@@ -1,0 +1,21 @@
+{
+    "name": "storyline-project",
+    "version": "0.0.0",
+    "description": "A minimal TypeScript starter project scaffolded by @erosire/create-storyline",
+    "type": "module",
+    "private": true,
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "typecheck": "tsc --noEmit"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "devDependencies": {
+        "@types/node": "^25.9.1",
+        "typescript": "^6.0.0"
+    },
+    "license": "MIT"
+}

@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        // Node 20+ ESM output: NodeNext makes tsc emit/import with the exact
+        // module semantics node uses (relative imports need explicit .js extensions).
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "rootDir": "src",
+        "outDir": "dist",
+        // Strict starter baseline — every strictness flag on, so generated projects
+        // start type-safe instead of needing a migration later.
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "noImplicitOverride": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        // process/console globals come from @types/node (devDependency of the template).
+        "types": ["node"]
+    },
+    "include": ["src/**/*"]
+}

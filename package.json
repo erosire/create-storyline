@@ -1,0 +1,29 @@
+{
+    "name": "@erosire/create-storyline",
+    "version": "1.0.2",
+    "description": "Scaffold a new Storyline project — minimal TypeScript starter initializer for npm create @erosire/storyline",
+    "type": "module",
+    "bin": {
+        "create-storyline": "./bin/create-storyline.js"
+    },
+    "files": [
+        "bin",
+        "template"
+    ],
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "release": "vite-node ../../../scripts/publish-safe.ts"
+    },
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/erosire/create-storyline.git"
+    },
+    "author": "erosire",
+    "license": "MIT"
+}
