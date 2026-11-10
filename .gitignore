@@ -1,0 +1,7 @@
+# Build and tool output of the storyline app (the UI bundle the gateway serves at
+# /storyline, the workspace dependencies, and the harness durable store the server
+# writes under `temporary/harness`). None of it is source; none of it belongs in this
+# initializer repository.
+dist/
+node_modules/
+temporary/

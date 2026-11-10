@@ -1,0 +1,31 @@
+// Standalone tsconfig — mirrors distribution/chat-assistant/tsconfig.json: the
+// compiler options that would otherwise come from the monorepo root tsconfig.json
+// via `extends` are INLINED here, because packages/erosire/create-storyline is
+// its own git repository (a published initializer package) and must typecheck
+// without a parent tsconfig. Keep in sync with the monorepo root tsconfig.json.
+//
+// Deliberate divergences from the root config (same ones chat-assistant makes):
+//   - `jsx: "react-jsx"` instead of `"react"` — the dashboard stubs in src/ use
+//     the automatic React 17+ runtime, so no `import React` is required.
+//   - no `declaration`/`outDir` — `tsc` only typechecks here (`--noEmit`); vite
+//     produces the bundle, and the published artifact stays `bin/` + `template/`.
+//
+// `include` covers src plus the two config files, so `bin/create-storyline.js`
+// (plain Node ESM initializer, allowJs but not included) is never typechecked.
+{
+    "compilerOptions": {
+        "module": "ESNext",
+        "target": "ESNext",
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "skipLibCheck": true,
+        "allowJs": true,
+        "experimentalDecorators": true,
+        "esModuleInterop": true,
+        "strict": true,
+        "lib": ["decorators", "dom", "es5", "scripthost", "es2015.collection"],
+        "types": ["node", "vitest/globals"]
+    },
+    "exclude": ["node_modules", "**/dist/*", "**/lib/*"],
+    "include": ["src/**/*", "vite.config.ts", "vitest.config.ts"]
+}

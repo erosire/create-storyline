@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#18272f" />
+        <meta
+            name="description"
+            content="Storyline — an AI story-writing workspace (Writer / Reader / Editor agents)."
+        />
+        <title>Storyline</title>
+        <style>
+            /* Document scaffolding ONLY — the dashboard skin (T2 owns
+               src/dashboard/styles/**) owns palette, typography, form controls
+               and scrollbars. Everything here is layout plumbing that the React
+               tree cannot supply before it mounts. */
+            /* Height chain so a 100vh station and a 100% #root agree. */
+            html,
+            body,
+            #root {
+                height: 100%;
+            }
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+            }
+            /* Keep the pre-JS document hint dual; the dashboard theme layer
+               decides which skin actually renders. */
+            :root {
+                color-scheme: light dark;
+            }
+            body {
+                margin: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+    </body>
+</html>
