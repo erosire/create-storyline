@@ -18,8 +18,8 @@
         "dev": "vite --host",
         "build": "vite build",
         "preview": "vite preview",
-        "start": "vite-node src/server/cli.ts",
-        "start:prod": "vite build && vite-node src/server/cli.ts",
+        "start": "vite-node src/server/start.ts",
+        "start:prod": "vite build && vite-node src/server/start.ts",
         "test": "vitest run",
         "test:watch": "vitest",
         "typecheck": "tsc --noEmit"
@@ -35,14 +35,8 @@
     "author": "erosire",
     "license": "MIT",
     "dependencies": {
-        "@presource/core": "*",
-        "@presource/react": "*",
-        "@rightless/icons": "*",
-        "@underload/dashboard": "*",
-        "@underload/harness": "*",
-        "@underload/service": "*",
-        "@emotion/react": "^11.14.0",
-        "@emotion/styled": "^11.14.0",
+        "@hono/node-server": "^2.0.12",
+        "hono": "^4.12.25",
         "react": "^18.2.0",
         "react-dom": "^18.2.0"
     },

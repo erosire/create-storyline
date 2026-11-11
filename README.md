@@ -44,66 +44,94 @@ The generated `package.json` `name` is derived from the target directory name
 
 - Node.js >= 20
 
+
 ## Storyline app
 
-This package is also a runnable application, not only an initializer: a storyline
-server plus the workstation UI that drives it.
+The package is also a runnable application: the loop the Author drives, plus the workstation
+that drives it, from one origin.
 
-- **Server** (`src/server/`) — an `@underload/service` gateway endpoint that wraps
-  `@underload/harness`. It registers the `storyline` preset — a `writer` (primary), a
-  `reader` and an `editor` — with the harness's built-in `chapters` and `profiles`
-  record tools pre-enabled, and serves it at REST `/v1/storyline/*` and over the live
-  stream `/v1/storyline/stream` (WebSocket subprotocol `harness.v1`).
-- **UI** (`src/dashboard/`) — a `@underload/dashboard` composition: chapter rail,
-  agent stage, and story library, talking to that mount
-  (`src/api/root.ts` pins the client root to `/v1/storyline`).
+- **Server** (`src/server/`) — a Hono app started by `startStorylineServer`
+  (`src/server/api/server.ts`). It owns the loop (`src/server/loop/`), the §8 tool catalogue
+  (`src/server/tools/`), the brief builder (`src/server/run/`), the provider client
+  (`src/server/llm/`) and the event-journal Store (`src/server/store/` — `store.json` plus
+  `journal.jsonl`; the journal is the state, and a restart replays it). The REST API is mounted
+  at `/v1/storyline`, and `GET /v1/storyline/stream` is a server-sent events feed of the Store's
+  own commit groups (a `ready` frame first, then one frame per commit, debounced).
+- **UI** (`src/dashboard/`) — the Author's desk: the Stories panel, the Author's queue, the crew
+  rail, the Ideas tray, the Goal panel, the phase strip, the prose editor. It dials the same
+  origin at `/v1/storyline`.
+- **The contract** is `documents/specifications.md`. Every behaviour note in the code cites the
+  id it serves (`L-` loop, `D-` design decision, `U-` UI, `S-` service, `T-` tool, `G-` goal,
+  `E-` engine, `P-` principle), so a reader can go from a line of code to the paragraph that
+  demanded it, and back.
 
 ### Running it
 
 ```bash
-yarn workspace @erosire/create-storyline dev      # UI on http://localhost:4510
-yarn workspace @erosire/create-storyline start    # package-scoped gateway on :5000
-yarn workspace @erosire/create-storyline build    # dist/, which `start` then serves at /storyline
+yarn workspace @erosire/create-storyline start        # vite-node src/server/start.ts
+yarn workspace @erosire/create-storyline start:prod   # vite build, then start
+yarn workspace @erosire/create-storyline dev          # the UI on http://localhost:4510
+yarn workspace @erosire/create-storyline build        # dist/ — the dashboard bundle
+yarn workspace @erosire/create-storyline test         # vitest run
+yarn workspace @erosire/create-storyline typecheck    # tsc --noEmit
 ```
 
-`dev` proxies `/v1/storyline` (REST **and** the socket upgrade) to the gateway on
-`http://127.0.0.1:5000`; point it elsewhere with `STORYLINE_DEV_TARGET`.
-
-`start` is its own gateway: it scans **only this package** for `endpoint` folders, so
-one origin serves `/v1/storyline`, `/v1/storyline/stream`, and — once built — the UI at
-`/storyline`.
+`start` serves the API at `/v1/storyline` and, when `dist/` exists, the built dashboard from the
+same port. `dev` is Vite only: it proxies `/v1/storyline` to wherever the server is actually
+running (`STORYLINE_DEV_TARGET`, default `http://127.0.0.1:5000`), so the browser stays
+same-origin with the API while you work on the UI.
 
 ```bash
-yarn start-service                               # repo root: the shared gateway
+# from this package's directory
+npx vite-node src/server/start.ts --port 5100 --store-root "" --no-static
 ```
 
-The shared gateway scans the whole repository, so it auto-discovers
-`packages/erosire/create-storyline/src/server/endpoint/storyline` and mounts
-`/v1/storyline` beside `/v1/harness`. It resolves endpoints **at startup**: a gateway
-that is already running needs a restart before the storyline route appears.
+### Flags and environment
 
-### Environment
+Precedence is `flag` → `STORYLINE_*` → built-in default.
 
-Precedence is always `CLI flag` → `STORYLINE_*` → `HARNESS_*` → built-in default, so an
-existing harness deployment needs no new variables while `STORYLINE_*` still allows the
-two to run side by side with different providers.
+| Setting | Flag | Variable | Default |
+| --- | --- | --- | --- |
+| Port | `--port` | `STORYLINE_PORT` | `5000` ( `0` = the OS picks ) |
+| Interface | `--host` | `STORYLINE_HOST` | `127.0.0.1` |
+| Where the book lives | `--store-root` (alias `--database-root`) | `STORYLINE_STORE_ROOT` | `temporary/storyline`; an **empty value runs in memory** |
+| Built dashboard | `--no-static` | `STORYLINE_STATIC_ROOT` | `dist` when it exists, otherwise no static root |
 
-| Variable | Fallback | Default |
-| --- | --- | --- |
-| `STORYLINE_PORT` | — (the harness has no port variable) | `5000` |
-| `STORYLINE_HOST` | — | `127.0.0.1` |
-| `STORYLINE_DATABASE_ROOT` | — | `temporary/harness` (`""` = in-memory) |
-| `STORYLINE_STATIC_ROOT` | — | `dist` when it exists |
-| `STORYLINE_PROVIDER_URL` | `HARNESS_BASE_URL` | `http://localhost:5500/providers/private/v1` |
-| `STORYLINE_API_KEY` | `HARNESS_API_KEY` → `OPENAI_API_KEY` | empty |
-| `STORYLINE_MODEL` | `HARNESS_MODEL` | `local/basalt` |
+The crew needs a model. Exactly three variables say where it is, and nothing else about the
+harness is configuration — the roles, the tools, the criteria and the caps are Template cards the
+Author edits in the running product:
 
-### Port 5000 caveat
+| Variable | Meaning |
+| --- | --- |
+| `STORYLINE_PROVIDER_BASE_URL` | OpenAI-compatible `chat/completions` root |
+| `STORYLINE_PROVIDER_MODEL` | the model every crew run asks for |
+| `STORYLINE_PROVIDER_API_KEY` | its key; empty means the provider is unauthenticated |
 
-`start` **is** a gateway, and a gateway calls `killPort` on its port before binding
-(`packages/underload/service/src/server/start.ts:241`). At the default that means
-`yarn start` takes over `:5000` — the port the shared `yarn start-service` gateway uses
-— so with the shared gateway running, start this one elsewhere:
-`start --port 5100` (or `STORYLINE_PORT=5100`), and point the dev proxy at it with
-`STORYLINE_DEV_TARGET=http://127.0.0.1:5100 yarn dev`.
+Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBAL_MAX_CONCURRENT`
+(a hard cap on simultaneous runs), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes;
+`0` means the Author drives it by hand), `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease
+is stealable).
 
+The Explorer's browsing tools (`web.open`) use `EXA_API_KEY` or `TAVILY_API_KEY`. With neither
+set, browsing is unavailable and the tool says so in the refusal — a crew with no web access
+forms thinner Ideas, which is a fact about the run and not a story defect.
+
+### How it is tested
+
+The suites are deterministic without a model, because the crew is not asked to be clever in a
+test — it is scripted from what its brief actually says:
+
+- `src/server/llm/mock.ts` is a `ChatClient` whose answers come from a handler. The integration
+  harness (`src/server/integration/harness.ts`) reads each run's BRIEF — the same bytes a real
+  model would read — and answers as the template the brief names: a Writer calls `editSummary` /
+  `createPlotline` / `editChapter`, a Checker calls `submitVerdict` with the criteria the brief
+  briefed it on, a Reader calls `proposeIdea`. A refusal the tool layer gives is recorded with its
+  rule id, so a test asserts the rule the crew hit.
+- `src/server/integration/*.test.ts` boots the real server on port 0 and drives it with `fetch`:
+  `slice-phases` (Seed → Summary → Plotlines, the Ideas tray and the lock gates), `slice-chapters`
+  (chapters, the finding → repair ladder, the drain that proposes completion), `slice-ops`
+  (stop/resume, backtrack, the section edit and undo, the assistant run, kill, restart from the
+  journal). The engine's own internals stay in `src/server/loop/*.test.ts`.
+- Sweeps are never the clock: every suite starts the engine with `autoSweep: false` and calls
+  `engine.sweep()` / `engine.settle()` as an explicit Author action, so a test cannot pass by
+  waiting.

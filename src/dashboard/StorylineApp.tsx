@@ -1,83 +1,138 @@
-// The public application component: build one dashboard, render it, tear it down.
+// §10.1 — the four-region shell: STORIES | THE STORY | CREW + TEMPLATES, over a DIRECTIVE BAR.
 //
-// RESPONSIBILITIES, and nothing else:
-//   1. build exactly ONE dashboard instance for this mount (composition.ts);
-//   2. hand it to the shell;
-//   3. dispose it on unmount in the order the kernel requires.
+// WHY THIS FILE IS ONLY A SHELL: §10.1 fixes the regions; the later waves fill them. Anything
+// that reads a Story's contents (the Seed card, the Summary pane, the Ideas tray, the prose
+// editor, the crew and template cards) is W10/W11's surface, so it is imported from the
+// component that owns it and rendered into the region the layout names. The shell's own job is
+// three things and nothing else: the store lifecycle, the home-vs-story switch (U-10: the queue
+// IS the home view), and keeping the directive bar reachable from every region (U-9).
 //
-// DISPOSAL ORDER — the part that is easy to get wrong, and the reason the instance
-// is created in a ref rather than in an effect:
+// THE RIGHT REGION, AND WHY IT MOVES (judgment call, stated in the report): `StoryView` (W10)
+// renders the CREW rail and the TEMPLATES catalogue itself, because they are two halves of one
+// readable tree — "the distance between the contract and its prose" (U-4) needs the harness
+// that produced it beside it. So with a Story selected the centre region SPANS the story and
+// crew columns and StoryView's own rail lands exactly in the third column of §10.1's grid
+// (`data-open`). With no Story selected there is nothing for the rail to be about, so the shell
+// renders the workspace CREW there itself and the catalogue waits for a Story (the pinned
+// TemplatesPanel takes a `story`, and on the home view there is none).
 //
-//   React unmounts bottom-up, so every child's `useSyncExternalStore` unsubscribe
-//   runs BEFORE this component's effect cleanup. Deferring `dispose()` one microtask
-//   past that cleanup adds the other half of the guarantee, and — more importantly —
-//   survives React 18 StrictMode, which runs setup -> cleanup -> setup on the same
-//   committed tree. A synchronous dispose would leave the re-mounted children
-//   subscribed to detached cells, and a detached cell throws
-//   DashboardError('disposed') on get()/subscribe()
-//   (packages/underload/dashboard/src/extensions/state.ts). The re-run setup
-//   CANCELS the pending dispose, so the instance simply stays alive; on a real
-//   unmount no setup follows and the microtask disposes exactly once.
-//
-//   The same ordering is why the socket's teardown lives in the session plugin's
-//   returned cleanup (plugins/session.ts): dispose() runs cleanups in REVERSE setup
-//   order, so the consumers of the stream are torn down before the stream itself.
-//
-// The instance is built once per mount. Changing an option after mount does not
-// rebuild it — a rebuild would drop every state cell mid-story — so a host that
-// wants a different deployment remounts this component by key instead.
-//
-// Precedent: distribution/chat-assistant/src/dashboard/ChatAssistantApp.tsx and
-// packages/underload/dashboard/example/src/app/entry.tsx.
-import { memo, useEffect, useRef } from 'react';
-import type { Dashboard } from '@underload/dashboard';
-import { createStoryline, type StorylineOptions } from './composition';
-import { WorkstationShell } from './WorkstationShell';
+// THE RIGHT REGION IS THE CREW, NOT AN AGENT LIST (§10.1, §13): live runs for this Story, then
+// the harnesses that produced them — the Author controls the templates and watches what their
+// crews are doing, so those two things sit together and nothing else does.
 
-export type StorylineAppProps = StorylineOptions & {
-    /** Test seam: a host that composes its own instance (a storybook scenario). */
-    instance?: Dashboard;
-};
+import { useEffect } from 'react';
 
-export const StorylineApp = memo(function StorylineApp({ instance: provided, ...options }: StorylineAppProps = {}) {
-    // Built during the first render, not in an effect: the very first paint already
-    // reads state cells, so the instance must exist before any child renders.
-    // `cancelPending` holds the cancel handle of a dispose queued by the last
-    // cleanup, which the next setup consumes.
-    const holder = useRef<{ instance: Dashboard; owns: boolean; cancelPending: (() => void) | null } | null>(null);
+import { AuthorQueue } from './components/AuthorQueue';
+import { CrewPanel } from './components/CrewPanel';
+import { DirectiveBar } from './components/DirectiveBar';
+import { NewStoryForm } from './components/NewStoryForm';
+import { StoriesPanel } from './components/StoriesPanel';
+import { StoryView } from './components/StoryView';
+import { TopBar } from './components/TopBar';
+import { DashboardContext, defaultDashboardStore, useDashboard, useDashboardStore, type DashboardStore } from './state';
+import { shellActions, storyViewData } from './shell-binding';
+import type { StoryViewData } from './components/story-contract';
 
-    if (holder.current === null) {
-        holder.current = { instance: provided ?? createStoryline(options), owns: provided === undefined, cancelPending: null };
-    }
+export function StorylineApp(props: { store?: DashboardStore }) {
+    const store = props.store ?? defaultDashboardStore();
+    return (
+        // The app-wide store by default; a test passes one built on a fake client.
+        <DashboardContext.Provider value={store}>
+            <Shell />
+        </DashboardContext.Provider>
+    );
+}
 
-    const current = holder.current;
+/** The regions themselves, split out so the store injection above stays one line. */
+function Shell() {
+    const store = useDashboardStore();
+    const { activeStoryId, stories, storyViews, runs, templates } = useDashboard();
 
-    useEffect(() => {
-        // A StrictMode re-setup (or a fast refresh) cancels the dispose the previous
-        // cleanup queued for this same instance.
-        current.cancelPending?.();
-        current.cancelPending = null;
+    // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
+    // unmount (React StrictMode's double-mount is why the teardown has to be real).
+    useEffect(() => store.start(), [store]);
 
-        return () => {
-            if (!current.owns) return;
+    const story = activeStoryId ? stories.find((row) => row.id === activeStoryId) : undefined;
+    const view = activeStoryId ? storyViews[activeStoryId] : undefined;
+    const now = new Date().toISOString();
 
-            let cancelled = false;
+    return (
+        <div className="station" data-theme="ink" data-testid="station">
+            <TopBar />
 
-            current.cancelPending = () => {
-                cancelled = true;
-            };
+            <div className="station__regions" data-open={activeStoryId ? 'true' : 'false'}>
+                {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). */}
+                <aside className="region region--stories" data-region="stories" aria-label="Stories">
+                    <StoriesPanel />
+                </aside>
 
-            // One microtask, cancelled by the following setup — see the header. React
-            // runs the StrictMode cleanup and re-setup in the SAME task, so the
-            // microtask lands after the re-setup has set `cancelled`; a real unmount
-            // has no following setup, so this still disposes exactly once.
-            globalThis.queueMicrotask(() => {
-                current.cancelPending = null;
-                if (cancelled) return;
-                current.instance.dispose();
-            });
-        };
-    }, [current]);
+                {/* Region 2 — THE STORY, or the Author's queue when nothing is selected (U-10). */}
+                <main className="region region--story" data-region="story" aria-label="The story">
+                    {activeStoryId ? (
+                        <>
+                            <div className="region__head">
+                                <h2 className="region__title">{story?.title ?? 'the story'}</h2>
+                                <button
+                                    type="button"
+                                    className="button button--ghost"
+                                    onClick={() => store.closeStory()}
+                                >
+                                    to the queue
+                                </button>
+                            </div>
+                            <div className="region__body">
+                                {view ? (
+                                    /* W10: Seed card, ① Summary ② Plotlines ③ Chapters, the Ideas
+                                       tray, revisions, the prose editor, the Goal panel — and the
+                                       CREW/TEMPLATES rail this component renders (U-7, U-8).
+                                       The cast is seam 1 of `shell-binding.ts`: the pinned payload
+                                       carries the assigned template IDS, and the shell hands the
+                                       rail the resolved records, which is what `CrewPanel` and
+                                       `TemplatesPanel` take as their `templates` prop (U-8d needs
+                                       each role's `agents` and `aggregate`, and the ids alone
+                                       would draw an empty card). */
+                                    <StoryView
+                                        view={storyViewData(view, templates) as unknown as StoryViewData}
+                                        actions={shellActions(store, activeStoryId)}
+                                    />
+                                ) : (
+                                    /* U-11: no spinner while the first read is in flight. */
+                                    <p className="panel__empty">reading the story…</p>
+                                )}
+                            </div>
+                        </>
+                    ) : (
+                        <div className="region__body region__body--home">
+                            <AuthorQueue />
+                            <NewStoryForm />
+                        </div>
+                    )}
+                </main>
 
-    return <WorkstationShell instance={current.instance} />;
-});
+                {/* Region 3 — CREW (and, inside a Story, the template catalogue). */}
+                {activeStoryId ? null : (
+                    <aside className="region region--crew" data-region="crew" aria-label="Crew">
+                        <div className="region__body">
+                            {/* U-7 across every Story: with no Story selected the Author is on the
+                                desk, and what is still running is the next thing that will land on it. */}
+                            <CrewPanel
+                                runs={runs}
+                                templates={templates}
+                                now={now}
+                                onKillRun={(runId) => void store.killRun(runId)}
+                            />
+                            <p className="panel__hint">
+                                the template catalogue sits beside every Story — pick one to edit its crews (U-8).
+                            </p>
+                        </div>
+                    </aside>
+                )}
+            </div>
+
+            {/* Region 4 — the DIRECTIVE BAR, full width, always in reach (U-9 / D-19). */}
+            <DirectiveBar />
+        </div>
+    );
+}
+
+export default StorylineApp;

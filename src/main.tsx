@@ -1,23 +1,21 @@
-// The browser entry point: mount the app, and nothing else.
-//
-// WHY THIS FILE IS SO SHORT: the dashboard instance is created, provided and
-// disposed INSIDE <StorylineApp/> (src/dashboard/StorylineApp.tsx), so the mount
-// order the kernel wants — React unsubscribes first, then the plugin cleanups run
-// (socket closed last, being registered first) — holds for any host, not only for
-// this bundle. An earlier shape (build the instance here, hand it down) made the
-// standalone entry correct and every OTHER embedder responsible for getting the
-// teardown right by hand.
-//
-// StrictMode is kept on purpose: its setup -> cleanup -> setup double-run is where
-// a lifecycle mistake shows up, and the deferred-dispose path in StorylineApp is
-// built for it (that file's header explains the microtask and the cancel).
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 
-// `#root` is guaranteed by index.html. The stylesheet travels with the shell
-// (WorkstationShell imports it), so an embedder never renders an unstyled tree.
-createRoot(document.getElementById('root')!).render(
+// The whole visual layer in one plain stylesheet (no CSS-in-JS in this package — the
+// component libraries and @emotion were removed for the rebuild). Imported once, here, so
+// there is exactly one place that decides what the shipped bundle looks like.
+import './dashboard/styles/app.css';
+
+const container = document.getElementById('root');
+
+if (!container) {
+    // A missing #root is a broken index.html, not a runtime condition to recover from;
+    // failing loudly beats a blank page that looks like a stalled loop (L-24).
+    throw new Error('Storyline needs a #root element in index.html');
+}
+
+createRoot(container).render(
     <StrictMode>
         <App />
     </StrictMode>

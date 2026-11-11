@@ -1,14 +1,13 @@
-// Dashboard barrel — the public surface of the UI half of this package.
-//
-// Everything here is plugin-composed: the app component, the composition factory
-// (so a host can build its own instance and drive commands directly), the shell, the
-// React bridge, the center-pane fold, and the reserved id vocabulary the plugins
-// speak. No server code is re-exported — the barrel stays importable from a browser
-// bundle.
-export * from './content-view';
-export * from './contract';
-export * from './composition';
-export * from './state-hooks';
-export * from './StorylineApp';
-export * from './WorkstationShell';
-export * from './workbench';
+// Barrel for the dashboard (W9-W13). Only the shell's own surface is re-exported: W10/W11's
+// components (StoryView, CrewPanel, TemplatesPanel, and their panes) are separate waves with
+// their own files, and a barrel that names them before they land breaks every consumer of
+// this one. `api.ts` and `state.ts` are the cross-wave contract — T9 imports exactly these two.
+export * from './api';
+export * from './shell-binding';
+export * from './state';
+export { AuthorQueue } from './components/AuthorQueue';
+export { DirectiveBar } from './components/DirectiveBar';
+export { NewStoryForm } from './components/NewStoryForm';
+export { StoriesPanel, pendingTone, sortStories, storyRank, waitSentence } from './components/StoriesPanel';
+export { StorylineApp } from './StorylineApp';
+export { TopBar } from './components/TopBar';

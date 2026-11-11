@@ -1,18 +1,11 @@
-// The application shell of the storyline UI.
-//
-// This file is deliberately thin: the dashboard instance, its plugins and its
-// teardown all live in src/dashboard/StorylineApp.tsx, so a host that imports the
-// package (`import { StorylineApp } from '@erosire/create-storyline'`) gets exactly
-// what this app renders, with the same composition and the same options.
-//
-// The one thing App adds is the DEFAULT DEPLOYMENT: the UI dials `/v1/storyline` on
-// this page's origin (src/api/root.ts), which the dev server proxies to the
-// @underload/service gateway and a production host serves beside the bundle. A host
-// that wants another mount passes its own `api`/`streamFactory` — the composition's
-// two seams — rather than a root string, because the root is resolved once per page
-// load by the harness client and cannot be re-pointed per component.
-import { StorylineApp, type StorylineAppProps } from './dashboard';
+// The app root: one component, no routing. §10.1's four regions ARE the application, and the
+// home-vs-story switch inside them (U-10) replaces a router — the Author's queue is the page,
+// and selecting a Story is a store write rather than a URL change. A router would be a second
+// source of truth for "what am I looking at", which P1 says lives in the store.
+import { StorylineApp } from './dashboard/StorylineApp';
 
-export function App(props: StorylineAppProps = {}) {
-    return <StorylineApp {...props} />;
+export function App() {
+    return <StorylineApp />;
 }
+
+export default App;

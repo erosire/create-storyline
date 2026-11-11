@@ -1,0 +1,832 @@
+/* §10.1 — the Storyline workstation skin (W9-W13).
+ *
+ * Plain CSS, one file, no CSS-in-JS: the package's component libraries and @emotion were
+ * removed for the rebuild, and a data workstation does not need them — the whole visual
+ * argument is a grid, a monospace scale, and a colour per MEANING.
+ *
+ * THE COLOUR RULE (U-1b / L-34, the load-bearing part of this file): colour is assigned to
+ * what a state MEANS, never to which enum produced it.
+ *   teal  = the loop finished something and is waiting to be told (the product working)
+ *   green = it ran out of authorised work — finished by the standard the dial set (U-1c)
+ *   coral = it stopped converging — the only flavour of `pending` that means trouble (P14)
+ *   slate = the Author pulled the cord (P8)
+ *   dim   = closed
+ * A stalled row is coral AND heavier AND wider-ruled, so the difference survives a
+ * monochrome screen and a bad projector (L-34: "at a glance").
+ *
+ * Structure: tokens → station grid → topbar + the Stop button → regions → panels →
+ * story rows (tones, phase strip, levels, trend) → queue → forms → directive bar →
+ * shared buttons → responsive collapse.
+ */
+
+.station {
+    /* ink: the workstation default. Everything else reads these tokens. */
+    --bg: #0d1418;
+    --surface: #121c23;
+    --raised: #17242d;
+    --line: #24343f;
+    --text: #e6edf2;
+    --muted: #8ba0b0;
+    --accent: #e8b45a;
+
+    /* the meaning palette — see the header rule above */
+    --calm: #57b1a4;
+    --calm-bg: #10231f;
+    --finished: #59b37a;
+    --finished-bg: #101f18;
+    --urgent: #e0715f;
+    --urgent-bg: #251517;
+    --halt: #6f8496;
+    --halt-bg: #131c22;
+
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    height: 100%;
+    min-height: 0;
+    padding: 10px;
+    background: var(--bg);
+    color: var(--text);
+    /* Monospace first: every number in this UI is data (levels, counts, ids) and a
+       proportional face makes a table of them impossible to scan. */
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    font-variant-ligatures: none;
+}
+
+/* ——— topbar ——————————————————————————————————————————————————————————————————— */
+
+.topbar {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+}
+
+.topbar__brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.topbar__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.topbar__version {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+/* U-3: "Global Stop is the biggest button on the screen." Deliberately ~2x every other
+   control in height and type size, and it is the only control with a filled background. */
+.stop-all {
+    min-width: 232px;
+    min-height: 58px;
+    padding: 10px 26px;
+    border: 2px solid var(--urgent);
+    border-radius: 4px;
+    background: var(--urgent);
+    color: #14090a;
+    font: inherit;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.stop-all:hover {
+    background: #eb8271;
+    border-color: #eb8271;
+}
+
+.stop-all:active {
+    transform: translateY(1px);
+}
+
+.topbar__counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.count {
+    padding: 2px 7px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    color: var(--muted);
+}
+
+.count--awaiting {
+    border-color: var(--calm);
+    color: var(--calm);
+}
+
+.count--stalled {
+    border-color: var(--urgent);
+    color: var(--urgent);
+    font-weight: 700;
+}
+
+/* U-11: the health line is story prose. It is allowed to be the loudest TEXT on the
+   strip because there is no spinner competing with it. */
+.topbar__health {
+    margin: 0;
+    padding-left: 12px;
+    border-left: 1px solid var(--line);
+    color: var(--text);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar__error {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 5px 8px;
+    border: 1px solid var(--urgent);
+    border-radius: 3px;
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.topbar__error-text {
+    overflow-wrap: anywhere;
+}
+
+/* ——— the four regions (§10.1) ————————————————————————————————————————————————— */
+
+.station__regions {
+    display: grid;
+    /* The centre column is the widest by design: the distance between a contract and its
+       prose is the product (U-4), and it needs the room. */
+    grid-template-columns: 330px minmax(0, 1fr) 350px;
+    gap: 10px;
+    min-height: 0;
+}
+
+/* With a Story open, StoryView renders its own CREW + TEMPLATES rail, so the centre region
+   spans the story and crew columns and the rail lands in column three of §10.1's grid. */
+.station__regions[data-open='true'] {
+    grid-template-columns: 330px minmax(0, 1fr);
+}
+
+.region {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+}
+
+.region__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+}
+
+.region__title {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.region__body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+}
+
+.region__body--home {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 14px;
+    align-content: start;
+}
+
+/* ——— panels ——————————————————————————————————————————————————————————————————— */
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 10px;
+}
+
+.panel__title {
+    margin: 0 0 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.panel__hint,
+.queue__hint,
+.directive-bar__hint,
+.panel__empty {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.story-list,
+.queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* ——— story rows (U-1 / U-1b / U-1c / U-12a) ————————————————————————————————————— */
+
+.story-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 8px;
+    padding: 7px 9px 7px 6px;
+    border: 1px solid var(--line);
+    /* The tone rail is the at-a-glance signal; colour plus weight plus rail width. */
+    border-left: 3px solid var(--tone, var(--line));
+    border-radius: 3px;
+    background: var(--tone-bg, transparent);
+}
+
+/* calm: the loop finished something and is waiting to be told (L-34's item 1) */
+.story-row[data-tone='awaiting'] {
+    --tone: var(--calm);
+    --tone-bg: var(--calm-bg);
+}
+
+/* urgent: the only flavour that means trouble (P14 / L-37a) — heavier type, wider rail */
+.story-row[data-tone='stalled'] {
+    --tone: var(--urgent);
+    --tone-bg: var(--urgent-bg);
+    border-left-width: 6px;
+    font-weight: 700;
+}
+
+/* U-1c: drained reads as a FINISHED thing — green, settled, no urgency anywhere */
+.story-row[data-pending-kind='drained'] {
+    --tone: var(--finished);
+    --tone-bg: var(--finished-bg);
+    border-left-width: 3px;
+    font-weight: 400;
+}
+
+.story-row[data-status='stopped'] {
+    --tone: var(--halt);
+    --tone-bg: var(--halt-bg);
+    color: var(--muted);
+}
+
+/* closed Stories recede: the Author has already accepted them (L-25a) */
+.story-row[data-status='completed'] {
+    --tone: var(--line);
+    opacity: 0.72;
+}
+
+.story-row[data-active='true'] {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.story-row__open {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.story-row__title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+/* U-12a: the phase strip, readable from across the room. Unsigned phases are dim, the
+   current phase is accent-weight, a signed phase carries the lock glyph. */
+.phase-strip {
+    display: inline-flex;
+    gap: 3px;
+    font-size: 15px;
+    letter-spacing: 0.04em;
+}
+
+.phase-mark {
+    position: relative;
+    color: var(--line);
+}
+
+.phase-mark[data-state='past'],
+.phase-mark[data-state='current'] {
+    color: var(--text);
+}
+
+.phase-mark[data-state='current'] {
+    color: var(--accent);
+    font-weight: 800;
+}
+
+.phase-mark[data-locked='true'] {
+    color: var(--finished);
+}
+
+.phase-mark__lock {
+    margin-left: 1px;
+    font-size: 10px;
+    color: var(--finished);
+}
+
+.badge {
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+}
+
+.badge--ready {
+    color: var(--muted);
+}
+
+.badge--pending {
+    color: var(--calm);
+}
+
+/* the badge takes the tone too, so a stalled Story is coral in three places at once */
+/* the badge takes the tone too, so a stalled Story is coral in three places at once */
+.badge--pending[data-tone='stalled'] {
+    color: var(--urgent);
+}
+
+/* U-1c: a drained Story's badge is finished-green, not "waiting" teal */
+.story-row[data-pending-kind='drained'] .badge--pending {
+    color: var(--finished);
+}
+
+.badge--completed {
+    color: var(--finished);
+}
+
+.badge--stopped {
+    color: var(--halt);
+}
+
+/* L-14's rendered levels: a monospace table of `n/m`, aligned so the eye runs down it. */
+.levels {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0 10px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.level {
+    display: inline-flex;
+    gap: 4px;
+}
+
+.level__value {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.level[data-level='whole'] .level__value {
+    color: var(--accent);
+}
+
+.trend {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.trend[data-trend='improving'] {
+    color: var(--finished);
+}
+
+.trend[data-trend='flat'] {
+    color: var(--muted);
+}
+
+.trend[data-trend='regressing'] {
+    color: var(--urgent);
+}
+
+/* U-1b's wait line. On a stalled Story this is L-22's named reason, not a status word. */
+.story-row__wait {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    font-size: 11px;
+}
+
+.story-row__wait-label {
+    padding: 0 5px;
+    border-radius: 2px;
+    background: var(--tone, var(--line));
+    color: #0d1418;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.story-row__wait-detail {
+    overflow-wrap: anywhere;
+    color: var(--text);
+}
+
+/* U-2: what the crew is doing to it right now, in story words (U-11). */
+.story-row__crew {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.story-row__runs {
+    margin-right: 6px;
+    color: var(--accent);
+}
+
+.story-row__moves,
+.story-row__controls {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.story-row__moves .button--move {
+    border-color: var(--tone, var(--accent));
+    color: var(--tone, var(--accent));
+    font-weight: 700;
+}
+
+/* ——— the Author's queue (U-10 / U-10a / U-10b) ————————————————————————————————— */
+
+.queue__headline {
+    margin: 0 0 2px;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.queue__head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.queue__empty {
+    margin: 24px 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.queue-group {
+    margin-bottom: 14px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--raised);
+}
+
+.queue-group__title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 6px;
+    font-size: 12px;
+}
+
+.queue-group__link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline dotted;
+    cursor: pointer;
+}
+
+.queue-group__count {
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    color: var(--muted);
+}
+
+/* One item per decision (U-10b): each row carries its own buttons, never a batch bar. */
+.queue-item {
+    padding: 7px 0;
+    border-top: 1px solid var(--line);
+}
+
+.queue-item:first-child {
+    border-top: 0;
+}
+
+.queue-item__claim,
+.queue-item__question {
+    /* the claim is the Editor's rewrite (D-34a) — it gets the row's emphasis */
+    margin: 0 0 3px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.queue-item__question::before {
+    content: '? ';
+    color: var(--accent);
+}
+
+.queue-item__detail {
+    margin: 0 0 3px;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.queue-item__evidence {
+    display: flex;
+    gap: 6px;
+    margin: 0 0 4px;
+    font-size: 11px;
+}
+
+.queue-item__evidence-label {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.queue-item__evidence-text {
+    color: var(--text);
+    border-left: 2px solid var(--line);
+    padding-left: 6px;
+    overflow-wrap: anywhere;
+}
+
+.queue-item__meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.cost-chip {
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+/* D-35's triage scale, in colour: the two costs the dial usually covers are the loud ones. */
+.cost-chip[data-cost='critical'] {
+    color: var(--urgent);
+}
+
+.cost-chip[data-cost='major'] {
+    color: var(--accent);
+}
+
+.cost-chip[data-cost='minor'] {
+    color: var(--muted);
+}
+
+.cost-chip[data-cost='taste'] {
+    color: var(--halt);
+}
+
+.queue-item__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* ——— forms (Seed, new story) ————————————————————————————————————————————————— */
+
+.new-story {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    align-self: start;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.field--narrow {
+    max-width: 110px;
+}
+
+.field__label {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.field__input {
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+}
+
+.field__input:focus,
+.directive-bar__input:focus {
+    outline: 1px solid var(--accent);
+    border-color: var(--accent);
+}
+
+.field__input--seed {
+    min-height: 96px;
+    resize: vertical;
+    /* the Seed is prose the Author wrote — it is the one place a reading face is right */
+    font-family: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+/* ——— the directive bar (U-9 / D-19) ——————————————————————————————————————————— */
+
+.directive-bar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--accent);
+    border-radius: 4px;
+    background: var(--surface);
+}
+
+.directive-bar__label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.directive-bar__input {
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+}
+
+.directive-bar__input:disabled {
+    color: var(--muted);
+}
+
+.directive-bar__hint {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+/* ——— shared buttons: everything that is not the global Stop stays small (U-3) ——— */
+
+.button {
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--raised);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.button:disabled {
+    color: var(--line);
+    cursor: not-allowed;
+}
+
+.button--stop {
+    border-color: var(--urgent);
+    color: var(--urgent);
+}
+
+.button--resume,
+.button--approve,
+.button--select {
+    border-color: var(--finished);
+    color: var(--finished);
+}
+
+.button--discard {
+    border-color: var(--muted);
+    color: var(--muted);
+}
+
+.button--primary,
+.button--send {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #1a1206;
+    font-weight: 800;
+}
+
+.button--ghost {
+    background: none;
+    border-color: transparent;
+    color: var(--muted);
+}
+
+/* ——— narrow screens ————————————————————————————————————————————————————————— */
+
+@media (max-width: 1180px) {
+    .station__regions {
+        grid-template-columns: 280px minmax(0, 1fr);
+    }
+
+    .region--crew {
+        grid-column: 1 / -1;
+    }
+
+    .region__body--home {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 820px) {
+    .station__regions,
+    .station__regions[data-open='true'] {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .topbar {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .stop-all {
+        min-width: 0;
+        width: 100%;
+    }
+}
