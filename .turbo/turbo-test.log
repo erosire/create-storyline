@@ -1,0 +1,155 @@
+yarn run v1.22.22
+$ vitest run
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.12 [39m[90m/run/media/erosire/Project/Projects/typescript/noobscript/packages/erosire/create-storyline[39m
+
+ [32m✓[39m src/dashboard/components/StoriesPanel.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 700[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/GoalPanel.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 676[2mms[22m[39m
+     [33m[2m✓[22m[39m sends every Goal edit as the op it actually is — never a rewritten list (G-1) [33m 306[2mms[22m[39m
+ [32m✓[39m src/server/api/routes.test.ts [2m([22m[2m52 tests[22m[2m)[22m[33m 890[2mms[22m[39m
+     [33m[2m✓[22m[39m advances the phase after a real crew pass, through the same route [33m 395[2mms[22m[39m
+ [32m✓[39m src/dashboard/real-server-smoke.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 740[2mms[22m[39m
+     [33m[2m✓[22m[39m a Story nobody has worked on renders its unreached levels as `n/a`, never as a score (L-14) [33m 339[2mms[22m[39m
+ [32m✓[39m src/server/integration/slice-phases.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 1285[2mms[22m[39m
+     [33m[2m✓[22m[39m the queue is the Author's desk across every Story at once, oldest first (U-15, U-10) [33m 330[2mms[22m[39m
+ [32m✓[39m src/server/integration/slice-ops.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 1405[2mms[22m[39m
+ [32m✓[39m src/server/integration/slice-chapters.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1691[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/IdeasTray.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 513[2mms[22m[39m
+ [32m✓[39m src/server/loop/restart.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 2376[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps every row the first engine wrote, and re-attaches to the same Story [33m 1263[2mms[22m[39m
+     [33m[2m✓[22m[39m releases the run the dead process left behind, and its work goes back to the queue once (L-3, S-3) [33m 750[2mms[22m[39m
+     [33m[2m✓[22m[39m a run whose owner goes quiet loses its lease, and the item returns to the queue (S-4a, D-36) [33m 360[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/TemplatesPanel.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 935[2mms[22m[39m
+     [33m[2m✓[22m[39m locks a built-in against in-place editing and offers Duplicate as its only mutation (D-17) [33m 329[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/SeedCard.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 361[2mms[22m[39m
+     [33m[2m✓[22m[39m shows the Author’s own Seed verbatim and states that no agent may write it [33m 341[2mms[22m[39m
+ [32m✓[39m src/dashboard/StorylineApp.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 843[2mms[22m[39m
+     [33m[2m✓[22m[39m swaps the queue for the story view and hands the third column to its crew rail (U-1b / §10.1) [33m 620[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/ProseEditor.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 815[2mms[22m[39m
+     [33m[2m✓[22m[39m locks the prose while the Story runs, states the rule, and prices Pause & edit on its face [33m 330[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/CrewPanel.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 633[2mms[22m[39m
+     [33m[2m✓[22m[39m gives the live run exactly one cord, and records why a closed run ended (U-7, S-3, D-18) [33m 380[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/PlotlineChapters.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[33m 521[2mms[22m[39m
+ [32m✓[39m src/server/api/server.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 415[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/SummaryPane.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1104[2mms[22m[39m
+     [33m[2m✓[22m[39m marks the locked Summary read-only for every agent and names Backtrack as the only move [33m 923[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/story-stalled-review.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 522[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/DirectiveBar.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/RevisionsCompare.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 614[2mms[22m[39m
+     [33m[2m✓[22m[39m lets the Author override the Editor once the route exists, with the unit and the draft it names (D-24) [33m 367[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/CompletionPrompt.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 677[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts completion as the Story’s own sign-off, and says when the endpoint is missing (L-25a) [33m 560[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/StoryView.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 6291[2mms[22m[39m
+     [33m[2m✓[22m[39m shows the review surface and the four exits ONLY on a stalled Story, never on an awaiting one (U-1a, L-23) [33m 416[2mms[22m[39m
+     [33m[2m✓[22m[39m states the status, the reason, the levels, the trend, and the progress in story terms [33m 485[2mms[22m[39m
+     [33m[2m✓[22m[39m shows the dial as the one switch that moves both the gate and the drain threshold, and writes the whole set [33m 1092[2mms[22m[39m
+     [33m[2m✓[22m[39m signs phase ③ through the completion route once the gate is clear (L-25a, L-25b) [33m 545[2mms[22m[39m
+     [33m[2m✓[22m[39m offers Backtrack on each signed earlier phase, and commits with the route’s phase argument (L-31, L-32) [33m 815[2mms[22m[39m
+     [33m[2m✓[22m[39m shows the completion prompt only when the crew has actually proposed, with the discard counted [33m 2217[2mms[22m[39m
+     [33m[2m✓[22m[39m carries the CREW and TEMPLATES rail on the same surface (U-7, U-8) [33m 303[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/TopBar.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 301[2mms[22m[39m
+ [32m✓[39m src/server/loop/divergence.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 7527[2mms[22m[39m
+     [33m[2m✓[22m[39m dispatches exactly `attempts` writer runs, each told no sibling exists [33m 2058[2mms[22m[39m
+     [33m[2m✓[22m[39m holds the checkers until the set is complete, then judges each draft once (D-22, L-20) [33m 1139[2mms[22m[39m
+     [33m[2m✓[22m[39m selects once, removes the other drafts, and writes the note it gave [33m 1542[2mms[22m[39m
+     [33m[2m✓[22m[39m the chapter carries the winning prose, and it is the chosen revision (D-22, L-10) [33m 2774[2mms[22m[39m
+ [32m✓[39m src/server/run/executor.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m src/server/tools/runtime.test.ts [2m([22m[2m44 tests[22m[2m)[22m[33m 308[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/NewStoryForm.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 261[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/AuthorQueue.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 1351[2mms[22m[39m
+     [33m[2m✓[22m[39m renders a finding as the Editor wrote it — claim, evidence line, cost, and two buttons (U-10a / D-34) [33m 628[2mms[22m[39m
+     [33m[2m✓[22m[39m approves one finding at a time, with the audit line, and offers no silent batch (U-10b / P11) [33m 376[2mms[22m[39m
+ [32m✓[39m src/server/store/store.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 162[2mms[22m[39m
+ [32m✓[39m src/server/tools/digest-gap.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/server/tools/permissions.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/server/run/panel.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+ [32m✓[39m src/server/api/revision-routes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 142[2mms[22m[39m
+ [32m✓[39m src/server/run/brief.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/server/digest/digest.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 98[2mms[22m[39m
+ [32m✓[39m src/server/loop/trend.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 10678[2mms[22m[39m
+     [33m[2m✓[22m[39m stops with `stalled`, naming the limit, the oldest confirmed finding, and the attempts [33m 1584[2mms[22m[39m
+     [33m[2m✓[22m[39m the finding the sentence names is the one the store says is oldest and confirmed (L-22) [33m 969[2mms[22m[39m
+     [33m[2m✓[22m[39m the exits are not sticky: changing the Goal re-arms the loop (L-23) [33m 1253[2mms[22m[39m
+     [33m[2m✓[22m[39m a Story that has run out of problems is drained, not stalled (L-37a, W7) [33m 2238[2mms[22m[39m
+     [33m[2m✓[22m[39m an unchanged ladder is flat, and the streak counts the rounds that were measured [33m 1672[2mms[22m[39m
+     [33m[2m✓[22m[39m closing a fingerprint is progress even when no level moved (L-15a) [33m 552[2mms[22m[39m
+     [33m[2m✓[22m[39m a closed fingerprint seen again is a regression, and one never closed is not (L-16a) [33m 1605[2mms[22m[39m
+     [33m[2m✓[22m[39m a level falling is a regression, and a level rising is not (L-16) [33m 801[2mms[22m[39m
+ [32m✓[39m src/server/loop/drain.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 10733[2mms[22m[39m
+     [33m[2m✓[22m[39m buys the Editor pass at the phase-① sign-off instead of waiting for the Author (D-27, L-29) [33m 950[2mms[22m[39m
+     [33m[2m✓[22m[39m a verified Idea still holds the lock shut until the Author discards it — verified is not a decision (L-7a, U-15, T-3b) [33m 631[2mms[22m[39m
+     [33m[2m✓[22m[39m leaves an UNSOURCED proposed Idea as the Author's decision (D-27 reads `sources`, not "an Idea exists") [33m 321[2mms[22m[39m
+     [33m[2m✓[22m[39m dispatches at the drained boundary too, once, and the Idea lands verified (D-27, D-35b, L-37) [33m 2282[2mms[22m[39m
+     [33m[2m✓[22m[39m states the verified Idea in the completion prompt's discard count, not only the `proposed` ones (L-25b, U-14) [33m 3013[2mms[22m[39m
+     [33m[2m✓[22m[39m never re-verifies an Idea the Author picked over the missing verdict — C-15 stays red (D-27, C-15) [33m 1142[2mms[22m[39m
+     [33m[2m✓[22m[39m files one verdict per competing draft against the DRAFT, and the pinned view carries every row [33m 2383[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/story-cost-distribution.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 226[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/PhaseStrip.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 140[2mms[22m[39m
+ [32m✓[39m src/server/criteria/engine.test.ts [2m([22m[2m51 tests[22m[2m)[22m[32m 150[2mms[22m[39m
+ [32m✓[39m src/server/tools/catalogue.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/server/llm/client.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/server/run/loop.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/server/llm/mock.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/server/api/level-history.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m src/server/run/assistant-run.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/server/api/approve-all.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 120[2mms[22m[39m
+ [32m✓[39m src/server/tools/assistant-attribution.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/dashboard/api.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/shared/criteria.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/server/templates/templates.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/shared/types.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/dashboard/shell-binding.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/server/loop/d36-tray.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/server/config.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/dashboard/components/story-contract.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/shared/chapter.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/server/tools/artifacts.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/server/loop/slice.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 16402[2mms[22m[39m
+     [33m[2m✓[22m[39m writes and judges the Summary, then waits for the Author instead of advancing (L-29, L-6) [33m 421[2mms[22m[39m
+     [33m[2m✓[22m[39m locks the Summary on the Author word and moves to phase ②, with the lock recorded (L-6a, §6.3) [33m 492[2mms[22m[39m
+     [33m[2m✓[22m[39m writes and judges each plotline, then holds for the sign-off without touching phase ③ (L-29) [33m 867[2mms[22m[39m
+     [33m[2m✓[22m[39m refuses to lock a phase the Story has not reached (L-33) [33m 394[2mms[22m[39m
+     [33m[2m✓[22m[39m drafts every chapter, judges every draft, and selects one (D-21, D-22, L-8) [33m 1386[2mms[22m[39m
+     [33m[2m✓[22m[39m does not stop when the phase Goal turns green: the crew keeps working until it drains (L-35, L-36) [33m 1048[2mms[22m[39m
+     [33m[2m✓[22m[39m runs the whole-Story pass once, after every chapter has been judged (§5.2, L-15a) [33m 2497[2mms[22m[39m
+     [33m[2m✓[22m[39m goes pending/drained after a clean Reader+checker round, and dispatches nothing (L-37, W4) [33m 3597[2mms[22m[39m
+     [33m[2m✓[22m[39m proposes completion — it never completes itself — and names what accepting discards (L-25, L-26, L-25b) [33m 2366[2mms[22m[39m
+     [33m[2m✓[22m[39m completes on the Author acceptance, and says so with the discard count (L-25, L-25b) [33m 1418[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps the crew working when the Author refuses, and retires the probe so the round re-runs (L-30) [33m 1021[2mms[22m[39m
+     [33m[2m✓[22m[39m is not stalled: a Story that has run out of problems reports drained (L-37a, W7) [33m 831[2mms[22m[39m
+ [32m✓[39m src/server/loop/findings.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 16999[2mms[22m[39m
+     [33m[2m✓[22m[39m approves on the spot, creates the task, and runs the fix — the Author is never consulted [33m 675[2mms[22m[39m
+     [33m[2m✓[22m[39m aims the fix at the unit that was under judgment, not at the Story row (L-11a, T-12) [33m 723[2mms[22m[39m
+     [33m[2m✓[22m[39m carries the criterion and the finding on the task row — the queue, not the transcript, is the plan (§4.7, D-11) [33m 694[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps working while covered work is open — a failing criterion is not a drain (L-35, L-25) [33m 722[2mms[22m[39m
+     [33m[2m✓[22m[39m a re-claim of a defect the crew already fixed opens a second row the ledger reads as a regression (L-16a, D-16) [33m 2016[2mms[22m[39m
+     [33m[2m✓[22m[39m drains with the rows awaiting the Author, and names the count where the board reads it [33m 1533[2mms[22m[39m
+     [33m[2m✓[22m[39m the approval is what starts Writer work, and the Author answer is on the record (D-34, D-41c) [33m 3922[2mms[22m[39m
+     [33m[2m✓[22m[39m the task the Author starts is the same record shape — criterion and finding refs and all (§4.7, D-11, D-34) [33m 2940[2mms[22m[39m
+     [33m[2m✓[22m[39m accepting completion discards the leftovers and says how many (L-25b) [33m 1692[2mms[22m[39m
+     [33m[2m✓[22m[39m files the Editor verdict on the row, creates no work, and lets the Story drain [33m 1124[2mms[22m[39m
+     [33m[2m✓[22m[39m the Editor triage is final — an approval does not quietly re-cost the claim (D-34a) [33m 952[2mms[22m[39m
+ [32m✓[39m src/server/loop/verbs.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 26174[2mms[22m[39m
+     [33m[2m✓[22m[39m backtracking to the plotlines deletes the chapters and their verdicts, and unlocks only phase ② [33m 2180[2mms[22m[39m
+     [33m[2m✓[22m[39m editing the Seed is a full backtrack to phase ①, and the Idea record is the Seed (D-25a) [33m 2055[2mms[22m[39m
+     [33m[2m✓[22m[39m refuses the Seed edit until the Author confirms what it throws away (L-32) [33m 2884[2mms[22m[39m
+     [33m[2m✓[22m[39m asks what it will delete before growing, then re-materialises the whole chapter set [33m 3792[2mms[22m[39m
+     [33m[2m✓[22m[39m shrinking deletes the last chapter and keeps the rest (D-3c) [33m 2267[2mms[22m[39m
+     [33m[2m✓[22m[39m refuses the prose edit while the Story runs, naming D-37 [33m 1680[2mms[22m[39m
+     [33m[2m✓[22m[39m the pause kills the live runs, the edit marks the span Author-written, and the undo restores it [33m 952[2mms[22m[39m
+     [33m[2m✓[22m[39m an Author edit dirties the chapters that depend on it before anyone runs (D-37a, L-11a) [33m 866[2mms[22m[39m
+     [33m[2m✓[22m[39m unapproving a chapter outranks the criteria and wakes the crew (L-10) [33m 1112[2mms[22m[39m
+     [33m[2m✓[22m[39m creates the propagate task, marks the targets, and closes the directive with its impact [33m 913[2mms[22m[39m
+     [33m[2m✓[22m[39m leaves §4.7's `finding_ref` empty — a directive is not a finding (D-19, §4.7) [33m 1075[2mms[22m[39m
+     [33m[2m✓[22m[39m setGoal rewrites the Goal the criteria read, and the next sweep re-derives from it (L-16b) [33m 917[2mms[22m[39m
+     [33m[2m✓[22m[39m setChapterBar writes §4.4's override as the include/exclude text the criteria read (G-1) [33m 929[2mms[22m[39m
+     [33m[2m✓[22m[39m an assignment that does not validate is refused with the reasons, and the row keeps the old crew (D-17b, T-0) [33m 1610[2mms[22m[39m
+     [33m[2m✓[22m[39m a valid assignment lands on the Story row, and live runs need the confirm first (D-38a, L-4) [33m 1464[2mms[22m[39m
+     [33m[2m✓[22m[39m retires the dispatchable tasks without touching the artifacts they were about to change [33m 1221[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m61 passed[39m[22m[90m (61)[39m
+[2m      Tests [22m [1m[32m592 passed[39m[22m[90m (592)[39m
+[2m   Start at [22m 00:45:34
+[2m   Duration [22m 28.55s[2m (transform 11.09s, setup 0ms, import 25.96s, tests 117.11s, environment 87.15s)[22m
+
+Done in 29.04s.
