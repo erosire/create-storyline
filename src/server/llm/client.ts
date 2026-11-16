@@ -74,7 +74,7 @@ export interface ChatClient {
 }
 
 export interface LlmConfig {
-    /** Provider root, e.g. `http://localhost:5500/providers/private/v1`. Trailing slashes are collapsed. */
+    /** Provider root, e.g. `http://localhost:6660/providers/private/v1`. Trailing slashes are collapsed. */
     baseUrl: string;
     /** Optional: a key-free local relay sends no `Authorization` header at all. */
     apiKey?: string;
