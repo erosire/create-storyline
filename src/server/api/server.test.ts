@@ -458,7 +458,7 @@ describe('the CLI flags', () => {
         );
 
         expect(lines[0]).toBe('Storyline is listening on http://127.0.0.1:5050/v1/storyline');
-        expect(lines[2]).toBe('harness: http://localhost:6660/providers/private/v1 · model deepseek-r1');
+        expect(lines[2]).toBe('harness: http://localhost:8800/providers/private/v1 · model deepseek-r1');
         expect(lines[3]).toContain('in-memory');
         expect(HELP_TEXT).toContain('--store-root <dir>');
     });

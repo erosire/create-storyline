@@ -46,7 +46,7 @@ export const PROVIDER_MODEL_ENVIRONMENT = 'STORYLINE_PROVIDER_MODEL';
 export const PROVIDER_API_KEY_ENVIRONMENT = 'STORYLINE_PROVIDER_API_KEY';
 
 /** The §8.5 web-tool fetch is behind the same transport, so one base URL covers it. */
-export const DEFAULT_PROVIDER_BASE_URL = 'http://localhost:6660/providers/private/v1';
+export const DEFAULT_PROVIDER_BASE_URL = 'http://localhost:8800/providers/private/v1';
 
 /** Any OpenAI-compatible relay name; the local dev relay serves a single default model. */
 export const DEFAULT_PROVIDER_MODEL = 'local/basalt';
