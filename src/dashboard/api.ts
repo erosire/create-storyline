@@ -300,12 +300,34 @@ export interface StoryKnowledgeTree {
     degraded: boolean;
 }
 
+/**
+ * U-8 — the provider's model catalog (`GET /agents/models`), the only choices the roster's
+ * dropdown offers. `base_url` is the provider root the harness engine dials.
+ */
+export interface AgentModelCatalog {
+    base_url: string;
+    models: string[];
+}
+
 /** One tenant of the global agent roster, with every Story thread it is currently working. */
 export interface AgentStatusRow {
     /** `writer` | `editor` | `reader` | `checker` — the Storyline role, shared by every Story. */
     kind: string;
     title: string;
     status: 'idle' | 'running';
+    /**
+     * U-8 / T-6b — the roster's model for this agent, or the process model when the Author has
+     * set none. Optional on the client contract so an older/fake projection still renders: the
+     * tile says "not reported" rather than inventing a model.
+     */
+    model?: string;
+    /** `agent` when the Author set it on this roster; `default` for the process model. */
+    model_source?: 'agent' | 'default';
+    /**
+     * Template roles that name their own model for this kind. A role model wins until the Author
+     * sets a roster choice here; listing them is what stops the tile misreporting the crew (T-6b).
+     */
+    template_models?: Array<{ template: string; role: string; model: string }>;
     working: Array<{
         story_id: string;
         story_title: string;
@@ -324,8 +346,15 @@ export interface ApiClient {
     getStory(storyId: string): Promise<StoryView>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
-    /** The global Story-agent roster: Writer/Editor/Reader/Checker and their live threads. */
+    /** The global Story-agent roster: Writer/Editor/Reader/Checker, their models and live threads. */
     listAgents(): Promise<AgentStatusRow[]>;
+    /** U-8 — the provider's model catalog, the roster dropdown's only choices. */
+    listAgentModels(): Promise<AgentModelCatalog>;
+    /**
+     * U-8 — set (or clear, with `null`) one agent's model on the global roster. Answers the whole
+     * refreshed projection, because every tile's model line is server-owned.
+     */
+    setAgentModel(kind: string, model: string | null): Promise<AgentStatusRow[]>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
     stop(storyId: string): Promise<StoryRow>;
     resume(storyId: string): Promise<StoryRow>;
@@ -545,6 +574,8 @@ export const api: ApiClient = {
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),
+    listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
+    setAgentModel: (kind, model) => patch<AgentStatusRow[]>(`/agents/${encodeURIComponent(kind)}`, { model }),
     patchStory: (storyId, body) => patch<StoryRow>(storyPath(storyId), body),
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),
     resume: (storyId) => post<StoryRow>(storyPath(storyId, '/resume')),

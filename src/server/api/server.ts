@@ -146,7 +146,7 @@ export interface StorylineRuntimeOptions {
     env?: Record<string, string | undefined>;
     /** SSE debounce (one frame per topic per commit burst). */
     streamDebounceMs?: number;
-    /** Passed to the tool runtime so the §8.5 web tools never touch the network in tests. */
+    /** Passed to the tool runtime and the U-8 model-catalog route so neither touches the network in tests. */
     fetchImpl?: typeof fetch;
     /** Skips the §8.6 template seed (a test that asserts the catalogue is exactly the built-ins). */
     noAssistantSeed?: boolean;
@@ -231,6 +231,10 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
             criteria,
             digest,
             knowledge,
+            // U-8 — the roster's dropdown reads the SAME provider root the transport dials.
+            providerBaseUrl: baseUrl,
+            ...(apiKey === undefined ? {} : { providerApiKey: apiKey }),
+            ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
             ...(options.streamDebounceMs === undefined ? {} : { streamDebounceMs: options.streamDebounceMs })
         })
     );

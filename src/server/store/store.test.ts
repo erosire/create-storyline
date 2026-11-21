@@ -493,7 +493,7 @@ describe('Store persistence — the two files (P1, L-3, D-12a)', () => {
             expect(snapshot.version).toBe(1);
             expect(snapshot.counters.stories).toBe(1);
             // `store.json` puts the record arrays under `records` (persist.ts `StoreSnapshot`);
-            // the top level is version + counters + records + journal only.
+            // the top level is version + counters + records + settings + journal.
             expect(snapshot.records.stories).toHaveLength(1);
             expect(snapshot.records.stories[0].rev).toBe(2);
         } finally {

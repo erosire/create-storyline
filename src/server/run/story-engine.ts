@@ -35,6 +35,7 @@ import type {
 } from '@underload/harness';
 import type { ChatClient, ChatMessage, ToolCall, ToolSchema } from '../llm';
 import type { LoopOutcome, LoopSpec, RunTally } from './loop';
+import { agentModelFor, templateRoleModels, type AgentModelSource, type AgentTemplateModel } from './agent-models';
 import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
 import type { RoleKind, Story, StoryPhase } from '../../shared/types';
@@ -106,6 +107,18 @@ export interface StoryAgentStatus {
     kind: RoleKind;
     title: string;
     status: 'idle' | 'running';
+    /**
+     * U-8 / T-6b — the model this agent asks for when its template role names none. The Agents
+     * panel shows it beside the status so the Author never has to guess what a tile is running.
+     */
+    model: string;
+    /** `agent` when the Author set it on the global roster, `default` for the process model. */
+    model_source: AgentModelSource;
+    /**
+     * Template roles that name their own model for this kind (T-6b). They override the process
+     * default until the Author sets a roster choice, so the tile has to name them to stay honest.
+     */
+    template_models: AgentTemplateModel[];
     /** Live threads across every Story, oldest first. */
     working: Array<{
         story_id: string;
@@ -134,8 +147,7 @@ export const STORY_AGENT_CATALOGUE: readonly StoryAgentCatalogueEntry[] = [
     {
         kind: 'editor',
         title: 'Editor',
-        description:
-            'Chooses between competing drafts, verifies Ideas and findings, and writes no prose of its own.'
+        description: 'Chooses between competing drafts, verifies Ideas and findings, and writes no prose of its own.'
     },
     {
         kind: 'reader',
@@ -182,7 +194,10 @@ export class StoryHarness {
     /** Brief system line -> run, so the transport can attribute a request to its thread. */
     private readonly byBrief = new Map<string, EngineRun>();
 
-    constructor(private readonly storyId: string, options: StoryHarnessOptions) {
+    constructor(
+        private readonly storyId: string,
+        options: StoryHarnessOptions
+    ) {
         this.store = options.store;
         this.chat = options.chat;
         this.runtime = options.runtime;
@@ -273,8 +288,7 @@ export class StoryHarness {
                     if (run === undefined) {
                         return {
                             ok: false,
-                            error:
-                                'this tool call arrived outside a Storyline thread, so there is no Story to bind (T-3)'
+                            error: 'this tool call arrived outside a Storyline thread, so there is no Story to bind (T-3)'
                         };
                     }
 
@@ -312,7 +326,8 @@ export class StoryHarness {
     }
 
     private async executeInRun(run: EngineRun, name: string, args: Record<string, unknown>): Promise<unknown> {
-        if (run.signal?.aborted === true) return { ok: false, error: 'the run was stopped before this call started (P8)' };
+        if (run.signal?.aborted === true)
+            return { ok: false, error: 'the run was stopped before this call started (P8)' };
 
         // U-1e: not merely hidden from the declaration list. A model that guesses a name the run
         // was not offered is refused here as well, so §7/§8.6's empty cell cannot be bypassed.
@@ -321,11 +336,7 @@ export class StoryHarness {
         }
 
         const cursor = run.tally.executed.length;
-        const result: Awaited<ReturnType<ToolRuntime['execute']>> = await run.runtime.execute(
-            run.context,
-            name,
-            args
-        );
+        const result: Awaited<ReturnType<ToolRuntime['execute']>> = await run.runtime.execute(run.context, name, args);
 
         // S-4a: the lease is refreshed on every tool call, exactly as the hand-written loop did.
         run.heartbeat?.();
@@ -401,14 +412,17 @@ export class StoryHarness {
     private toolSchemas(request: HarnessStreamRequest, run: EngineRun | undefined): ToolSchema[] {
         return (request.tools ?? [])
             .filter((schema) => run === undefined || run.allowed.has(schema.name))
-            .map((schema) => this.declaredSchemas.get(schema.name) ?? {
-                type: 'function',
-                function: {
-                    name: schema.name,
-                    description: schema.description,
-                    parameters: schema.parameters ?? { type: 'object', properties: {} }
-                }
-            });
+            .map(
+                (schema) =>
+                    this.declaredSchemas.get(schema.name) ?? {
+                        type: 'function',
+                        function: {
+                            name: schema.name,
+                            description: schema.description,
+                            parameters: schema.parameters ?? { type: 'object', properties: {} }
+                        }
+                    }
+            );
     }
 
     /**
@@ -577,7 +591,10 @@ export class StoryHarness {
             briefKey,
             // U-1e: an omitted list means the whole catalogue; an explicit list (an assistant run)
             // narrows what the model is offered and what it may call.
-            allowed: new Set(spec.tools?.map((schema) => schema.function.name) ?? this.runtime.schemas().map((schema) => schema.function.name)),
+            allowed: new Set(
+                spec.tools?.map((schema) => schema.function.name) ??
+                    this.runtime.schemas().map((schema) => schema.function.name)
+            ),
             queue: Promise.resolve(),
             turns: 0,
             startedAt: Date.now()
@@ -635,10 +652,15 @@ export class StoryHarness {
                     started_at: run.startedAt
                 }));
 
+            const choice = agentModelFor(this.store, this.defaultModel, entry.kind);
+
             return {
                 kind: entry.kind,
                 title: entry.title,
                 status: working.length > 0 ? 'running' : 'idle',
+                model: choice.model,
+                model_source: choice.source,
+                template_models: templateRoleModels(this.store, entry.kind),
                 working
             };
         });
@@ -734,7 +756,19 @@ export class StoryHarnessManager {
         const byKind = new Map<RoleKind, StoryAgentStatus>();
 
         for (const entry of STORY_AGENT_CATALOGUE) {
-            byKind.set(entry.kind, { kind: entry.kind, title: entry.title, status: 'idle', working: [] });
+            // The model is a roster fact, not a per-Story thread fact, so a workspace with no
+            // harness yet still answers what each agent would run (U-8).
+            const choice = agentModelFor(this.store, this.options.defaultModel, entry.kind);
+
+            byKind.set(entry.kind, {
+                kind: entry.kind,
+                title: entry.title,
+                status: 'idle',
+                model: choice.model,
+                model_source: choice.source,
+                template_models: templateRoleModels(this.store, entry.kind),
+                working: []
+            });
         }
 
         for (const story of this.harnesses.values()) {

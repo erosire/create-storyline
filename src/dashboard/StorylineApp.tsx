@@ -51,7 +51,7 @@ export function StorylineApp(props: { store?: DashboardStore }) {
 /** The regions themselves, split out so the store injection above stays one line. */
 function Shell() {
     const store = useDashboardStore();
-    const { activeStoryId, stories, storyViews, runs, templates, knowledge, agents } = useDashboard();
+    const { activeStoryId, stories, storyViews, runs, templates, knowledge, agents, agentModels } = useDashboard();
 
     // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
     // unmount (React StrictMode's double-mount is why the teardown has to be real).
@@ -108,7 +108,13 @@ function Shell() {
                                     <StoryView
                                         view={storyViewData(view, templates) as unknown as StoryViewData}
                                         actions={shellActions(store, activeStoryId)}
-                                        railLead={<AgentsPanel agents={agents} />}
+                                        railLead={
+                                            <AgentsPanel
+                                                agents={agents}
+                                                models={agentModels}
+                                                onSetModel={(kind, model) => store.setAgentModel(kind, model)}
+                                            />
+                                        }
                                     />
                                 ) : (
                                     /* U-11: no spinner while the first read is in flight. */
@@ -131,7 +137,11 @@ function Shell() {
                         <div className="region__body">
                             {/* The roster is global: every story's phrases run these agents.
                                 Rank A is called out, before the phrases live right now. */}
-                            <AgentsPanel agents={agents} />
+                            <AgentsPanel
+                                agents={agents}
+                                models={agentModels}
+                                onSetModel={(kind, model) => store.setAgentModel(kind, model)}
+                            />
                             {/* U-7 across every Story: with no Story selected the Author is on the
                                 desk, and what is still running is the next thing that will land on it. */}
                             <CrewPanel

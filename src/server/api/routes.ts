@@ -39,6 +39,8 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { duplicateTemplate, validateTemplate } from '../templates/templates';
 import { authorAttr, competingRevisions, requireStory, undecidedIdeas } from '../loop/records';
+import { isAgentKind, setAgentModel } from '../run/agent-models';
+import { listProviderModels } from '../run/provider-models';
 // U-13's two routes install and queue drafts, so they use the tool layer's own §4.15 body codec and
 // its task opener: the Editor's `selectRevision`/`requestMerge` read the SAME functions, so an
 // Author's choice and a Checker's choice cannot disagree about what a stored draft says (D-22, D-23).
@@ -73,6 +75,16 @@ export interface StorylineRoutesDeps extends ProjectionDeps {
     executor: RunExecutor;
     /** The Story's durable knowledge projection (harness knowledge engine, outside every session). */
     knowledge: StoryKnowledge;
+    /**
+     * U-8 — the provider root the harness engine dials (`STORYLINE_PROVIDER_BASE_URL`). The roster's
+     * model choices are read from this root's OpenAI-compatible catalog, `GET {base}/models`, because
+     * the dropdown must offer exactly the models the runs can ask for.
+     */
+    providerBaseUrl: string;
+    /** The transport's optional bearer; the catalog request sends the same one. */
+    providerApiKey?: string;
+    /** Test seam for the catalog fetch; defaults to `globalThis.fetch`. */
+    fetchImpl?: typeof fetch;
     /** SSE debounce: one commit bursts into one frame per topic, so a sweep cannot flood the client. */
     streamDebounceMs?: number;
 }
@@ -165,6 +177,11 @@ interface GoalPatchBody {
 interface AssistantBody {
     target?: unknown;
     text?: unknown;
+}
+
+/** U-8 — one agent's model on the global roster. `null` clears the choice (template role → process default). */
+interface AgentModelBody {
+    model?: unknown;
 }
 
 /**
@@ -1344,6 +1361,81 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * Author to see the roster.
      */
     app.get('/agents', (c) => c.json(deps.executor.harness.statuses(), 200));
+
+    /**
+     * U-8 — the model catalog the roster's dropdown offers. The harness engine dials one provider
+     * root (the env triple's base URL, default `http://localhost:8800/providers/private/v1`), and its
+     * OpenAI-compatible catalog is `GET {base}/models`. The dashboard never asks the browser to reach
+     * that origin directly: one origin, and a provider that is down becomes this server's sentence
+     * (L-13) rather than an unreadable cross-origin failure.
+     */
+    app.get('/agents/models', async (c) => {
+        try {
+            const catalog = await listProviderModels({
+                baseUrl: deps.providerBaseUrl,
+                ...(deps.providerApiKey === undefined ? {} : { apiKey: deps.providerApiKey }),
+                ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl })
+            });
+
+            return c.json(catalog, 200);
+        } catch (error) {
+            // 502, not 409: the provider is outside this server, so the request was not refused by a
+            // Storyline rule — the upstream that owns the catalog did not answer.
+            return c.json({ error: error instanceof Error ? error.message : String(error) }, 502);
+        }
+    });
+
+    /**
+     * U-8 — the Author sets which model one global agent asks for. The roster is not a §4 record:
+     * the choice is a host setting beside the book, and the response is the same projection
+     * `GET /agents` answers, so the tile can show the new model in the frame the click lands.
+     *
+     * `model: null` clears the choice, returning the agent to its template role model, else the
+     * process model (T-6b); an empty or missing string is a 400 rather than a silent clear, because
+     * a typo must not unset a running configuration. A template role that names its own model is
+     * listed on the tile, so the Author knows what a clear would fall back to.
+     */
+    app.patch('/agents/:kind', async (c) => {
+        const kind = param(c, 'kind');
+
+        if (!isAgentKind(kind)) {
+            return errorResponse(
+                c,
+                404,
+                `no agent named "${kind}" — the global roster is writer, editor, reader and checker (U-8).`
+            );
+        }
+
+        const parsed = await readBody<AgentModelBody>(c);
+
+        if (!parsed.ok) return parsed.response;
+
+        if (!('model' in parsed.body)) {
+            return errorResponse(
+                c,
+                400,
+                '`model` is required — send a model name, or null to clear the agent’s choice (T-6b).'
+            );
+        }
+
+        const model = parsed.body.model;
+
+        if (model !== null && (typeof model !== 'string' || model.trim().length === 0)) {
+            return errorResponse(
+                c,
+                400,
+                '`model` must be a non-empty string, or null to clear the agent’s choice (T-6b).'
+            );
+        }
+
+        try {
+            setAgentModel(store, kind, model);
+        } catch (error) {
+            return refusal(c, error);
+        }
+
+        return c.json(deps.executor.harness.statuses(), 200);
+    });
 
     app.get('/templates', (c) => c.json(store.templates.list(), 200));
 

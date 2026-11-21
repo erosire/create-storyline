@@ -478,6 +478,14 @@ export class Store {
     private readonly listeners = new Set<CommitListener>();
 
     /**
+     * Host settings that are not §4 records (today the global agent roster's models, U-8). They are
+     * persisted in `store.json` but never journaled: a model choice is a host configuration, not a
+     * story fact, so it must not feed the Digest derivation (D-12a). The map is kept separate from
+     * the collections so no §4 path can see or enumerate it as an artifact.
+     */
+    private readonly settings = new Map<string, unknown>();
+
+    /**
      * The commit under construction. Non-null inside `commit()`; a mutation that lands there
      * is buffered so the group can be rolled back as a unit and so listeners see one
      * decision at a time (D-22's "in the same commit" is this buffer, nothing else).
@@ -567,6 +575,18 @@ export class Store {
 
         store.events.push(...merged);
 
+        // A malformed settings section does the same thing a malformed collection does: it
+        // rehydrates as absent rather than costing the Author the book (see the note above).
+        if (
+            snapshot?.settings !== null &&
+            typeof snapshot?.settings === 'object' &&
+            !Array.isArray(snapshot.settings)
+        ) {
+            for (const [key, value] of Object.entries(snapshot.settings)) {
+                store.settings.set(key, copyIn(value));
+            }
+        }
+
         // The counter continues from the journal rather than restarting, or a replayed store
         // would hand out seq 1 twice and the digest derivation would read two different
         // commits by the same number.
@@ -580,6 +600,31 @@ export class Store {
     /** The append-only commit journal (P11 audit, D-12a derivation source). */
     get journal(): readonly CommitEvent[] {
         return this.events;
+    }
+
+    /**
+     * A host setting persisted with the book but outside the §4 record model (U-8's agent models).
+     * `undefined` means the setting has never been written; callers own the default.
+     */
+    setting<T = unknown>(key: string): T | undefined {
+        return this.settings.get(key) as T | undefined;
+    }
+
+    /**
+     * Writes a host setting and schedules the same debounced snapshot a record write uses. Settings
+     * are deliberately NOT journaled: they are host configuration, not story state (see `settings`
+     * above), and an audit of the Author's book should not be cluttered by model names.
+     */
+    setSetting(key: string, value: unknown): void {
+        this.settings.set(key, copyIn(value));
+        this.schedulePersist();
+    }
+
+    /** Removes a host setting; a deleted setting is the absence a caller defaults from. */
+    deleteSetting(key: string): void {
+        if (!this.settings.delete(key)) return;
+
+        this.schedulePersist();
     }
 
     /**
@@ -805,6 +850,7 @@ export class Store {
      */
     private snapshotState(): {
         collections: Record<CollectionName, CollectionState<AnyRecord>>;
+        settings: Record<string, unknown>;
         seq: number;
         events: number;
     } {
@@ -814,15 +860,25 @@ export class Store {
 
         // `events.length`, not `seq`: after a load with a gapped journal the two differ, and
         // the rollback has to drop exactly the events this commit added.
-        return { collections, seq: this.seq, events: this.events.length };
+        return {
+            collections,
+            settings: Object.fromEntries(this.settings),
+            seq: this.seq,
+            events: this.events.length
+        };
     }
 
     private restoreState(state: {
         collections: Record<CollectionName, CollectionState<AnyRecord>>;
+        settings: Record<string, unknown>;
         seq: number;
         events: number;
     }): void {
         for (const name of COLLECTION_NAMES) this.collections[name]._restore(state.collections[name]);
+
+        this.settings.clear();
+
+        for (const [key, value] of Object.entries(state.settings)) this.settings.set(key, value);
 
         // Buffered events were never published, and published-but-rolled-back ones must not
         // survive either: the journal is a record of what happened, not of what was attempted.
@@ -840,6 +896,7 @@ export class Store {
             version: SNAPSHOT_VERSION,
             counters: {},
             records: {},
+            settings: copyIn(Object.fromEntries(this.settings)),
             journal: copyIn(this.events)
         };
 

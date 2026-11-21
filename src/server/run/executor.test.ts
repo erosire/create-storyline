@@ -13,6 +13,7 @@ import { LlmError } from '../llm';
 import { calls, msg } from '../llm/mock';
 import { MockChatClient, type MockHandler } from '../llm/mock';
 import { Store } from '../store';
+import { setAgentModel } from './agent-models';
 import { buildBrief } from './brief';
 import { resolveHarness } from './harness';
 import { RunExecutor } from './executor';
@@ -907,5 +908,35 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // state hash identically — and a run's own rows never leak into it (which is why the second
         // hash still matches the pre-run assembly).
         expect(store.runs.list().map((row) => row.brief_hash)).toEqual([brief.hash, brief.hash]);
+    });
+
+    it('asks for the roster model the Author set, then falls back to the template role (U-8, T-6b)', async () => {
+        const { store, runtime, item, template } = rig();
+        const { client, requests } = record(() => ({
+            message: msg({ content: 'nothing to add' }),
+            usage: { input: 1, output: 1 }
+        }));
+        const executor = new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' });
+
+        setAgentModel(store, 'writer', 'deepseek-r1');
+
+        await executor.execute(item);
+
+        // The roster choice is the agent's model until the Author clears it.
+        expect(requests[0]?.model).toBe('deepseek-r1');
+
+        // T-6b: a template role's own model governs its crew once the roster has no choice.
+        store.templates.update(
+            template.id,
+            { roles: template.roles.map((role) => ({ ...role, model: 'role-only' })) },
+            { run_ref: null, author: true, why: 'the test pins a role-level model over the roster default' },
+            [{ id: template.id, rev: template.rev }]
+        );
+        setAgentModel(store, 'writer', null);
+
+        requests.length = 0;
+        await executor.execute(item);
+
+        expect(requests[0]?.model).toBe('role-only');
     });
 });

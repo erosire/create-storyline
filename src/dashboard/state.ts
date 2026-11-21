@@ -59,6 +59,11 @@ export interface DashboardSnapshot {
     templates: Template[];
     /** The global Story-agent roster and every Story thread each one is working right now. */
     agents: AgentStatusRow[];
+    /**
+     * U-8 — the provider's model catalog (`GET /agents/models`). The agent tiles offer exactly
+     * these ids; an empty list means the catalog has not answered yet, never that typing is allowed.
+     */
+    agentModels: string[];
     /** U-1c — "work the leftovers" jumps the queue to one Story without leaving the panel. */
     queueStoryFilter: string | null;
     /** U-11 / L-13 — the last refusal, shown as the server wrote it, never swallowed. */
@@ -76,6 +81,7 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     runs: [],
     templates: [],
     agents: [],
+    agentModels: [],
     queueStoryFilter: null,
     error: null,
     loading: true
@@ -140,8 +146,11 @@ export function createDashboardStore(client: ApiClient = api) {
     const refreshTemplates = (): Promise<void> =>
         refresh('templates', async () => ({ templates: await client.listTemplates() }));
 
-    const refreshAgents = (): Promise<void> =>
-        refresh('agents', async () => ({ agents: await client.listAgents() }));
+    const refreshAgents = (): Promise<void> => refresh('agents', async () => ({ agents: await client.listAgents() }));
+
+    /** U-8 — the provider's catalog. Read once per page; a provider restart is a later reload's job. */
+    const refreshAgentModels = (): Promise<void> =>
+        refresh('agentModels', async () => ({ agentModels: (await client.listAgentModels()).models }));
 
     const refreshKnowledge = (storyId: string): Promise<void> =>
         refresh(`knowledge:${storyId}`, async () => {
@@ -223,6 +232,7 @@ export function createDashboardStore(client: ApiClient = api) {
             void refreshQueue();
             void refreshTemplates();
             void refreshAgents();
+            void refreshAgentModels();
             void refreshRuns();
             // The callback captures `snapshot` lazily, so a `runs` event after a story
             // switch lists the NEW active Story's runs rather than the previous one's.
@@ -276,6 +286,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshQueue(),
                 refreshTemplates(),
                 refreshAgents(),
+                refreshAgentModels(),
                 refreshRuns()
             ]).then(() => undefined);
         },
@@ -360,6 +371,11 @@ export function createDashboardStore(client: ApiClient = api) {
             mutate(() => client.setChapterBar(storyId, chapterId, barOverride), storyId),
 
         // ---- crew + templates (U-7 / U-8) ---------------------------------------------
+        /**
+         * U-8 — one agent's model on the global roster. `mutate` already refreshes `agents`, so a
+         * tile can never keep showing the model it had before the Author's click.
+         */
+        setAgentModel: (kind: string, model: string | null) => mutate(() => client.setAgentModel(kind, model)),
         killRun: (runId: string) =>
             mutate(async () => {
                 const run = await client.killRun(runId);

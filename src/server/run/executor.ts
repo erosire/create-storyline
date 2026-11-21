@@ -19,8 +19,16 @@
 // run is fine while it keeps calling tools; a hung run stops refreshing and lapses (L-2), and
 // the sweep re-adopts or abandons it (L-3).
 import { LlmError, type ChatClient, type ToolSchema } from '../llm';
-import { ROLE_KINDS, type RoleAggregation, type RoleKind, type Run, type RunDelegation, type Story } from '../../shared/types';
+import {
+    ROLE_KINDS,
+    type RoleAggregation,
+    type RoleKind,
+    type Run,
+    type RunDelegation,
+    type Story
+} from '../../shared/types';
 import { type Store, type UpdatePatch } from '../store';
+import { runModelFor } from './agent-models';
 import { buildBrief, type AssembledBrief } from './brief';
 import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
@@ -244,7 +252,10 @@ export class RunExecutor {
                 runId,
                 item,
                 harness,
-                model: harness.role?.model ?? this.defaultModel,
+                // T-6b's precedence, in one place (`runModelFor`): the Author's explicit choice
+                // on the Agents panel (U-8) wins; otherwise the template role's own model; then
+                // the process default.
+                model: runModelFor(this.store, this.defaultModel, harness.kind, harness.role?.model),
                 controller,
                 tally,
                 context: undefined,

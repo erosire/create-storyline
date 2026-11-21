@@ -23,16 +23,16 @@ Goal/criteria, `E-` engine, `P-` principle.
 
 ## The stack, bottom up
 
-| Layer | Path | What it owns |
-| --- | --- | --- |
-| The book | `src/server/store/` | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`. |
-| Criteria | `src/server/criteria/` | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on. |
-| Tools | `src/server/tools/` | The §8 catalogue (Writer/Editor/Checker/Reader/Explorer/assistant), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
-| Brief | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2). |
-| Runs | `src/server/run/` | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`). |
-| Loop | `src/server/loop/` | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill. |
-| API | `src/server/api/` | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`). |
-| Dashboard | `src/dashboard/` | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`. |
+| Layer     | Path                      | What it owns                                                                                                                                                                                                                                                                         |
+| --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`.                                            |
+| Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                             |
+| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Explorer/assistant), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
+| Brief     | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2).                                                                           |
+| Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`).                                       |
+| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill.                                                                           |
+| API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`).                                                                                                       |
+| Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`.                                                                                                                                                           |
 
 ## Things that are easy to get wrong
 
@@ -59,13 +59,13 @@ Goal/criteria, `E-` engine, `P-` principle.
   work is the empty ref `''`, phase ③'s units are chapter ids. `loop/work.ts` treats `''` as the
   set, and a `ref === ''` unit is not "already drafted" (see Fixes below).
 - **Sweeps are Author actions.** `engine.sweep()` returns `{stories: [{status, pending_kind,
-  dispatched, deferred}]}`; `engine.settle()` drains the in-flight runs. Tests drive both
+dispatched, deferred}]}`; `engine.settle()` drains the in-flight runs. Tests drive both
   explicitly (`autoSweep: false`) so nothing passes by waiting.
 - **The Ideas tray is gated by the phase Goal, and probe rounds only fire while the phase still
   has work.** A phase whose Goal passes short-circuits to `pending/phase_signoff` with its probe
   round deferred — `{ "wi_probe_reader_summary_1": "not dispatched: phase_signoff" }` — and a
   `drained` Story defers the tray's verify jobs — `{ "wi_verify_ideas_1_2_idea_1": "not
-  dispatched: drained" }`. Ideas land while a phase is still working, which is why §15 step 1's
+dispatched: drained" }`. Ideas land while a phase is still working, which is why §15 step 1's
   "tray blocks the lock" needs a withheld criterion to be reachable at all.
 
 ## The Author's verbs (routes.ts)
@@ -108,7 +108,7 @@ the number U-14's prompt states, counted from the same `DISCARDABLE_IDEA_STATES`
 - **`POST /complete` has no tray gate.** `engine.acceptCompletion` completes over a tray of
   undecided Ideas and discards them; only the phase lock refuses on the tray (L-7a).
 - **The assistant run reports `role: "writer"`** on its Run row and `work_item_ref:
-  "assistant_<story>_<run>"`; the plumbing role is reused rather than a distinct one. §7's assistant
+"assistant_<story>_<run>"`; the plumbing role is reused rather than a distinct one. §7's assistant
   COLUMN is now real in two places the row alone used to hide it: the run is offered no web tools
   (`run/catalogue.ts:toolsForRunKind`, U-1e — pinned by `run/assistant-run.test.ts`), and every write
   it makes records `attribution.assistant: true` so the audit tells "the machine, on the Author's
@@ -215,9 +215,18 @@ global agent roster. Both are projections, and neither is a second source of tru
   section articles, and an empty section keeps a placeholder paragraph so its folder stays
   visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree.
 - **The agent roster** (`src/server/run/story-engine.ts`) is fixed and global: Writer, Editor,
-  Reader and Checker. `GET /agents` projects one row per kind with its live threads, the Story
-  title and the phase each thread belongs to. The right-hand tile panel renders that projection;
-  selecting a Story never changes the roster.
+  Reader and Checker. `GET /agents` projects one row per kind with its model, its live threads,
+  the Story title and the phase each thread belongs to. The right-hand tile panel renders that
+  projection; selecting a Story never changes the roster. Each tile's model line is the same
+  resolution the executor uses (`src/server/run/agent-models.ts`): the Author's explicit choice
+  for that agent kind wins, then the template role's own model, then the process model. The tile
+  also lists the template roles that name a model, so clearing a choice cannot silently fall back
+  to something the Author did not expect. The choice is set by `PATCH /agents/:kind` and persisted
+  in the store snapshot's `settings` section — host configuration, deliberately outside §4's
+  journal. `GET /agents/models` proxies the provider's OpenAI-compatible catalog
+  (`{STORYLINE_PROVIDER_BASE_URL}/models`, default `http://localhost:8800/providers/private/v1/models`)
+  and the tile's model editor is a dropdown over that catalog, so a name the harness cannot ask for
+  cannot be selected.
 - **One harness per Story, one session per phase, one thread per Run.** `StoryHarnessManager`
   owns a lazily-built engine `harness()` per Story, so tool registries, transcripts and threads
   are isolated by book. The Story's phase is Storyline's session record (the engine has no session

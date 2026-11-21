@@ -40,6 +40,13 @@ export interface StoreSnapshot {
     version: number;
     counters: Record<string, number>;
     records: Record<string, unknown[]>;
+    /**
+     * Host settings that live beside the §4 records rather than inside them — today the global
+     * agent roster's model choices (U-8). They are not journaled: a model setting is not a story
+     * fact and must not enter the Digest's derivation, but it has to survive a restart all the
+     * same (L-3), so it rides the same atomic snapshot.
+     */
+    settings?: Record<string, unknown>;
     journal: unknown[];
 }
 

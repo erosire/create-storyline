@@ -121,10 +121,59 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
             degraded: false
         })),
         listAgents: vi.fn(async () => [
-            { kind: 'writer', title: 'Writer', status: 'idle' as const, working: [] },
-            { kind: 'editor', title: 'Editor', status: 'idle' as const, working: [] },
-            { kind: 'reader', title: 'Reader', status: 'idle' as const, working: [] },
-            { kind: 'checker', title: 'Checker', status: 'idle' as const, working: [] }
+            {
+                kind: 'writer',
+                title: 'Writer',
+                status: 'idle' as const,
+                model: 'local/basalt',
+                model_source: 'default' as const,
+                template_models: [],
+                working: []
+            },
+            {
+                kind: 'editor',
+                title: 'Editor',
+                status: 'idle' as const,
+                model: 'local/basalt',
+                model_source: 'default' as const,
+                template_models: [],
+                working: []
+            },
+            {
+                kind: 'reader',
+                title: 'Reader',
+                status: 'idle' as const,
+                model: 'local/basalt',
+                model_source: 'default' as const,
+                template_models: [],
+                working: []
+            },
+            {
+                kind: 'checker',
+                title: 'Checker',
+                status: 'idle' as const,
+                model: 'local/basalt',
+                model_source: 'default' as const,
+                template_models: [],
+                working: []
+            }
+        ]),
+        // U-8 — the provider catalog the roster dropdown offers.
+        listAgentModels: vi.fn(async () => ({
+            base_url: 'http://localhost:8800/providers/private/v1',
+            models: ['local/basalt']
+        })),
+        // U-8 — the model write answers the refreshed roster, exactly like the route.
+        setAgentModel: vi.fn(async (kind: string, model: string | null) => [
+            {
+                kind,
+                title: kind,
+                status: 'idle' as const,
+                model: model ?? 'local/basalt',
+                model_source: model === null ? ('default' as const) : ('agent' as const),
+                template_models: [],
+                working: []
+            }
         ]),
         patchStory: vi.fn(async (storyId) => storyRow(storyId)),
         stop: vi.fn(async (storyId) => storyRow(storyId, { status: 'stopped' })),

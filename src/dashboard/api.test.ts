@@ -30,6 +30,17 @@ describe('api — the pinned REST surface', () => {
         expect(lastFetch()).toEqual({ url: `${API_ROOT}/stories`, method: 'GET' });
     });
 
+    it('reads the provider model catalog from /agents/models (U-8)', async () => {
+        const catalog = { base_url: 'http://localhost:8800/providers/private/v1', models: ['local/basalt'] };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => catalog }))
+        );
+
+        expect(await api.listAgentModels()).toEqual(catalog);
+        expect(lastFetch()).toEqual({ url: `${API_ROOT}/agents/models`, method: 'GET' });
+    });
+
     it("refuses a locked phase with the server's own sentence, not a generic failure (L-7a / L-13)", async () => {
         vi.stubGlobal(
             'fetch',

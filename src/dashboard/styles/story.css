@@ -1815,13 +1815,129 @@
 
 .sv-agent-tile__head {
     display: flex;
+    width: 100%;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sv-agent-tile__head:hover .sv-agent-tile__name,
+.sv-agent-tile__head:focus-visible .sv-agent-tile__name {
+    color: var(--accent);
+}
+
+.sv-agent-tile__head:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .sv-agent-tile__name {
     font-weight: 700;
+}
+
+.sv-agent-tile__model {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.7rem;
+}
+
+.sv-agent-tile__model code {
+    color: var(--text-strong);
+    font-size: 0.7rem;
+    overflow-wrap: anywhere;
+}
+
+.sv-agent-tile__model-source {
+    color: var(--dim);
+    font-size: 0.64rem;
+    letter-spacing: 0.02em;
+}
+
+.sv-agent-tile__template-models {
+    margin: 0;
+    color: var(--dim);
+    font-size: 0.64rem;
+    line-height: 1.4;
+}
+
+.sv-agent-tile--open {
+    border-color: var(--accent);
+}
+
+.sv-agent-tile__config {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-top: 0.45rem;
+    border-top: 1px dashed var(--line-strong);
+}
+
+.sv-agent-tile__config label {
+    color: var(--muted);
+    font-size: 0.66rem;
+    line-height: 1.4;
+}
+
+.sv-agent-tile__model-select {
+    width: 100%;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.sv-agent-tile__model-select:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.sv-agent-tile__model-select:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+.sv-agent-tile__config-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.sv-agent-tile__config-actions button {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.66rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sv-agent-tile__config-actions button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.sv-agent-tile__config-actions button:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
 }
 
 .sv-agent-tile__state {

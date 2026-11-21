@@ -44,7 +44,6 @@ The generated `package.json` `name` is derived from the target directory name
 
 - Node.js >= 20
 
-
 ## Storyline app
 
 The package is also a runnable application: the loop the Author drives, plus the workstation
@@ -90,22 +89,22 @@ npx vite-node src/server/start.ts --port 5100 --store-root "" --no-static
 
 Precedence is `flag` → `STORYLINE_*` → built-in default.
 
-| Setting | Flag | Variable | Default |
-| --- | --- | --- | --- |
-| Port | `--port` | `STORYLINE_PORT` | `5000` ( `0` = the OS picks ) |
-| Interface | `--host` | `STORYLINE_HOST` | `127.0.0.1` |
-| Where the book lives | `--store-root` (alias `--database-root`) | `STORYLINE_STORE_ROOT` | `temporary/storyline`; an **empty value runs in memory** |
-| Built dashboard | `--no-static` | `STORYLINE_STATIC_ROOT` | `dist` when it exists, otherwise no static root |
+| Setting              | Flag                                     | Variable                | Default                                                  |
+| -------------------- | ---------------------------------------- | ----------------------- | -------------------------------------------------------- |
+| Port                 | `--port`                                 | `STORYLINE_PORT`        | `5000` ( `0` = the OS picks )                            |
+| Interface            | `--host`                                 | `STORYLINE_HOST`        | `127.0.0.1`                                              |
+| Where the book lives | `--store-root` (alias `--database-root`) | `STORYLINE_STORE_ROOT`  | `temporary/storyline`; an **empty value runs in memory** |
+| Built dashboard      | `--no-static`                            | `STORYLINE_STATIC_ROOT` | `dist` when it exists, otherwise no static root          |
 
 The crew needs a model. Exactly three variables say where it is, and nothing else about the
 harness is configuration — the roles, the tools, the criteria and the caps are Template cards the
 Author edits in the running product:
 
-| Variable | Meaning |
-| --- | --- |
-| `STORYLINE_PROVIDER_BASE_URL` | OpenAI-compatible `chat/completions` root |
-| `STORYLINE_PROVIDER_MODEL` | the model every crew run asks for |
-| `STORYLINE_PROVIDER_API_KEY` | its key; empty means the provider is unauthenticated |
+| Variable                      | Meaning                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `STORYLINE_PROVIDER_BASE_URL` | OpenAI-compatible root — `chat/completions` for runs, `models` for the roster dropdown; defaults to `http://localhost:8800/providers/private/v1` |
+| `STORYLINE_PROVIDER_MODEL`    | the model every crew run asks for unless its agent or template role names one |
+| `STORYLINE_PROVIDER_API_KEY`  | its key; empty means the provider is unauthenticated                          |
 
 Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBAL_MAX_CONCURRENT`
 (a hard cap on simultaneous runs), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes;
@@ -131,8 +130,14 @@ server (`src/server/api/server.ts`) is the only server and owns every Story deci
   run rows, tally, panel aggregation and delegation rules.
 
 `GET /v1/storyline/agents` is the global status projection the right-hand tile panel renders:
-one row per agent kind, its live threads, and the Story + phase each thread belongs to.
-Selecting a Story changes the centre; the agent tiles stay global.
+one row per agent kind, its model, its live threads, and the Story + phase each thread belongs to.
+Selecting a Story changes the centre; the agent tiles stay global. The tile shows the model the
+agent asks for, and `PATCH /v1/storyline/agents/:kind` with `{ model }` sets it (or `{ model: null }`
+clears it back to the template role's model, else `STORYLINE_PROVIDER_MODEL`). The tile also lists
+any template role that names its own `model` (T-6b), so a crew-specific model is never invisible.
+`GET /v1/storyline/agents/models` proxies the provider's OpenAI-compatible catalog
+(`{STORYLINE_PROVIDER_BASE_URL}/models`), and the tile's model editor is a dropdown over those ids —
+never free text, because a model the provider does not serve cannot run.
 
 The Explorer's browsing tools (`web.open`) use `EXA_API_KEY` or `TAVILY_API_KEY`. With neither
 set, browsing is unavailable and the tool says so in the refusal — a crew with no web access
