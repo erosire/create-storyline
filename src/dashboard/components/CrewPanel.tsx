@@ -1,13 +1,14 @@
-// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the crew panel.
+// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the phrases panel.
 //
-// The right region is the CREW, not an agent list (§10.1): the Author controls the harnesses and
-// watches what they are doing to the selected Story. D-18 makes `runs` the data source precisely
-// so a row exists from spawn to teardown — the Author can watch a run and pull the cord on that
-// one run (U-7's kill button).
+// A RUN IS A PHRASE. Each dispatch spins up its own session — a phrase — against the story's
+// Goal, using the global agents the right-hand catalogue configures. D-18 makes `runs` the data
+// source precisely so a row exists from spawn to teardown, and the Author can watch a phrase and
+// pull the cord on that one phrase (U-7's kill button).
 //
-// S-7 is the nesting rule: a delegated sub-context (D-17e) is NOT a Work Item and gets no row of
-// its own, because the Author's unit of attention and of control is the dispatched run. It is
-// drawn nested under its parent, and the parent stays the only row with a kill button.
+// S-7 is the nesting rule: a delegated sub-context (D-17e) is a THREAD a phrase spins to do a
+// task, not a Work Item, so it gets no row of its own — the Author's unit of attention and of
+// control is the dispatched phrase. It is drawn nested under its parent, and the parent stays
+// the only row with a kill button.
 //
 // U-8d is the disagreement marker: when a role's N agents disagreed, the dissent is supposed to
 // be named in the `selection_note`, and the Author needs to know which authoritative answers were
@@ -108,7 +109,9 @@ export function CrewPanel({ runs, templates, now, onKillRun }: CrewPanelProps) {
                                 <span className="sv-delegated-tokens">
                                     {entry.tokens.toLocaleString('en-US')} tokens
                                 </span>
-                                <span className="sv-delegated-note">inside this run — not a work item (S-7, T-2b)</span>
+                                <span className="sv-delegated-note">
+                                    a thread this phrase spun — not a work item (S-7, T-2b)
+                                </span>
                             </li>
                         ))}
                     </ul>
@@ -120,7 +123,7 @@ export function CrewPanel({ runs, templates, now, onKillRun }: CrewPanelProps) {
                         className="sv-run-kill"
                         disabled={!onKillRun}
                         // S-3: teardown is unconditional, and the row records why it ended.
-                        title="Tear this one harness down; the Story keeps running (D-18, S-3)"
+                        title="Tear this phrase down; the Story keeps running (D-18, S-3)"
                         onClick={() => onKillRun?.(run.id)}
                     >
                         Kill run
@@ -136,18 +139,20 @@ export function CrewPanel({ runs, templates, now, onKillRun }: CrewPanelProps) {
     };
 
     return (
-        <aside className="sv-pane sv-crew" aria-label="Crew">
+        <aside className="sv-pane sv-crew" aria-label="Phrases">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Crew — live runs for this story (U-7)</h3>
+                <h3 className="sv-pane-title">Phrases — live on this story (U-7)</h3>
                 <span className="sv-pane-badge">{live.length} running</span>
             </header>
 
-            {live.length === 0 ? <p className="sv-crew-idle">Nothing is running on this story right now.</p> : null}
+            {live.length === 0 ? (
+                <p className="sv-crew-idle">No phrase is running on this story right now.</p>
+            ) : null}
             <ul className="sv-runs">{live.map(renderRun)}</ul>
 
             {closed.length > 0 ? (
                 <details className="sv-crew-closed">
-                    <summary>{closed.length} runs torn down — each row says why it ended (S-3)</summary>
+                    <summary>{closed.length} phrases torn down — each row says why it ended (S-3)</summary>
                     <ul className="sv-runs">{closed.map(renderRun)}</ul>
                 </details>
             ) : null}

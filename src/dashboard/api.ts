@@ -274,7 +274,7 @@ export interface RevisionMergeRequest {
  * `GET /stories/:id/knowledge` — the Story's durable knowledge directory.
  *
  * Each section is one harness knowledge article (tags `story:<id>` + `section:<key>`), stored
- * outside every session at `<storeRoot>/harness/knowledge/`. The client renders the directory;
+ * outside every phrase at `<storeRoot>/harness/knowledge/`. The client renders the directory;
  * it never re-derives an entry from the book (the same rule L-14 applies to levels).
  */
 export interface StoryKnowledgeEntry {
@@ -300,7 +300,7 @@ export interface StoryKnowledgeTree {
     degraded: boolean;
 }
 
-/** One agent inside a harness session, with the A–Z authority letter that gates delegation. */
+/** One global agent a phrase can run, with the A–Z authority letter that gates delegation. */
 export interface HarnessAgentListing {
     name: string;
     title: string;
@@ -328,7 +328,7 @@ export interface ApiClient {
     getStory(storyId: string): Promise<StoryView>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
-    /** The harness catalogue — the agents a session can run, Rank A called out. */
+    /** The global agent catalogue — the agents every story's phrases run, Rank A called out. */
     listHarnesses(): Promise<HarnessListing[]>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
     stop(storyId: string): Promise<StoryRow>;

@@ -46,7 +46,7 @@ describe('KnowledgeTree — the durable directory', () => {
         render(<KnowledgeTree tree={tree} />);
 
         const panel = screen.getByTestId('knowledge-tree');
-        expect(within(panel).getByText('Knowledge')).toBeTruthy();
+        expect(within(panel).getByText('Knowledge — this story')).toBeTruthy();
         expect(within(panel).getByText('Summary', { selector: '.kn-folder__title' })).toBeTruthy();
         expect(within(panel).getByText('Ideas', { selector: '.kn-folder__title' })).toBeTruthy();
         expect(

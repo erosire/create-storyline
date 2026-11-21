@@ -1,10 +1,17 @@
-// The harness listing — the agents a session can run, with Rank A called out.
+// The global agent catalogue — the agents every story's phrases run, with Rank A called out.
 //
 // WHY THE RANK IS THE FIRST THING ON THE ROW: the harness's delegation rule is purely
 // authority-based (`isLowerRank` in `@underload/harness`), so which agents are Rank A is not
 // decoration — it is the answer to "who can hand work to whom". The card shows the Rank A
-// members directly and folds the delegates away, which is also the compact reading a session
-// needs: the top of the roster is the team that owns the session.
+// members directly and folds the delegates away, which is also the compact reading a phrase
+// needs: the top of the roster is the team it can hand work to.
+//
+// THESE AGENTS ARE GLOBAL, AND THERE IS NO MAIN AGENT. The roster is configuration: the Author
+// shapes it once in the template catalogue, and every story's phrases run it. No row here is a
+// lead — the loop is fully autonomous from the Goal the Author types into the directive, and a
+// phrase is started because the Goal still has work, not because an entry agent chose to. The
+// server does report an `entry` member for unfocused harness submits; the dashboard
+// deliberately does not surface it as a lead agent.
 import type { HarnessAgentListing, HarnessListing } from '../api';
 
 function RankChip({ rank }: { rank: string }) {
@@ -17,11 +24,10 @@ function RankChip({ rank }: { rank: string }) {
 
 function AgentRow({ agent }: { agent: HarnessAgentListing }) {
     return (
-        <li className="hv-agent" data-rank={agent.rank} data-entry={agent.entry ? 'true' : 'false'}>
+        <li className="hv-agent" data-rank={agent.rank}>
             <RankChip rank={agent.rank} />
             <span className="hv-agent__name">{agent.title}</span>
             <code className="hv-agent__id">{agent.name}</code>
-            {agent.entry ? <span className="hv-agent__entry">entry</span> : null}
             {agent.description ? <p className="hv-agent__description">{agent.description}</p> : null}
         </li>
     );
@@ -78,24 +84,26 @@ export interface HarnessPanelProps {
 
 export function HarnessPanel({ harnesses, loading = false }: HarnessPanelProps) {
     const rankACount = harnesses.reduce((total, harness) => total + harness.rank_a.length, 0);
+    const agentCount = harnesses.reduce((total, harness) => total + harness.agents.length, 0);
 
     return (
-        <aside className="sv-pane sv-harnesses" data-testid="harness-panel" aria-label="Harnesses">
+        <aside className="sv-pane sv-harnesses" data-testid="harness-panel" aria-label="Agents">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Harnesses</h3>
+                <h3 className="sv-pane-title">Agents — global (U-8)</h3>
                 <span className="sv-pane-badge">
-                    {harnesses.length} session{harnesses.length === 1 ? '' : 's'} · {rankACount} rank A
+                    {agentCount} agent{agentCount === 1 ? '' : 's'} · {rankACount} Rank A
                 </span>
             </header>
 
             <p className="hv-note">
-                the agents available to a session, ranked A–Z. Rank A may delegate to a strictly lower rank; a same-rank
-                peer is never a delegate target.
+                every agent here is global — the Author configures the roster once and every story&apos;s phrases run
+                it. Rank A may delegate to a strictly lower rank; a same-rank peer is never a delegate target, and no
+                agent owns the loop.
             </p>
 
             {harnesses.length === 0 ? (
                 <p className="hv-empty">
-                    {loading ? 'reading the harness catalogue…' : 'the harness catalogue is empty'}
+                    {loading ? 'reading the agent catalogue…' : 'the agent catalogue is empty'}
                 </p>
             ) : (
                 <ul className="hv-cards">

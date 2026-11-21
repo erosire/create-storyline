@@ -1,10 +1,14 @@
-// The Story knowledge directory — the left panel's second half.
+// The Story knowledge directory — the left panel's second half, inside THIS story's harness.
 //
 // WHAT IT IS: eight folders (Summary, Plotlines, Chapters, Characters, Continuity, Goal, Ideas,
 // Findings), each one durable harness knowledge article. The panel does not derive a single
 // entry from the book: the server projects the book into the knowledge base, and this component
 // only paints what the article says. That is the same division as L-14's levels — the client
 // renders, it never recomputes.
+//
+// SCOPE IS THE WHOLE POINT: every story owns its own harness, so this directory is that story's
+// memory and nothing else is ever mixed into it. A phrase updates it; the Author watches the
+// listing update here on the left while the story runs.
 //
 // THE FOLDERS ARE ALWAYS THERE. A section with no records still carries a placeholder entry, so
 // an empty Summary reads as "not written yet" rather than a missing directory. That is the point
@@ -70,8 +74,8 @@ export function KnowledgeTree({ tree, loading = false }: KnowledgeTreeProps) {
         <section className="panel panel--knowledge" data-testid="knowledge-tree">
             <header className="panel__head">
                 <div>
-                    <h2 className="panel__title">Knowledge</h2>
-                    <p className="panel__subtitle">the story's durable memory · harness knowledge store</p>
+                    <h2 className="panel__title">Knowledge — this story</h2>
+                    <p className="panel__subtitle">its own harness memory · never shared between stories</p>
                 </div>
                 <span className="pill pill--quiet" title="one harness knowledge article per folder">
                     {entryCount} notes
@@ -81,7 +85,7 @@ export function KnowledgeTree({ tree, loading = false }: KnowledgeTreeProps) {
             {tree ? (
                 <>
                     <p className="panel__hint">
-                        {tree.story_title} · one article per folder, persisted outside every session.
+                        {tree.story_title} · one article per folder, written by this story&apos;s phrases.
                     </p>
                     {tree.degraded ? (
                         <p className="kn-warning" role="status">

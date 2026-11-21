@@ -200,7 +200,10 @@ export function StoriesPanel() {
     return (
         <div className="panel panel--stories" data-testid="stories-panel">
             <h2 className="panel__title">Stories</h2>
-            <p className="panel__hint">phase-first, then status: the ones only you can move are on top (U-1).</p>
+            <p className="panel__hint">
+                phase-first, then status: the ones only you can move are on top (U-1). every story runs its own
+                harness — open one and its knowledge appears below.
+            </p>
 
             {ordered.length === 0 ? <p className="panel__empty">no stories · write a Seed below</p> : null}
 

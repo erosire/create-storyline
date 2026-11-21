@@ -16,9 +16,12 @@
 // renders the workspace CREW there itself and the catalogue waits for a Story (the pinned
 // TemplatesPanel takes a `story`, and on the home view there is none).
 //
-// THE RIGHT REGION IS THE CREW, NOT AN AGENT LIST (§10.1, §13): live runs for this Story, then
-// the harnesses that produced them — the Author controls the templates and watches what their
-// crews are doing, so those two things sit together and nothing else does.
+// THE MODEL THE REGIONS SPEAK, in one place. Every story owns its own harness: its knowledge
+// directory and its phrases are scoped to that story, and nothing crosses between stories. The
+// agents are the one global thing — the right rail is the roster the Author configures once and
+// every story's phrases run. A phrase is one session against the story's Goal, spinning threads
+// to do a task. There is no main agent: the loop is fully autonomous from the Goal the Author
+// types into the directive, and a phrase is dispatched because the Goal still has work.
 
 import { useEffect } from 'react';
 
@@ -63,15 +66,17 @@ function Shell() {
             <TopBar />
 
             <div className="station__regions" data-open={activeStoryId ? 'true' : 'false'}>
-                {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). With a
-                    Story open the same column carries the Story's knowledge directory, which is
-                    the durable map of what the book is made of. */}
+                {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). Below the
+                    list sits the selected Story's OWN harness — its knowledge directory, the
+                    durable map of what that book is made of and nothing else. Phrase updates land
+                    here while the story runs, so the listing the Author reads is the story they
+                    picked. */}
                 <aside className="region region--stories" data-region="stories" aria-label="Stories">
                     <div className="region__body region__body--stack">
+                        <StoriesPanel />
                         {activeStoryId ? (
                             <KnowledgeTree tree={knowledge[activeStoryId]} loading={!knowledge[activeStoryId]} />
                         ) : null}
-                        <StoriesPanel />
                     </div>
                 </aside>
 
@@ -119,12 +124,13 @@ function Shell() {
                     )}
                 </main>
 
-                {/* Region 3 — CREW (and, inside a Story, the template catalogue). */}
+                {/* Region 3 — the GLOBAL AGENTS, then the PHRASES still live (and, inside a
+                    Story, the template catalogue that configures the roster). */}
                 {activeStoryId ? null : (
-                    <aside className="region region--crew" data-region="crew" aria-label="Crew">
+                    <aside className="region region--crew" data-region="crew" aria-label="Agents and phrases">
                         <div className="region__body">
-                            {/* The harness listing is the right rail's top: who a session can run,
-                                with Rank A called out, before the live crew it is running now. */}
+                            {/* The roster is global: every story's phrases run these agents.
+                                Rank A is called out, before the phrases live right now. */}
                             <HarnessPanel harnesses={harnesses} />
                             {/* U-7 across every Story: with no Story selected the Author is on the
                                 desk, and what is still running is the next thing that will land on it. */}
@@ -135,7 +141,7 @@ function Shell() {
                                 onKillRun={(runId) => void store.killRun(runId)}
                             />
                             <p className="panel__hint">
-                                the template catalogue sits beside every Story — pick one to edit its crews (U-8).
+                                the agents are global — open a Story to edit the roster its phrases run (U-8).
                             </p>
                         </div>
                     </aside>

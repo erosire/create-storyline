@@ -82,9 +82,9 @@ export interface StoryViewProps {
     /** L-25's clean-ledger line, when the caller has it (the pinned view carries no `ledger` collection). */
     ledgerState?: string;
     /**
-     * The first block of the right rail, supplied by the shell. It carries the harness listing —
-     * the agents a session can run, with Rank A called out — above the live crew and the template
-     * catalogue, which stay this component's own concern.
+     * The first block of the right rail, supplied by the shell. It carries the global agent
+     * catalogue — the roster every phrase of this story runs, with Rank A called out — above the
+     * live phrases and the template catalogue, which stay this component's own concern.
      */
     railLead?: ReactNode;
 }

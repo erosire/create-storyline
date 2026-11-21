@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useDashboardStore } from '../state';
 
-/** §14's sensible opening: a short book, so phase ③'s goal is reachable in a first session. */
+/** §14's sensible opening: a short book, so phase ③'s goal is reachable in a first phrase. */
 const DEFAULT_CHAPTER_COUNT = 12;
 
 export function NewStoryForm() {

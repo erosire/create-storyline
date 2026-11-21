@@ -1,4 +1,5 @@
-// The harness listing: Rank A is the session's authority, delegates fold away.
+// The global agent catalogue: Rank A is the phrase's authority, delegates fold away, and no
+// agent is drawn as a lead (the design has no main agent).
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { HarnessPanel } from './HarnessPanel';
@@ -32,11 +33,13 @@ const harnesses: HarnessListing[] = [
     }
 ];
 
-describe('HarnessPanel — the agents available to a session', () => {
-    it('renders the harness, its Rank A agent, and the delegate roster', () => {
+describe('HarnessPanel — the global agents a phrase runs', () => {
+    it('renders the roster, its Rank A agent, and the delegates', () => {
         render(<HarnessPanel harnesses={harnesses} />);
 
         const panel = screen.getByTestId('harness-panel');
+        expect(within(panel).getByText('Agents — global (U-8)')).toBeTruthy();
+        expect(within(panel).getByText('2 agents · 1 Rank A')).toBeTruthy();
         expect(within(panel).getByText('Reviewer', { selector: '.hv-card__title' })).toBeTruthy();
         expect(within(panel).getByText('reviewer', { selector: '.hv-card__name' })).toBeTruthy();
         expect(within(panel).getByText('Rank A')).toBeTruthy();
@@ -44,11 +47,13 @@ describe('HarnessPanel — the agents available to a session', () => {
         expect(within(panel).getByText('12 tools')).toBeTruthy();
         expect(within(panel).getByText('1 delegate below Rank A')).toBeTruthy();
         expect(within(panel).getByText('Summarizer')).toBeTruthy();
+        // No main agent: the server's `entry` member is not drawn as a lead.
+        expect(within(panel).queryByText('entry')).toBeNull();
     });
 
     it('states that the catalogue is empty rather than drawing a blank rail', () => {
         render(<HarnessPanel harnesses={[]} />);
 
-        expect(screen.getByText('the harness catalogue is empty')).toBeTruthy();
+        expect(screen.getByText('the agent catalogue is empty')).toBeTruthy();
     });
 });

@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-        <meta name="theme-color" content="#070a10" />
+        <meta name="theme-color" content="#101317" />
         <meta
             name="description"
             content="Storyline — an AI story-writing workspace (Writer / Reader / Editor agents)."
@@ -25,13 +25,16 @@
             *::after {
                 box-sizing: border-box;
             }
-            /* Keep the pre-JS document hint dual; the dashboard theme layer
-               decides which skin actually renders. */
+            /* The dashboard ships one flat ink skin, so the pre-JS document hint
+               names the same scheme the skin paints (a light OS hint would flash
+               white form controls and a white canvas before React mounts). */
             :root {
-                color-scheme: light dark;
+                color-scheme: dark;
+                background: #101317;
             }
             body {
                 margin: 0;
+                background: #101317;
             }
         </style>
     </head>

@@ -57,7 +57,7 @@ export interface DashboardSnapshot {
     runs: Run[];
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
-    /** The harness sessions available to a story, with their Rank A agents called out. */
+    /** The global agent rosters every story's phrases run, with their Rank A agents called out. */
     harnesses: HarnessListing[];
     /** U-1c — "work the leftovers" jumps the queue to one Story without leaving the panel. */
     queueStoryFilter: string | null;
