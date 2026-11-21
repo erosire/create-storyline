@@ -19,13 +19,14 @@
 // run is fine while it keeps calling tools; a hung run stops refreshing and lapses (L-2), and
 // the sweep re-adopts or abandons it (L-3).
 import { LlmError, type ChatClient, type ToolSchema } from '../llm';
-import { ROLE_KINDS, type RoleAggregation, type RoleKind, type Run, type RunDelegation } from '../../shared/types';
+import { ROLE_KINDS, type RoleAggregation, type RoleKind, type Run, type RunDelegation, type Story } from '../../shared/types';
 import { type Store, type UpdatePatch } from '../store';
 import { buildBrief, type AssembledBrief } from './brief';
 import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
 import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
+import { runEngineAgent, StoryHarnessManager } from './story-engine';
 import { resolveAggregation } from './types';
 import {
     type RunExecutorDeps,
@@ -71,6 +72,13 @@ export class RunExecutor {
     private readonly runtime: ToolRuntime;
     private readonly chat: ChatClient;
     private readonly defaultModel: string;
+    /**
+     * The per-Story engine harnesses. Built lazily on the first run, because a test rig wires the
+     * executor's chat/runtime by `Object.assign` after construction (and the manager must see the
+     * real pair, not the placeholders).
+     */
+    private harnessInstance: StoryHarnessManager | undefined;
+    private readonly injectedHarness: StoryHarnessManager | undefined;
 
     /** Live runs this instance owns, so `kill(runId)` has something to abort (P8, U-7). */
     private readonly controllers = new Map<string, AbortController>();
@@ -82,7 +90,46 @@ export class RunExecutor {
         this.runtime = deps.runtime;
         this.chat = deps.chat;
         this.defaultModel = deps.defaultModel;
+        this.injectedHarness = deps.harness;
     }
+
+    /** The manager over the CURRENT store/runtime/chat pair (late-bound for the test rig). */
+    get harness(): StoryHarnessManager {
+        if (this.injectedHarness !== undefined) return this.injectedHarness;
+
+        if (this.harnessInstance === undefined) {
+            this.harnessInstance = new StoryHarnessManager({
+                store: this.store,
+                runtime: this.runtime,
+                chat: this.chat,
+                defaultModel: this.defaultModel
+            });
+        }
+
+        return this.harnessInstance;
+    }
+
+    /**
+     * The engine-backed loop runner. The spec is the SAME one the hand-written loop took, so the
+     * panel, delegate, tally and permission behaviour are unchanged; only the loop owner moved
+     * into the Story's harness.
+     */
+    private readonly runAgent = (
+        deps: import('./loop').LoopDeps,
+        spec: import('./loop').LoopSpec,
+        tally: RunTally
+    ): Promise<import('./loop').LoopOutcome> => {
+        if (spec.storyId === undefined) {
+            throw new Error('an engine-backed run must name the Story it is bound to (T-3)');
+        }
+
+        return runEngineAgent(this.harness, spec.storyId, spec.phase ?? 'chapters', spec, tally, {
+            runtime: deps.runtime,
+            context: spec.context,
+            ...(deps.heartbeat === undefined ? {} : { heartbeat: deps.heartbeat }),
+            ...(deps.onReport === undefined ? {} : { onReport: deps.onReport })
+        });
+    };
 
     // -------------------------------------------------------------------------
     // The Author's cord (P8, U-7)
@@ -192,6 +239,7 @@ export class RunExecutor {
             const briefing = buildBrief(this.store, item, harness);
             const agents = Math.max(1, harness.role?.agents ?? 1);
             const aggregate = resolveAggregation(agents, harness.role?.aggregate);
+            const phase = (this.store.stories.get(item.storyId) as Story | undefined)?.phase ?? 'chapters';
             const scope: RunScope = {
                 runId,
                 item,
@@ -228,7 +276,7 @@ export class RunExecutor {
                 // D-38: the role is a PANEL. The panel replaces this run's outer loop — it does
                 // not run alongside one — so the loop still receives one report (S-1, D-38).
                 panelOutcome = await runPanel(
-                    { chat: this.chat, runtime: this.runtime },
+                    { chat: this.chat, runtime: this.runtime, runAgent: this.runAgent },
                     {
                         brief: briefing.text,
                         kickoff: kickoffLine(REPORT_TOOLS),
@@ -237,6 +285,7 @@ export class RunExecutor {
                         roleKind: scope.harness.kind,
                         templateRef: item.templateRef,
                         storyId: item.storyId,
+                        phase,
                         runId,
                         count: agents,
                         aggregate,
@@ -261,6 +310,7 @@ export class RunExecutor {
                     {
                         chat: this.chat,
                         runtime: this.runtime,
+                        runAgent: this.runAgent,
                         heartbeat: () => this.heartbeat(scope),
                         onReport: () => this.markReporting(scope)
                     },
@@ -270,6 +320,10 @@ export class RunExecutor {
                         kickoff: kickoffLine(REPORT_TOOLS),
                         model: scope.model,
                         context: scope.context,
+                        storyId: item.storyId,
+                        phase,
+                        roleName: scope.harness.roleName,
+                        roleKind: scope.harness.kind,
                         // U-1e: §7's tool row for this kind of run (./catalogue's `toolsForRunKind`).
                         tools: scope.tools,
                         signal: controller.signal
@@ -477,7 +531,7 @@ export class RunExecutor {
         const context = this.runtime.createContext(this.sessionFor(scope, role), hooks);
 
         const outcome = await runAgentLoop(
-            { chat: this.chat, runtime: this.runtime, heartbeat: () => this.heartbeat(scope) },
+            { chat: this.chat, runtime: this.runtime, runAgent: this.runAgent, heartbeat: () => this.heartbeat(scope) },
             {
                 label: `${scope.runId}#${role}`,
                 system: inner ? inner.prompt : genericReasonerPrompt(role, task),
@@ -486,6 +540,10 @@ export class RunExecutor {
                 // model is the template's setting, not this layer's choice).
                 model: inner?.model ?? scope.model,
                 context,
+                storyId: scope.item.storyId,
+                phase: (this.store.stories.get(scope.item.storyId) as Story | undefined)?.phase ?? 'chapters',
+                roleName: role,
+                roleKind: inner?.kind ?? scope.harness.kind,
                 // U-1e/T-2b: a sub-context may only do what its run may do — including which tools it
                 // is offered, so a delegate inside an assistant run has no web either.
                 tools: scope.tools,

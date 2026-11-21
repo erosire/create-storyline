@@ -20,7 +20,7 @@
 import type { ToolSchema } from '../llm';
 import type { LoopDeps, RunTally } from './loop';
 import { createTally, runAgentLoop } from './loop';
-import type { RunDelegation, RoleAggregation } from '../../shared/types';
+import type { RunDelegation, RoleAggregation, RoleKind, StoryPhase } from '../../shared/types';
 import { panelPreamble } from './harness';
 import {
     describeProposal,
@@ -58,6 +58,8 @@ export interface PanelSpec {
     roleKind: string;
     templateRef: string;
     storyId: string;
+    /** The phase session the panel's threads belong to. */
+    phase?: StoryPhase;
     runId: string;
     count: number;
     aggregate: RoleAggregation;
@@ -365,7 +367,7 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
         );
 
         const outcome = await runAgentLoop(
-            { chat: deps.chat, runtime: agentRuntime, heartbeat: spec.heartbeat },
+            { chat: deps.chat, runtime: agentRuntime, runAgent: deps.runAgent, heartbeat: spec.heartbeat },
             {
                 label,
                 // The same brief, plus the one fact an agent needs about its own writes (D-38).
@@ -373,6 +375,10 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
                 kickoff: spec.kickoff,
                 model: spec.model,
                 context,
+                storyId: spec.storyId,
+                phase: spec.phase,
+                roleName: label,
+                roleKind: spec.roleKind as RoleKind,
                 // U-1e: the run's own tool list — see `PanelSpec.tools`.
                 tools: spec.tools,
                 signal: spec.signal

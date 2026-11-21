@@ -1780,3 +1780,95 @@
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* --------------------------------------------------------------- the global agents (U-8) */
+
+.sv-agents-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+
+.sv-agent-tiles {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-agent-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.sv-agent-tile[data-status='running'] {
+    border-color: var(--accent);
+}
+
+.sv-agent-tile__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.sv-agent-tile__name {
+    font-weight: 700;
+}
+
+.sv-agent-tile__state {
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: var(--calm-bg);
+    color: var(--calm);
+}
+
+.sv-agent-tile__state--running {
+    background: var(--accent);
+    color: var(--surface);
+}
+
+.sv-agent-tile__idle,
+.sv-agents-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.7rem;
+}
+
+.sv-agent-tile__threads {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-agent-thread {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    font-size: 0.7rem;
+}
+
+.sv-agent-thread__story {
+    font-weight: 600;
+}
+
+.sv-agent-thread__phase,
+.sv-agent-thread__work {
+    color: var(--muted);
+}

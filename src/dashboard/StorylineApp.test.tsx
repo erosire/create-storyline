@@ -10,9 +10,13 @@ import type { DashboardStore } from './state';
 
 vi.mock('./components/StoryView', () => ({
     // The one thing the shell owes the story view is the bound props; the stub proves they
-    // arrived by reading the Story title back out of the view object.
-    StoryView: (props: { view: { story: { title: string } } }) => (
-        <div data-testid="story-view">{props.view.story.title}</div>
+    // arrived by reading the Story title back out of the view object and by painting the
+    // global rail lead the shell handed it.
+    StoryView: (props: { view: { story: { title: string } }; railLead?: unknown }) => (
+        <div data-testid="story-view">
+            {props.view.story.title}
+            {props.railLead as never}
+        </div>
     )
 }));
 vi.mock('./components/CrewPanel', () => ({
@@ -43,6 +47,8 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(screen.getByTestId('author-queue')).toBeTruthy();
         expect(screen.getByTestId('new-story-form')).toBeTruthy();
         expect(screen.getByTestId('crew-panel')).toBeTruthy();
+        expect(screen.getByTestId('agents-panel')).toBeTruthy();
+        expect(screen.getAllByTestId('agents-panel')).toHaveLength(1);
         expect(screen.getByTestId('directive-bar')).toBeTruthy();
         // With no Story open the centre region is one column, not the spanned story+rail pair.
         expect(document.querySelector<HTMLElement>('.station__regions')?.dataset.open).toBe('false');
@@ -57,7 +63,9 @@ describe('StorylineApp — the four regions (§10.1)', () => {
 
         // The bound view reached the story view, and the shell's own crew region steps aside
         // because the rail inside the story view owns the third column now.
-        expect(screen.getByTestId('story-view').textContent).toBe('Hollow Sea');
+        expect(screen.getByTestId('story-view').textContent).toContain('Hollow Sea');
+        // The agent tiles stay on the right rail, global to every Story, while the centre changes.
+        expect(screen.getAllByTestId('agents-panel')).toHaveLength(1);
         expect(document.querySelector('[data-region="crew"]')).toBeNull();
         expect(document.querySelector<HTMLElement>('.station__regions')?.dataset.open).toBe('true');
         // U-9: the directive bar is scoped to the selected Story.

@@ -112,32 +112,27 @@ Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBA
 `0` means the Author drives it by hand), `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease
 is stealable).
 
-### Harness catalogue configuration
+### Agents, harnesses, sessions and threads
 
-`GET /v1/storyline/harnesses` lists the harness package's session-agent catalogue, not the Story
-engine's own role Templates. The default catalogue lives in `src/server/harness-config.ts` and
-is resolved through `@underload/harness/server`'s `HarnessBootConfiguration` contract. An
-embedding host can replace it at boot without a parallel route stack:
+Storyline uses `@underload/harness` as an **engine only**. It does not boot the harness
+server, mount a `HarnessRuntime` or accept a `HarnessBootConfiguration`; this package's Hono
+server (`src/server/api/server.ts`) is the only server and owns every Story decision.
 
-```ts
-import { bootStorylineServer } from './src/server/main';
-import type { HarnessBootConfiguration } from '@underload/harness/server';
+- **One harness per Story.** `src/server/run/story-engine.ts` builds an engine `harness()` for a
+  Story the first time it dispatches work. The four agents are the same roster in every Story —
+  **Writer, Editor, Reader, Checker** — but each Story's harness has its own tool registry,
+  transcripts and threads, so no state crosses between books.
+- **A phase is a session.** The engine has no session object, so Storyline owns that level: the
+  Story's `summary` / `plotlines` / `chapters` phase is a session record holding the threads
+  that phase caused.
+- **A Run is a thread.** Each dispatched Work Item (and each panel agent or delegated
+  sub-context) opens a host thread in its Story's harness with the assembled brief as the system
+  turn. The engine executes the model/tool loop; Storyline keeps its §8 tools, permission rows,
+  run rows, tally, panel aggregation and delegation rules.
 
-const harness: HarnessBootConfiguration = {
-    presets: [{ name: 'my-team', title: 'My team', agents: ['general'], entry: 'general' }],
-    plugins: [],                    // omitted/[] = no executable plugins
-    toolbox: { sharedToolbox: false } // omitted = the harness core floor
-};
-
-await bootStorylineServer({ harness });
-```
-
-The same option reaches `createStorylineApp`, `startStorylineServer` and the
-`@underload/service` endpoint through `variables.harness`. Omitted (`undefined`) means the
-Storyline default above; an explicit `{}` stays empty (no cards, no plugins, core tools only).
-The service route refuses a later, different `variables.harness` for a store root rather than
-silently reusing the first runtime. Storyline still runs its own loop and Story `Template`
-system; it does not boot harness sessions.
+`GET /v1/storyline/agents` is the global status projection the right-hand tile panel renders:
+one row per agent kind, its live threads, and the Story + phase each thread belongs to.
+Selecting a Story changes the centre; the agent tiles stay global.
 
 The Explorer's browsing tools (`web.open`) use `EXA_API_KEY` or `TAVILY_API_KEY`. With neither
 set, browsing is unavailable and the tool says so in the refusal — a crew with no web access

@@ -1,38 +1,19 @@
-// R5 — the @underload/service route forwards `variables.harness` into the Storyline boot and
-// refuses a later, different configuration for the same root instead of silently reusing the
-// first runtime. The in-memory store root keeps the test off the filesystem; `dispose` stops the
-// loop and clears the module cache between cases.
+// The @underload/service route forwards every `/v1/storyline/*` request into the Hono app.
+//
+// Storyline owns its server and its agents, so the service loader supplies only the storage
+// boundary (`variables.root`); no harness catalogue is forwarded.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { disposeStorylineServiceRuntimes, storylineServiceHandler } from './service-route';
-import type { HarnessBootConfiguration } from '@underload/harness/server';
 
-const customHarness: HarnessBootConfiguration = {
-    presets: [
-        {
-            name: 'service-team',
-            title: 'Service team',
-            description: 'One service-declared card.',
-            agents: ['general'],
-            entry: 'general',
-            ranks: { general: 'A' },
-            tools: [],
-            environmentTools: []
-        }
-    ],
-    plugins: [],
-    toolbox: { sharedToolbox: false }
-};
-
-// The loader's context: only the raw Request is read by the forwarder.
 const call = (variables?: Record<string, unknown>) =>
     storylineServiceHandler(
-        { req: { raw: new Request('http://localhost/v1/storyline/harnesses') } },
+        { req: { raw: new Request('http://localhost/v1/storyline/agents') } },
         undefined,
         variables
     );
 
-const namesOf = async (response: Response): Promise<string[]> =>
-    ((await response.json()) as Array<{ name: string }>).map((listing) => listing.name);
+const kindsOf = async (response: Response): Promise<string[]> =>
+    ((await response.json()) as Array<{ kind: string }>).map((listing) => listing.kind);
 
 describe('the Storyline service route', () => {
     let previousStoreRoot: string | undefined;
@@ -51,48 +32,17 @@ describe('the Storyline service route', () => {
         else process.env.STORYLINE_STORE_ROOT = previousStoreRoot;
     });
 
-    it('lists the Storyline default when no variables.harness is supplied', async () => {
+    it('serves the Storyline agent roster from the mounted app', async () => {
         const result = await call();
 
         expect(result.raw.status).toBe(200);
-        expect(await namesOf(result.raw)).toEqual([
-            'general',
-            'instruct',
-            'research',
-            'workspace',
-            'reviewer',
-            'planner',
-            'debugger',
-            'chat'
-        ]);
+        expect(await kindsOf(result.raw)).toEqual(['writer', 'editor', 'reader', 'checker']);
     });
 
-    it('forwards variables.harness to the boot and lists exactly the host catalogue', async () => {
-        const result = await call({ harness: customHarness });
+    it('ignores any harness variables: the storyline control plane owns them', async () => {
+        const result = await call({ harness: { presets: [] } });
 
         expect(result.raw.status).toBe(200);
-        expect(await namesOf(result.raw)).toEqual(['service-team']);
-    });
-
-    it('rejects a different configuration for the same root instead of mixing catalogues', async () => {
-        await call({ harness: customHarness });
-
-        // The first request decided `<memory>`; an explicit empty configuration is a different
-        // signature and must fail loudly rather than returning the first runtime's cards.
-        await expect(call({ harness: {} })).rejects.toThrow(
-            /The Storyline runtime for "<memory>" was already created with a DIFFERENT harness boot configuration/
-        );
-
-        // The original configuration still resolves, and its listing did not change.
-        const repeated = await call({ harness: customHarness });
-
-        expect(await namesOf(repeated.raw)).toEqual(['service-team']);
-    });
-
-    it('keeps an explicit empty configuration empty', async () => {
-        const result = await call({ harness: {} });
-
-        expect(result.raw.status).toBe(200);
-        expect(await result.raw.json()).toEqual([]);
+        expect(await kindsOf(result.raw)).toEqual(['writer', 'editor', 'reader', 'checker']);
     });
 });

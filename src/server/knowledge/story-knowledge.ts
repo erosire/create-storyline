@@ -21,8 +21,7 @@
 // A section with no records still gets a placeholder so the folder is visible before its
 // artifacts exist (an empty Summary is information, not a missing folder).
 import path from 'node:path';
-import { createKnowledgeEngine, type KnowledgeArticle, type KnowledgeEngine } from '@underload/harness';
-import { loadKnowledgeFileStore, type KnowledgeStore } from '@underload/harness/server';
+import { createKnowledgeEngine, loadKnowledgeFileStore, type KnowledgeArticle, type KnowledgeEngine, type KnowledgeStore } from '@underload/harness';
 import { chapterContent } from '../../shared/chapter';
 import type {
     CastMember,

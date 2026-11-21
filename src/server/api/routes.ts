@@ -53,8 +53,6 @@ import type { GoalPatch as EngineGoalPatch } from '../loop/types';
 import type { LoopEngine } from '../loop/engine';
 import type { Cost, Criterion, Revision, Run, Story, StoryPhase, Template } from '../../shared/types';
 import type { GoalCriterionOp } from '../../dashboard/api';
-import { harnessListings } from '../harnesses';
-import type { HarnessPreset } from '@underload/harness/server';
 import type { StoryKnowledge } from '../knowledge';
 import { feedEvents, goalSurface, queueItems, storyRow, storyRows, storyView } from './projections';
 import type { FeedEvent, ProjectionDeps } from './projections';
@@ -75,15 +73,6 @@ export interface StorylineRoutesDeps extends ProjectionDeps {
     executor: RunExecutor;
     /** The Story's durable knowledge projection (harness knowledge engine, outside every session). */
     knowledge: StoryKnowledge;
-    /**
-     * The harness presets resolved from the runtime's `harness` boot option (R5).
-     *
-     * Required rather than defaulted here on purpose: the route layer must project the SAME
-     * configuration the runtime was built from. Defaulting to Storyline's shipped catalogue at
-     * this depth would make an explicit empty/custom configuration silently fall back to the
-     * global one — the exact implicit behaviour R-boot removed.
-     */
-    harnessPresets: readonly HarnessPreset[];
     /** SSE debounce: one commit bursts into one frame per topic, so a sweep cannot flood the client. */
     streamDebounceMs?: number;
 }
@@ -1349,13 +1338,12 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** U-8 — the template catalogue, as rows (§4.12 as-is). */
     /**
-     * The harness listing (the Author asked for the agents available to a session, Rank A called
-     * out). The catalogue is the one resolved from THIS runtime's `harness` boot configuration
-     * (R5) — Storyline's explicit default when the host stated none, and the host's exact cards
-     * (including an empty list) when it did. No session has to be running for the Author to see
-     * who a session could run.
+     * U-8 — the GLOBAL Story-agent roster, in tile order: Writer, Editor, Reader, Checker. Each row
+     * carries every live engine thread that agent holds across every Story, with the Story title
+     * and phase session. No Story has to be selected, and no thread has to be running, for the
+     * Author to see the roster.
      */
-    app.get('/harnesses', (c) => c.json(harnessListings(deps.harnessPresets), 200));
+    app.get('/agents', (c) => c.json(deps.executor.harness.statuses(), 200));
 
     app.get('/templates', (c) => c.json(store.templates.list(), 200));
 

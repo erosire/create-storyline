@@ -22,6 +22,7 @@ import type { ChatClient, ChatMessage, ChatUsage, ToolCall, ToolSchema } from '.
 import { isAbortError } from '../llm';
 import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolResult, type ToolRuntime } from './types';
+import type { RoleKind, StoryPhase } from '../../shared/types';
 
 /**
  * Everything the run counted and called, accumulated IN PLACE so a throw halfway through does
@@ -47,6 +48,11 @@ export interface LoopDeps {
     chat: ChatClient;
     runtime: ToolRuntime;
     /**
+     * The engine-backed runner. When present, `runAgentLoop` delegates the whole model/tool loop
+     * to it (the Story's harness) and keeps this file's legacy loop only as the unit-test path.
+     */
+    runAgent?: (deps: LoopDeps, spec: LoopSpec, tally: RunTally) => Promise<LoopOutcome>;
+    /**
      * Fired after EVERY tool call, executed or intercepted — this is the lease heartbeat
      * (S-4a), and it must fire for a panel agent's intercepted proposal too: the run is still
      * working, so the lease must not lapse while its panel reads (D-38).
@@ -68,6 +74,14 @@ export interface LoopSpec {
     kickoff: string;
     model: string;
     context: RunToolContext;
+    /** T-3: the Story this run is bound to (the engine harness is selected by it). */
+    storyId?: string;
+    /** The phase session this run's thread belongs to. */
+    phase?: StoryPhase;
+    /** The template role that produced this run (attribution and the crew rail). */
+    roleName?: string;
+    /** §4.12 role kind, which selects the brief and the permission row. */
+    roleKind?: RoleKind;
     /**
      * U-1e: the tools this session declares, when the caller has narrowed the catalogue. Omitted
      * means T-6a's default — the whole catalogue on every session. The Author-invoked assistant
@@ -138,6 +152,11 @@ function decodeArguments(call: ToolCall): { args: Record<string, unknown> } | { 
  * `abandoned`, S-3) and on any transport/store fault (the caller turns that into `failed`).
  */
 export async function runAgentLoop(deps: LoopDeps, spec: LoopSpec, tally: RunTally): Promise<LoopOutcome> {
+    // The shipped server always supplies this: the Story's own harness executes the loop. The
+    // hand-written loop below remains the deterministic unit-test path and the fallback for a
+    // caller that has no engine (a bare `run/loop.test.ts` harness).
+    if (deps.runAgent !== undefined) return deps.runAgent(deps, spec, tally);
+
     const { chat, runtime } = deps;
 
     // The brief IS the history (S-2: "a run has no memory of any prior run"), so the

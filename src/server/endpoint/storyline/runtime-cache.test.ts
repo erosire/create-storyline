@@ -1,15 +1,13 @@
-// The service runtime cache: one runtime per store root, guarded by the harness boot signature.
+// The service runtime cache: one runtime per resolved store root.
 //
-// These tests use an injected factory so they exercise the conflict rule without opening a real
-// book or starting a sweep. The exact error sentence is pinned because an operator reads it when
-// a warm-up/request pair disagrees about `variables.harness`.
+// These tests use an injected factory so they exercise the root rules without opening a real
+// book or starting a sweep. Storyline owns its agent/session control, so the cache has exactly
+// one boot input: the book location.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createStorylineRuntimeCache } from './runtime-cache';
-import { STORYLINE_HARNESS_CONFIGURATION } from '../../harness-config';
 import { STORE_ROOT_ENVIRONMENT, packageRootOf, resolveStoreRoot } from '../../config';
 import type { StorylineRuntime } from '../../api/server';
-import type { HarnessBootConfiguration } from '@underload/harness/server';
 
 // A minimal runtime stand-in: the cache only touches lifecycle members on `dispose`.
 const fakeRuntime = (): StorylineRuntime & { stopped: boolean; closed: boolean } => {
@@ -34,70 +32,8 @@ const fakeRuntime = (): StorylineRuntime & { stopped: boolean; closed: boolean }
     return runtime as unknown as StorylineRuntime & { stopped: boolean; closed: boolean };
 };
 
-const teamConfiguration: HarnessBootConfiguration = {
-    presets: [
-        {
-            name: 'cache-team',
-            agents: ['general'],
-            tools: [],
-            environmentTools: []
-        }
-    ],
-    toolbox: { sharedToolbox: false }
-};
-
 describe('createStorylineRuntimeCache', () => {
-    it('builds once per root and reuses the runtime for a structurally equal fresh config', async () => {
-        const boots: Array<{ storeRoot: string | null | undefined }> = [];
-        const runtime = fakeRuntime();
-        const cache = createStorylineRuntimeCache(async (boot) => {
-            boots.push(boot);
-            return runtime;
-        });
-
-        const first = await cache.runtimeFor({ storeRoot: '/books/a', harness: teamConfiguration });
-        // A host composing a second, structurally equal object must not be a conflict: the
-        // cache compares signatures, not object identity.
-        const second = await cache.runtimeFor({
-            storeRoot: '/books/a',
-            harness: {
-                presets: [
-                    {
-                        name: 'cache-team',
-                        agents: ['general'],
-                        tools: [],
-                        environmentTools: []
-                    }
-                ],
-                toolbox: { sharedToolbox: false }
-            }
-        });
-
-        expect(first).toBe(runtime);
-        expect(second).toBe(runtime);
-        expect(boots).toEqual([{ storeRoot: '/books/a', harness: teamConfiguration }]);
-    });
-
-    it('rejects a different configuration for the same root with the operator sentence', async () => {
-        const runtime = fakeRuntime();
-        const cache = createStorylineRuntimeCache(async () => runtime);
-
-        await cache.runtimeFor({ storeRoot: '/books/a', harness: teamConfiguration });
-
-        // An explicit empty configuration is the zero floor, not "use the default": it must be
-        // a conflict when the root already opened with the team card.
-        expect(() => cache.runtimeFor({ storeRoot: '/books/a', harness: {} })).toThrow(
-            'The Storyline runtime for "/books/a" was already created with a DIFFERENT harness boot configuration. ' +
-                'The first request decides the harness catalogue, plugins and toolbox for a store root, so pass the SAME `variables.harness` to every request under that root (or restart the gateway with the new configuration).'
-        );
-
-        // The same root with the same configuration still works after the refusal.
-        await expect(cache.runtimeFor({ storeRoot: '/books/a', harness: teamConfiguration })).resolves.toBe(
-            runtime
-        );
-    });
-
-    it('keys different roots separately and treats absent/default as one signature', async () => {
+    it('keys different roots separately and reuses one root', async () => {
         const built: string[] = [];
         const cache = createStorylineRuntimeCache(async ({ storeRoot }) => {
             built.push(storeRoot ?? '<default>');
@@ -106,18 +42,11 @@ describe('createStorylineRuntimeCache', () => {
 
         const first = await cache.runtimeFor({ storeRoot: '/books/a' });
         const second = await cache.runtimeFor({ storeRoot: '/books/b' });
-        const absentAgain = await cache.runtimeFor({ storeRoot: '/books/a' });
-        // Spelling out Storyline's own default is NOT a conflict: `undefined` is compared as
-        // the same configuration, which is what lets a warm-up and a request agree.
-        const explicitDefault = await cache.runtimeFor({
-            storeRoot: '/books/a',
-            harness: STORYLINE_HARNESS_CONFIGURATION
-        });
+        const again = await cache.runtimeFor({ storeRoot: '/books/a' });
 
         expect(built).toEqual(['/books/a', '/books/b']);
         expect(first).not.toBe(second);
-        expect(absentAgain).toBe(first);
-        expect(explicitDefault).toBe(first);
+        expect(again).toBe(first);
     });
 
     it('treats an omitted root and its resolved default as one runtime', async () => {
@@ -172,18 +101,12 @@ describe('createStorylineRuntimeCache', () => {
             return runtime;
         });
 
-        const first = await cache.runtimeFor({ storeRoot: relative, harness: teamConfiguration });
-        const second = await cache.runtimeFor({ storeRoot: absolute, harness: teamConfiguration });
-        const third = await cache.runtimeFor({ storeRoot: dotted, harness: teamConfiguration });
+        const first = await cache.runtimeFor({ storeRoot: relative });
+        const second = await cache.runtimeFor({ storeRoot: absolute });
+        const third = await cache.runtimeFor({ storeRoot: dotted });
 
         expect(second).toBe(first);
         expect(third).toBe(first);
-        // A conflict on a DIFFERENT spelling is still a conflict on the same book, and the
-        // operator sentence names the resolved root rather than whichever spelling arrived.
-        expect(() => cache.runtimeFor({ storeRoot: absolute, harness: {} })).toThrow(
-            `The Storyline runtime for "${absolute}" was already created with a DIFFERENT harness boot configuration. ` +
-                'The first request decides the harness catalogue, plugins and toolbox for a store root, so pass the SAME `variables.harness` to every request under that root (or restart the gateway with the new configuration).'
-        );
         expect(built).toEqual([relative]);
     });
 

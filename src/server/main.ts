@@ -22,12 +22,6 @@ import type { StorylineServerConfig } from './config';
 import type { StorylineRuntime, StorylineRuntimeOptions, StorylineServerHandle } from './api/server';
 import type { LoopEngineConfig } from './loop/types';
 
-// R5: the Storyline-owned harness boot configuration, exported beside the boot functions so an
-// embedding host composes `bootStorylineServer({ harness: ... })` from one import site. The
-// module itself (`./harness-config.ts`) remains the source of record; this is a re-export, not
-// a second default.
-export { STORYLINE_HARNESS_CONFIGURATION, STORYLINE_HARNESS_PRESETS, resolveStorylineHarnessBoot } from './harness-config';
-
 // ---------------------------------------------------------------------------
 // The book
 // ---------------------------------------------------------------------------

@@ -217,6 +217,12 @@ export interface RunExecutorDeps {
     runtime: ToolRuntime;
     chat: ChatClient;
     defaultModel: string;
+    /**
+     * The per-Story engine harness registry. Omitted means the executor builds its own over the
+     * same store/chat/runtime; the server passes the one it owns so `GET /agents` and the run
+     * path observe the same threads.
+     */
+    harness?: import('./story-engine').StoryHarnessManager;
 }
 
 /** How many journal entries the "what changed since the last pass" section carries (S-2). */

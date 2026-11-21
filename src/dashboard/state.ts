@@ -36,7 +36,7 @@ import {
     type CreateTemplateInput,
     type AssistantRequest,
     type RevisionMergeRequest,
-    type HarnessListing,
+    type AgentStatusRow,
     type StoryKnowledgeTree
 } from './api';
 import type { Cost, Run, Template } from '../shared/types';
@@ -57,8 +57,8 @@ export interface DashboardSnapshot {
     runs: Run[];
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
-    /** The global agent rosters every story's phrases run, with their Rank A agents called out. */
-    harnesses: HarnessListing[];
+    /** The global Story-agent roster and every Story thread each one is working right now. */
+    agents: AgentStatusRow[];
     /** U-1c — "work the leftovers" jumps the queue to one Story without leaving the panel. */
     queueStoryFilter: string | null;
     /** U-11 / L-13 — the last refusal, shown as the server wrote it, never swallowed. */
@@ -75,7 +75,7 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     queue: [],
     runs: [],
     templates: [],
-    harnesses: [],
+    agents: [],
     queueStoryFilter: null,
     error: null,
     loading: true
@@ -140,8 +140,8 @@ export function createDashboardStore(client: ApiClient = api) {
     const refreshTemplates = (): Promise<void> =>
         refresh('templates', async () => ({ templates: await client.listTemplates() }));
 
-    const refreshHarnesses = (): Promise<void> =>
-        refresh('harnesses', async () => ({ harnesses: await client.listHarnesses() }));
+    const refreshAgents = (): Promise<void> =>
+        refresh('agents', async () => ({ agents: await client.listAgents() }));
 
     const refreshKnowledge = (storyId: string): Promise<void> =>
         refresh(`knowledge:${storyId}`, async () => {
@@ -174,7 +174,7 @@ export function createDashboardStore(client: ApiClient = api) {
     const mutate = async <T>(work: () => Promise<T>, touchedStoryId?: string): Promise<T | null> => {
         try {
             const result = await work();
-            const refetch: Array<Promise<void>> = [refreshStories(), refreshQueue(), refreshRuns()];
+            const refetch: Array<Promise<void>> = [refreshStories(), refreshQueue(), refreshRuns(), refreshAgents()];
             if (touchedStoryId) {
                 refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId));
             }
@@ -222,7 +222,7 @@ export function createDashboardStore(client: ApiClient = api) {
             void refreshStories();
             void refreshQueue();
             void refreshTemplates();
-            void refreshHarnesses();
+            void refreshAgents();
             void refreshRuns();
             // The callback captures `snapshot` lazily, so a `runs` event after a story
             // switch lists the NEW active Story's runs rather than the previous one's.
@@ -233,6 +233,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 }
                 if (kind === 'runs') {
                     void refreshRuns();
+                    void refreshAgents();
                     return;
                 }
                 if (storyId) {
@@ -274,7 +275,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshStories(),
                 refreshQueue(),
                 refreshTemplates(),
-                refreshHarnesses(),
+                refreshAgents(),
                 refreshRuns()
             ]).then(() => undefined);
         },
@@ -362,7 +363,7 @@ export function createDashboardStore(client: ApiClient = api) {
         killRun: (runId: string) =>
             mutate(async () => {
                 const run = await client.killRun(runId);
-                await Promise.all([refreshRuns(), refreshStories()]);
+                await Promise.all([refreshRuns(), refreshStories(), refreshAgents()]);
                 return run;
             }, snapshot.activeStoryId ?? undefined),
         listTemplates: async (): Promise<Template[]> => {
@@ -389,7 +390,7 @@ export function createDashboardStore(client: ApiClient = api) {
         requestAssistant: (storyId: string, body: AssistantRequest) =>
             mutate(async () => {
                 const run = await client.requestAssistant(storyId, body);
-                await Promise.all([refreshRuns(), refreshStory(storyId)]);
+                await Promise.all([refreshRuns(), refreshStory(storyId), refreshAgents()]);
                 return run;
             }, storyId)
     };

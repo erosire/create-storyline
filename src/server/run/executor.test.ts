@@ -6,7 +6,7 @@
 // assertion would let a run row drift and still pass, so each expectation below is the value the
 // spec or the seeded state forces — including the token totals, which the scripted `usage` makes
 // plain arithmetic rather than a guess.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Chapter, Run } from '../../shared/types';
 import type { ChatRequest, ChatResponse } from '../llm';
 import { LlmError } from '../llm';
@@ -395,8 +395,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const running = executor.execute(item);
 
         // The row and the dial happen in the synchronous prefix, so the Author has a Stop button
-        // before the first token — D-18's whole point.
-        expect(client.callCount).toBe(1);
+        // before the first token — D-18's whole point. The engine's first stream request is queued
+        // on its own thread, so the call lands one turn of the event loop later.
+        await vi.waitFor(() => expect(client.callCount).toBe(1));
         expect(store.runs.get('run_1')!.state).toBe('working');
 
         executor.kill('run_1');
@@ -405,12 +406,14 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         const result = await running;
 
+        // The engine checks cancellation before every tool call, so a turn the Author interrupted
+        // does NOT land its write after the abort (P8's stop is preemptive).
         expect(result).toEqual({
             runId: 'run_1',
             ended: 'killed',
             no_op: true,
             tokens: 75,
-            toolsCalled: ['editChapter']
+            toolsCalled: []
         });
 
         const row = store.runs.get('run_1')!;
@@ -433,15 +436,15 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         });
         expect(row.brief_hash).toMatch(/^[0-9a-f]{64}$/);
 
-        // D-11: stopping a run is a stop, not a rewind — the events that happened stay. The turn the
-        // Author interrupted still wrote, because the tool call had already been issued.
-        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:', 'update:abandoned']);
+        // D-11: stopping a run is a stop, not a rewind — the events that happened stay. The tool
+        // call the interrupted turn asked for is not issued after the abort.
+        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:abandoned']);
         // S-3 has no exception for a stop: the row closed through the same teardown write, named on it.
         expect(lastRunEvent(store).attribution).toEqual({
             run_ref: 'run_1',
             why: 'teardown — killed — the Author pulled the cord (P8, U-7) (S-3)'
         });
-        expect(store.chapters.get('chapter_1')).toMatchObject({ rev: 2, summary: 'half-written' });
+        expect(store.chapters.get('chapter_1')).toMatchObject({ rev: 1 });
     });
 
     it('hands a rejected write straight back to the model with the current values, and lets it re-apply (T-4)', async () => {

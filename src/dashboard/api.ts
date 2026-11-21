@@ -300,25 +300,21 @@ export interface StoryKnowledgeTree {
     degraded: boolean;
 }
 
-/** One global agent a phrase can run, with the A–Z authority letter that gates delegation. */
-export interface HarnessAgentListing {
-    name: string;
+/** One tenant of the global agent roster, with every Story thread it is currently working. */
+export interface AgentStatusRow {
+    /** `writer` | `editor` | `reader` | `checker` — the Storyline role, shared by every Story. */
+    kind: string;
     title: string;
-    description: string;
-    rank: string;
-    entry: boolean;
-}
-
-/** `GET /harnesses` — the boot-configured harness catalogue (`src/server/harness-config.ts`, R5). */
-export interface HarnessListing {
-    name: string;
-    title: string;
-    description: string;
-    entry: string;
-    builtin: boolean;
-    agents: HarnessAgentListing[];
-    rank_a: string[];
-    tool_count: number;
+    status: 'idle' | 'running';
+    working: Array<{
+        story_id: string;
+        story_title: string;
+        phase: 'summary' | 'plotlines' | 'chapters';
+        role_name: string;
+        work_item: string;
+        thread_id: string;
+        started_at: number;
+    }>;
 }
 
 /** The full method set T9 imports — one entry per route in the pinned table. */
@@ -328,8 +324,8 @@ export interface ApiClient {
     getStory(storyId: string): Promise<StoryView>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
-    /** The global agent catalogue — the agents every story's phrases run, Rank A called out. */
-    listHarnesses(): Promise<HarnessListing[]>;
+    /** The global Story-agent roster: Writer/Editor/Reader/Checker and their live threads. */
+    listAgents(): Promise<AgentStatusRow[]>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
     stop(storyId: string): Promise<StoryRow>;
     resume(storyId: string): Promise<StoryRow>;
@@ -548,7 +544,7 @@ export const api: ApiClient = {
     createStory: (input) => post<StoryRow>('/stories', input),
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
-    listHarnesses: () => request<HarnessListing[]>('/harnesses'),
+    listAgents: () => request<AgentStatusRow[]>('/agents'),
     patchStory: (storyId, body) => patch<StoryRow>(storyPath(storyId), body),
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),
     resume: (storyId) => post<StoryRow>(storyPath(storyId, '/resume')),

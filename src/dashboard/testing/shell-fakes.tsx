@@ -120,7 +120,12 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
             sections: [],
             degraded: false
         })),
-        listHarnesses: vi.fn(async () => []),
+        listAgents: vi.fn(async () => [
+            { kind: 'writer', title: 'Writer', status: 'idle' as const, working: [] },
+            { kind: 'editor', title: 'Editor', status: 'idle' as const, working: [] },
+            { kind: 'reader', title: 'Reader', status: 'idle' as const, working: [] },
+            { kind: 'checker', title: 'Checker', status: 'idle' as const, working: [] }
+        ]),
         patchStory: vi.fn(async (storyId) => storyRow(storyId)),
         stop: vi.fn(async (storyId) => storyRow(storyId, { status: 'stopped' })),
         resume: vi.fn(async (storyId) => storyRow(storyId, { status: 'ready' })),

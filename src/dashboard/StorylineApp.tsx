@@ -28,7 +28,7 @@ import { useEffect } from 'react';
 import { AuthorQueue } from './components/AuthorQueue';
 import { CrewPanel } from './components/CrewPanel';
 import { DirectiveBar } from './components/DirectiveBar';
-import { HarnessPanel } from './components/HarnessPanel';
+import { AgentsPanel } from './components/AgentsPanel';
 import { KnowledgeTree } from './components/KnowledgeTree';
 import { NewStoryForm } from './components/NewStoryForm';
 import { StoriesPanel } from './components/StoriesPanel';
@@ -51,7 +51,7 @@ export function StorylineApp(props: { store?: DashboardStore }) {
 /** The regions themselves, split out so the store injection above stays one line. */
 function Shell() {
     const store = useDashboardStore();
-    const { activeStoryId, stories, storyViews, runs, templates, knowledge, harnesses } = useDashboard();
+    const { activeStoryId, stories, storyViews, runs, templates, knowledge, agents } = useDashboard();
 
     // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
     // unmount (React StrictMode's double-mount is why the teardown has to be real).
@@ -108,7 +108,7 @@ function Shell() {
                                     <StoryView
                                         view={storyViewData(view, templates) as unknown as StoryViewData}
                                         actions={shellActions(store, activeStoryId)}
-                                        railLead={<HarnessPanel harnesses={harnesses} />}
+                                        railLead={<AgentsPanel agents={agents} />}
                                     />
                                 ) : (
                                     /* U-11: no spinner while the first read is in flight. */
@@ -131,7 +131,7 @@ function Shell() {
                         <div className="region__body">
                             {/* The roster is global: every story's phrases run these agents.
                                 Rank A is called out, before the phrases live right now. */}
-                            <HarnessPanel harnesses={harnesses} />
+                            <AgentsPanel agents={agents} />
                             {/* U-7 across every Story: with no Story selected the Author is on the
                                 desk, and what is still running is the next thing that will land on it. */}
                             <CrewPanel
