@@ -270,11 +270,66 @@ export interface RevisionMergeRequest {
     why?: string;
 }
 
+/**
+ * `GET /stories/:id/knowledge` — the Story's durable knowledge directory.
+ *
+ * Each section is one harness knowledge article (tags `story:<id>` + `section:<key>`), stored
+ * outside every session at `<storeRoot>/harness/knowledge/`. The client renders the directory;
+ * it never re-derives an entry from the book (the same rule L-14 applies to levels).
+ */
+export interface StoryKnowledgeEntry {
+    key: string;
+    title: string;
+    body: string;
+    tags: string[];
+}
+
+export interface StoryKnowledgeSection {
+    key: string;
+    title: string;
+    article_id: string | null;
+    updated_at: string | null;
+    entries: StoryKnowledgeEntry[];
+}
+
+export interface StoryKnowledgeTree {
+    story_id: string;
+    story_title: string;
+    sections: StoryKnowledgeSection[];
+    /** True when a section article could not be materialised (the knowledge store is unavailable). */
+    degraded: boolean;
+}
+
+/** One agent inside a harness session, with the A–Z authority letter that gates delegation. */
+export interface HarnessAgentListing {
+    name: string;
+    title: string;
+    description: string;
+    rank: string;
+    entry: boolean;
+}
+
+/** `GET /harnesses` — the shipped harness catalogue, projected from `@underload/harness`. */
+export interface HarnessListing {
+    name: string;
+    title: string;
+    description: string;
+    entry: string;
+    builtin: boolean;
+    agents: HarnessAgentListing[];
+    rank_a: string[];
+    tool_count: number;
+}
+
 /** The full method set T9 imports — one entry per route in the pinned table. */
 export interface ApiClient {
     listStories(): Promise<StoryRow[]>;
     createStory(input: CreateStoryInput): Promise<StoryRow>;
     getStory(storyId: string): Promise<StoryView>;
+    /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
+    getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
+    /** The harness catalogue — the agents a session can run, Rank A called out. */
+    listHarnesses(): Promise<HarnessListing[]>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
     stop(storyId: string): Promise<StoryRow>;
     resume(storyId: string): Promise<StoryRow>;
@@ -492,6 +547,8 @@ export const api: ApiClient = {
     listStories: () => request<StoryRow[]>('/stories'),
     createStory: (input) => post<StoryRow>('/stories', input),
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
+    getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
+    listHarnesses: () => request<HarnessListing[]>('/harnesses'),
     patchStory: (storyId, body) => patch<StoryRow>(storyPath(storyId), body),
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),
     resume: (storyId) => post<StoryRow>(storyPath(storyId, '/resume')),

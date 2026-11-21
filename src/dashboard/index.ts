@@ -7,6 +7,8 @@ export * from './shell-binding';
 export * from './state';
 export { AuthorQueue } from './components/AuthorQueue';
 export { DirectiveBar } from './components/DirectiveBar';
+export { HarnessPanel } from './components/HarnessPanel';
+export { KnowledgeTree } from './components/KnowledgeTree';
 export { NewStoryForm } from './components/NewStoryForm';
 export { StoriesPanel, pendingTone, sortStories, storyRank, waitSentence } from './components/StoriesPanel';
 export { StorylineApp } from './StorylineApp';

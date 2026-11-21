@@ -114,6 +114,13 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
         listStories: vi.fn(async () => [] as StoryRow[]),
         createStory: vi.fn(async (input) => storyRow('story_new', { title: input.title })),
         getStory: vi.fn(async (storyId) => storyView(storyRow(storyId))),
+        getStoryKnowledge: vi.fn(async (storyId) => ({
+            story_id: storyId,
+            story_title: storyRow(storyId).title,
+            sections: [],
+            degraded: false
+        })),
+        listHarnesses: vi.fn(async () => []),
         patchStory: vi.fn(async (storyId) => storyRow(storyId)),
         stop: vi.fn(async (storyId) => storyRow(storyId, { status: 'stopped' })),
         resume: vi.fn(async (storyId) => storyRow(storyId, { status: 'ready' })),

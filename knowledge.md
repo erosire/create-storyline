@@ -200,3 +200,24 @@ loop can even propose), `src/server/api/projections.ts` (what the Author is told
 `src/server/tools/index.ts` (what the crew may do), `src/server/integration/harness.ts` (a crew
 that only ever sees its brief), and `documents/specifications.md` §15 for the walk all of it is
 built to survive.
+
+## The knowledge directory and the harness listing (2026-11-21)
+
+The dashboard's left rail carries the Story's knowledge directory and its right rail carries the
+harness listing. Both are projections, and neither is a second source of truth:
+
+- **The directory** (`src/server/knowledge/story-knowledge.ts`) writes through the harness's
+  cross-session knowledge engine (`createKnowledgeEngine` + `loadKnowledgeFileStore`) — the same
+  engine the `knowledge` tool uses. One article per section; the eight sections are Summary,
+  Plotlines, Chapters, Characters, Continuity, Goal, Ideas, Findings. The bytes live at
+  `<storeRoot>/harness/knowledge/`, outside every session, so a destroyed harness or a restart
+  cannot take them away. The book is still the authority: every store commit re-derives the
+  section articles, and an empty section keeps a placeholder paragraph so its folder stays
+  visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree.
+- **The harness listing** (`src/server/harnesses.ts`) projects the shipped
+  `@underload/harness/server` presets: each session template, its roster, and its A–Z authority
+  map. Rank A is called out because delegation is strictly downward in that model.
+  `GET /harnesses` is the read.
+
+The components are `src/dashboard/components/KnowledgeTree.tsx` and `HarnessPanel.tsx`; the
+dashboard store keeps `knowledge: story_id -> tree` and `harnesses` beside the §4 rows.

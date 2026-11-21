@@ -35,7 +35,9 @@ import {
     type StoryPatch,
     type CreateTemplateInput,
     type AssistantRequest,
-    type RevisionMergeRequest
+    type RevisionMergeRequest,
+    type HarnessListing,
+    type StoryKnowledgeTree
 } from './api';
 import type { Cost, Run, Template } from '../shared/types';
 
@@ -47,12 +49,16 @@ export interface DashboardSnapshot {
     activeStoryId: string | null;
     /** `story_id -> the last full read`, refetched on every event and every local mutation. */
     storyViews: Record<string, StoryView>;
+    /** `story_id -> the durable knowledge directory`, one article per section. */
+    knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
     queue: QueueItem[];
     /** U-7 — runs for the active Story, or every Story when none is selected. */
     runs: Run[];
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
+    /** The harness sessions available to a story, with their Rank A agents called out. */
+    harnesses: HarnessListing[];
     /** U-1c — "work the leftovers" jumps the queue to one Story without leaving the panel. */
     queueStoryFilter: string | null;
     /** U-11 / L-13 — the last refusal, shown as the server wrote it, never swallowed. */
@@ -65,9 +71,11 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     stories: [],
     activeStoryId: null,
     storyViews: {},
+    knowledge: {},
     queue: [],
     runs: [],
     templates: [],
+    harnesses: [],
     queueStoryFilter: null,
     error: null,
     loading: true
@@ -132,6 +140,16 @@ export function createDashboardStore(client: ApiClient = api) {
     const refreshTemplates = (): Promise<void> =>
         refresh('templates', async () => ({ templates: await client.listTemplates() }));
 
+    const refreshHarnesses = (): Promise<void> =>
+        refresh('harnesses', async () => ({ harnesses: await client.listHarnesses() }));
+
+    const refreshKnowledge = (storyId: string): Promise<void> =>
+        refresh(`knowledge:${storyId}`, async () => {
+            const tree = await client.getStoryKnowledge(storyId);
+
+            return { knowledge: { ...snapshot.knowledge, [storyId]: tree } };
+        });
+
     const refreshRuns = (): Promise<void> =>
         refresh('runs', async () => ({ runs: await client.listRuns(snapshot.activeStoryId ?? undefined) }));
 
@@ -158,7 +176,7 @@ export function createDashboardStore(client: ApiClient = api) {
             const result = await work();
             const refetch: Array<Promise<void>> = [refreshStories(), refreshQueue(), refreshRuns()];
             if (touchedStoryId) {
-                refetch.push(refreshStory(touchedStoryId));
+                refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId));
             }
             await Promise.all(refetch);
             // Cleared only after the refetch, so a refusal from the refresh still surfaces.
@@ -204,6 +222,7 @@ export function createDashboardStore(client: ApiClient = api) {
             void refreshStories();
             void refreshQueue();
             void refreshTemplates();
+            void refreshHarnesses();
             void refreshRuns();
             // The callback captures `snapshot` lazily, so a `runs` event after a story
             // switch lists the NEW active Story's runs rather than the previous one's.
@@ -219,6 +238,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 if (storyId) {
                     if (storyId === snapshot.activeStoryId) {
                         void refreshStory(storyId);
+                        void refreshKnowledge(storyId);
                     }
                     void refreshStories();
                     void refreshQueue();
@@ -235,7 +255,7 @@ export function createDashboardStore(client: ApiClient = api) {
         openStory(storyId: string): Promise<StoryRow | null> {
             commit({ activeStoryId: storyId, loading: true });
             return mutate(async () => {
-                await Promise.all([refreshStory(storyId), refreshRuns(), refreshStories()]);
+                await Promise.all([refreshStory(storyId), refreshKnowledge(storyId), refreshRuns(), refreshStories()]);
                 return snapshot.stories.find((row) => row.id === storyId) ?? null;
             });
         },
@@ -250,9 +270,13 @@ export function createDashboardStore(client: ApiClient = api) {
 
         // ---- reads -------------------------------------------------------------------
         reload(): Promise<void> {
-            return Promise.all([refreshStories(), refreshQueue(), refreshTemplates(), refreshRuns()]).then(
-                () => undefined
-            );
+            return Promise.all([
+                refreshStories(),
+                refreshQueue(),
+                refreshTemplates(),
+                refreshHarnesses(),
+                refreshRuns()
+            ]).then(() => undefined);
         },
 
         // ---- story control (U-3 / P8) ------------------------------------------------
@@ -262,7 +286,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 // The new Story is immediately THE STORY: the Author just wrote a Seed and the
                 // next thing they do is work phase ① (U-12: usable with zero harnesses).
                 commit({ activeStoryId: row.id });
-                await Promise.all([refreshStory(row.id), refreshStories()]);
+                await Promise.all([refreshStory(row.id), refreshKnowledge(row.id), refreshStories()]);
                 return row;
             });
         },

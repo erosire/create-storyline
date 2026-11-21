@@ -48,8 +48,8 @@
     top: 0;
     z-index: 3;
     padding: 0.5rem 0.625rem;
-    border-left: 3px solid #b58900;
-    background: #fffaf0;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
 }
 
@@ -68,19 +68,19 @@
 
 .sv-seed-note,
 .sv-seed-measure {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.75rem;
 }
 
 .sv-seed-body {
     margin: 0.25rem 0;
-    color: #2b2620;
+    color: var(--text-strong);
     white-space: pre-wrap;
 }
 
 .sv-seed-measure {
     display: block;
-    border-top: 1px dashed #e0d6c6;
+    border-top: 1px dashed var(--line);
     padding-top: 0.25rem;
     font-weight: 600;
 }
@@ -97,18 +97,18 @@
     gap: 0.25rem;
     align-items: center;
     padding: 0.25rem 0.5rem;
-    border: 1px solid #d8d2c8;
-    background: #f6f4f0;
-    color: #57534e;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
+    color: var(--muted);
     font: inherit;
     text-align: left;
 }
 
 /* The current phase is a filled block, not just a colour (L-34's at-a-glance rule). */
 .sv-phase-current {
-    border-color: #2b3a55;
-    background: #2b3a55;
-    color: #fff;
+    border-color: var(--accent-2);
+    background: var(--accent-2);
+    color: var(--text-strong);
     font-weight: 700;
 }
 
@@ -140,44 +140,44 @@
 
 /* Awaiting the Author is CALM: the loop finished something (U-1b). */
 .sv-status-awaiting .sv-story-status-badge {
-    background: #dbe8d5;
-    color: #2f4a2c;
+    background: var(--finished-bg);
+    color: var(--finished);
 }
 
 /* Drained reads as a finished thing, never an idle one (U-1c). */
 .sv-status-done .sv-story-status-badge,
 .sv-status-paused .sv-story-status-badge {
-    background: #dde3ea;
-    color: #2b3a55;
+    background: var(--surface-3);
+    color: var(--accent-2);
 }
 
 /* Stalled is URGENT and it is the only one that is (L-21, L-24: neither is an error). */
 .sv-status-stalled .sv-story-status-badge {
-    background: #f3d2ce;
-    color: #7a2a20;
-    outline: 1px dashed #7a2a20;
+    background: var(--urgent-bg);
+    color: var(--urgent);
+    outline: 1px dashed var(--urgent);
 }
 
 .sv-status-ready .sv-story-status-badge {
-    background: #eef0ee;
-    color: #3d4441;
+    background: var(--surface-3);
+    color: var(--text);
 }
 
 .sv-story-reason {
     flex: 1 1 18rem;
-    color: #3d4441;
+    color: var(--text);
 }
 
 /* ------------------------------------------------------------------ the dial (D-35, D-35b) */
 
 .sv-dial {
     padding: 0.25rem 0.5rem;
-    border: 1px solid #e0d6c6;
-    background: #fbf8f2;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
 }
 
 .sv-dial-title {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
     text-transform: uppercase;
     letter-spacing: 0.02em;
@@ -199,16 +199,16 @@
 }
 
 .sv-dial-on .sv-dial-cost-name {
-    color: #2f4a2c;
+    color: var(--finished);
     font-weight: 700;
 }
 
 .sv-dial-off .sv-dial-cost-name {
-    color: #8a8378;
+    color: var(--dim);
 }
 
 .sv-dial-cost-note {
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
@@ -233,32 +233,32 @@
 .sv-lock-button,
 .sv-backtrack-button {
     padding: 0.75rem 1rem;
-    border: 2px solid #2b3a55;
-    background: #2b3a55;
-    color: #fff;
+    border: 2px solid var(--accent-2);
+    background: var(--accent-2);
+    color: var(--text-strong);
     font-size: 1rem;
     font-weight: 700;
     text-align: left;
 }
 
 .sv-backtrack-button {
-    border-color: #7a2a20;
-    background: #fff;
-    color: #7a2a20;
+    border-color: var(--urgent);
+    background: var(--surface-2);
+    color: var(--urgent);
 }
 
 .sv-lock-button:disabled,
 .sv-backtrack-button:disabled {
-    border-color: #c9c3ba;
-    background: #f1efeb;
-    color: #8a8378;
+    border-color: var(--line-strong);
+    background: var(--surface-3);
+    color: var(--dim);
 }
 
 .sv-lock-statement,
 .sv-backtrack-hint,
 .sv-backtrack-none {
     margin: 0;
-    color: #3d4441;
+    color: var(--text);
     font-size: 0.75rem;
 }
 
@@ -266,7 +266,7 @@
 .sv-lock-reasons {
     margin: 0;
     padding-left: 1.1rem;
-    color: #7a2a20;
+    color: var(--urgent);
     font-size: 0.75rem;
 }
 
@@ -277,12 +277,12 @@
     gap: 0.375rem;
     align-items: center;
     padding: 0.5rem;
-    border: 2px dashed #7a2a20;
+    border: 2px dashed var(--urgent);
 }
 
 .sv-confirm-text {
     flex: 1 1 20rem;
-    color: #7a2a20;
+    color: var(--urgent);
     font-weight: 600;
 }
 
@@ -290,12 +290,12 @@
 
 .sv-pane {
     padding: 0.5rem 0.625rem;
-    border: 1px solid #ddd8d0;
-    background: #fff;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
 }
 
 .sv-pane-locked {
-    border-left: 3px solid #b58900;
+    border-left: 3px solid var(--accent);
 }
 
 .sv-pane-head {
@@ -303,7 +303,7 @@
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: baseline;
-    border-bottom: 1px solid #efece7;
+    border-bottom: 1px solid var(--line);
     padding-bottom: 0.25rem;
 }
 
@@ -314,7 +314,7 @@
 }
 
 .sv-pane-badge {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
@@ -325,25 +325,25 @@
 }
 
 .sv-badge-lock {
-    background: #fdf3dc;
-    color: #6b5312;
+    background: var(--accent-soft);
+    color: var(--accent);
 }
 
 .sv-badge-warn {
-    background: #f3d2ce;
-    color: #7a2a20;
+    background: var(--urgent-bg);
+    color: var(--urgent);
 }
 
 .sv-badge-assigned {
-    background: #dbe8d5;
-    color: #2f4a2c;
+    background: var(--finished-bg);
+    color: var(--finished);
 }
 
 /* ------------------------------------------------------------------ the Summary (U-4) */
 
 .sv-summary-note {
     margin: 0.25rem 0;
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.75rem;
 }
 
@@ -360,7 +360,7 @@
 }
 
 .sv-summary-field dt {
-    color: #57534e;
+    color: var(--muted);
     font-size: 0.75rem;
     font-weight: 600;
 }
@@ -379,16 +379,16 @@
 }
 
 .sv-summary-flag {
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
 .sv-ask-assistant,
 .sv-summary-actions button {
     padding: 0.125rem 0.5rem;
-    border: 1px solid #2b3a55;
-    background: #fff;
-    color: #2b3a55;
+    border: 1px solid var(--accent-2);
+    background: var(--surface-2);
+    color: var(--accent-2);
     font-size: 0.6875rem;
 }
 
@@ -399,25 +399,25 @@
 /* --------------------------------------------------- plotlines beside prose (U-4) */
 
 .sv-chapters-none {
-    color: #6b6257;
+    color: var(--muted);
 }
 
 .sv-activity {
     margin-top: 0.5rem;
     padding-left: 0.5rem;
-    border-left: 2px solid #ddd8d0;
+    border-left: 2px solid var(--line-strong);
 }
 
 .sv-activity-contested {
-    border-left-color: #7a2a20;
+    border-left-color: var(--urgent);
 }
 
 .sv-activity-awaiting {
-    border-left-color: #b58900;
+    border-left-color: var(--accent);
 }
 
 .sv-activity-clean {
-    border-left-color: #2f4a2c;
+    border-left-color: var(--finished);
 }
 
 .sv-activity-title {
@@ -435,7 +435,7 @@
     gap: 0.5rem;
     margin-bottom: 0.5rem;
     padding: 0.375rem;
-    border: 1px solid #efece7;
+    border: 1px solid var(--line);
 }
 
 .sv-chapter-contract,
@@ -451,7 +451,7 @@
 
 .sv-chapter-no-contract {
     margin: 0;
-    color: #7a2a20;
+    color: var(--urgent);
     font-size: 0.75rem;
 }
 
@@ -462,7 +462,7 @@
 }
 
 .sv-plotline-field dt {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
@@ -496,27 +496,27 @@
 }
 
 .sv-cost-critical {
-    background: #f3d2ce;
-    color: #7a2a20;
+    background: var(--urgent-bg);
+    color: var(--urgent);
 }
 
 .sv-cost-major {
-    background: #fdf3dc;
-    color: #6b5312;
+    background: var(--accent-soft);
+    color: var(--accent);
 }
 
 .sv-cost-minor,
 .sv-cost-taste {
-    background: #eef0ee;
-    color: #57534e;
+    background: var(--surface-3);
+    color: var(--muted);
 }
 
 .sv-chapter-unapprove {
     margin-top: 0.25rem;
     padding: 0.125rem 0.5rem;
-    border: 1px dashed #2b3a55;
-    background: #fff;
-    color: #2b3a55;
+    border: 1px dashed var(--accent-2);
+    background: var(--surface-2);
+    color: var(--accent-2);
     font-size: 0.6875rem;
 }
 
@@ -524,17 +524,17 @@
 
 .sv-prose {
     padding: 0.375rem;
-    border: 1px solid #efece7;
+    border: 1px solid var(--line);
 }
 
 .sv-prose-running {
     /* Greyed while the Story runs, live the moment the pause lands (U-17). */
-    background: #f7f6f3;
+    background: var(--surface-2);
 }
 
 .sv-prose-paused {
-    border-left: 3px solid #7a2a20;
-    background: #fffdf7;
+    border-left: 3px solid var(--urgent);
+    background: var(--surface-2);
 }
 
 .sv-prose-head {
@@ -554,21 +554,21 @@
 .sv-prose-score,
 .sv-prose-round,
 .sv-prose-bar {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
 .sv-prose-banner {
     margin: 0.25rem 0;
     padding: 0.25rem 0.375rem;
-    background: #7a2a20;
-    color: #fff;
+    background: var(--urgent);
+    color: var(--text-strong);
     font-weight: 700;
 }
 
 .sv-prose-locked {
     margin: 0.25rem 0;
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.75rem;
 }
 
@@ -582,13 +582,13 @@
 
 .sv-section {
     padding: 0.25rem;
-    border: 1px solid #efece7;
+    border: 1px solid var(--line);
 }
 
 /* P9 / T-2: the Author's own span, marked so its protection is visible. */
 .sv-section-author {
-    border-left: 3px solid #b58900;
-    background: #fffaf0;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
 }
 
 .sv-section-head {
@@ -600,33 +600,33 @@
 }
 
 .sv-section-id {
-    color: #8a8378;
+    color: var(--dim);
 }
 
 .sv-section-origin {
-    color: #6b5312;
+    color: var(--accent);
     font-weight: 700;
 }
 
 .sv-section-origin-writer {
-    color: #57534e;
+    color: var(--muted);
     font-weight: 400;
 }
 
 .sv-section-dirty {
-    color: #7a2a20;
+    color: var(--urgent);
 }
 
 .sv-section-saved {
-    color: #2f4a2c;
+    color: var(--finished);
 }
 
 .sv-section-text {
     width: 100%;
     min-height: 6rem;
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
-    background: #fff;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
     font: inherit;
     line-height: 1.5;
 }
@@ -641,23 +641,23 @@
 
 .sv-section-save {
     padding: 0.125rem 0.5rem;
-    border: 1px solid #2b3a55;
-    background: #2b3a55;
-    color: #fff;
+    border: 1px solid var(--accent-2);
+    background: var(--accent-2);
+    color: var(--text-strong);
     font-size: 0.6875rem;
 }
 
 .sv-section-why {
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
 .sv-prose-error {
     margin: 0.25rem 0;
     padding: 0.25rem 0.375rem;
-    border-left: 3px solid #7a2a20;
-    background: #f3d2ce;
-    color: #7a2a20;
+    border-left: 3px solid var(--urgent);
+    background: var(--urgent-bg);
+    color: var(--urgent);
     font-weight: 600;
 }
 
@@ -668,16 +668,16 @@
 .sv-prose-pause,
 .sv-prose-resume {
     padding: 0.375rem 0.75rem;
-    border: 1px solid #7a2a20;
-    background: #fff;
-    color: #7a2a20;
+    border: 1px solid var(--urgent);
+    background: var(--surface-2);
+    color: var(--urgent);
     font-weight: 700;
 }
 
 .sv-prose-resume {
-    border-color: #2b3a55;
-    background: #2b3a55;
-    color: #fff;
+    border-color: var(--accent-2);
+    background: var(--accent-2);
+    color: var(--text-strong);
 }
 
 /* ----------------------------------------------------------- proposals (U-5, D-20) */
@@ -698,7 +698,7 @@
 
 .sv-proposal {
     padding: 0.25rem;
-    border: 1px dashed #ddd8d0;
+    border: 1px dashed var(--line-strong);
 }
 
 .sv-proposal-head {
@@ -714,19 +714,19 @@
 
 /* U-5: a diff, not a replaced paragraph. */
 .sv-diff-removed {
-    background: #f3d2ce;
-    color: #7a2a20;
+    background: var(--urgent-bg);
+    color: var(--urgent);
     text-decoration: line-through;
 }
 
 .sv-diff-added {
-    background: #dbe8d5;
-    color: #2f4a2c;
+    background: var(--finished-bg);
+    color: var(--finished);
 }
 
 .sv-proposal-why {
     margin: 0.125rem 0;
-    color: #3d4441;
+    color: var(--text);
     font-size: 0.75rem;
 }
 
@@ -734,14 +734,14 @@
 .sv-proposal-reject,
 .sv-proposal-undo {
     padding: 0.125rem 0.5rem;
-    border: 1px solid #57534e;
-    background: #fff;
+    border: 1px solid var(--muted);
+    background: var(--surface-2);
     font-size: 0.6875rem;
 }
 
 .sv-proposal-error {
     margin: 0.125rem 0;
-    color: #7a2a20;
+    color: var(--urgent);
     font-size: 0.75rem;
 }
 
@@ -750,7 +750,7 @@
 .sv-revisions-note,
 .sv-revisions-hint {
     margin: 0.25rem 0;
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.75rem;
 }
 
@@ -775,11 +775,11 @@
     flex-direction: column;
     gap: 0.25rem;
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
+    border: 1px solid var(--line-strong);
 }
 
 .sv-revision-selected {
-    border: 2px solid #2f4a2c;
+    border: 2px solid var(--finished);
 }
 
 .sv-revision-head {
@@ -808,7 +808,7 @@
 /* U-13: a row filed against the UNIT is labelled, not passed off as the draft's own judgement. */
 .sv-revision-verdicts-scope {
     margin: 0;
-    color: #6b6257;
+    color: var(--muted);
     font-style: italic;
 }
 
@@ -817,15 +817,15 @@
     flex-direction: column;
     gap: 0.125rem;
     padding: 0.125rem 0.25rem;
-    border-left: 2px solid #ddd8d0;
+    border-left: 2px solid var(--line-strong);
 }
 
 .sv-revision-verdict-pass {
-    border-left-color: #2f4a2c;
+    border-left-color: var(--finished);
 }
 
 .sv-revision-verdict-fail {
-    border-left-color: #7a2a20;
+    border-left-color: var(--urgent);
 }
 
 .sv-revision-verdict-state {
@@ -834,20 +834,20 @@
 
 .sv-revision-verdict-failure {
     margin: 0;
-    color: #7a2a20;
+    color: var(--urgent);
 }
 
 .sv-revision-body {
     margin: 0;
     padding: 0.25rem;
-    background: #f7f6f3;
+    background: var(--surface-2);
     font-family: inherit;
     white-space: pre-wrap;
 }
 
 .sv-revision-note {
     margin: 0;
-    color: #2f4a2c;
+    color: var(--finished);
     font-size: 0.75rem;
 }
 
@@ -859,7 +859,7 @@
 
 .sv-ideas-thin {
     margin: 0.25rem 0;
-    color: #6b5312;
+    color: var(--accent);
     font-size: 0.75rem;
 }
 
@@ -877,18 +877,18 @@
 
 .sv-idea {
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
+    border: 1px solid var(--line-strong);
 }
 
 /* D-27: unverified is dimmed, and the dimming is the gate, not decoration. */
 .sv-idea-dim {
-    border-left: 3px solid #c9c3ba;
-    background: #f7f6f3;
+    border-left: 3px solid var(--line-strong);
+    background: var(--surface-2);
     opacity: 0.62;
 }
 
 .sv-idea-verified {
-    border-left: 3px solid #2f4a2c;
+    border-left: 3px solid var(--finished);
 }
 
 .sv-idea-head {
@@ -902,23 +902,23 @@
 .sv-idea-repeat {
     padding: 0 0.25rem;
     border-radius: 0.25rem;
-    background: #fdf3dc;
-    color: #6b5312;
+    background: var(--accent-soft);
+    color: var(--accent);
     font-weight: 700;
 }
 
 .sv-idea-verdict-pending {
-    color: #6b5312;
+    color: var(--accent);
 }
 
 .sv-idea-verdict-verified {
-    color: #2f4a2c;
+    color: var(--finished);
     font-weight: 700;
 }
 
 .sv-idea-verdict-refuted,
 .sv-idea-verdict-unverifiable {
-    color: #7a2a20;
+    color: var(--urgent);
 }
 
 .sv-idea-body {
@@ -931,12 +931,12 @@
 .sv-idea-earlier,
 .sv-idea-note {
     margin: 0;
-    color: #57534e;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
 .sv-idea-earlier {
-    color: #6b5312;
+    color: var(--accent);
 }
 
 .sv-idea-actions {
@@ -949,20 +949,20 @@
 .sv-idea-discard,
 .sv-idea-defer {
     padding: 0.125rem 0.5rem;
-    border: 1px solid #57534e;
-    background: #fff;
+    border: 1px solid var(--muted);
+    background: var(--surface-2);
     font-size: 0.6875rem;
 }
 
 .sv-idea-select {
-    border-color: #2b3a55;
-    color: #2b3a55;
+    border-color: var(--accent-2);
+    color: var(--accent-2);
     font-weight: 700;
 }
 
 .sv-idea-confirm {
     margin: 0.25rem 0 0;
-    color: #7a2a20;
+    color: var(--urgent);
     font-weight: 600;
 }
 
@@ -982,7 +982,7 @@
 
 .sv-goal-progress {
     margin: 0.25rem 0;
-    color: #2b2620;
+    color: var(--text-strong);
     font-family: ui-monospace, monospace;
     font-weight: 700;
 }
@@ -994,7 +994,7 @@
 
 .sv-goal-level-question {
     margin: 0;
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
@@ -1012,15 +1012,15 @@
     gap: 0.375rem;
     align-items: baseline;
     padding: 0.125rem 0;
-    border-bottom: 1px solid #f4f2ee;
+    border-bottom: 1px solid var(--line);
 }
 
 .sv-criterion-failing {
-    background: #fdf6f5;
+    background: var(--urgent-bg);
 }
 
 .sv-criterion-ahead {
-    color: #8a8378;
+    color: var(--dim);
 }
 
 .sv-criterion-state {
@@ -1029,11 +1029,11 @@
 }
 
 .sv-criterion-failing .sv-criterion-state {
-    color: #7a2a20;
+    color: var(--urgent);
 }
 
 .sv-criterion-passing .sv-criterion-state {
-    color: #2f4a2c;
+    color: var(--finished);
 }
 
 .sv-criterion-id {
@@ -1044,12 +1044,12 @@
 .sv-criterion-checker,
 .sv-criterion-hard,
 .sv-goal-bar-progress {
-    color: #6b6257;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
 .sv-criterion-hard-on {
-    color: #2b2620;
+    color: var(--text-strong);
     font-weight: 700;
 }
 
@@ -1065,11 +1065,11 @@
 }
 
 .sv-criterion-evidence {
-    color: #57534e;
+    color: var(--muted);
 }
 
 .sv-criterion-hint {
-    color: #2f4a2c;
+    color: var(--finished);
 }
 
 .sv-goal-controls {
@@ -1086,7 +1086,7 @@
     gap: 0.375rem;
     align-items: center;
     padding: 0.25rem;
-    border: 1px solid #efece7;
+    border: 1px solid var(--line);
 }
 
 .sv-goal-bar-rows {
@@ -1115,7 +1115,7 @@
 /* ------------------------------------------------------------------ completion (U-14) */
 
 .sv-completion {
-    border: 2px solid #2f4a2c;
+    border: 2px solid var(--finished);
 }
 
 .sv-completion-facts {
@@ -1132,21 +1132,21 @@
 
 .sv-completion-fact dt {
     min-width: 8rem;
-    color: #6b6257;
+    color: var(--muted);
 }
 
 /* L-25b: the count the Author accepts with their eyes open. */
 .sv-completion-discard {
     margin: 0.25rem 0;
-    color: #7a2a20;
+    color: var(--urgent);
     font-weight: 700;
 }
 
 .sv-completion-accept {
     padding: 0.5rem 1rem;
-    border: 2px solid #2f4a2c;
-    background: #2f4a2c;
-    color: #fff;
+    border: 2px solid var(--finished);
+    background: var(--finished);
+    color: var(--text-strong);
     font-weight: 700;
 }
 
@@ -1170,18 +1170,18 @@
 }
 
 .sv-cost-note {
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
 .sv-cost-warn .sv-cost-count {
-    color: #7a2a20;
+    color: var(--urgent);
     font-weight: 700;
 }
 
 .sv-cost-hint {
     margin: 0.25rem 0 0;
-    color: #6b5312;
+    color: var(--accent);
     font-size: 0.75rem;
 }
 
@@ -1189,13 +1189,13 @@
 
 .sv-run {
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
+    border: 1px solid var(--line-strong);
 }
 
 /* U-8a: the crew that writes never reads like the crew that judges. */
 .sv-run-writer {
-    border-left: 3px solid #b58900;
-    background: #fffaf0;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
 }
 
 .sv-run-head {
@@ -1207,62 +1207,62 @@
 }
 
 .sv-kind-writer {
-    background: #b58900;
-    color: #fff;
+    background: var(--accent);
+    color: var(--text-strong);
     font-weight: 700;
 }
 
 .sv-kind-editor {
-    background: #dbe8d5;
-    color: #2f4a2c;
+    background: var(--finished-bg);
+    color: var(--finished);
 }
 
 .sv-kind-reader,
 .sv-kind-checker {
-    background: #dde3ea;
-    color: #2b3a55;
+    background: var(--surface-3);
+    color: var(--accent-2);
 }
 
 .sv-run-dissent {
     margin: 0.125rem 0;
     padding: 0.125rem 0.25rem;
-    border-left: 3px dashed #7a2a20;
-    color: #7a2a20;
+    border-left: 3px dashed var(--urgent);
+    color: var(--urgent);
     font-size: 0.75rem;
 }
 
 .sv-run-panel {
     margin: 0.125rem 0;
-    color: #2b3a55;
+    color: var(--accent-2);
     font-size: 0.6875rem;
 }
 
 /* S-7: delegated children are nested, indented, and never rows of their own. */
 .sv-run-delegated {
     padding-left: 1rem;
-    border-left: 1px dashed #c9c3ba;
+    border-left: 1px dashed var(--line-strong);
 }
 
 .sv-delegated {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    color: #57534e;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
 .sv-run-kill {
     margin-top: 0.25rem;
     padding: 0.125rem 0.5rem;
-    border: 1px solid #7a2a20;
-    background: #fff;
-    color: #7a2a20;
+    border: 1px solid var(--urgent);
+    background: var(--surface-2);
+    color: var(--urgent);
     font-size: 0.6875rem;
 }
 
 .sv-run-ended {
     margin: 0.125rem 0 0;
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
@@ -1271,11 +1271,11 @@
 .sv-template {
     margin-top: 0.375rem;
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
+    border: 1px solid var(--line-strong);
 }
 
 .sv-template-builtin {
-    background: #f7f6f3;
+    background: var(--surface-2);
 }
 
 .sv-template-head {
@@ -1292,7 +1292,7 @@
 }
 
 .sv-template-name {
-    color: #8a8378;
+    color: var(--dim);
     font-size: 0.6875rem;
 }
 
@@ -1301,12 +1301,12 @@
 .sv-template-escalation,
 .sv-template-attempts {
     margin: 0.125rem 0;
-    color: #57534e;
+    color: var(--muted);
     font-size: 0.6875rem;
 }
 
 .sv-template-divergent {
-    color: #2f4a2c;
+    color: var(--finished);
     font-weight: 700;
 }
 
@@ -1327,11 +1327,11 @@
 }
 
 .sv-role-writer {
-    border-left: 2px solid #b58900;
+    border-left: 2px solid var(--accent);
 }
 
 .sv-role-panel {
-    color: #2b3a55;
+    color: var(--accent-2);
     font-size: 0.6875rem;
 }
 
@@ -1344,8 +1344,8 @@
 .sv-template-rules-text {
     width: 100%;
     padding: 0.25rem;
-    border: 1px solid #ddd8d0;
-    background: #fffdf7;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
     font: inherit;
 }
 
@@ -1365,15 +1365,15 @@
 .sv-template-attempts-save,
 .sv-role-agents-save {
     padding: 0.125rem 0.5rem;
-    border: 1px solid #2b3a55;
-    background: #fff;
-    color: #2b3a55;
+    border: 1px solid var(--accent-2);
+    background: var(--surface-2);
+    color: var(--accent-2);
     font-size: 0.6875rem;
 }
 
 .sv-template-assign-writer {
-    border-color: #b58900;
-    color: #6b5312;
+    border-color: var(--accent);
+    color: var(--accent);
     font-weight: 700;
 }
 
@@ -1382,7 +1382,7 @@
 .sv-digest-body {
     margin: 0;
     padding: 0.25rem;
-    background: #f7f6f3;
+    background: var(--surface-2);
     font-family: inherit;
     white-space: pre-wrap;
 }
@@ -1393,9 +1393,9 @@
 .sv-stalled-review {
     margin: 0.5rem 0;
     padding: 0.5rem 0.75rem;
-    border: 1px solid #b58900;
+    border: 1px solid var(--accent);
     border-left-width: 4px;
-    background: #fffdf5;
+    background: var(--accent-soft);
 }
 
 .sv-stalled-title {
@@ -1439,7 +1439,7 @@
 .sv-stalled-note {
     margin: 0.25rem 0 0;
     font-size: 0.6875rem;
-    color: #5c574d;
+    color: var(--muted);
 }
 
 /* L-23's exits are the point of the screen, so they are the loudest controls in the block. */
@@ -1454,8 +1454,8 @@
 .sv-exit {
     padding: 0.375rem 0.625rem;
     font-weight: 700;
-    border: 1px solid #b58900;
-    background: #fff;
+    border: 1px solid var(--accent);
+    background: var(--surface-2);
     cursor: pointer;
 }
 
@@ -1472,7 +1472,7 @@
     font: inherit;
     font-size: 0.75rem;
     padding: 0.25rem;
-    border: 1px solid #c9c2b4;
+    border: 1px solid var(--line-strong);
 }
 
 .sv-exit-rules {
@@ -1485,8 +1485,8 @@
     margin-top: 0.375rem;
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
-    border: 1px solid #6c8ebf;
-    background: #fff;
+    border: 1px solid var(--accent-2);
+    background: var(--surface-2);
     cursor: pointer;
 }
 
@@ -1498,6 +1498,1066 @@
 @media (max-width: 70rem) {
     .sv-story,
     .sv-chapter-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* ================================================================== modern skin
+ *
+ * The rules above are the original semantic layer: which thing is calm, which is urgent, which
+ * is locked. This block is the visual layer that makes those meanings read like a 2026
+ * workstation instead of a 1998 terminal: rounded surfaces, soft depth, one accent, and the
+ * same type discipline as the shell (sans for prose, monospace for ids and numbers).
+ */
+
+.sv-story {
+    grid-template-columns: minmax(0, 1fr) 24rem;
+    gap: 1rem;
+    padding: 0.25rem;
+    font-size: 0.8125rem;
+}
+
+.sv-story-main,
+.sv-story-rail {
+    gap: 0.7rem;
+}
+
+.sv-story-rail {
+    top: 0.75rem;
+    max-height: calc(100vh - 1.5rem);
+    scrollbar-width: thin;
+}
+
+/* ------------------------------------------------------------ the Seed */
+
+.sv-seed {
+    top: -0.25rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid rgba(246, 198, 107, 0.24);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background-color: #0c111a;
+    background-image:
+        radial-gradient(600px 200px at 100% 0%, rgba(246, 198, 107, 0.12), transparent 65%),
+        linear-gradient(180deg, rgba(246, 198, 107, 0.07), rgba(16, 23, 36, 0.82));
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(8px);
+}
+
+.sv-seed-title {
+    color: var(--text-strong);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.sv-seed-note,
+.sv-seed-measure {
+    color: var(--muted);
+}
+
+.sv-seed-body {
+    color: var(--text);
+    font-family:
+        'Inter',
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        Roboto,
+        sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.65;
+}
+
+.sv-seed-measure {
+    border-top-color: var(--line);
+    color: var(--accent);
+}
+
+/* ------------------------------------------------------------ phase strip */
+
+.sv-phase-strip {
+    gap: 0.35rem;
+}
+
+.sv-phase-item {
+    padding: 0.35rem 0.6rem;
+    border-color: var(--line-strong);
+    border-radius: 8px;
+    background: rgba(20, 29, 44, 0.55);
+    color: var(--muted);
+    font-size: 0.75rem;
+    transition:
+        border-color 140ms ease,
+        color 140ms ease,
+        background 140ms ease;
+}
+
+.sv-phase-item:hover {
+    border-color: rgba(246, 198, 107, 0.45);
+    color: var(--text);
+}
+
+.sv-phase-current {
+    border-color: rgba(246, 198, 107, 0.55);
+    background: linear-gradient(180deg, rgba(246, 198, 107, 0.22), rgba(246, 198, 107, 0.08));
+    color: var(--accent);
+    box-shadow: 0 8px 20px rgba(246, 198, 107, 0.1);
+}
+
+.sv-phase-locked {
+    border-right-color: var(--finished);
+}
+
+/* ------------------------------------------------------------ status + dial */
+
+.sv-story-status {
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.15rem 0;
+}
+
+.sv-story-status-badge {
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+}
+
+.sv-status-awaiting .sv-story-status-badge {
+    background: var(--calm-bg);
+    color: var(--calm);
+}
+
+.sv-status-done .sv-story-status-badge,
+.sv-status-paused .sv-story-status-badge {
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+.sv-status-stalled .sv-story-status-badge {
+    outline: 1px dashed rgba(251, 126, 147, 0.6);
+    outline-offset: 1px;
+}
+
+.sv-status-ready .sv-story-status-badge {
+    background: rgba(148, 163, 184, 0.1);
+    color: var(--muted);
+}
+
+.sv-story-reason,
+.sv-story-levels,
+.sv-story-trend,
+.sv-story-progress {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.sv-story-reason {
+    color: var(--text);
+}
+
+.sv-dial {
+    padding: 0.6rem 0.75rem;
+    border-color: var(--line);
+    border-radius: var(--radius-sm);
+    background: rgba(20, 29, 44, 0.48);
+}
+
+.sv-dial-title {
+    color: var(--dim);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.sv-dial-cost {
+    gap: 0.35rem;
+    padding: 0.18rem 0.4rem;
+    border-radius: 7px;
+    background: rgba(7, 10, 16, 0.3);
+}
+
+.sv-dial-on .sv-dial-cost-name {
+    color: var(--finished);
+}
+
+.sv-dial-off .sv-dial-cost-name {
+    color: var(--dim);
+}
+
+.sv-dial-cost-note {
+    color: var(--dim);
+    font-size: 0.64rem;
+}
+
+/* ------------------------------------------------------------ lock / backtrack */
+
+.sv-lock-button,
+.sv-backtrack-button {
+    padding: 0.7rem 0.9rem;
+    border: 1px solid rgba(143, 168, 255, 0.48);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(143, 168, 255, 0.22), rgba(143, 168, 255, 0.08)), rgba(16, 23, 36, 0.6);
+    color: var(--accent-2);
+    font-size: 0.9rem;
+    font-weight: 700;
+    transition:
+        border-color 150ms ease,
+        background 150ms ease,
+        transform 110ms ease;
+}
+
+.sv-lock-button:hover:not(:disabled),
+.sv-backtrack-button:hover:not(:disabled) {
+    border-color: var(--accent-2);
+    background: linear-gradient(180deg, rgba(143, 168, 255, 0.3), rgba(143, 168, 255, 0.12)), rgba(16, 23, 36, 0.7);
+}
+
+.sv-backtrack-button {
+    border-color: rgba(251, 126, 147, 0.42);
+    background: linear-gradient(180deg, rgba(251, 126, 147, 0.14), rgba(251, 126, 147, 0.05)), rgba(16, 23, 36, 0.6);
+    color: var(--urgent);
+}
+
+.sv-backtrack-button:hover:not(:disabled) {
+    border-color: var(--urgent);
+    background: linear-gradient(180deg, rgba(251, 126, 147, 0.22), rgba(251, 126, 147, 0.08)), rgba(16, 23, 36, 0.7);
+}
+
+.sv-lock-button:disabled,
+.sv-backtrack-button:disabled {
+    border-color: var(--line);
+    background: rgba(20, 29, 44, 0.4);
+    color: var(--dim);
+}
+
+.sv-lock-statement,
+.sv-backtrack-hint,
+.sv-backtrack-none {
+    color: var(--muted);
+}
+
+.sv-lock-reasons {
+    color: var(--urgent);
+}
+
+.sv-lock-button-confirm,
+.sv-backtrack-button-confirm {
+    border: 1px dashed rgba(251, 126, 147, 0.55);
+    border-radius: 9px;
+    background: var(--urgent-bg);
+}
+
+.sv-confirm-text {
+    color: var(--urgent);
+}
+
+/* ------------------------------------------------------------ generic panes */
+
+.sv-pane {
+    padding: 0.75rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: linear-gradient(180deg, rgba(20, 29, 44, 0.62), rgba(12, 17, 26, 0.52)), rgba(16, 23, 36, 0.32);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+}
+
+.sv-pane-locked {
+    border-left: 3px solid var(--accent);
+}
+
+.sv-pane-head {
+    gap: 0.5rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.sv-pane-title {
+    color: var(--text-strong);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.sv-pane-badge {
+    color: var(--dim);
+    font-size: 0.64rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.sv-badge {
+    padding: 0.06rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.63rem;
+}
+
+.sv-badge-lock {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.sv-badge-warn {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-badge-assigned {
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+/* ------------------------------------------------------------ Summary */
+
+.sv-summary-note,
+.sv-summary-flag {
+    color: var(--dim);
+}
+
+.sv-summary-field {
+    grid-template-columns: 10rem minmax(0, 1fr);
+    padding: 0.28rem 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.07);
+}
+
+.sv-summary-field dt {
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.sv-summary-value {
+    gap: 0.4rem;
+}
+
+.sv-summary-text {
+    color: var(--text);
+    line-height: 1.55;
+}
+
+.sv-ask-assistant,
+.sv-summary-actions button {
+    padding: 0.22rem 0.6rem;
+    border: 1px solid rgba(143, 168, 255, 0.35);
+    border-radius: 7px;
+    background: rgba(143, 168, 255, 0.08);
+    color: var(--accent-2);
+    font-size: 0.65rem;
+    cursor: pointer;
+}
+
+/* ------------------------------------------------------------ plotlines / prose */
+
+.sv-activity {
+    padding-left: 0.6rem;
+    border-left: 2px solid var(--line-strong);
+}
+
+.sv-activity-contested {
+    border-left-color: var(--urgent);
+}
+
+.sv-activity-awaiting {
+    border-left-color: var(--accent);
+}
+
+.sv-activity-clean {
+    border-left-color: var(--finished);
+}
+
+.sv-activity-title {
+    color: var(--text-strong);
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+}
+
+.sv-chapter-row {
+    margin-bottom: 0.7rem;
+    padding: 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: rgba(7, 10, 16, 0.24);
+    gap: 0.7rem;
+}
+
+.sv-chapter-contract-title {
+    color: var(--text-strong);
+    font-size: 0.72rem;
+}
+
+.sv-plotline-field dt {
+    color: var(--dim);
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.sv-plotline-field dd {
+    color: var(--text);
+}
+
+.sv-chapter-no-contract {
+    color: var(--urgent);
+}
+
+.sv-chapter-unapprove {
+    padding: 0.2rem 0.55rem;
+    border: 1px dashed rgba(143, 168, 255, 0.45);
+    border-radius: 7px;
+    background: rgba(143, 168, 255, 0.06);
+    color: var(--accent-2);
+    cursor: pointer;
+}
+
+.sv-chapter-approve {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid rgba(126, 226, 160, 0.4);
+    border-radius: 7px;
+    background: var(--finished-bg);
+    color: var(--finished);
+    cursor: pointer;
+}
+
+.sv-finding-cost,
+.sv-cost-critical,
+.sv-cost-major,
+.sv-cost-minor,
+.sv-cost-taste {
+    border-radius: 999px;
+    padding: 0 0.35rem;
+}
+
+.sv-cost-critical {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-cost-major {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.sv-cost-minor,
+.sv-cost-taste {
+    background: rgba(148, 163, 184, 0.1);
+    color: var(--muted);
+}
+
+/* ------------------------------------------------------------ prose editor */
+
+.sv-prose {
+    padding: 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: rgba(7, 10, 16, 0.2);
+}
+
+.sv-prose-running {
+    background: rgba(20, 29, 44, 0.4);
+}
+
+.sv-prose-paused {
+    border-left: 3px solid var(--urgent);
+    background: rgba(251, 126, 147, 0.04);
+}
+
+.sv-prose-title {
+    color: var(--text-strong);
+    font-size: 0.74rem;
+}
+
+.sv-prose-state,
+.sv-prose-score,
+.sv-prose-round,
+.sv-prose-bar {
+    color: var(--dim);
+}
+
+.sv-prose-banner {
+    padding: 0.3rem 0.5rem;
+    border-radius: 7px;
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-prose-locked {
+    color: var(--dim);
+}
+
+.sv-section {
+    padding: 0.5rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(7, 10, 16, 0.2);
+}
+
+.sv-section-author {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+}
+
+.sv-section-id {
+    color: var(--dim);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.sv-section-origin {
+    color: var(--accent);
+}
+
+.sv-section-origin-writer {
+    color: var(--muted);
+    font-weight: 400;
+}
+
+.sv-section-dirty {
+    color: var(--urgent);
+}
+
+.sv-section-saved {
+    color: var(--finished);
+}
+
+.sv-section-text,
+.sv-template-rules-text,
+.sv-goal-bar-input,
+.sv-role-agents-input,
+.sv-template-attempts-input,
+.sv-exit-rules,
+.sv-exit-directive-text,
+.sv-exit-template-pick,
+.sv-exit-bar-value {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: rgba(7, 10, 16, 0.5);
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.6;
+}
+
+.sv-section-text:focus,
+.sv-template-rules-text:focus,
+.sv-goal-bar-input:focus,
+.sv-exit-rules:focus {
+    border-color: rgba(246, 198, 107, 0.6);
+    box-shadow: 0 0 0 3px rgba(246, 198, 107, 0.1);
+    outline: none;
+}
+
+.sv-section-save,
+.sv-prose-pause,
+.sv-prose-resume,
+.sv-proposal-accept,
+.sv-proposal-reject,
+.sv-proposal-undo,
+.sv-revision-select,
+.sv-idea-select,
+.sv-idea-discard,
+.sv-idea-defer,
+.sv-idea-verify,
+.sv-template-new,
+.sv-template-duplicate,
+.sv-template-assign-phase,
+.sv-template-assign-writer,
+.sv-template-rules-save,
+.sv-template-attempts-save,
+.sv-role-agents-save,
+.sv-goal-threshold-save,
+.sv-goal-add-save,
+.sv-goal-bar-save,
+.sv-criterion-toggle,
+.sv-criterion-delete,
+.sv-run-kill {
+    padding: 0.24rem 0.6rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: rgba(30, 42, 63, 0.55);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.65rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        border-color 140ms ease,
+        color 140ms ease,
+        background 140ms ease;
+}
+
+.sv-section-save,
+.sv-prose-resume,
+.sv-proposal-accept,
+.sv-idea-select {
+    border-color: rgba(126, 226, 160, 0.4);
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+.sv-prose-pause,
+.sv-proposal-reject,
+.sv-idea-discard,
+.sv-run-kill {
+    border-color: rgba(251, 126, 147, 0.4);
+    color: var(--urgent);
+}
+
+.sv-prose-error {
+    padding: 0.35rem 0.5rem;
+    border-left: 3px solid var(--urgent);
+    border-radius: 0 7px 7px 0;
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+/* ------------------------------------------------------------ proposals / revisions */
+
+.sv-proposals {
+    gap: 0.35rem;
+}
+
+.sv-proposal {
+    padding: 0.5rem;
+    border: 1px dashed var(--line-strong);
+    border-radius: 8px;
+    background: rgba(20, 29, 44, 0.35);
+}
+
+.sv-proposal-state {
+    color: var(--text-strong);
+}
+
+.sv-diff-removed {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-diff-added {
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+.sv-proposal-why {
+    color: var(--muted);
+}
+
+.sv-revisions-note,
+.sv-revisions-hint {
+    color: var(--dim);
+}
+
+.sv-revision-col {
+    padding: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(7, 10, 16, 0.24);
+}
+
+.sv-revision-selected {
+    border: 1px solid rgba(126, 226, 160, 0.55);
+    box-shadow: 0 0 0 1px rgba(126, 226, 160, 0.12);
+}
+
+.sv-revision-state {
+    border-radius: 999px;
+}
+
+.sv-revision-verdict {
+    border-left-color: var(--line-strong);
+}
+
+.sv-revision-verdict-pass {
+    border-left-color: var(--finished);
+}
+
+.sv-revision-verdict-fail {
+    border-left-color: var(--urgent);
+}
+
+.sv-revision-body {
+    padding: 0.5rem;
+    border-radius: 7px;
+    background: rgba(20, 29, 44, 0.45);
+    color: var(--text);
+    font-family:
+        'Inter',
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        Roboto,
+        sans-serif;
+    line-height: 1.6;
+}
+
+.sv-revision-note {
+    color: var(--finished);
+}
+
+/* ------------------------------------------------------------ ideas */
+
+.sv-idea {
+    padding: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(20, 29, 44, 0.35);
+}
+
+.sv-idea-dim {
+    border-left: 3px solid var(--line-strong);
+    background: rgba(20, 29, 44, 0.22);
+    opacity: 0.65;
+}
+
+.sv-idea-verified {
+    border-left: 3px solid var(--finished);
+}
+
+.sv-idea-repeat {
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.sv-idea-verdict-pending {
+    color: var(--accent);
+}
+
+.sv-idea-verdict-verified {
+    color: var(--finished);
+}
+
+.sv-idea-verdict-refuted,
+.sv-idea-verdict-unverifiable {
+    color: var(--urgent);
+}
+
+.sv-idea-body {
+    color: var(--text);
+    line-height: 1.55;
+}
+
+.sv-idea-sources,
+.sv-idea-evidence,
+.sv-idea-guidelines,
+.sv-idea-earlier,
+.sv-idea-note {
+    color: var(--muted);
+}
+
+.sv-idea-earlier {
+    color: var(--accent);
+}
+
+.sv-idea-confirm {
+    color: var(--urgent);
+}
+
+.sv-idea-decided {
+    padding: 0.2rem 0;
+    border-bottom: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------------ Goal */
+
+.sv-goal-progress {
+    color: var(--accent);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 15px;
+    font-weight: 750;
+}
+
+.sv-goal-level-title {
+    color: var(--text-strong);
+    font-size: 0.74rem;
+}
+
+.sv-goal-level-question {
+    color: var(--dim);
+}
+
+.sv-criterion {
+    border-bottom: 1px solid var(--line);
+}
+
+.sv-criterion-failing {
+    background: rgba(251, 126, 147, 0.05);
+}
+
+.sv-criterion-failing .sv-criterion-state {
+    color: var(--urgent);
+}
+
+.sv-criterion-passing .sv-criterion-state {
+    color: var(--finished);
+}
+
+.sv-criterion-id {
+    color: var(--text-strong);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.sv-criterion-checker,
+.sv-criterion-hard,
+.sv-goal-bar-progress {
+    color: var(--dim);
+}
+
+.sv-criterion-evidence {
+    color: var(--muted);
+}
+
+.sv-criterion-hint {
+    color: var(--finished);
+}
+
+.sv-goal-threshold,
+.sv-goal-add,
+.sv-goal-bars {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(7, 10, 16, 0.24);
+}
+
+/* ------------------------------------------------------------ completion */
+
+.sv-completion {
+    border: 1px solid rgba(126, 226, 160, 0.45);
+    background: linear-gradient(180deg, rgba(126, 226, 160, 0.08), rgba(12, 17, 26, 0.6));
+}
+
+.sv-completion-fact dt {
+    color: var(--dim);
+}
+
+.sv-completion-discard {
+    color: var(--urgent);
+}
+
+.sv-completion-accept {
+    padding: 0.55rem 1rem;
+    border: 1px solid rgba(126, 226, 160, 0.5);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(126, 226, 160, 0.24), rgba(126, 226, 160, 0.1));
+    color: var(--finished);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+/* ------------------------------------------------------------ cost distribution */
+
+.sv-cost-cost {
+    color: var(--text);
+}
+
+.sv-cost-count {
+    color: var(--text-strong);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.sv-cost-note {
+    color: var(--dim);
+}
+
+.sv-cost-warn .sv-cost-count {
+    color: var(--urgent);
+}
+
+.sv-cost-hint {
+    color: var(--accent);
+}
+
+/* ------------------------------------------------------------ crew */
+
+.sv-run {
+    padding: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(20, 29, 44, 0.34);
+}
+
+.sv-run-writer {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+}
+
+.sv-kind-writer {
+    background: var(--accent);
+    color: #1a1206;
+    font-weight: 800;
+}
+
+.sv-kind-editor {
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+.sv-kind-reader,
+.sv-kind-checker {
+    background: var(--accent-2-soft);
+    color: var(--accent-2);
+}
+
+.sv-run-head {
+    gap: 0.4rem;
+}
+
+.sv-run-dissent {
+    border-left: 3px dashed var(--urgent);
+    color: var(--urgent);
+}
+
+.sv-run-panel {
+    color: var(--accent-2);
+}
+
+.sv-run-delegated {
+    border-left: 1px dashed var(--line-strong);
+}
+
+.sv-delegated {
+    color: var(--muted);
+}
+
+.sv-run-ended {
+    color: var(--dim);
+}
+
+.sv-crew-idle {
+    margin: 0.5rem 0 0;
+    color: var(--dim);
+    font-size: 0.72rem;
+    font-style: italic;
+}
+
+.sv-crew-closed > summary {
+    margin-top: 0.5rem;
+    color: var(--dim);
+    font-size: 0.68rem;
+    cursor: pointer;
+}
+
+/* ------------------------------------------------------------ templates */
+
+.sv-template {
+    padding: 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(20, 29, 44, 0.3);
+}
+
+.sv-template-builtin {
+    background: rgba(143, 168, 255, 0.05);
+}
+
+.sv-template-title {
+    color: var(--text-strong);
+    font-size: 0.75rem;
+}
+
+.sv-template-name {
+    color: var(--dim);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.sv-template-phases,
+.sv-template-done,
+.sv-template-escalation,
+.sv-template-attempts {
+    color: var(--muted);
+}
+
+.sv-template-divergent {
+    color: var(--finished);
+}
+
+.sv-role {
+    padding: 0.25rem;
+    border-radius: 7px;
+}
+
+.sv-role-writer {
+    border-left: 2px solid var(--accent);
+}
+
+.sv-role-panel {
+    color: var(--accent-2);
+}
+
+/* ------------------------------------------------------------ digest / stalled review */
+
+.sv-digest-body {
+    padding: 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(7, 10, 16, 0.4);
+    color: var(--muted);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    line-height: 1.55;
+}
+
+.sv-stalled-review {
+    padding: 0.75rem 0.9rem;
+    border: 1px solid rgba(246, 198, 107, 0.4);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background:
+        radial-gradient(500px 180px at 100% 0%, rgba(246, 198, 107, 0.1), transparent 65%), rgba(246, 198, 107, 0.045);
+}
+
+.sv-stalled-title {
+    color: var(--text-strong);
+    font-size: 0.9rem;
+}
+
+.sv-stalled-sub {
+    color: var(--accent);
+    letter-spacing: 0.1em;
+}
+
+.sv-stalled-round-list {
+    color: var(--muted);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.sv-stalled-none,
+.sv-stalled-live,
+.sv-stalled-chapters,
+.sv-stalled-note {
+    color: var(--muted);
+}
+
+.sv-exit {
+    border: 1px solid rgba(246, 198, 107, 0.45);
+    border-radius: 8px;
+    background: rgba(246, 198, 107, 0.08);
+    color: var(--accent);
+    cursor: pointer;
+}
+
+.sv-exit:disabled {
+    border-color: var(--line);
+    background: rgba(20, 29, 44, 0.35);
+    color: var(--dim);
+}
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 70rem) {
+    .sv-story {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sv-story-rail {
+        position: static;
+        max-height: none;
+    }
+
+    .sv-summary-field {
         grid-template-columns: minmax(0, 1fr);
     }
 }

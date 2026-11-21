@@ -56,9 +56,14 @@ export function TopBar() {
     return (
         <header className="topbar">
             <div className="topbar__brand">
-                <h1 className="topbar__title">Storyline</h1>
-                {/* The pinned single-source version (vite.config.ts `__APP_VERSION__` define). */}
-                <span className="topbar__version">v{__APP_VERSION__}</span>
+                <span className="topbar__mark" aria-hidden="true">
+                    S
+                </span>
+                <div className="topbar__title-block">
+                    <h1 className="topbar__title">Storyline</h1>
+                    {/* The pinned single-source version (vite.config.ts `__APP_VERSION__` define). */}
+                    <span className="topbar__version">v{__APP_VERSION__}</span>
+                </div>
             </div>
 
             {/* U-3: the biggest control in the shell. P8 — kills dispatch and in-flight runs

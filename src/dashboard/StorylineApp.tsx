@@ -25,6 +25,8 @@ import { useEffect } from 'react';
 import { AuthorQueue } from './components/AuthorQueue';
 import { CrewPanel } from './components/CrewPanel';
 import { DirectiveBar } from './components/DirectiveBar';
+import { HarnessPanel } from './components/HarnessPanel';
+import { KnowledgeTree } from './components/KnowledgeTree';
 import { NewStoryForm } from './components/NewStoryForm';
 import { StoriesPanel } from './components/StoriesPanel';
 import { StoryView } from './components/StoryView';
@@ -46,7 +48,7 @@ export function StorylineApp(props: { store?: DashboardStore }) {
 /** The regions themselves, split out so the store injection above stays one line. */
 function Shell() {
     const store = useDashboardStore();
-    const { activeStoryId, stories, storyViews, runs, templates } = useDashboard();
+    const { activeStoryId, stories, storyViews, runs, templates, knowledge, harnesses } = useDashboard();
 
     // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
     // unmount (React StrictMode's double-mount is why the teardown has to be real).
@@ -61,9 +63,16 @@ function Shell() {
             <TopBar />
 
             <div className="station__regions" data-open={activeStoryId ? 'true' : 'false'}>
-                {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). */}
+                {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). With a
+                    Story open the same column carries the Story's knowledge directory, which is
+                    the durable map of what the book is made of. */}
                 <aside className="region region--stories" data-region="stories" aria-label="Stories">
-                    <StoriesPanel />
+                    <div className="region__body region__body--stack">
+                        {activeStoryId ? (
+                            <KnowledgeTree tree={knowledge[activeStoryId]} loading={!knowledge[activeStoryId]} />
+                        ) : null}
+                        <StoriesPanel />
+                    </div>
                 </aside>
 
                 {/* Region 2 — THE STORY, or the Author's queue when nothing is selected (U-10). */}
@@ -94,6 +103,7 @@ function Shell() {
                                     <StoryView
                                         view={storyViewData(view, templates) as unknown as StoryViewData}
                                         actions={shellActions(store, activeStoryId)}
+                                        railLead={<HarnessPanel harnesses={harnesses} />}
                                     />
                                 ) : (
                                     /* U-11: no spinner while the first read is in flight. */
@@ -113,6 +123,9 @@ function Shell() {
                 {activeStoryId ? null : (
                     <aside className="region region--crew" data-region="crew" aria-label="Crew">
                         <div className="region__body">
+                            {/* The harness listing is the right rail's top: who a session can run,
+                                with Rank A called out, before the live crew it is running now. */}
+                            <HarnessPanel harnesses={harnesses} />
                             {/* U-7 across every Story: with no Story selected the Author is on the
                                 desk, and what is still running is the next thing that will land on it. */}
                             <CrewPanel

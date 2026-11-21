@@ -53,6 +53,8 @@ import type { GoalPatch as EngineGoalPatch } from '../loop/types';
 import type { LoopEngine } from '../loop/engine';
 import type { Cost, Criterion, Revision, Run, Story, StoryPhase, Template } from '../../shared/types';
 import type { GoalCriterionOp } from '../../dashboard/api';
+import { harnessListings } from '../harnesses';
+import type { StoryKnowledge } from '../knowledge';
 import { feedEvents, goalSurface, queueItems, storyRow, storyRows, storyView } from './projections';
 import type { FeedEvent, ProjectionDeps } from './projections';
 
@@ -70,6 +72,8 @@ const BACKTRACK_PHASES: string[] = ['summary', 'plotlines'];
 export interface StorylineRoutesDeps extends ProjectionDeps {
     engine: LoopEngine;
     executor: RunExecutor;
+    /** The Story's durable knowledge projection (harness knowledge engine, outside every session). */
+    knowledge: StoryKnowledge;
     /** SSE debounce: one commit bursts into one frame per topic, so a sweep cannot flood the client. */
     streamDebounceMs?: number;
 }
@@ -321,6 +325,29 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
         return c.json(storyView(projectionDeps, story), 200);
+    });
+
+    /**
+     * The Story's knowledge directory. One read, eight folders, one article per folder.
+     *
+     * THE WRITE-BEFORE-READ IS DELIBERATE: the tree is a projection of the book, and a commit
+     * that landed since the last sync must be visible in this response. `tree()` re-derives the
+     * Story's sections synchronously, then `flush()` makes the bytes durable before answering —
+     * so a harness that is destroyed immediately after this response cannot take the directory
+     * with it.
+     */
+    app.get('/stories/:id/knowledge', async (c) => {
+        const storyId = c.req.param('id');
+
+        if (storyOf(storyId) === undefined) return missing(c, 'story', storyId);
+
+        const tree = deps.knowledge.tree(storyId);
+
+        if (tree === null) return missing(c, 'story', storyId);
+
+        await deps.knowledge.flush();
+
+        return c.json(tree, 200);
     });
 
     /**
@@ -1311,6 +1338,13 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     // -------------------------------------------------------------------------
 
     /** U-8 — the template catalogue, as rows (§4.12 as-is). */
+    /**
+     * The harness listing (the Author asked for the agents available to a session, Rank A called
+     * out). The catalogue is the shipped one from `@underload/harness/server`; no session has to
+     * be running for the Author to see who a session could run.
+     */
+    app.get('/harnesses', (c) => c.json(harnessListings(), 200));
+
     app.get('/templates', (c) => c.json(store.templates.list(), 200));
 
     /**

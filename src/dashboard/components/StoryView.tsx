@@ -23,6 +23,7 @@
 // Every class is `sv-` prefixed: `styles/app.css` (T8) owns the shell, and the two files must not
 // collide.
 import '../styles/story.css';
+import type { ReactNode } from 'react';
 import { CompletionPrompt } from './CompletionPrompt';
 import { CrewPanel } from './CrewPanel';
 import { GoalPanel } from './GoalPanel';
@@ -80,9 +81,21 @@ export interface StoryViewProps {
     now?: string;
     /** L-25's clean-ledger line, when the caller has it (the pinned view carries no `ledger` collection). */
     ledgerState?: string;
+    /**
+     * The first block of the right rail, supplied by the shell. It carries the harness listing —
+     * the agents a session can run, with Rank A called out — above the live crew and the template
+     * catalogue, which stay this component's own concern.
+     */
+    railLead?: ReactNode;
 }
 
-export function StoryView({ view, actions = {}, now = new Date().toISOString(), ledgerState }: StoryViewProps) {
+export function StoryView({
+    view,
+    actions = {},
+    now = new Date().toISOString(),
+    ledgerState,
+    railLead
+}: StoryViewProps) {
     const { story, goal } = view;
 
     // D-37: the prose editor is live only from a paused Story — the same status Stop sets (P8).
@@ -267,6 +280,7 @@ export function StoryView({ view, actions = {}, now = new Date().toISOString(), 
             </div>
 
             <div className="sv-story-rail">
+                {railLead}
                 <CrewPanel runs={view.runs} templates={view.templates} now={now} onKillRun={actions.killRun} />
                 <TemplatesPanel
                     templates={view.templates}

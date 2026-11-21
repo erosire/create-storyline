@@ -112,12 +112,14 @@ export function waitSentence(row: StoryRow): string {
     return row.status_reason || WAIT_LABELS[row.pending_kind as Exclude<PendingKind, 'none' | 'stalled'>] || '';
 }
 
-/** The `n/m` lines (L-14). A phase not reached arrives as `n/a` from W3 — rendered as-is. */
-const LEVEL_LINES: Array<{ key: keyof StoryRow['levels']; label: string }> = [
-    { key: 'summary', label: 'idea→summary' },
-    { key: 'plotlines', label: 'summary→plotlines' },
-    { key: 'chapters', label: 'plotlines→chapters' },
-    { key: 'whole', label: 'whole' }
+/** The `n/m` lines (L-14). A phase not reached arrives as `n/a` from W3 — rendered as-is.
+ *  The label is the phase glyph: the left panel is narrow, and the full sentence lives in the
+ *  row's tooltip so the numbers stay scannable. */
+const LEVEL_LINES: Array<{ key: keyof StoryRow['levels']; label: string; title: string }> = [
+    { key: 'summary', label: '①', title: 'idea → summary' },
+    { key: 'plotlines', label: '②', title: 'summary → plotlines' },
+    { key: 'chapters', label: '③', title: 'plotlines → chapters' },
+    { key: 'whole', label: '◎', title: 'whole story' }
 ];
 
 /** U-12a: which phases are signed. Phase ③'s lock IS `completed` (L-25a — no fourth phase). */
@@ -209,6 +211,11 @@ export function StoriesPanel() {
                     const active = row.id === activeStoryId;
                     const moves = rowMoves(row);
                     const wait = row.status === 'pending' ? waitSentence(row) : '';
+                    const waitLabel =
+                        row.pending_kind === 'stalled'
+                            ? 'stuck'
+                            : WAIT_LABELS[row.pending_kind as Exclude<PendingKind, 'none' | 'stalled'>];
+                    const waitDetail = wait === waitLabel ? '' : wait;
 
                     return (
                         <li
@@ -269,7 +276,7 @@ export function StoriesPanel() {
                                 {/* L-14's rendered levels — the client never recomputes them. */}
                                 <span className="levels" data-testid="levels">
                                     {LEVEL_LINES.map((line) => (
-                                        <span key={line.key} className="level" data-level={line.key}>
+                                        <span key={line.key} className="level" data-level={line.key} title={line.title}>
                                             <span className="level__label">{line.label}</span>
                                             <span className="level__value">{row.levels[line.key]}</span>
                                         </span>
@@ -290,7 +297,7 @@ export function StoriesPanel() {
                                             ? 'stuck'
                                             : WAIT_LABELS[row.pending_kind as Exclude<PendingKind, 'none' | 'stalled'>]}
                                     </span>
-                                    <span className="story-row__wait-detail">{wait}</span>
+                                    {waitDetail ? <span className="story-row__wait-detail">{waitDetail}</span> : null}
                                 </p>
                             ) : null}
 

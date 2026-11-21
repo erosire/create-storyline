@@ -28,6 +28,7 @@ import { CriteriaEngine } from '../criteria/engine';
 import { DigestBuilder } from '../digest/digest';
 import { RunExecutor } from '../run/executor';
 import { LoopEngine } from '../loop/engine';
+import { StoryKnowledge } from '../knowledge';
 import { Store } from '../store/store';
 import { ASSISTANT_ROLE, ASSISTANT_TEMPLATE, createStorylineRoutes } from './routes';
 import type { ChatClient } from '../llm/client';
@@ -126,6 +127,11 @@ export function seedAssistantTemplate(store: Store): Template {
 export interface StorylineRuntimeOptions {
     /** The book. Defaults to `Store.empty()`; the CLI passes `Store.load(storeRoot)`. */
     store?: Store;
+    /**
+     * The Story knowledge projection. Defaults to an in-memory one over the same book; the CLI
+     * loads a durable one beside `store.json` so a destroyed harness cannot take it away.
+     */
+    knowledge?: StoryKnowledge;
     /** The model transport. Defaults to the OpenAI-compatible client from the provider env triple. */
     chat?: ChatClient;
     /** The §8 tool catalogue. Defaults to `createToolRuntime(store)`. */
@@ -149,6 +155,7 @@ export interface StorylineRuntimeOptions {
 export interface StorylineRuntime {
     app: Hono;
     store: Store;
+    knowledge: StoryKnowledge;
     criteria: CriteriaEngine;
     digest: DigestBuilder;
     executor: RunExecutorType;
@@ -186,6 +193,7 @@ const positiveInt = (value: string | undefined): number | undefined => {
 export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): StorylineRuntime {
     const env = options.env ?? process.env;
     const store = options.store ?? Store.empty();
+    const knowledge = options.knowledge ?? StoryKnowledge.memory(store);
     const criteria = new CriteriaEngine();
     const digest = new DigestBuilder();
 
@@ -222,11 +230,12 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
             executor,
             criteria,
             digest,
+            knowledge,
             ...(options.streamDebounceMs === undefined ? {} : { streamDebounceMs: options.streamDebounceMs })
         })
     );
 
-    return { app, store, criteria, digest, executor, engine, defaultModel };
+    return { app, store, knowledge, criteria, digest, executor, engine, defaultModel };
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +373,7 @@ export async function startStorylineServer(options: StorylineServerOptions = {})
             });
 
             await runtime.store.close();
+            await runtime.knowledge.close();
         }
     };
 }

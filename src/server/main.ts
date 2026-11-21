@@ -16,6 +16,7 @@
 // the rows, not about guessing where they are).
 import { resolveServerConfig } from './config';
 import { Store } from './store/store';
+import { StoryKnowledge } from './knowledge';
 import { buildStorylineRuntime, startStorylineServer } from './api/server';
 import type { StorylineServerConfig } from './config';
 import type { StorylineRuntime, StorylineRuntimeOptions, StorylineServerHandle } from './api/server';
@@ -55,8 +56,9 @@ export async function createStorylineApp(options: CreateStorylineAppOptions = {}
     const storeRoot =
         options.storeRoot === undefined ? resolveServerConfig({ env: options.env }).storeRoot : options.storeRoot;
     const store = options.store ?? (await openStore(storeRoot));
+    const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
 
-    return buildStorylineRuntime({ ...options, store });
+    return buildStorylineRuntime({ ...options, store, knowledge });
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +85,12 @@ export async function bootStorylineServer(options: BootStorylineOptions = {}): P
     // while the last run's Stories were still on the wall. Only `undefined` means "the caller did not say".
     const storeRoot = options.storeRoot === undefined ? resolved.storeRoot : options.storeRoot;
     const store = options.store ?? (await openStore(storeRoot));
+    const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
 
     return startStorylineServer({
         ...options,
         store,
+        knowledge,
         port: options.port ?? resolved.port,
         host: options.host ?? resolved.host,
         // An explicit `null` means "API only" and must not fall through to the `dist/` probe.
