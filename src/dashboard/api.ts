@@ -309,7 +309,7 @@ export interface HarnessAgentListing {
     entry: boolean;
 }
 
-/** `GET /harnesses` — the shipped harness catalogue, projected from `@underload/harness`. */
+/** `GET /harnesses` — the boot-configured harness catalogue (`src/server/harness-config.ts`, R5). */
 export interface HarnessListing {
     name: string;
     title: string;

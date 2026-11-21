@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "article": {
+    "id": "b1142049-8e3b-4c4d-b507-ddaa066e5767",
+    "title": "Durable — Ideas",
+    "createdAt": "2026-11-21T10:17:20.126Z",
+    "updatedAt": "2026-11-21T10:17:20.126Z",
+    "tags": [
+      "story:story_1",
+      "section:ideas",
+      "storyline-knowledge"
+    ],
+    "content": [
+      {
+        "id": "10d197db-83d8-43ba-8f46-5991b10c96ff",
+        "text": "Ideas\n\nThe Ideas tray is empty for this phase.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:ideas",
+          "entry:ideas:empty",
+          "placeholder"
+        ]
+      }
+    ],
+    "rev": 1
+  }
+}

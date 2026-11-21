@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "article": {
+    "id": "858b24c1-ebd2-4d7e-9202-5e8479cfe0e8",
+    "title": "Durable — Continuity",
+    "createdAt": "2026-11-21T10:17:20.126Z",
+    "updatedAt": "2026-11-21T10:17:20.126Z",
+    "tags": [
+      "story:story_1",
+      "section:continuity",
+      "storyline-knowledge"
+    ],
+    "content": [
+      {
+        "id": "f71149fb-0bed-4942-84a8-c2ef10eb50be",
+        "text": "Continuity\n\nNo continuity facts yet — setups, payoffs, and the facts a change must respect.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:continuity",
+          "entry:continuity:empty",
+          "placeholder"
+        ]
+      }
+    ],
+    "rev": 1
+  }
+}

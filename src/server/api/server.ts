@@ -30,8 +30,10 @@ import { RunExecutor } from '../run/executor';
 import { LoopEngine } from '../loop/engine';
 import { StoryKnowledge } from '../knowledge';
 import { Store } from '../store/store';
+import { resolveStorylineHarnessBoot } from '../harness-config';
 import { ASSISTANT_ROLE, ASSISTANT_TEMPLATE, createStorylineRoutes } from './routes';
 import type { ChatClient } from '../llm/client';
+import type { HarnessBootConfiguration, ResolvedHarnessBootConfiguration } from '@underload/harness/server';
 import type { ToolRuntime } from '../run/types';
 import type { RunExecutor as RunExecutorType } from '../run/executor';
 import type { LoopEngineConfig } from '../loop/types';
@@ -150,6 +152,20 @@ export interface StorylineRuntimeOptions {
     fetchImpl?: typeof fetch;
     /** Skips the §8.6 template seed (a test that asserts the catalogue is exactly the built-ins). */
     noAssistantSeed?: boolean;
+    /**
+     * The harness catalogue/plugins/toolbox this runtime exposes on `GET /harnesses` (R5).
+     *
+     * Omitted (`undefined`) means Storyline's explicit default
+     * (`STORYLINE_HARNESS_CONFIGURATION` in `../harness-config.ts`). An explicitly EMPTY object
+     * (`{}`) stays empty — no presets, no plugins, core tools only — because the harness boot
+     * contract makes omission mean empty and this seam must not merge the default back in.
+     *
+     * The same object is accepted by `startStorylineServer`, `createStorylineApp`,
+     * `bootStorylineServer` (through `StorylineRuntimeOptions`) and the service route's
+     * `variables.harness`. Storyline resolves it once here; the resolved presets feed the
+     * route table and the rest stays inspectable on `runtime.harnessConfiguration`.
+     */
+    harness?: HarnessBootConfiguration;
 }
 
 export interface StorylineRuntime {
@@ -160,6 +176,13 @@ export interface StorylineRuntime {
     digest: DigestBuilder;
     executor: RunExecutorType;
     engine: LoopEngine;
+    /**
+     * The resolved harness boot configuration this runtime projects (R5): the exact presets,
+     * executable plugins/descriptors, toolbox posture and commands. Exposed for an embedding
+     * host and for tests; it is NOT a HarnessRuntime — Storyline does not mount harness
+     * sessions here, it only owns the catalogue the dashboard lists.
+     */
+    harnessConfiguration: ResolvedHarnessBootConfiguration;
     /** The model name every run defaults to when its template names none (T-6b). */
     defaultModel: string;
 }
@@ -197,6 +220,12 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
     const criteria = new CriteriaEngine();
     const digest = new DigestBuilder();
 
+    // R5: resolve the harness boot configuration ONCE, at composition time. `undefined` means
+    // Storyline's explicit shipped catalogue; `{}` means the harness zero floor. The resolved
+    // presets are the dashboard listing's only source, and the whole resolved object is kept on
+    // the runtime so a host can inspect the plugin/toolbox posture it actually got.
+    const harnessConfiguration = resolveStorylineHarnessBoot(options.harness);
+
     if (options.noAssistantSeed !== true) seedAssistantTemplate(store);
 
     const baseUrl = text(env[PROVIDER_BASE_URL_ENVIRONMENT]) ?? DEFAULT_PROVIDER_BASE_URL;
@@ -231,11 +260,12 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
             criteria,
             digest,
             knowledge,
+            harnessPresets: harnessConfiguration.presets,
             ...(options.streamDebounceMs === undefined ? {} : { streamDebounceMs: options.streamDebounceMs })
         })
     );
 
-    return { app, store, knowledge, criteria, digest, executor, engine, defaultModel };
+    return { app, store, knowledge, criteria, digest, executor, engine, harnessConfiguration, defaultModel };
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +353,8 @@ export interface StorylineServerHandle {
     app: Hono;
     store: Store;
     engine: LoopEngine;
+    /** The resolved harness catalogue/plugins/toolbox this listener was built with (R5). */
+    harnessConfiguration: ResolvedHarnessBootConfiguration;
     defaultModel: string;
     /** Stops the sweep, closes the listener, flushes the book (L-3: the journal carries the rest). */
     close: () => Promise<void>;
@@ -364,6 +396,7 @@ export async function startStorylineServer(options: StorylineServerOptions = {})
         app: runtime.app,
         store: runtime.store,
         engine: runtime.engine,
+        harnessConfiguration: runtime.harnessConfiguration,
         defaultModel: runtime.defaultModel,
         async close() {
             runtime.engine.stop();

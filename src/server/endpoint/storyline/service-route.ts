@@ -30,9 +30,19 @@
 // same env switch `resolveServerConfig` documents), and a blank value keeps the documented
 // in-memory run. The runtime is built once per store root and reused: it owns the Hono app, the
 // loop engine and the open store, none of which may be re-created per request.
+//
+// THE HARNESS CONFIGURATION (R5): the loader's `variables.harness` is forwarded to
+// `createStorylineApp({ harness })`, the SAME `HarnessBootConfiguration` the harness
+// package's service routes accept. The cache keys on the store root AND refuses a later,
+// different configuration for the same root (runtime-cache.ts), because two runtimes over
+// one book would be two writers on the same store/journal. Absent `variables.harness`
+// means Storyline's explicit shipped catalogue; an explicit `{}` stays empty (no
+// cards/plugins, core tools only).
 import path from 'node:path';
 import { createStorylineApp } from '../../main';
+import { createStorylineRuntimeCache } from './runtime-cache';
 import type { StorylineRuntime } from '../../api/server';
+import type { HarnessBootConfiguration } from '@underload/harness/server';
 
 /** The one root the dashboard dials; the wildcard covers every route below it. */
 export const STORYLINE_SERVICE_ROUTE = '/v1/storyline/*';
@@ -65,30 +75,43 @@ const storeRootFor = (variables: ServiceVariables): string | null | undefined =>
     return typeof root === 'string' && root.length > 0 ? path.join(root, 'storyline') : undefined;
 };
 
-/** One open runtime per store root. A restart of the gateway drops it with the process. */
-const runtimes = new Map<string, Promise<StorylineRuntime>>();
-
-const runtimeFor = (variables: ServiceVariables): Promise<StorylineRuntime> => {
-    const storeRoot = storeRootFor(variables);
-    const key = storeRoot === null ? '<memory>' : (storeRoot ?? '<default>');
-
-    const existing = runtimes.get(key);
-
-    if (existing !== undefined) return existing;
-
-    const created = createStorylineApp({ storeRoot }).then((runtime) => {
-        // L-1: the loop is started, not auto-started by composition. The gateway is a
-        // long-lived host, so the sweep is what makes the dashboard move at all.
-        runtime.engine.start();
-
-        return runtime;
+/**
+ * One open runtime per store root, guarded by the harness boot signature so a later request
+ * cannot silently reuse a runtime built for a different catalogue/plugin/toolbox. A restart of
+ * the gateway drops the cache with the process.
+ */
+const runtimes = createStorylineRuntimeCache(async ({ storeRoot, harness }) => {
+    const runtime = await createStorylineApp({
+        storeRoot,
+        // `undefined` is meaningful to the app boundary (Storyline's default); do not spread
+        // an explicit undefined member into the options object.
+        ...(harness === undefined ? {} : { harness })
     });
 
-    // A failed open must not poison the cache: the next request retries the boot.
-    created.catch(() => runtimes.delete(key));
-    runtimes.set(key, created);
+    // L-1: the loop is started, not auto-started by composition. The gateway is a
+    // long-lived host, so the sweep is what makes the dashboard move at all.
+    runtime.engine.start();
 
-    return created;
+    return runtime;
+});
+
+/**
+ * Stop and close every runtime this mount opened. The gateway owns the process lifetime, so
+ * production does not need this on a normal exit; tests and an embedding host that unmounts
+ * the endpoint use it for a deterministic shutdown.
+ */
+export const disposeStorylineServiceRuntimes = (): Promise<void> => runtimes.dispose();
+
+const runtimeFor = (variables: ServiceVariables): Promise<StorylineRuntime> => {
+    // The harness boot configuration rides the loader's `variables.harness`, exactly like the
+    // harness package's own endpoints. It is passed through untouched: the app boundary applies
+    // Storyline's default only when the member is absent, and an explicit `{}` stays empty.
+    const harness = variables?.harness as HarnessBootConfiguration | undefined;
+
+    return runtimes.runtimeFor({
+        storeRoot: storeRootFor(variables),
+        ...(harness === undefined ? {} : { harness })
+    });
 };
 
 /**

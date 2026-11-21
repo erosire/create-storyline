@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "article": {
+    "id": "deec2bf1-d84f-4d93-a531-21923d1a6aab",
+    "title": "Durable — Summary",
+    "createdAt": "2026-11-21T10:17:20.126Z",
+    "updatedAt": "2026-11-21T10:17:20.126Z",
+    "tags": [
+      "story:story_1",
+      "section:summary",
+      "storyline-knowledge"
+    ],
+    "content": [
+      {
+        "id": "d6e8ebd2-f44e-4f73-95d6-69650479a1d9",
+        "text": "Overview\n\nChapters: 1\nDraft: still being worked.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:summary",
+          "entry:summary"
+        ]
+      }
+    ],
+    "rev": 1
+  }
+}

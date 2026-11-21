@@ -112,6 +112,33 @@ Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBA
 `0` means the Author drives it by hand), `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease
 is stealable).
 
+### Harness catalogue configuration
+
+`GET /v1/storyline/harnesses` lists the harness package's session-agent catalogue, not the Story
+engine's own role Templates. The default catalogue lives in `src/server/harness-config.ts` and
+is resolved through `@underload/harness/server`'s `HarnessBootConfiguration` contract. An
+embedding host can replace it at boot without a parallel route stack:
+
+```ts
+import { bootStorylineServer } from './src/server/main';
+import type { HarnessBootConfiguration } from '@underload/harness/server';
+
+const harness: HarnessBootConfiguration = {
+    presets: [{ name: 'my-team', title: 'My team', agents: ['general'], entry: 'general' }],
+    plugins: [],                    // omitted/[] = no executable plugins
+    toolbox: { sharedToolbox: false } // omitted = the harness core floor
+};
+
+await bootStorylineServer({ harness });
+```
+
+The same option reaches `createStorylineApp`, `startStorylineServer` and the
+`@underload/service` endpoint through `variables.harness`. Omitted (`undefined`) means the
+Storyline default above; an explicit `{}` stays empty (no cards, no plugins, core tools only).
+The service route refuses a later, different `variables.harness` for a store root rather than
+silently reusing the first runtime. Storyline still runs its own loop and Story `Template`
+system; it does not boot harness sessions.
+
 The Explorer's browsing tools (`web.open`) use `EXA_API_KEY` or `TAVILY_API_KEY`. With neither
 set, browsing is unavailable and the tool says so in the refusal — a crew with no web access
 forms thinner Ideas, which is a fact about the run and not a story defect.

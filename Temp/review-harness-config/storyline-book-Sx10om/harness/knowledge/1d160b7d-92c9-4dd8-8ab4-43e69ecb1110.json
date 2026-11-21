@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "article": {
+    "id": "1d160b7d-92c9-4dd8-8ab4-43e69ecb1110",
+    "title": "Durable — Goal",
+    "createdAt": "2026-11-21T10:17:20.126Z",
+    "updatedAt": "2026-11-21T10:17:20.126Z",
+    "tags": [
+      "story:story_1",
+      "section:goal",
+      "storyline-knowledge"
+    ],
+    "content": [
+      {
+        "id": "193bd467-2369-4ae4-a22d-e2bf24eb0567",
+        "text": "Goal\n\nSoft threshold: 3\nCriteria: 16\nEach criterion below is a pass/fail question, never a score.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:goal"
+        ]
+      },
+      {
+        "id": "0a187985-6e0c-4f63-b0cc-02b24727258c",
+        "text": "C-0 · the Story has exactly `chapter_count` plotlines and chapters — no more, no fewer\n\nQuestion: Does the Story have exactly `chapter_count` plotlines and exactly `chapter_count` chapters?\nChecker: code\nHard: yes\nFix hint: Create the missing plotlines/chapters or delete the surplus; never edit chapter_count to pass (D-3b).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-0"
+        ]
+      },
+      {
+        "id": "4ce65760-7e31-49fc-89ae-150f0ef1b170",
+        "text": "C-1 · every chapter has a plotline\n\nQuestion: Does every chapter name a plotline that governs it?\nChecker: code\nHard: yes\nFix hint: createPlotline for the orphan chapter, or set the chapter’s plotline_ref to the plotline that owns it.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-1"
+        ]
+      },
+      {
+        "id": "27106992-a641-4796-996a-2e4e571dfa85",
+        "text": "C-2 · every plotline traces to the Summary — nothing in it contradicts premise, promise, theme, or ending\n\nQuestion: Does every plotline trace to the locked Summary — does nothing in it contradict the premise, promise, theme or ending?\nChecker: judge\nHard: yes\nFix hint: Rewrite the plotline to serve the Summary it names; if the Summary is the thing that is wrong, raise a finding and let the Author backtrack (D-25).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-2"
+        ]
+      },
+      {
+        "id": "54009e78-ab55-48e1-9f91-718ceff35b56",
+        "text": "C-3 · every plotline’s `must_change` is actually a change, not a restatement\n\nQuestion: Is each plotline’s must_change a real change of state, knowledge, relationship or position rather than a restatement of must_happen?\nChecker: judge\nHard: no\nFix hint: State must_change as a named before and after; if nothing is different at the end, the chapter has no contract.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-3"
+        ]
+      },
+      {
+        "id": "319597f6-6eee-4cba-b75e-cc78ddb5d170",
+        "text": "C-4 · plotlines are consistent with each other: no contradiction between adjacent chapters, no event requiring a setup that no earlier chapter makes\n\nQuestion: Are the plotlines consistent with each other — no adjacent contradiction, and no event that needs a setup no earlier chapter makes?\nChecker: judge\nHard: yes\nFix hint: Move the setup into an earlier plotline, or drop the event that depends on it (L-8a fixes whichever side the plotline says is wrong).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-4"
+        ]
+      },
+      {
+        "id": "9f2c5403-ecdf-4418-a644-330b4de2d161",
+        "text": "C-5 · every `setup` in the ledger has a `payoff`, and every `payoff` has a setup\n\nQuestion: Does every setup in the ledger have a matching payoff, and every payoff a setup?\nChecker: code\nHard: yes\nFix hint: editLedger: add the payoff the setup promises, or add the setup the payoff presumes.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-5"
+        ]
+      },
+      {
+        "id": "744b7dba-2c80-4e93-880b-1bc9d27422cd",
+        "text": "C-6 · timeline is monotonic; no `fact` contradiction\n\nQuestion: Is the ledger timeline monotonic, and do no two fact entries contradict each other on the same key?\nChecker: code\nHard: yes\nFix hint: Reorder or re-date the timeline entries, and resolve the contradicting fact to one value (D-10).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-6"
+        ]
+      },
+      {
+        "id": "aacceee8-18f1-4230-8d80-9b278b1f5d1a",
+        "text": "C-7 · expanded prose delivers its chapter’s `must_happen`\n\nQuestion: Does the expanded prose deliver every event this chapter’s must_happen names?\nChecker: judge\nHard: yes\nFix hint: Write the events the plotline names in this chapter; do not let an adjacent chapter do them instead.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-7"
+        ]
+      },
+      {
+        "id": "84946334-d1e5-400b-b610-fb835b2a237c",
+        "text": "C-8 · expanded prose delivers its chapter’s `must_change`\n\nQuestion: Does the expanded prose actually leave this chapter in the changed state its must_change declares?\nChecker: judge\nHard: yes\nFix hint: Show the declared change happening on the page by the chapter’s final section.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-8"
+        ]
+      },
+      {
+        "id": "d9016199-3395-4a9a-a593-f6eb1b64428d",
+        "text": "C-9 · no character acts against `arc` + `state_now` without a scene that owns the change\n\nQuestion: Does every character act consistently with their arc and state_now, or is there a scene that owns the change when they do not?\nChecker: judge\nHard: no\nFix hint: Add the scene that owns the change, or bring the behaviour back to the cast record (D-9).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-9"
+        ]
+      },
+      {
+        "id": "fc5093f7-96d0-4f4e-a737-53a0bb34ad14",
+        "text": "C-10 · the ending pays the `promise`\n\nQuestion: Does the ending pay the promise the Summary made to the reader?\nChecker: judge\nHard: yes\nFix hint: Change the ending so it pays the promise; changing the promise instead is the Author’s call (P5).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-10"
+        ]
+      },
+      {
+        "id": "b542e578-ed07-41ca-95fa-4566c1769a37",
+        "text": "C-11 · no two consecutive chapters do the same job (pacing)\n\nQuestion: Do any two consecutive chapters do the same job?\nChecker: judge\nHard: no\nFix hint: Merge the two chapters, or restate one chapter’s contract so it does a different job.",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-11"
+        ]
+      },
+      {
+        "id": "298dc3a5-70fc-4267-9fd2-82821d0d6c64",
+        "text": "C-12 · prose quality at the level the `tone` sheet demands\n\nQuestion: Does the prose reach the quality level the Summary’s tone sheet demands?\nChecker: judge\nHard: no\nFix hint: Revise the prose toward the tone sheet’s voice, POV, tense and register — the Writer writes it, never the reviewer (P10).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-12"
+        ]
+      },
+      {
+        "id": "e6472ee2-2aa7-41dc-81af-88d20ceb3ec7",
+        "text": "C-13 · the prose reads as though this Author wrote it — matches the `tone` sheet and the Editor templates’ `selection_rules`\n\nQuestion: Does the prose read as though this Author wrote it — does it match the tone sheet and the Editor templates’ selection_rules?\nChecker: judge\nHard: yes\nFix hint: Revise toward the tone sheet and selection_rules; if those do not describe prose you like, edit the rules — that text is the product (P12).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-13"
+        ]
+      },
+      {
+        "id": "0db4e173-3d57-45e7-832d-7f8eccf30762",
+        "text": "C-14 · the Summary delivers the Seed: nothing central to `stories.idea` is missing from it, and nothing in it contradicts the Seed\n\nQuestion: Does the Summary deliver the Seed — is nothing central to stories.idea missing from it, and does nothing in it contradict the Seed?\nChecker: judge\nHard: yes\nFix hint: Expand the Summary to carry everything central to the Seed, and remove what contradicts it (P5: the Seed is never edited to pass).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-14"
+        ]
+      },
+      {
+        "id": "5d271001-d8a7-43db-b422-f2e8fc8fce58",
+        "text": "C-15 · every Idea that reached a locked artifact was verified by an Editor and carries evidence\n\nQuestion: Was every Idea that reached a locked artifact verified by an Editor, with evidence recorded?\nChecker: code\nHard: yes\nFix hint: Run verifyIdea (re-read the source, record evidence) before the lock, or keep the unverified Idea out of the artifact (D-27).",
+        "rev": 1,
+        "createdAt": "2026-11-21T10:17:20.126Z",
+        "updatedAt": "2026-11-21T10:17:20.126Z",
+        "tags": [
+          "story:story_1",
+          "section:goal",
+          "entry:criterion:C-15"
+        ]
+      }
+    ],
+    "rev": 1
+  }
+}

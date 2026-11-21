@@ -450,6 +450,13 @@ describe('the CLI flags', () => {
                 app: {} as never,
                 store: { close: async () => undefined } as never,
                 engine: {} as never,
+                harnessConfiguration: {
+                    presets: [],
+                    plugins: [],
+                    pluginDescriptors: [],
+                    toolbox: { sharedToolbox: false },
+                    commands: []
+                },
                 defaultModel: 'm',
                 close: async () => undefined
             },

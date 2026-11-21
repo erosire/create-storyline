@@ -214,10 +214,42 @@ harness listing. Both are projections, and neither is a second source of truth:
   cannot take them away. The book is still the authority: every store commit re-derives the
   section articles, and an empty section keeps a placeholder paragraph so its folder stays
   visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree.
-- **The harness listing** (`src/server/harnesses.ts`) projects the shipped
-  `@underload/harness/server` presets: each session template, its roster, and its A–Z authority
+- **The harness listing** (`src/server/harnesses.ts`) projects the harness presets resolved from
+  this runtime's `harness` boot option: each session template, its roster, and its A–Z authority
   map. Rank A is called out because delegation is strictly downward in that model.
   `GET /harnesses` is the read.
+
+### Harness boot configuration (R5)
+
+`src/server/harness-config.ts` owns Storyline's default `HarnessBootConfiguration` and resolves
+it through `@underload/harness/server`'s public `resolveHarnessBootConfiguration`. The default
+declares the eight visible cards (general, instruct, research/Explore, workspace/Analyst,
+reviewer, planner/Manager, debugger, chat) with their exact rosters/ranks, shared toolbox for the
+seven working cards, no toolbox for chat, and **no executable plugins or commands**; those are
+host choices, not hidden package defaults.
+
+The override path is one option on the existing boot entries:
+
+```ts
+await bootStorylineServer({ harness });
+await createStorylineApp({ storeRoot, harness });
+await startStorylineServer({ harness });
+// @underload/service: pass variables.harness to the Storyline endpoint
+```
+
+`undefined` means the Storyline default; an explicit `{}` is the harness zero floor (no cards, no
+plugins, core tools only) and is never merged with the default. The service route caches one
+runtime per resolved (canonicalised) store root — an omitted root, its resolved default and any
+equivalent relative/absolute spelling share one runtime — and refuses a later, different
+`variables.harness` with a named error
+(`runtime-cache.ts`) instead of silently reusing the first catalogue; configuration is fixed per
+process per root.
+
+**Boundary:** this is the harness package's session-agent catalogue, not Storyline's own story
+engine. `src/server/loop/templates.ts` (`BUILT_IN_TEMPLATES`), the §8.6 assistant template seed
+and `src/server/tools/` remain the Story engine's vocabulary. Storyline does not mount a
+`HarnessRuntime`; it resolves the catalogue for `GET /harnesses` and exposes the whole resolved
+configuration as `runtime.harnessConfiguration`.
 
 The components are `src/dashboard/components/KnowledgeTree.tsx` and `HarnessPanel.tsx`; the
 dashboard store keeps `knowledge: story_id -> tree` and `harnesses` beside the §4 rows.
