@@ -38,6 +38,7 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
         'requestMerge',
         'rejectAll',
         'compareRevisions',
+        'reviewSeed',
         'verifyIdea',
         'verifyFinding',
         'approveFinding',
@@ -45,7 +46,15 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
         'delegate'
     ],
     // §8.3 — the checker surface.
-    checker: ['submitVerdict', 'raiseFinding', 'createTask', 'editTask', 'requestAuthor', 'markChapterDone'],
+    checker: [
+        'submitVerdict',
+        'raiseFinding',
+        'confirmFinding',
+        'createTask',
+        'editTask',
+        'requestAuthor',
+        'markChapterDone'
+    ],
     // §8.4 — shared plumbing, in §8's row order (`readX / editX` rows expand into two names).
     plumbing: [
         'readSeed',
@@ -182,6 +191,13 @@ const SPEC_TOOL_CONTRACT: Record<
         level: 'read',
         allow: 'yyyy'
     },
+    reviewSeed: {
+        args: ['verdict', 'missing', 'notes', 'why'],
+        required: ['verdict', 'why'],
+        writes: 'tasks',
+        level: 'write',
+        allow: 'nynn'
+    },
     verifyIdea: {
         args: ['idea_id', 'verdict', 'evidence', 'meets_guidelines', 'why', 'expects'],
         required: ['idea_id', 'verdict', 'evidence', 'meets_guidelines', 'why'],
@@ -226,6 +242,13 @@ const SPEC_TOOL_CONTRACT: Record<
         writes: 'findings',
         level: 'write',
         allow: 'yyyy'
+    },
+    confirmFinding: {
+        args: ['finding_id', 'verdict', 'evidence', 'why', 'expects'],
+        required: ['finding_id', 'verdict', 'evidence', 'why'],
+        writes: 'findings',
+        level: 'verify',
+        allow: 'nnny'
     },
     createTask: {
         args: ['title', 'detail', 'owner_role', 'criterion_ref', 'finding_ref', 'priority', 'done', 'why'],
@@ -423,11 +446,11 @@ describe('the §8 catalogue', () => {
                 tools: SPEC_GROUP_SIZES[group]
             });
 
-        // T-6a: registration is the flat union of the five sections — 45 tools, no shadowing.
+        // T-6a: registration is the flat union of the five sections — 46 tools, no shadowing.
         expect(TOOL_NAMES).toEqual([...SPEC_TOOL_NAMES]);
-        expect(TOOL_NAMES.length).toBe(45);
-        expect(ALL_TOOLS.length).toBe(45);
-        expect(TOOL_BY_NAME.size).toBe(45);
+        expect(TOOL_NAMES.length).toBe(47);
+        expect(ALL_TOOLS.length).toBe(47);
+        expect(TOOL_BY_NAME.size).toBe(47);
         // Every tool knows its own section, which is what `describeTool`'s provenance reads.
         expect(TOOL_NAMES.map((name) => GROUP_OF_TOOL.get(name) ?? 'missing')).toEqual([
             ...SPEC_GROUP_SIZES.writer.map(() => 'writer'),
@@ -454,7 +477,7 @@ describe('the §8 catalogue', () => {
                 role: data.role,
                 total: data.total,
                 tools: data.tools.map((row: { name: string }) => row.name)
-            }).toEqual({ roleKind, role: roleKind, total: 45, tools: [...TOOL_NAMES] });
+            }).toEqual({ roleKind, role: roleKind, total: 47, tools: [...TOOL_NAMES] });
         }
     });
 
@@ -500,7 +523,13 @@ describe('the §8 catalogue', () => {
             // §7's row, as the tool reads it (P10 is enforced from this, not from a prompt).
             expect({ name, permission: info.permission }).toEqual({
                 name,
-                permission: { writes: contract.writes, level: contract.level }
+                permission: {
+                    writes: contract.writes,
+                    level: contract.level,
+                    // §8 grants phase ①'s Reader confirmation explicitly (the row gives a Reader
+                    // `write` there, and this tool needs `verify`).
+                    ...(name === 'confirmFinding' ? { extra_kinds: ['reader'] } : {})
+                }
             });
             // The kind column, computed the way `listTools` reports it: one predicate, so the
             // answer an agent reads and the answer the call gets cannot drift (T-6c).
@@ -520,7 +549,7 @@ describe('the §8 catalogue', () => {
         expect({ role: data.role, role_name: data.role_name, total: data.total, note: data.note }).toEqual({
             role: 'reader',
             role_name: 'reader_1',
-            total: 45,
+            total: 47,
             note: LIST_NOTE
         });
 
@@ -555,9 +584,9 @@ describe('the §8 catalogue', () => {
         // possible before it files the task (§7's column sums).
         for (const [kind, total] of [
             ['writer', 38],
-            ['editor', 34],
+            ['editor', 35],
             ['checker', 32],
-            ['reader', 32]
+            ['reader', 33]
         ] as [RoleKind, number][]) {
             const filtered = await callAs(store, kind, 'listTools', { kind });
             const rows = (filtered.data as Record<string, any>).tools as Array<Record<string, unknown>>;

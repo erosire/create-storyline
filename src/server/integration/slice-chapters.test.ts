@@ -68,7 +68,11 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         await fixture.settle(
             async () =>
                 (await storyRow(fixture, storyId)).levels.chapters === '3/3' &&
-                revisionStates(fixture.store, storyId).every((revision) => !revision.endsWith('/competing')),
+                // §4.15: `drafted` is the live-draft state now, so the choice has landed only when
+                // no draft is still pending, drafted or (legacy) competing.
+                revisionStates(fixture.store, storyId).every(
+                    (revision) => !/(?:pending|drafted|competing)$/.test(revision)
+                ),
             20
         );
 

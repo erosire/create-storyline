@@ -25,6 +25,7 @@ import {
     ideasToVerify,
     last,
     latestJournalSeq,
+    liveRuns,
     loopStory,
     repeatIdeas,
     storyIdeas,
@@ -33,7 +34,8 @@ import {
     undecidedIdeas,
     storyFindings,
     unconfirmedBlockingFindings,
-    unitsWithCompetingRevisions
+    unitsWithCompetingRevisions,
+    unitsWithPendingRevisions
 } from './records';
 import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
@@ -100,10 +102,22 @@ export function drainPreconditions(store: Store, story: Story): { met: boolean; 
     const tasks = dispatchableTasks(store, story.id);
     const unconfirmed = unconfirmedBlockingFindings(store, story);
     const competing = unitsWithCompetingRevisions(store, story.id);
+    const pendingDrafts = unitsWithPendingRevisions(store, story.id);
     const unverified = ideasAwaitingVerification(store, story);
+    // A Writer that has not filed a revision yet is invisible to `unitsWithPendingRevisions`: the
+    // first Writer of phase ① works on the EMPTY Summary row `createStory` opened, and its run is
+    // the only record that the draft exists. Counting it is what stops the drain probe from reading
+    // (and filing on) an artifact the Writer is still writing (L-37's "single full pass").
+    const liveWriters = liveRuns(store, story.id).filter((run) => run.role === 'writer');
     const unmet: string[] = [];
 
     if (tasks.length > 0) unmet.push(`${tasks.length} task${tasks.length === 1 ? '' : 's'} still queued`);
+    if (liveWriters.length > 0)
+        unmet.push(
+            `${liveWriters.length} Writer${liveWriters.length === 1 ? '' : 's'} still running (§4.15: no draft has been filed yet)`
+        );
+    if (pendingDrafts.length > 0)
+        unmet.push(`${pendingDrafts.length} unit${pendingDrafts.length === 1 ? '' : 's'} still being drafted (§4.15)`);
     if (unconfirmed.length > 0)
         unmet.push(`${unconfirmed.length} finding${unconfirmed.length === 1 ? '' : 's'} still unconfirmed (D-33)`);
     if (competing.length > 0)
@@ -369,6 +383,9 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // Editor's job keeps the Story `ready`. Signing off over unchosen drafts would put the choice in
     // the Author's hands by default rather than by decision.
     const competing = unitsWithCompetingRevisions(store, story.id);
+    // A draft whose Writer run closed short of a block is not competition yet: it is work the loop
+    // still owes (§4.15), so a phase sign-off over it would park the Writer's own correction.
+    const pendingDrafts = unitsWithPendingRevisions(store, story.id);
 
     // D-27 / L-36: a sourced Idea the Editor has not verified is an EDITOR job the crew can start now,
     // not a decision only the Author can make. Offering the lock (or the Idea pick) over one would put
@@ -405,6 +422,7 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     if (
         input.goalStatus.passed &&
         competing.length === 0 &&
+        pendingDrafts.length === 0 &&
         verificationOwed === 0 &&
         findingsUnconfirmed === 0 &&
         phaseWorkQueued === 0 &&

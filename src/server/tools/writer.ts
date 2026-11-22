@@ -23,6 +23,7 @@ import {
     hasOpenFindings,
     isDivergenceMode,
     mustResolveRef,
+    pendingDraftFor,
     pendingRevisions,
     plotlineRows,
     proposalWhy,
@@ -31,10 +32,12 @@ import {
     resolvedPlotline,
     resolvedSummary,
     rewriteSections,
+    revisionBodyFields,
     summaryRow,
     revisionBodyForUnit,
     type ResolvedRef
 } from './artifacts';
+import { SUMMARY_PROSE_FIELDS } from '../../shared/summary';
 import { guardAuthorSpans, guardPlotlineWritable, guardSummaryWritable } from './permissions';
 import { arr, bool, enumOf, EXPECTS_ARG, num, obj, str, whyArg, type PropertySchema } from './schema';
 import {
@@ -60,8 +63,12 @@ import {
 } from './utilities';
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from './types';
 
-/** §4.2's prose fields — the Writer's whole canvas in phase ① (D-3b excludes `chapter_count`). */
-const SUMMARY_FIELDS = ['premise', 'promise', 'theme', 'tone', 'ending', 'world_rules'] as const;
+/**
+ * §4.2's prose fields — the Writer's whole canvas in phase ① (D-3b excludes `chapter_count`).
+ * The list lives in `shared/summary.ts` because the loop's completeness gate (§4.15's
+ * `pending` → `drafted`) has to ask the same question this tool answers.
+ */
+const SUMMARY_FIELDS = SUMMARY_PROSE_FIELDS;
 
 /** §4.3's fields the Writer may set (D-1 keeps `aligned`/`needs_recheck`/`contract_locked` engine-owned). */
 const PLOTLINE_FIELDS = ['heading', 'order', 'must_happen', 'must_change', 'pov', 'setups', 'payoffs'] as const;
@@ -153,11 +160,26 @@ const editSummary: ToolDefinition = {
                 const value = existing[field];
                 if (typeof value === 'string' && value.trim().length > 0) inherited[field] = value;
             }
-            const revision = await fileRevision(
-                ctx,
-                { unit_kind: 'summary', unit_ref: existing.id, body: { fields: { ...inherited, ...fields } } },
-                why
-            );
+
+            // A Writer that writes its Summary over several calls keeps ONE draft: the second
+            // `editSummary` of the same run extends the same `pending` row instead of filing a
+            // second, partial one (the draft is `drafted` only when the run closes — §4.15).
+            // The loop's completion job (`wi_complete_*`) is the one run that also adopts a draft
+            // an earlier Writer left short: its brief names exactly the blocks that are missing.
+            const completionRun =
+                ctx.runId !== undefined &&
+                (ctx.store.runs.get(ctx.runId)?.work_item_ref ?? '').startsWith('wi_complete_');
+            const pending = pendingDraftFor(ctx.store, ctx.storyId, 'summary', existing.id, ctx.runId, completionRun);
+            const body = { fields: { ...inherited, ...(pending ? revisionBodyFields(pending) : {}), ...fields } };
+
+            const revision =
+                pending === undefined
+                    ? await fileRevision(ctx, { unit_kind: 'summary', unit_ref: existing.id, body }, why)
+                    : ((await ctx.store.revisions.update(
+                          pending.id,
+                          { body },
+                          buildAttribution(ctx, why)
+                      )) as Revision);
             const drafts = pendingRevisions(ctx.store, ctx.storyId, 'summary', existing.id);
 
             return ok(
@@ -165,12 +187,15 @@ const editSummary: ToolDefinition = {
                     id: revision.id,
                     summary_id: existing.id,
                     draft: true,
+                    state: revision.state,
                     competing: drafts.length,
                     current_rev: existing.rev,
-                    next: `An Editor selects between ${drafts.length} Summary draft${drafts.length === 1 ? '' : 's'} with listRevisions + selectRevision; the Summary still holds the previous text.`
+                    next: `The draft stays pending until this Writer run closes; then Readers review it and an Editor selects between the completed drafts with listRevisions + selectRevision. The Summary still holds the previous text.`
                 },
                 existing.rev,
-                `Summary draft filed (${revision.id})`,
+                pending === undefined
+                    ? `Summary draft filed (${revision.id})`
+                    : `Summary draft ${revision.id} extended (pending)`,
                 { revision_id: revision.id }
             );
         }

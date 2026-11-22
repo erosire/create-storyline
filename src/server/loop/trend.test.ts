@@ -75,7 +75,7 @@ describe('L-21 / L-22 — the stall that pages the Author, and the reason it has
         // L-22's three sentences, in the order the Author reads them: what stopped moving, the oldest
         // thing still open, and what the crews already spent trying to move it.
         expect(story.status_reason).toBe(
-            'every level unchanged for 2 of the 2 rounds that trip loop detection — no level will move · oldest confirmed finding C-10|story_1 (seen 1×, on story_1) · the crews tried 0 task attempts across 22 runs'
+            'every level unchanged for 2 of the 2 rounds that trip loop detection — no level will move · oldest confirmed finding C-10|story_1 (seen 1×, on story_1) · the crews tried 0 task attempts across 23 runs'
         );
     });
 

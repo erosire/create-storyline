@@ -41,6 +41,15 @@ const STATE_LABEL: Record<AgentThreadRecord['state'], string> = {
     abandoned: 'abandoned'
 };
 
+/**
+ * A thread that is not running now is ARCHIVED: completed (`torn_down`), failed, or abandoned.
+ * The Author's tab beside the Story title toggles that set, so the list can read as "what is
+ * working now" without losing the closed threads the Story was built out of.
+ */
+function isArchived(thread: AgentThreadRecord): boolean {
+    return thread.state !== 'running';
+}
+
 interface PhaseGroup {
     phase: StoryPhase;
     threads: AgentThreadRecord[];
@@ -110,6 +119,23 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
     const [open, setOpen] = useState<Set<string>>(() => new Set());
     /** U-8: the request is collapsed by default, at every state — open the bar, then the block. */
     const [requests, setRequests] = useState<Set<string>>(() => new Set());
+    /**
+     * The Story ids whose archived threads the Author has folded away. Archived threads are shown
+     * by default — the Story's history is the point of this surface — and the tab beside the title
+     * hides them so the list reads as the threads working right now.
+     */
+    const [archivedHidden, setArchivedHidden] = useState<Set<string>>(() => new Set());
+
+    const toggleArchived = (storyId: string): void => {
+        setArchivedHidden((current) => {
+            const next = new Set(current);
+
+            if (next.has(storyId)) next.delete(storyId);
+            else next.add(storyId);
+
+            return next;
+        });
+    };
 
     const toggle = (threadId: string): void => {
         setOpen((current) => {
@@ -135,159 +161,219 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
 
     return (
         <section className="sv-threads" data-testid="agent-threads" data-agent={kind} aria-label={`${kind} threads`}>
-            {groups.map((story) => (
-                <div className="sv-threads__story" data-story={story.storyId} key={story.storyId}>
-                    <h3 className="sv-threads__story-title">{story.storyTitle}</h3>
+            {groups.map((story) => {
+                const archivedCount = story.phases.reduce(
+                    (count, group) => count + group.threads.filter(isArchived).length,
+                    0
+                );
+                const archivedShown = !archivedHidden.has(story.storyId);
+                const phases = archivedShown
+                    ? story.phases
+                    : story.phases
+                          .map((group) => ({
+                              ...group,
+                              threads: group.threads.filter((thread) => !isArchived(thread))
+                          }))
+                          .filter((group) => group.threads.length > 0);
 
-                    {story.phases.map((group) => (
-                        <section
-                            className="sv-threads__phase"
-                            data-phase={group.phase}
-                            key={`${story.storyId}:${group.phase}`}
-                        >
-                            <h4 className="sv-threads__phase-title">
-                                <span className="sv-threads__phase-code">{PHASE_CODE[group.phase]}</span>
-                                {PHASE_LABELS[group.phase]}
-                                <span className="sv-threads__phase-count">
-                                    {group.threads.length} thread{group.threads.length === 1 ? '' : 's'}
-                                </span>
-                            </h4>
+                return (
+                    <div className="sv-threads__story" data-story={story.storyId} key={story.storyId}>
+                        <div className="sv-threads__story-head">
+                            <h3 className="sv-threads__story-title">{story.storyTitle}</h3>
+                            <button
+                                type="button"
+                                className="sv-threads__archive-tab"
+                                aria-pressed={archivedShown}
+                                data-active={archivedShown ? 'true' : 'false'}
+                                title={
+                                    archivedShown
+                                        ? 'Hide the completed, failed and abandoned threads — show only what is running now'
+                                        : 'Show the completed, failed and abandoned threads again'
+                                }
+                                onClick={() => toggleArchived(story.storyId)}
+                            >
+                                Archived
+                                <span className="sv-threads__archive-count">{archivedCount}</span>
+                            </button>
+                        </div>
 
-                            <ul className="sv-thread-list">
-                                {group.threads.map((thread) => {
-                                    const expanded = open.has(thread.thread_id);
-                                    const requestVisible = requests.has(thread.thread_id);
-                                    const code = PHASE_CODE[thread.phase];
-                                    const duration = formatElapsed(thread.started_at, thread.ended_at, now);
-                                    const answerText =
-                                        thread.answer.length > 0
-                                            ? thread.answer
-                                            : thread.error !== undefined
-                                              ? thread.state === 'abandoned'
-                                                  ? `the thread was abandoned before answering: ${thread.error}`
-                                                  : `the thread failed before answering: ${thread.error}`
-                                              : 'no answer was recorded.';
+                        {phases.length === 0 ? (
+                            <p className="sv-threads__empty">
+                                no thread is running now — {archivedCount} archived thread
+                                {archivedCount === 1 ? ' is' : 's are'} hidden.
+                            </p>
+                        ) : null}
 
-                                    return (
-                                        <li
-                                            className="sv-thread"
-                                            data-state={thread.state}
-                                            data-retained={thread.retained ? 'true' : 'false'}
-                                            key={thread.thread_id}
-                                        >
-                                            <button
-                                                type="button"
-                                                className="sv-thread__bar"
-                                                aria-expanded={expanded}
-                                                onClick={() => toggle(thread.thread_id)}
+                        {phases.map((group) => (
+                            <section
+                                className="sv-threads__phase"
+                                data-phase={group.phase}
+                                key={`${story.storyId}:${group.phase}`}
+                            >
+                                <h4 className="sv-threads__phase-title">
+                                    <span className="sv-threads__phase-code">{PHASE_CODE[group.phase]}</span>
+                                    {PHASE_LABELS[group.phase]}
+                                    <span className="sv-threads__phase-count">
+                                        {group.threads.length} thread{group.threads.length === 1 ? '' : 's'}
+                                    </span>
+                                </h4>
+
+                                <ul className="sv-thread-list">
+                                    {group.threads.map((thread) => {
+                                        const expanded = open.has(thread.thread_id);
+                                        const requestVisible = requests.has(thread.thread_id);
+                                        const code = PHASE_CODE[thread.phase];
+                                        const duration = formatElapsed(thread.started_at, thread.ended_at, now);
+                                        const answerText =
+                                            thread.answer.length > 0
+                                                ? thread.answer
+                                                : thread.error !== undefined
+                                                  ? thread.state === 'abandoned'
+                                                      ? `the thread was abandoned before answering: ${thread.error}`
+                                                      : `the thread failed before answering: ${thread.error}`
+                                                  : 'no answer was recorded.';
+
+                                        return (
+                                            <li
+                                                className="sv-thread"
+                                                data-state={thread.state}
+                                                data-retained={thread.retained ? 'true' : 'false'}
+                                                key={thread.thread_id}
                                             >
-                                                <span className="sv-thread__code">{code}</span>
-                                                <span className="sv-thread__title">
-                                                    {thread.title.length > 0 ? thread.title : thread.role_name}
-                                                </span>
-                                                <span className="sv-thread__role">{thread.role_name}</span>
-                                                <span
-                                                    className="sv-thread__duration"
-                                                    title="wall-clock, informational only (S-6, E-0)"
+                                                <button
+                                                    type="button"
+                                                    className="sv-thread__bar"
+                                                    aria-expanded={expanded}
+                                                    onClick={() => toggle(thread.thread_id)}
                                                 >
-                                                    {duration}
-                                                </span>
-                                                <span className="sv-thread__tokens">
-                                                    {thread.tokens.toLocaleString('en-US')} tokens
-                                                </span>
-                                                <span className={`sv-thread__state sv-thread__state--${thread.state}`}>
-                                                    {STATE_LABEL[thread.state]}
-                                                </span>
-                                            </button>
-
-                                            {thread.state === 'running' ? (
-                                                <div className="sv-thread__actions">
-                                                    <button
-                                                        type="button"
-                                                        className="sv-thread__kill"
-                                                        disabled={onKillRun === undefined}
-                                                        title="Tear this run down; the Story keeps running (P8, U-7, S-3)"
-                                                        onClick={() => onKillRun?.(thread.run_id)}
+                                                    <span className="sv-thread__code">{code}</span>
+                                                    <span className="sv-thread__title">
+                                                        {thread.title.length > 0 ? thread.title : thread.role_name}
+                                                    </span>
+                                                    <span className="sv-thread__role">{thread.role_name}</span>
+                                                    <span
+                                                        className="sv-thread__duration"
+                                                        title="wall-clock, informational only (S-6, E-0)"
                                                     >
-                                                        kill run
-                                                    </button>
-                                                </div>
-                                            ) : null}
+                                                        {duration}
+                                                    </span>
+                                                    <span className="sv-thread__tokens">
+                                                        {thread.tokens.toLocaleString('en-US')} tokens
+                                                    </span>
+                                                    <span
+                                                        className={`sv-thread__state sv-thread__state--${thread.state}`}
+                                                    >
+                                                        {STATE_LABEL[thread.state]}
+                                                    </span>
+                                                </button>
 
-                                            {expanded ? (
-                                                <div className="sv-thread__detail">
-                                                    <section className="sv-thread__block">
+                                                {thread.state === 'running' ? (
+                                                    <div className="sv-thread__actions">
                                                         <button
                                                             type="button"
-                                                            className="sv-thread__block-toggle"
-                                                            aria-expanded={requestVisible}
-                                                            onClick={() => toggleRequest(thread.thread_id)}
+                                                            className="sv-thread__kill"
+                                                            disabled={onKillRun === undefined}
+                                                            title="Tear this run down; the Story keeps running (P8, U-7, S-3)"
+                                                            onClick={() => onKillRun?.(thread.run_id)}
                                                         >
-                                                            <span className="sv-thread__block-title">Request</span>
-                                                            <span className="sv-thread__block-caret" aria-hidden="true">
-                                                                {requestVisible ? '▾' : '▸'}
-                                                            </span>
+                                                            kill run
                                                         </button>
-                                                        {requestVisible ? (
-                                                            <div className="sv-thread__text">
-                                                                <MarkdownText>{thread.request}</MarkdownText>
-                                                            </div>
-                                                        ) : null}
-                                                    </section>
+                                                    </div>
+                                                ) : null}
 
-                                                    {thread.state === 'running' ? (
-                                                        /* U-8 — below the collapsed request: what the employee is
+                                                {expanded ? (
+                                                    <div className="sv-thread__detail">
+                                                        <section className="sv-thread__block">
+                                                            <button
+                                                                type="button"
+                                                                className="sv-thread__block-toggle"
+                                                                aria-expanded={requestVisible}
+                                                                onClick={() => toggleRequest(thread.thread_id)}
+                                                            >
+                                                                <span className="sv-thread__block-title">Request</span>
+                                                                <span
+                                                                    className="sv-thread__block-caret"
+                                                                    aria-hidden="true"
+                                                                >
+                                                                    {requestVisible ? '▾' : '▸'}
+                                                                </span>
+                                                            </button>
+                                                            {requestVisible ? (
+                                                                <div className="sv-thread__text">
+                                                                    <MarkdownText>{thread.request}</MarkdownText>
+                                                                </div>
+                                                            ) : null}
+                                                        </section>
+
+                                                        {thread.state === 'running' ? (
+                                                            /* U-8 — below the collapsed request: what the employee is
                                                            doing at this moment. The answer lands when the thread
                                                            closes, and this block is what it replaces. */
-                                                        <section
-                                                            className="sv-thread__block sv-thread__block--live"
-                                                            aria-label="Happening now"
-                                                        >
-                                                            <h5 className="sv-thread__block-title">Happening now</h5>
-                                                            {thread.activity !== undefined && thread.activity.length > 0 ? (
-                                                                <ol className="sv-thread__activity">
-                                                                    {thread.activity.map((step, index) => (
-                                                                        <li
-                                                                            className="sv-thread__activity-step"
-                                                                            key={`${step.at}:${index}`}
-                                                                        >
-                                                                            <span className="sv-thread__activity-elapsed">
-                                                                                +{formatElapsed(thread.started_at, step.at, now)}
+                                                            <section
+                                                                className="sv-thread__block sv-thread__block--live"
+                                                                aria-label="Happening now"
+                                                            >
+                                                                <h5 className="sv-thread__block-title">
+                                                                    Happening now
+                                                                </h5>
+                                                                {thread.activity !== undefined &&
+                                                                thread.activity.length > 0 ? (
+                                                                    <ol className="sv-thread__activity">
+                                                                        {thread.activity.map((step, index) => (
+                                                                            <li
+                                                                                className="sv-thread__activity-step"
+                                                                                key={`${step.at}:${index}`}
+                                                                            >
+                                                                                <span className="sv-thread__activity-elapsed">
+                                                                                    +
+                                                                                    {formatElapsed(
+                                                                                        thread.started_at,
+                                                                                        step.at,
+                                                                                        now
+                                                                                    )}
+                                                                                </span>
+                                                                                <span className="sv-thread__activity-text">
+                                                                                    {step.text}
+                                                                                </span>
+                                                                            </li>
+                                                                        ))}
+                                                                        <li className="sv-thread__activity-step sv-thread__activity-step--live">
+                                                                            <span
+                                                                                className="sv-thread__activity-elapsed"
+                                                                                aria-hidden="true"
+                                                                            >
+                                                                                ···
                                                                             </span>
-                                                                            <span className="sv-thread__activity-text">{step.text}</span>
+                                                                            <span className="sv-thread__activity-text">
+                                                                                working…
+                                                                            </span>
                                                                         </li>
-                                                                    ))}
-                                                                    <li className="sv-thread__activity-step sv-thread__activity-step--live">
-                                                                        <span className="sv-thread__activity-elapsed" aria-hidden="true">
-                                                                            ···
-                                                                        </span>
-                                                                        <span className="sv-thread__activity-text">working…</span>
-                                                                    </li>
-                                                                </ol>
-                                                            ) : (
-                                                                <p className="sv-thread__activity-empty">
-                                                                    the thread is working — no step has landed yet.
-                                                                </p>
-                                                            )}
-                                                        </section>
-                                                    ) : (
-                                                        <section className="sv-thread__block">
-                                                            <h5 className="sv-thread__block-title">Answer</h5>
-                                                            <div className="sv-thread__text">
-                                                                <MarkdownText>{answerText}</MarkdownText>
-                                                            </div>
-                                                        </section>
-                                                    )}
-                                                </div>
-                                            ) : null}
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                        </section>
-                    ))}
-                </div>
-            ))}
+                                                                    </ol>
+                                                                ) : (
+                                                                    <p className="sv-thread__activity-empty">
+                                                                        the thread is working — no step has landed yet.
+                                                                    </p>
+                                                                )}
+                                                            </section>
+                                                        ) : (
+                                                            <section className="sv-thread__block">
+                                                                <h5 className="sv-thread__block-title">Answer</h5>
+                                                                <div className="sv-thread__text">
+                                                                    <MarkdownText>{answerText}</MarkdownText>
+                                                                </div>
+                                                            </section>
+                                                        )}
+                                                    </div>
+                                                ) : null}
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </section>
+                        ))}
+                    </div>
+                );
+            })}
         </section>
     );
 }

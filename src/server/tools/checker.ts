@@ -559,7 +559,148 @@ const raiseFinding: ToolDefinition = {
     }
 };
 
-// ── 3. createTask (D-11/P4/P12) ─────────────────────────────────────────────
+// ── 3. confirmFinding (phase ①'s independent second look) ───────────────────
+
+/** The states a Reader may still confirm: after the Editor's verify, before the fix has closed it. */
+const CONFIRMABLE_FINDING_STATES: Array<Finding['state']> = ['confirmed', 'approved'];
+
+/**
+ * Phase ①'s granular second look. The Editor's `verifyFinding` confirms a Reader's suspicion;
+ * this tool is the Reader's OWN independent pass over that same single finding, after the Editor
+ * has approved it. A `confirm` is what lets the Writer spend a round on the defect
+ * (`reader_confirmed`), and a `dispute` withdraws the queued fix so no Writer acts on a claim the
+ * Reader no longer believes. It writes one finding — never a batch — so each thread carries one
+ * decision and one piece of evidence.
+ */
+const confirmFinding: ToolDefinition = {
+    name: 'confirmFinding',
+    description:
+        "Record the Reader's independent second look at an Editor-approved finding: `confirm` when the defect holds (the Writer's fix is then allowed), or `dispute` when it does not (the queued fix is withdrawn). This thread confirms exactly one finding and rewrites nothing else.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            finding_id: str('The finding the Editor approved.'),
+            verdict: {
+                type: 'string',
+                enum: ['confirm', 'dispute'],
+                description: 'confirm = the defect is real; dispute = the Reader does not believe it.'
+            },
+            evidence: str('What this independent check read and what it showed (required — no verdict without evidence).'),
+            why: whyArg('Why this is the right verdict for this finding (T-5).'),
+            expects: EXPECTS_ARG
+        },
+        required: ['finding_id', 'verdict', 'evidence', 'why']
+    },
+    writes: 'findings',
+    level: 'verify',
+    mutating: true,
+    primaryArg: 'finding_id',
+    // A report-style decision, like `verifyFinding`: the row it checks is named by the brief and
+    // the call carries its evidence, so it does not need a separate `expects` read (T-4).
+    expectsArg: false,
+    // Phase ①'s confirmation is a READER act: the Editor verified, the Reader re-checks it. The
+    // grant is explicit so the §7 row's `write` level for a Reader does not have to be widened.
+    kinds: ['reader'],
+    onlyKinds: ['reader'],
+    requires: ['finding_id', 'verdict', 'evidence', 'why'],
+    async execute(ctx, expects): Promise<ToolResult> {
+        const target = await mustResolveRef(ctx, ctx.args.finding_id, 'finding_id', ['findings']);
+        const finding = target.record as Finding;
+        const verdict = String(ctx.args.verdict ?? '');
+        const evidence = String(ctx.args.evidence ?? '').trim();
+        const why = whyOf(ctx);
+
+        if (verdict !== 'confirm' && verdict !== 'dispute') {
+            throw new ToolRefusal('T-11', 'confirmFinding needs verdict "confirm" or "dispute".', {
+                field: 'verdict',
+                received: verdict,
+                fix: 're-check the finding and say whether it holds'
+            });
+        }
+
+        if (!CONFIRMABLE_FINDING_STATES.includes(finding.state)) {
+            throw new ToolRefusal(
+                'D-33',
+                `finding ${finding.id} is ${finding.state}, so there is nothing for the Reader to confirm — only an Editor-confirmed or approved finding reaches this pass`,
+                {
+                    finding_id: finding.id,
+                    state: finding.state,
+                    fix: 'the Editor confirms a suspicion first (verifyFinding); the Reader confirms that confirmation'
+                }
+            );
+        }
+
+        if (!evidence) {
+            throw new ToolRefusal(
+                'D-15',
+                'confirmFinding needs `evidence`: the independent check has to say what it read and what it showed',
+                {
+                    field: 'evidence',
+                    finding_id: finding.id,
+                    fix: 'quote the passage or the line range this check looked at'
+                }
+            );
+        }
+
+        const appended = `${finding.evidence}\n\nReader confirmation: ${evidence}`;
+        const written = (await commitAs(
+            ctx,
+            'confirmFinding',
+            async () => {
+                const updated = ctx.store.findings.update(
+                    finding.id,
+                    {
+                        state: verdict === 'confirm' ? finding.state : 'disputed',
+                        reader_confirmed: verdict === 'confirm',
+                        reader_confirmed_by: ctx.actorLabel,
+                        evidence: appended
+                    },
+                    buildAttribution(ctx, why),
+                    expects
+                );
+
+                // A disputed finding must not leave a Writer task standing: the approval created
+                // the queue entry, so the Reader's veto withdraws it in the same commit.
+                if (verdict === 'dispute') {
+                    for (const task of ctx.store.tasks.list()) {
+                        if (task.story_id !== ctx.storyId || task.finding_ref !== finding.id) continue;
+                        if (task.state !== 'open' && task.state !== 'claimed' && task.state !== 'blocked') continue;
+
+                        ctx.store.tasks.update(
+                            task.id,
+                            { state: 'wontfix' },
+                            buildAttribution(
+                                ctx,
+                                `${finding.id} was disputed by the Reader's independent check, so its fix task is withdrawn`
+                            )
+                        );
+                    }
+                }
+
+                return updated;
+            },
+            expects
+        )) as Finding;
+
+        return ok(
+            {
+                id: written.id,
+                state: written.state,
+                verdict,
+                reader_confirmed: written.reader_confirmed === true,
+                current_rev: written.rev,
+                next:
+                    verdict === 'confirm'
+                        ? `the Writer may now fix ${written.id} (phase ①)`
+                        : `the fix work for ${written.id} is withdrawn; the finding stays disputed for the audit trail (D-33)`
+            },
+            written.rev,
+            `Finding ${written.id} ${verdict === 'confirm' ? 'confirmed' : 'disputed'} by the Reader`
+        );
+    }
+};
+
+// ── 4. createTask (D-11/P4/P12) ─────────────────────────────────────────────
 
 /**
  * §8.3 `createTask`: the fix a checker wants, handed to the queue rather than to an agent
@@ -1012,6 +1153,7 @@ const markChapterDone: ToolDefinition = {
 export const checkerTools: ToolDefinition[] = [
     submitVerdict,
     raiseFinding,
+    confirmFinding,
     createTask,
     editTask,
     requestAuthor,

@@ -2045,14 +2045,80 @@
     gap: 0.65rem;
 }
 
-.sv-threads__story-title {
-    margin: 0;
+.sv-threads__story-head {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-end;
     padding-bottom: 0.35rem;
     border-bottom: 1px solid var(--line-strong);
+}
+
+.sv-threads__story-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
     color: var(--text-strong);
     font-size: 0.82rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+}
+
+/* The Story's one filter: archived = every thread that is not running now. */
+.sv-threads__archive-tab {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-bottom: -0.35rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: none;
+    color: var(--dim);
+    font: inherit;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.sv-threads__archive-tab:hover,
+.sv-threads__archive-tab:focus-visible {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.sv-threads__archive-tab:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.sv-threads__archive-tab[data-active='true'] {
+    border-color: var(--line-strong);
+    border-bottom-color: var(--accent);
+    background: var(--surface);
+    color: var(--text-strong);
+}
+
+.sv-threads__archive-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.1rem;
+    height: 1.1rem;
+    padding: 0 0.25rem;
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0;
+}
+
+.sv-threads__empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
 }
 
 .sv-threads__phase {
@@ -3094,12 +3160,61 @@
 }
 
 .find-title {
+    flex: 1;
+    min-width: 0;
     color: var(--text-strong);
     font-size: 0.78rem;
     font-weight: 600;
 }
 
-.find-state,
+/* The cost badge and the finding's state sit together: "major approved" is one thought, and the
+   state is the colour that says which one (D-33/D-34). One hue per state, no decoration:
+   unconfirmed = raised but unverified (grey), confirmed = the Editor agrees (green),
+   approved = the Author queued the work (amber), fixed = done (green), disputed = contested
+   (red), discarded = not a defect (grey, settled). */
+.find-tags {
+    display: inline-flex;
+    flex: none;
+    align-items: baseline;
+    gap: 0.3rem;
+}
+
+.find-state {
+    flex: none;
+    padding: 0 0.35rem;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    color: var(--dim);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.find-state--unconfirmed {
+    color: var(--muted);
+}
+
+.find-state--confirmed {
+    color: var(--calm);
+}
+
+.find-state--approved {
+    color: var(--amber);
+}
+
+.find-state--fixed {
+    color: var(--finished);
+}
+
+.find-state--disputed {
+    color: var(--urgent);
+}
+
+.find-state--discarded {
+    color: var(--halt);
+}
+
 .find-seen {
     margin-left: auto;
     color: var(--dim);

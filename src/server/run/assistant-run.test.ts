@@ -62,6 +62,7 @@ const offeredNames = (request: ChatRequest): string[] => (request.tools ?? []).m
  */
 const CREW_SURFACE = [
     'approveFinding',
+    'confirmFinding',
     'createTask',
     'delegate',
     'describeTool',
@@ -87,6 +88,7 @@ const CREW_SURFACE = [
     'rejectAll',
     'requestAuthor',
     'requestMerge',
+    'reviewSeed',
     'searchWeb',
     'selectRevision',
     'submitVerdict',

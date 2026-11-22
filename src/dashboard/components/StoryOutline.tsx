@@ -3,8 +3,10 @@
 // WHY THE RAIL IS A PURE NAVIGATOR: the content area shows exactly one thing at a time, and the
 // rail is the only place that decision is made. It therefore renders the phrase/folder list and
 // nothing else — no article counts, no "one article per folder" sentence, no running commentary.
-// The Summary's tick is the one piece of state the rail adds, because "ready for review" is a
-// decision the Author makes by opening the Summary, not a badge to read on every other pane.
+// Two marks are the exception, and both are decisions rather than decoration: the Summary's tick
+// ("ready for review"), and one badge on a Revision that still has OPEN Critical/Major findings
+// against it. Minor findings never badge — they are filed, not raised. A child row is a leaf, so
+// it carries no chevron: there is nothing to expand.
 import {
     STORY_FOLDERS,
     STORY_PHRASES,
@@ -17,7 +19,7 @@ import {
     summaryRevisions
 } from './story-nav';
 import type { StoryAttention, StorySelection, SummaryRevisionEntry } from './story-nav';
-import type { StoryViewData } from './story-contract';
+import { isOpenFinding, type StoryViewData } from './story-contract';
 
 function CheckIcon() {
     return (
@@ -34,23 +36,20 @@ function CheckIcon() {
     );
 }
 
-function ChevronIcon() {
-    return (
-        <svg className="outline-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-            <path d="M4 2.5 8 6l-4 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-        </svg>
-    );
-}
-
 function isActive(selection: StorySelection, panel: StorySelection['panel'], ref?: string): boolean {
     return selection.panel === panel && (selection.ref ?? undefined) === ref;
 }
 
-/** One entry under a phrase. A Summary entry is one flat Revision and its finding count. */
+/** One entry under a phrase. A Summary entry is one flat Revision and its findings badge. */
 interface OutlineChildSpec {
     ref: string;
     title: string;
-    count?: number;
+    /**
+     * Open Critical/Major findings filed against this revision — the badge. Minor findings are
+     * filed, not raised: a revision that only has those has nothing for the Author to answer, so
+     * it earns no badge.
+     */
+    findings?: number;
     state?: string;
 }
 
@@ -59,7 +58,9 @@ function summaryChildren(revisions: SummaryRevisionEntry[]): OutlineChildSpec[] 
     return revisions.map((entry) => ({
         ref: summaryRevisionRef(entry.revision.id),
         title: `Revision ${entry.index}`,
-        count: entry.findings.length,
+        findings: entry.findings.filter(
+            (finding) => isOpenFinding(finding) && (finding.cost === 'critical' || finding.cost === 'major')
+        ).length,
         state: entry.revision.state
     }));
 }
@@ -179,10 +180,15 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                         }
                                                         onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
                                                     >
-                                                        <ChevronIcon />
-                                                        <span>{child.title}</span>
-                                                        {child.count !== undefined ? (
-                                                            <span className="outline-count">{child.count}</span>
+                                                        <span className="outline-name">{child.title}</span>
+                                                        {child.findings !== undefined && child.findings > 0 ? (
+                                                            <span
+                                                                className="outline-badge"
+                                                                title={`${child.findings} open Critical or Major finding${child.findings === 1 ? '' : 's'}`}
+                                                                aria-label={`${child.findings} open Critical or Major finding${child.findings === 1 ? '' : 's'}`}
+                                                            >
+                                                                {child.findings}
+                                                            </span>
                                                         ) : null}
                                                         {childAttention ? (
                                                             <AttentionMark attention={childAttention} />

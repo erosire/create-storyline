@@ -89,6 +89,10 @@ export interface CrewContext {
     draftIds: string[];
     /** True for phase ①'s per-draft Reader pass (the job note carries `Reader pass N of M`). */
     reviewPass: boolean;
+    /** True for phase ①'s pre-Writer Seed review (the job line names `reviewSeed`). */
+    seedReview: boolean;
+    /** The findings a phase-① confirmation thread must independently re-check. */
+    confirmIds: string[];
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
     /** D-19: the directive this review thread must turn into tasks. */
@@ -119,10 +123,20 @@ export interface CrewOptions {
     readerFinds?: Cost | ((ctx: CrewContext) => Cost | undefined);
     /** Verify Ideas as `refuted` instead of `confirmed`, so the tray gets a real rejection (D-27). */
     refuteIdeas?: boolean;
+    /** Ask the Author to restructure the Seed instead of accepting it (phase ①'s first pass). */
+    seedRestructure?: boolean;
+    /** The Reader's independent confirmation disputes the Editor-approved finding. */
+    readerDispute?: boolean;
     /** Extra tool calls a Checker run makes on a chapter unit before reporting (U-3's drill). */
     checkerDrill?: boolean;
     /** The assistant run's final answer line (A-1: plain text to the Author, no writes). */
     assistantNote?: string;
+    /**
+     * Leave one §4.2 block out of the FIRST Writer attempt's `editSummary` — a crew that ends its
+     * run with an incomplete Summary, so the test can watch §4.15's pending → completion path.
+     * A completion run (the brief says which blocks are missing) always writes the whole set.
+     */
+    omitSummaryField?: keyof typeof SUMMARY_FIELDS;
 }
 
 // The criteria the engine aggregates over the Story row rather than the artifact: C-4's subject is
@@ -267,6 +281,8 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
         reviewPass: /Reader pass \d+ of \d+/.test(brief),
+        seedReview: /THE JOB[\s\S]*reviewSeed/.test(brief) && /Review the Seed above/.test(brief),
+        confirmIds: [...brief.matchAll(/Confirm finding (finding_\d+)/g)].map((match) => match[1]),
         phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
     };
 }
@@ -376,12 +392,21 @@ const writerScript: CrewScript = (ctx) => {
         // ① expands the Seed into the §4.2 fields. In a diverging Story the tool files each attempt
         // as a competing draft by itself (writer.ts:D-3d), which is what gives the Editor a select
         // job in §15 step 1 — the crew does not ask for it.
+        const blocks: Record<string, string> = { ...SUMMARY_FIELDS };
+        // A first attempt may be scripted short of a block (§4.15's completion path). The loop's
+        // completion brief names the gap ("is still pending: it is missing …"), and that run writes
+        // the whole set — exactly what a model reading the note would do.
+        const brief = String(ctx.request.messages[0]?.content ?? '');
+        const completing = /is still pending: it is missing/.test(brief);
+
+        if (ctx.options.omitSummaryField !== undefined && !completing) delete blocks[ctx.options.omitSummaryField];
+
         return {
             toolCalls: [
                 {
                     name: 'editSummary',
                     args: {
-                        ...SUMMARY_FIELDS,
+                        ...blocks,
                         ...(summaryId ? { expects: [{ id: summaryId, rev: revOf(store, summaryId) ?? 0 }] } : {}),
                         why: 'The Seed expanded into the Summary fields (C-1, C-14).'
                     }
@@ -489,6 +514,38 @@ const editorScript: CrewScript = (ctx) => {
               };
     }
 
+    // Phase ①'s first job: read the Seed before any Writer expands it. The scripted Editor accepts
+    // it unless the suite asks for the restructure path.
+    if (ctx.seedReview) {
+        if (ctx.results.length > 0) return { content: `Reported the Seed review (${ctx.template}).` };
+
+        return ctx.options.seedRestructure
+            ? {
+                  toolCalls: [
+                      {
+                          name: 'reviewSeed',
+                          args: {
+                              verdict: 'restructure',
+                              missing: ['world', 'stakes'],
+                              notes: 'The Seed does not say what the world costs or what failure takes away.',
+                              why: 'Phase ① cannot expand an unstructured Seed without inventing the missing story (P5).'
+                          }
+                      }
+                  ]
+              }
+            : {
+                  toolCalls: [
+                      {
+                          name: 'reviewSeed',
+                          args: {
+                              verdict: 'accept',
+                              why: 'The Seed names a protagonist, a want, an obstacle, stakes, a world and a change.'
+                          }
+                      }
+                  ]
+              };
+    }
+
     // The second turn of a session exists only to answer what the tool layer said. Anything other
     // than a fixable refusal is reported and dropped — the loop has no turn cap (E-0), so a crew
     // that re-issued a call it had already been refused would spin until the heap ran out.
@@ -501,7 +558,11 @@ const editorScript: CrewScript = (ctx) => {
         if (failed?.refused === 'T-9') {
             const kept = ctx.store.revisions
                 .list()
-                .filter((revision) => revision.story_id === ctx.story?.id && revision.state === 'competing');
+                .filter(
+                    (revision) =>
+                        revision.story_id === ctx.story?.id &&
+                        (revision.state === 'drafted' || revision.state === 'competing')
+                );
 
             return kept.length
                 ? {
@@ -524,7 +585,11 @@ const editorScript: CrewScript = (ctx) => {
         if (failed?.refused === 'T-11' && failed.issues?.some((issue) => issue.field === 'unit_ref')) {
             const draft = ctx.store.revisions
                 .list()
-                .find((revision) => revision.story_id === ctx.story?.id && revision.state === 'competing');
+                .find(
+                    (revision) =>
+                        revision.story_id === ctx.story?.id &&
+                        (revision.state === 'drafted' || revision.state === 'competing')
+                );
 
             return draft
                 ? {
@@ -569,6 +634,27 @@ const editorScript: CrewScript = (ctx) => {
                 why: 'D-33 verification: the cited passage shows the defect.'
             }
         });
+        // Phase ①'s approval, in the same granular thread. The Reader then performs its own
+        // independent confirmation before the Writer's fix is allowed (see readerScript). Phase ①
+        // approves only critical/major; a minor/taste note is recorded, never turned into work.
+        const finding = ctx.store.findings.get(id);
+        const covered = finding !== undefined && (ctx.story?.auto_approve ?? []).includes(finding.cost);
+
+        if (
+            ctx.phase !== 'summary' ||
+            (finding !== undefined && (finding.cost === 'critical' || finding.cost === 'major'))
+        ) {
+            if (covered) {
+                specs.push({
+                    name: 'approveFinding',
+                    args: {
+                        finding_id: id,
+                        decision: 'auto',
+                        why: 'The Story dial covers the confirmed finding; the Reader confirms it independently.'
+                    }
+                });
+            }
+        }
     }
 
     for (const id of ideaIds) {
@@ -630,6 +716,26 @@ const checkerScript: CrewScript = (ctx) => {
 
 /** The Research crew: probe Ideas about the Story as it runs (§6.7), Explorer research (D-25). */
 const readerScript: CrewScript = (ctx) => {
+    // Phase ①'s independent second look: one Reader thread per Editor-approved finding. The
+    // scripted Reader confirms unless the suite asks it to dispute.
+    if (ctx.confirmIds.length > 0) {
+        if (ctx.results.length > 0) return { content: `Reported the confirmation (${ctx.template}).` };
+
+        return {
+            toolCalls: ctx.confirmIds.map((findingId) => ({
+                name: 'confirmFinding',
+                args: {
+                    finding_id: findingId,
+                    verdict: ctx.options.readerDispute ? 'dispute' : 'confirm',
+                    evidence: `Independent re-read of the passage for ${findingId}: the cited lines behave as the finding says.`,
+                    why: ctx.options.readerDispute
+                        ? 'The Reader read the passage itself and does not believe the defect.'
+                        : 'The Editor approved it and the Reader read the passage itself; the defect holds.'
+                }
+            }))
+        };
+    }
+
     // The scripted crew files its Ideas ONCE per Story. A probe round on a Story whose tray was
     // just decided must not silently restock it and turn a Goal test into a tray test.
     const alreadyFiled = ctx.store.ideas.list().filter((idea) => idea.story_id === ctx.story?.id).length;
@@ -849,6 +955,8 @@ export function createCrewClient(
             unitTarget: parsed.unitTarget,
             draftIds: parsed.draftIds,
             reviewPass: parsed.reviewPass,
+            seedReview: parsed.seedReview,
+            confirmIds: parsed.confirmIds,
             directiveRef: parsed.directiveRef,
             directiveTargets: parsed.directiveTargets,
             options

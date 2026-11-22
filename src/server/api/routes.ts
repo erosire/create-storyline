@@ -1040,6 +1040,17 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 ? parsed.body.note.trim()
                 : 'selected by the Author (D-24)';
 
+        // §4.15: a `pending` draft is still being written by its Writer. Installing it would make
+        // the Summary the half-filled text its own Writer has not finished — the Author's override
+        // is a choice between DRAFTS, not a way to skip the completeness gate.
+        if (draft.state === 'pending') {
+            return errorResponse(
+                c,
+                409,
+                `revision ${draft.id} is still pending — its Writer has not finished it, so there is nothing complete to install yet (§4.15)`
+            );
+        }
+
         const unit = revisionUnit(story.id, draft.unit_ref);
 
         if (unit === undefined) return missing(c, 'unit', draft.unit_ref);

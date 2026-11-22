@@ -218,6 +218,91 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.getByTestId('agent-threads').querySelector('pre.sv-thread__text')).toBeNull();
     });
 
+    it('toggles the archived threads — completed, failed, abandoned — from the tab beside the Story title', () => {
+        render(
+            <AgentThreadsView
+                kind="reader"
+                threads={[
+                    thread({
+                        thread_id: 't-run',
+                        run_id: 'run_live',
+                        title: 'live pass',
+                        state: 'running',
+                        started_at: '2026-11-22T12:00:01.000Z',
+                        ended_at: undefined,
+                        answer: ''
+                    }),
+                    thread({
+                        thread_id: 't-done',
+                        run_id: 'run_done',
+                        title: 'completed pass',
+                        started_at: '2026-11-22T12:00:02.000Z'
+                    }),
+                    thread({
+                        thread_id: 't-failed',
+                        run_id: 'run_failed',
+                        title: 'failed pass',
+                        state: 'failed',
+                        started_at: '2026-11-22T12:00:03.000Z'
+                    })
+                ]}
+                now={NOW}
+            />
+        );
+
+        const tab = screen.getByRole('button', { name: /Archived/ });
+        expect(tab.getAttribute('aria-pressed')).toBe('true');
+
+        const view = screen.getByTestId('agent-threads');
+        const titles = (): string[] =>
+            Array.from(view.querySelectorAll<HTMLElement>('.sv-thread__title')).map((bar) => bar.textContent ?? '');
+
+        // The Story's whole history is the default surface.
+        expect(titles()).toEqual(['live pass', 'completed pass', 'failed pass']);
+        expect(within(view).getByText('3 threads')).toBeTruthy();
+
+        fireEvent.click(tab);
+
+        // Archived is every thread that is not running now: only the live pass is left.
+        expect(tab.getAttribute('aria-pressed')).toBe('false');
+        expect(titles()).toEqual(['live pass']);
+        expect(within(view).getByText('1 thread')).toBeTruthy();
+        expect(screen.queryByText('failed')).toBeNull();
+
+        fireEvent.click(tab);
+
+        expect(tab.getAttribute('aria-pressed')).toBe('true');
+        expect(titles()).toEqual(['live pass', 'completed pass', 'failed pass']);
+    });
+
+    it('says the archive is hidden when no thread is running, and toggles each Story on its own', () => {
+        const threads = [
+            thread({ thread_id: 't-a', story_id: 'story_1', title: 'story one pass' }),
+            thread({
+                thread_id: 't-b',
+                story_id: 'story_2',
+                story_title: 'Salt Year',
+                title: 'story two pass',
+                state: 'running',
+                ended_at: undefined,
+                answer: ''
+            })
+        ];
+
+        render(<AgentThreadsView kind="reader" threads={threads} now={NOW} />);
+
+        const tabs = screen.getAllByRole('button', { name: /Archived/ });
+        expect(tabs).toHaveLength(2);
+
+        fireEvent.click(tabs[0]!);
+
+        const view = screen.getByTestId('agent-threads');
+        expect(view.querySelectorAll('.sv-threads__phase')).toHaveLength(1);
+        expect(within(view).getByText('story two pass')).toBeTruthy();
+        expect(within(view).getByText(/no thread is running now — 1 archived thread is hidden\./)).toBeTruthy();
+        expect(tabs[1]!.getAttribute('aria-pressed')).toBe('true');
+    });
+
     it('renders nothing when the agent has no threads, and still shows a legacy run’s retained answer', () => {
         const { rerender } = render(<AgentThreadsView kind="checker" threads={[]} now={NOW} />);
 

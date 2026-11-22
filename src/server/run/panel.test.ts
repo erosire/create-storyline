@@ -183,6 +183,8 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
             'proposeIdea',
             'verifyIdea',
             'verifyFinding',
+            'confirmFinding',
+            'reviewSeed',
             'selectRevision',
             'requestMerge',
             'rejectAll'

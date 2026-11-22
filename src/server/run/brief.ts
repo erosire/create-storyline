@@ -274,7 +274,13 @@ function renderCompetingRevisions(store: Store, unitRef: string, fieldClip: numb
 
     const competing = store.revisions
         .list()
-        .filter((revision: Revision) => revision.unit_ref === unitRef && revision.state === 'competing')
+        .filter(
+            (revision: Revision) =>
+                revision.unit_ref === unitRef &&
+                // §4.15: a draft is reviewable once its Writer run closed (`drafted`); `competing`
+                // is the same meaning for rows written before the pending/drafted lifecycle.
+                (revision.state === 'drafted' || revision.state === 'competing')
+        )
         // §4.15 has no ordering field for drafts; the id is the only stable one, and a brief
         // that ordered them differently each assembly would make "which draft is 1" meaningless.
         .sort((left, right) => left.id.localeCompare(right.id));
@@ -441,8 +447,12 @@ const idSuffix = (id: string): number => {
  */
 function jobStatement(item: WorkItem): string {
     switch (item.kind) {
+        case 'seed_review':
+            return 'Review the Seed above BEFORE any Writer expands it. Check that it names the six things a Summary needs — protagonist, want, obstacle, stakes, world and change — and that its wording is precise enough to be contradicted. Call `reviewSeed` with `accept` when the Seed is structured enough, or with `restructure` and the missing areas when it is not; a restructure request asks the Author (sole owner of the Seed, P5) for the missing structure, and the Writer waits for the next Seed revision.';
         case 'write_unit':
-            return 'Write the unit named above (you are the only thing that writes story artifacts — P10, D-17b). Deliver the contract, then report with `submitVerdict`.';
+            return item.unit?.kind === 'summary'
+                ? 'Write ONE Summary from the Author requirements and the structured Seed above: fill every §4.2 block — premise, promise, theme, tone, ending, world_rules — in that order, keeping the Seed untouched (P5). When the job names findings or tasks, correct exactly those defects while keeping all six blocks complete. Report the draft with `submitVerdict` (you are the only thing that writes story artifacts — P10, D-17b).'
+                : 'Write the unit named above (you are the only thing that writes story artifacts — P10, D-17b). Deliver the contract, then report with `submitVerdict`.';
         case 'check_unit':
             // Phase ①'s per-draft review is a READER pass (D-30), not a consistency check: the
             // reader compares the sample to the Seed the Author wrote and files what is missing
@@ -456,7 +466,9 @@ function jobStatement(item: WorkItem): string {
                 ? 'Choose exactly ONE of the complete Summaries below, applying the selection rules side by side, and call `selectRevision` on it. The other drafts are kept as discarded history, never deleted. Phase ① does not merge: the next round, if one is needed, writes three complete drafts from the winner. Use `rejectAll` only when no draft deserves the Author. The `selection_note` must name the rule you applied and what you preferred in each draft (L-17, T-2a).'
                 : 'Choose between the competing revisions below by applying the selection rules to the drafts side by side, then `selectRevision` on exactly one, or `requestMerge` when the right unit is made of parts (L-19), or `rejectAll` when none deserves it (L-18). The `selection_note` must name the rule you applied and what you preferred in each draft (L-17, T-2a).';
         case 'verify_findings':
-            return 'For each finding listed below, run ONE quick validity check: read its `detail`, `evidence` and the passage it quotes, then call `verifyFinding` with `confirmed` when the defect is real or `disputed` when it is not. Put the reason in `why`; add `evidence` only when the check itself shows something the Reader did not. Keep the Reader’s title, detail and cost unless they are clearly wrong — the Reader already supplied the reference, so do not re-investigate the book or rewrite the finding. The phase waits on these verdicts, so be fast and decisive. In phase \u2460, `critical` is a story-logic contradiction and `major` is a broken promise; `minor`/`taste` are recorded notes and never block the Summary round.';
+            return 'A single finding is in front of you. Run ONE quick validity check: read its `detail`, `evidence` and the passage it quotes, then call `verifyFinding` with `confirmed` when the defect is real or `disputed` when it is not. Put the reason in `why`; add `evidence` only when the check itself shows something the Reader did not. Keep the Reader’s title, detail and cost unless they are clearly wrong — the Reader already supplied the reference, so do not re-investigate the book or rewrite the finding. When it is valid, call `approveFinding` with decision `auto` in the same run so the Story\u2019s dial authorises the work and the Reader can confirm it; a `disputed` finding needs no approval, and a finding whose cost the dial does not cover stays confirmed for the Author\u2019s own tap. This thread carries exactly one finding, so be fast and decisive. In phase \u2460, `critical` is a story-logic contradiction and `major` is a broken promise; `minor`/`taste` are recorded notes and never block the Summary round — approve only `critical` and `major` in phase \u2460.';
+        case 'confirm_finding':
+            return 'The Editor has approved the finding listed below. Do your OWN independent check: read the cited passage and the claim, and decide whether the defect is real. Call `confirmFinding` with `confirm` when it holds (this is what lets the Writer spend a round on it) or `dispute` when it does not (the fix task is withdrawn and the finding is recorded as disputed). Do not rewrite the finding and do not look for new defects — this thread exists to confirm or reject exactly one already-approved claim.';
         case 'verify_ideas':
             return 'Verify each Idea listed below: re-read the cited source or find a second one, then `verifyIdea` with the verdict, the evidence, and `meets_guidelines` answered separately from the fact-check (D-27, D-31). Where you cannot check it from here, `markUnverifiable` is the honest answer.';
         case 'merge':
@@ -736,6 +748,8 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
 
 /** The heading names the unit so an agent cannot mistake which record it is judging. */
 function artifactHeading(store: Store, item: WorkItem, story: Story): string {
+    if (item.kind === 'seed_review') return 'the Seed (Author truth, read-only for you — P5)';
+
     if (item.unit === undefined) {
         if (story.phase === 'summary') return 'the Summary draft (whole-Story job)';
         if (story.phase === 'plotlines') return 'the plotline set (whole-Story job)';

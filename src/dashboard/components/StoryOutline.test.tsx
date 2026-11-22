@@ -9,6 +9,7 @@ import { StoryOutline } from './StoryOutline';
 import { DEFAULT_STORY_SELECTION } from './story-nav';
 import type { StorySelection } from './story-nav';
 import { fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
+import type { Cost, Finding, FindingState } from '../../shared/types';
 
 describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
     it('lists the four phrases and the supporting folders, with no knowledge copy', () => {
@@ -130,7 +131,7 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
         ]);
     });
 
-    it('files each Writer round as a flat Revision 1…N entry with its finding count', () => {
+    it('files each Writer round as a flat Revision 1…N entry with its outstanding-findings badge', () => {
         const view = fixtureView();
         const rounds = ['rv-extra-1', 'rv-extra-2', 'rv-extra-3', 'rv-extra-4', 'rv-extra-5'].map(
             (id, index) => ({
@@ -172,6 +173,79 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
 
         fireEvent.click(screen.getByText('Revision 3'));
         expect(selections).toContainEqual({ panel: 'summary', ref: 'revision:rv-extra-3' });
+    });
+
+    it('badges a Revision with its OPEN Critical/Major findings, and never with a Minor one', () => {
+        const view = fixtureView();
+        const revisionId = view.revisions.find((revision) => revision.unit_kind === 'summary')!.id;
+        const finding = (id: string, cost: Cost, state: FindingState): Finding => ({
+            id,
+            rev: 1,
+            created_at: '2026-11-11T10:00:00.000Z',
+            updated_at: '2026-11-11T10:00:00.000Z',
+            story_id: 's1',
+            target_ref: 'sum1',
+            criterion_ref: 'C-8',
+            title: id,
+            evidence: 'ch. 1, ¶1 — one unbroken block.',
+            cost,
+            fingerprint: `fp-${id}`,
+            state,
+            seen_count: 1,
+            related_refs: [revisionId]
+        });
+
+        const open = [finding('f-crit', 'critical', 'approved'), finding('f-major', 'major', 'confirmed')];
+        const closed = [finding('f-minor', 'minor', 'unconfirmed'), finding('f-fixed', 'critical', 'fixed')];
+        const { container } = render(
+            <StoryOutline
+                view={{ ...view, findings: [...open, ...closed] }}
+                selection={DEFAULT_STORY_SELECTION}
+                onSelect={() => undefined}
+            />
+        );
+
+        const row = screen.getByText('Revision 1').closest('button')!;
+        // The badge counts only the two costs that force the Author's hand: Critical and Major, and
+        // only while they are open. Minor is filed, not raised; a fixed finding is not news.
+        const badge = row.querySelector<HTMLElement>('.outline-badge')!;
+        expect(badge.textContent).toBe('2');
+        expect(badge.getAttribute('title')).toBe('2 open Critical or Major findings');
+        // A leaf has nothing to expand, so no chevron sits in front of it.
+        expect(row.querySelector('svg')).toBeNull();
+        expect(container.querySelectorAll('.outline-chevron')).toHaveLength(0);
+    });
+
+    it('paints no badge when the only finding is Minor', () => {
+        const view = fixtureView();
+        const revisionId = view.revisions.find((revision) => revision.unit_kind === 'summary')!.id;
+        const minor: Finding = {
+            id: 'f-minor',
+            rev: 1,
+            created_at: '2026-11-11T10:00:00.000Z',
+            updated_at: '2026-11-11T10:00:00.000Z',
+            story_id: 's1',
+            target_ref: 'sum1',
+            criterion_ref: 'C-8',
+            title: 'line edit',
+            evidence: 'ch. 1, ¶1.',
+            cost: 'minor',
+            fingerprint: 'fp-minor',
+            state: 'unconfirmed',
+            seen_count: 1,
+            related_refs: [revisionId]
+        };
+
+        render(
+            <StoryOutline
+                view={{ ...view, findings: [minor] }}
+                selection={DEFAULT_STORY_SELECTION}
+                onSelect={() => undefined}
+            />
+        );
+
+        const row = screen.getByText('Revision 1').closest('button')!;
+        expect(row.querySelector('.outline-badge')).toBeNull();
     });
 
     it('keeps an empty Characters phrase clickable and childless', () => {

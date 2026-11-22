@@ -142,9 +142,11 @@ export function FindingsPane({ view }: { view: StoryViewData }) {
                     {open.map((finding) => (
                         <li className={`find-row find-row--${finding.cost}`} key={finding.id}>
                             <div className="find-head">
-                                <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                                <span className="find-tags">
+                                    <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                                    <span className={`find-state find-state--${finding.state}`}>{finding.state}</span>
+                                </span>
                                 <span className="find-title">{finding.title}</span>
-                                <span className="find-state">{finding.state}</span>
                                 {finding.seen_count > 1 ? (
                                     <span className="find-seen">{finding.seen_count}× seen</span>
                                 ) : null}
@@ -166,9 +168,11 @@ export function FindingsPane({ view }: { view: StoryViewData }) {
                         {closed.map((finding) => (
                             <li className={`find-row find-row--closed`} key={finding.id}>
                                 <div className="find-head">
-                                    <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                                    <span className="find-tags">
+                                        <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                                        <span className={`find-state find-state--${finding.state}`}>{finding.state}</span>
+                                    </span>
                                     <span className="find-title">{finding.title}</span>
-                                    <span className="find-state">{finding.state}</span>
                                 </div>
                             </li>
                         ))}

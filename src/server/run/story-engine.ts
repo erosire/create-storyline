@@ -901,7 +901,16 @@ export class StoryHarness {
             throw run.lastError ?? error;
         } finally {
             run.endedAt = Date.now();
-            this.byBrief.delete(briefKey);
+
+            // THE BRIEF STAYS THE THREAD'S KEY AFTER THIS RUN RESOLVES (2026-11-23). A thread can
+            // outlive the `sendThreadInput` call that started it: the engine's `context-compaction`
+            // plugin ends a host turn on its own SUMMARY and immediately continues the conversation
+            // with a continuation nudge as a SECOND run on the SAME thread. That turn's stream
+            // request carries the same seeded brief, so deleting the mapping here made the harness
+            // answer "the writer harness received a request whose brief names no Storyline Run" and
+            // the Author's Writer thread died exactly as it reached its context limit. The mapping is
+            // dropped with the thread instead (`prune`), which is the only point at which no request
+            // can arrive on it.
 
             // The engine caps a harness at MAX_THREAD_RECORDS. Storyline keeps only the live
             // indicator and the book's own audit, so old terminal threads are dropped before the
@@ -1018,10 +1027,18 @@ export class StoryHarness {
             try {
                 this.engine.deleteThread(run.threadId);
             } catch {
-                // A thread the engine already dropped is already pruned; nothing else is owed.
+                // The engine refuses a thread that still has live work: a context-compaction
+                // continuation can outlive the run that started it, and its tool calls and its
+                // stream request both still resolve through this run. Keep every mapping until the
+                // engine really drops the thread.
+                continue;
             }
 
             this.runs.delete(run.threadId);
+
+            // A pruned thread can receive no further request, so its brief key is safe to drop
+            // (the run itself stays in `history` for the Author's thread surface).
+            if (this.byBrief.get(run.briefKey) === run) this.byBrief.delete(run.briefKey);
 
             for (const session of this.sessions.values()) session.runs.delete(run.threadId);
         }

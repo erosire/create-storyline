@@ -345,25 +345,36 @@ The UI follows that model:
 The Summary is no longer drafted and immediately handed to an Editor. The Author set the phase to
 a sampled review loop, and both counts are the Author's settings:
 
+- **The Seed is reviewed before it is expanded.** One Editor thread (`wi_seed_review_<story>_<hash>`)
+  reads the Author's Seed for the six things a Summary needs (protagonist, want, obstacle, stakes,
+  world, change) and reports with `reviewSeed`. `accept` lets the Writers start; `restructure` queues
+  an Author escalation naming the missing structure. The key follows the Seed TEXT, so an Author edit
+  (D-25a) re-arms the review and `writeTrigger` refuses the first draft until the new review closes.
 - **Sampling** — `writer-summary` ships `attempts: 5`, and a Story may override it with
   `stories.summary_sampling` (`POST /stories` or `PATCH /stories/:id`). Ten means ten Writers
   expanding the Seed into ten competing Summary drafts.
 - **Readers per sample** — `stories.summary_readers`, standard five, set by the same routes and by
   the two count controls in `SummaryPane`. Each completed draft gets that many Reader passes.
-- **The order is per draft, not per stage.** `loop/work.ts` generates the Reader jobs for a
-  revision as soon as the revision exists, so a Reader starts on the first finished sample while
-  other Writers are still running. The claim key names the revision
-  (`wi_read_<revision>_a<n>`), and a revised draft is a new revision with fresh Readers.
+- **The order is per draft, not per stage.** A Writer files its revision as `pending` and keeps
+  extending the same row until its run returns; when the run closes, the loop promotes the draft to
+  `drafted` and only then generates Reader jobs (`wi_read_<revision>_a<n>`). So a Reader starts on
+  the first finished sample while other Writers are still running, and never on a half-written one.
+  A revised draft is a new revision with fresh Readers.
 - **Readers read the Seed and ONE draft.** The Work Item carries `revisionRef`, and the brief's
   revision section renders only that draft (D-21 keeps the rest from a Reader). The job tells the
   Reader to file `raiseFinding` with an evidence line and to rate the draft with `submitVerdict`;
   a Reader never edits (D-26, D-30, T-9).
-- **The Editor verifies the critique before choosing.** `wi_verify_findings` runs on each
-  unconfirmed report as it lands; `verifyFinding` confirms or disputes it. In phase ① every
-  confirmed finding is approved by the loop (the Editor's mark that the critique is valid), which
-  creates the Writer's fix task. The Editor's `select` waits until every competing draft has all
-  its Reader passes closed and no finding is unconfirmed — the choice is the last look, never the
-  first.
+- **The Editor verifies each critique in its own thread before choosing.** One
+  `wi_verify_finding_<finding>` run per report (never a batch across findings); `verifyFinding`
+  confirms or disputes it, and `approveFinding decision:auto` lets the Story's dial create the fix
+  task for a covered `critical`/`major` finding. The Editor's `select` waits until every competing
+  draft has all its Reader passes closed and no finding is unconfirmed — the choice is the last
+  look, never the first.
+- **A Reader then confirms the approved finding independently.** One
+  `wi_confirm_finding_<finding>` run per `critical`/`major` approval; `confirmFinding` records the
+  Reader's own check as `reader_confirmed`. Phase ①'s Writer fix waits for that flag
+  (`fixWork`), and a `dispute` withdraws the queued fix in the same commit — so no Writer spends a
+  round on a claim only the Editor believed.
 - **A revision is one corrected draft.** `divergenceGap` stops sampling once an Editor selection
   exists, so a valid critique sends back one `wi_fix_*` Writer job, not the whole sampling set
   again. That draft gets its own Readers, the Editor verifies them, and the loop repeats until a
@@ -375,6 +386,53 @@ a sampled review loop, and both counts are the Author's settings:
 `src/server/loop/summary-pipeline.test.ts` pins the plan (two drafts × five Readers each, no
 Editor choice early) and `src/server/integration/summary-review.test.ts` pins the real-server
 order, including a valid critique returning to the Writer as a new read-then-selected draft.
+
+## A draft is Pending until its Writer returns, then Drafted for the review crew (2026-11-23)
+
+§4.15's two new states are the phase ① order made mechanical:
+
+- **`pending`** — the row a Writer files on its first `editSummary`/`editChapter`. A later write in
+  the same run extends that row instead of filing a second, partial draft. No Reader, Checker or
+  Editor is offered a `pending` row.
+- **`drafted`** — the row after the Writer's run closes. `loop/engine.ts:settleJob` promotes it in
+  the same commit that closes the run, and a sweep-time `reconcileDrafts` catches a draft written
+  after its run ended (or recovered after a restart). For a Summary, `drafted` also requires every
+  §4.2 block to be present (`shared/summary.ts`).
+- **The incomplete case is Writer work, not a stall.** A Summary short of a block stays `pending`,
+  and `loop/work.ts:summaryCompletionJobs` opens ONE `wi_complete_<unit>_<revision>_<n>` Writer job
+  whose think-note the brief renders (`THE JOB` — "is still pending: it is missing …"). That run
+  adopts the same draft (`tools/artifacts.ts:pendingDraftFor`, completion runs only — a fresh
+  sampling attempt stays blind, L-16) and adds the blocks. Readers start only after it is complete.
+- `competing` stays in the enum as the historical spelling of a reviewable draft, so a store written
+  before this change still reads correctly. `pending`/`drafted` are in the Swagger enum and in
+  `documents/specifications.md` §4.15.
+
+## The Writer thread that died at its context limit (2026-11-23)
+
+`StoryHarness` correlates a model request to its Run by the seeded brief, because the engine's
+stream request carries no thread id. That mapping used to be deleted when `sendThreadInput`
+resolved — but the engine's `context-compaction` plugin ends a host turn on its own SUMMARY and
+continues the conversation as a SECOND run on the SAME thread, so the continuation's request found
+no brief and the harness answered "the writer harness received a request whose brief names no
+Storyline Run". The Author saw a Writer thread fail at ~297k tokens with that sentence. The mapping
+now lives for the thread's life (`run/story-engine.ts:run`/`prune`), so compaction can continue the
+conversation; pinned by `run/story-engine.test.ts` ("keeps a thread's brief after its run
+resolves").
+
+## The Reader threads that died with the same sentence (2026-11-23)
+
+The same sentence had a second cause, and it was the harness's, not Storyline's: the engine's
+request-only shrink (`planCompactionRequest`) clipped **every** head entry in its first pass,
+including the LEADING `system` entry — a host's standing instruction. Storyline's brief IS that
+entry, so the shrink clipped an 11,194-character Reader brief to 240 characters plus
+`… [truncated by compaction]`, and the Reader's next turn could no longer be attributed to its run.
+A delivery-relief pass (`relieveDeliveryWeight`, raised when `listRevisions`/`readVerdicts` came
+back between requests) was the pass that did it: five Reader passes on `revision_42` each died after
+two provider turns, ~30k tokens in. `planCompactionRequest`'s Pass A now exempts the leading
+`system` run (the rule Pass B and `planCompactionRetention` already followed for DROPS — clipping a
+standing instruction is worse, because it is silently rewritten rather than withheld); pinned by
+the harness's `engine/plugin/context-compaction.test.ts` ("never CLIPS a leading system entry").
+Storyline needs no change: the brief still reaches the model verbatim on every turn.
 
 ## The compact story row and the tabbed desk (2026-11-22)
 

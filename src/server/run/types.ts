@@ -17,15 +17,19 @@ import type { RoleAggregation, UnitKind } from '../../shared/types';
 // ---------------------------------------------------------------------------
 
 /**
- * The nine jobs the loop can dispatch. `assistant` is the Author-invoked run of §8.6 (Author
+ * The jobs the loop can dispatch. `assistant` is the Author-invoked run of §8.6 (Author
  * write rights for one run, no web tools, never a locked artifact); everything else is a
- * dispatched Work Item. §6.2 names the first eight as the three loops' jobs.
+ * dispatched Work Item. §6.2 names the original eight as the three loops' jobs; phase ① adds
+ * two granular jobs — the pre-phase Seed review and the Reader's independent finding check —
+ * so no thread has to carry a whole batch of decisions.
  */
 export const WORK_ITEM_KINDS = [
+    'seed_review',
     'write_unit',
     'check_unit',
     'select',
     'verify_findings',
+    'confirm_finding',
     'verify_ideas',
     'merge',
     'whole_story_check',

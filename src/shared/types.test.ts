@@ -82,7 +82,7 @@ describe('§4 enums', () => {
         expect(TASK_STATES).toEqual(['open', 'claimed', 'blocked', 'done', 'wontfix']);
         expect(RUN_STATES).toEqual(['spawning', 'working', 'reporting', 'torn_down', 'failed', 'abandoned']);
         expect(DIRECTIVE_STATES).toEqual(['queued', 'propagating', 'done', 'rejected']);
-        expect(REVISION_STATES).toEqual(['competing', 'selected', 'merged_into', 'discarded']);
+        expect(REVISION_STATES).toEqual(['pending', 'drafted', 'competing', 'selected', 'merged_into', 'discarded']);
         expect(PROPOSAL_STATES).toEqual(['pending', 'accepted', 'rejected']);
     });
 

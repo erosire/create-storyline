@@ -1452,7 +1452,7 @@ components:
       enum: [queued, propagating, done, rejected]
     RevisionState:
       type: string
-      enum: [competing, selected, merged_into, discarded]
+      enum: [pending, drafted, competing, selected, merged_into, discarded]
     ProposalState:
       type: string
       enum: [pending, accepted, rejected]

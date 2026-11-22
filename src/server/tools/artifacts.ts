@@ -459,14 +459,19 @@ export function revisionBodyFields(revision: Revision): Record<string, string | 
     return fields;
 }
 
-/** Competing drafts for one unit, newest first, whatever their stored state (U-13's list). */
+/** A draft a reviewer may read (see `loop/records.ts:isReviewableDraft`). */
+const isReviewableDraft = (row: Revision): boolean => row.state === 'drafted' || row.state === 'competing';
+
+/** The reviewable drafts of one unit, newest first (U-13's list). */
 export function competingRevisions(
     store: Store,
     storyId: string,
     unitKind: Revision['unit_kind'],
     unitRef: string
 ): Revision[] {
-    return revisionRows(store, storyId).filter((row) => row.unit_kind === unitKind && row.unit_ref === unitRef);
+    return revisionRows(store, storyId).filter(
+        (row) => row.unit_kind === unitKind && row.unit_ref === unitRef && isReviewableDraft(row)
+    );
 }
 
 /** The drafts still awaiting a choice — the ones `selectRevision` deletes (D-22). */
@@ -476,7 +481,38 @@ export function pendingRevisions(
     unitKind: Revision['unit_kind'],
     unitRef: string
 ): Revision[] {
-    return competingRevisions(store, storyId, unitKind, unitRef).filter((row) => row.state === 'competing');
+    return competingRevisions(store, storyId, unitKind, unitRef);
+}
+
+/**
+ * The `pending` draft a Writer may keep writing: its own row first (a second write in the same run
+ * extends the same draft). `adoptUnattended` lets the loop's completion job (`loop/work.ts:
+ * summaryCompletionJobs`) extend a draft an earlier Writer left unfinished; a fresh sampling
+ * attempt must NOT do that — L-16's siblings are blind to each other, so it files its own draft.
+ * A live sibling's draft is never touched either way.
+ */
+export function pendingDraftFor(
+    store: Store,
+    storyId: string,
+    unitKind: Revision['unit_kind'],
+    unitRef: string,
+    runId: string | undefined,
+    adoptUnattended = false
+): Revision | undefined {
+    const pending = revisionRows(store, storyId).filter(
+        (row) => row.unit_kind === unitKind && row.unit_ref === unitRef && row.state === 'pending'
+    );
+
+    const own = pending.find((row) => row.run_ref === runId);
+
+    if (own !== undefined) return own;
+    if (!adoptUnattended) return undefined;
+
+    return pending.find((row) => {
+        const run = row.run_ref === undefined ? undefined : store.runs.get(row.run_ref);
+
+        return run === undefined || run.state === 'torn_down' || run.state === 'failed' || run.state === 'abandoned';
+    });
 }
 
 /**
@@ -499,7 +535,10 @@ export async function fileRevision(
             // store's `RecordInit` accepts.
             run_ref: ctx.runId,
             template_ref: ctx.templateRef,
-            state: 'competing',
+            // A new draft is `pending` until its Writer's run closes and the loop validates it
+            // (§4.15). Readers, checkers and the Editor only ever see `drafted` rows, so a
+            // reviewer can no longer read a Summary halfway through its blocks.
+            state: 'pending',
             verdict_refs: []
         },
         buildAttribution(ctx, why)
@@ -536,16 +575,17 @@ export async function commitSelection(
                 { state: 'selected', selection_note: selectionNote },
                 buildAttribution(ctx, why)
             );
-            const losers = store.revisions
-                .list()
-                .filter(
-                    (row) =>
-                        row.story_id === storyId &&
-                        row.unit_kind === winner.unit_kind &&
-                        row.unit_ref === winner.unit_ref &&
-                        (row.state === 'competing' || row.state === 'selected') &&
-                        row.id !== winner.id
-                );
+            const losers = store.revisions.list().filter(
+                (row) =>
+                    row.story_id === storyId &&
+                    row.unit_kind === winner.unit_kind &&
+                    row.unit_ref === winner.unit_ref &&
+                    // A `pending` sibling goes with the unit's decision too: a half-written draft
+                    // cannot be selected later, and leaving it would show the Author a revision
+                    // that lost without ever being finished (§4.15).
+                    (isReviewableDraft(row) || row.state === 'selected' || row.state === 'pending') &&
+                    row.id !== winner.id
+            );
 
             // Phase ① keeps the Author's sampling visible. A Summary selection still installs the
             // winner, but the losing samples are parked as `discarded` instead of being erased: the

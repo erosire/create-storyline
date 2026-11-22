@@ -189,7 +189,9 @@ function competingOf(runtime: MockToolRuntime, storyId: string, unitRef: string)
         .list()
         .filter(
             (revision) =>
-                revision.story_id === storyId && revision.unit_ref === unitRef && revision.state === 'competing'
+                revision.story_id === storyId &&
+                revision.unit_ref === unitRef &&
+                (revision.state === 'drafted' || revision.state === 'competing')
         )
         .sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -426,7 +428,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                             sibling.id === revisionId
                         )
                             continue;
-                        if (sibling.state !== 'competing') continue;
+                        if (sibling.state !== 'drafted' && sibling.state !== 'competing') continue;
 
                         runtime.store.revisions.delete(sibling.id, attrFor(ctx, args));
                     }
@@ -589,11 +591,18 @@ function defaultTools(): Record<string, MockToolHandler> {
             if (scopedGet(runtime.store.findings, ctx.storyId, findingId) === undefined)
                 return outsideStory(ctx, findingId);
 
+            const decision = str(args.decision);
+
+            // The rig lets the SWEEP apply the dial (`auto`), which is the path that also creates
+            // the fix task (engine.scanStory's L-1 step 2). Writing the approval here would skip
+            // that path and leave the finding approved with no work behind it.
+            if (decision === 'auto') return { ok: true };
+
             try {
                 const updated = runtime.store.findings.update(
                     findingId,
                     {
-                        state: str(args.decision) === 'discard' ? 'discarded' : 'approved',
+                        state: decision === 'discard' ? 'discarded' : 'approved',
                         approved_by: ctx.runRef
                     } satisfies UpdatePatch<Finding>,
                     attrFor(ctx, args),
@@ -605,6 +614,48 @@ function defaultTools(): Record<string, MockToolHandler> {
                 return asToolError(error);
             }
         },
+        confirmFinding: async (ctx, args, runtime) => {
+            const findingId = str(args.finding_id);
+            const finding = scopedGet(runtime.store.findings, ctx.storyId, findingId);
+
+            if (finding === undefined) return outsideStory(ctx, findingId);
+            if (finding.state !== 'confirmed' && finding.state !== 'approved')
+                return {
+                    ok: false,
+                    refused: 'D-33',
+                    message: `finding ${findingId} is ${finding.state}; only an Editor-confirmed finding reaches the Reader's confirmation`
+                };
+
+            const dispute = str(args.verdict) === 'dispute';
+
+            try {
+                const updated = runtime.store.findings.update(
+                    findingId,
+                    {
+                        state: dispute ? 'disputed' : finding.state,
+                        reader_confirmed: !dispute,
+                        reader_confirmed_by: ctx.runRef,
+                        evidence: `${finding.evidence}\n\nReader confirmation: ${str(args.evidence)}`
+                    } satisfies UpdatePatch<Finding>,
+                    attrFor(ctx, args),
+                    expectsOf(args)
+                );
+
+                if (dispute) {
+                    for (const task of runtime.store.tasks.list()) {
+                        if (task.story_id !== ctx.storyId || task.finding_ref !== findingId) continue;
+                        if (task.state !== 'open' && task.state !== 'claimed' && task.state !== 'blocked') continue;
+
+                        runtime.store.tasks.update(task.id, { state: 'wontfix' }, attrFor(ctx, args));
+                    }
+                }
+
+                return { ok: true, rev: updated.rev };
+            } catch (error) {
+                return asToolError(error);
+            }
+        },
+        reviewSeed: async (_ctx, args) => ({ ok: true, data: { verdict: str(args.verdict) || 'accept' } }),
         editChapter: async (ctx, args, runtime) => {
             const chapterId = str(args.chapter_id);
 
@@ -1024,7 +1075,9 @@ export function seedFinding(
             fingerprint: init.fingerprint ?? 'C-4|chapter_1',
             state: init.state ?? 'unconfirmed',
             seen_count: init.seen_count ?? 1,
-            related_refs: init.related_refs
+            related_refs: init.related_refs,
+            ...(init.reader_confirmed === undefined ? {} : { reader_confirmed: init.reader_confirmed }),
+            ...(init.reader_confirmed_by === undefined ? {} : { reader_confirmed_by: init.reader_confirmed_by })
         },
         AUTHOR_ATTR
     );

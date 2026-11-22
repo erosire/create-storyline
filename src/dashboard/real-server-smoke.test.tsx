@@ -90,6 +90,8 @@ describe('the dashboard over the real server', () => {
     });
 
     it('the same screen after one sweep keeps rendering the real Story payload', async () => {
+        // Phase ① opens with the Editor's Seed review; the Writer samples start on the next sweep.
+        await fixture.tick();
         await fixture.tick();
 
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
@@ -110,6 +112,11 @@ describe('the dashboard over the real server', () => {
         expect(text).toContain('Summary — Phrase 1');
 
         // The crew is the server's run rows: the templates that actually ran, not a fixture list.
-        expect(runs.map((run) => run.template_ref)).toEqual(['writer-summary', 'writer-summary', 'writer-summary']);
+        expect(runs.map((run) => run.template_ref)).toEqual([
+            'editor-general',
+            'writer-summary',
+            'writer-summary',
+            'writer-summary'
+        ]);
     });
 });

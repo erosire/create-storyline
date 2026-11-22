@@ -320,12 +320,20 @@ export function lockCheck(view: StoryViewData): LockCheck {
     // that winner has no critical/major flaw left. Minor/taste notes never hold the final Summary.
     if (phase === 'summary' && story.summary_locked === false && view.summary) {
         const summary = view.summary;
+        const unfinished = view.revisions.filter(
+            (revision) =>
+                revision.unit_kind === 'summary' && revision.unit_ref === summary.id && isPendingRevision(revision)
+        );
         const competing = view.revisions.filter(
             (revision) =>
-                revision.unit_kind === 'summary' &&
-                revision.unit_ref === summary.id &&
-                revision.state === 'competing'
+                revision.unit_kind === 'summary' && revision.unit_ref === summary.id && isReviewableRevision(revision)
         );
+
+        if (unfinished.length > 0) {
+            reasons.push(
+                `${unfinished.length} Summary revision${unfinished.length === 1 ? '' : 's'} still being written — the Writer has to finish its blocks before the Summary can lock (§4.15)`
+            );
+        }
 
         if (competing.length > 0) {
             reasons.push(
@@ -424,9 +432,19 @@ export const ACTIVITY_LABELS: Record<ActivityGroup, string> = {
     clean: 'Clean — done'
 };
 
+/**
+ * §4.15: a draft a reviewer may read — `drafted` once its Writer run closed, and `competing` for
+ * rows written before the pending/drafted lifecycle existed.
+ */
+export const isReviewableRevision = (revision: Revision): boolean =>
+    revision.state === 'drafted' || revision.state === 'competing';
+
+/** A draft whose Writer is still working on it (or one waiting to be completed). */
+export const isPendingRevision = (revision: Revision): boolean => revision.state === 'pending';
+
 /** The competing revisions of one unit (D-23: more than one and the unit cannot advance). */
 export function competingRevisionsFor(revisions: Revision[], unitRef: string): Revision[] {
-    return revisions.filter((revision) => revision.unit_ref === unitRef && revision.state === 'competing');
+    return revisions.filter((revision) => revision.unit_ref === unitRef && isReviewableRevision(revision));
 }
 
 /**

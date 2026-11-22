@@ -110,7 +110,6 @@ export function AgentsPanel({
     selectedAgent = null
 }: AgentsPanelProps) {
     const rows = ordered(agents);
-    const working = rows.reduce((total, agent) => total + agent.working.length, 0);
 
     const setModel = (agent: AgentStatusRow, next: string): void => {
         // The blank option is the explicit clear: the template role, else the process model,
@@ -120,11 +119,11 @@ export function AgentsPanel({
 
     return (
         <aside className="sv-pane sv-agents" data-testid="agents-panel" aria-label="Employees">
+            {/* The header names the roster and nothing else: each tile's own badge already says
+                whether that employee is idle or how many threads it is running, so a panel-wide
+                "N threads running" line is a second answer to a question already on screen. */}
             <header className="sv-pane-head">
                 <h3 className="sv-pane-title">Employee</h3>
-                <span className="sv-pane-badge">
-                    {working} thread{working === 1 ? '' : 's'} running
-                </span>
             </header>
 
             {loading && agents.length === 0 ? <p className="sv-agents-empty">reading the agent roster…</p> : null}

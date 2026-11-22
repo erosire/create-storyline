@@ -90,6 +90,7 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     'requestMerge',
     'rejectAll',
     'compareRevisions',
+    'reviewSeed',
     'verifyIdea',
     'verifyFinding',
     'approveFinding',
@@ -98,6 +99,7 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     // §8.3 — the checker surface
     'submitVerdict',
     'raiseFinding',
+    'confirmFinding',
     'createTask',
     'editTask',
     'requestAuthor',

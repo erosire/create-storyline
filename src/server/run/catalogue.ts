@@ -30,6 +30,8 @@ export const REPORT_TOOLS = [
     'proposeIdea',
     'verifyIdea',
     'verifyFinding',
+    'confirmFinding',
+    'reviewSeed',
     'selectRevision',
     'requestMerge',
     'rejectAll'
@@ -118,6 +120,8 @@ const PRIMARY_ACTION_ARGS: Record<string, string[]> = {
     requestMerge: ['unit_ref'],
     rejectAll: ['unit_ref'],
     verifyFinding: ['finding_id', 'verdict'],
+    confirmFinding: ['finding_id', 'verdict'],
+    reviewSeed: ['verdict'],
     verifyIdea: ['idea_id', 'verdict'],
     markUnverifiable: ['idea_id'],
     approveFinding: ['finding_id', 'decision'],

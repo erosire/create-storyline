@@ -148,6 +148,65 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
+    it('keeps a thread’s brief after its run resolves, so context compaction can continue it (S-2, S-4a)', async () => {
+        // The engine's `context-compaction` plugin ends a host turn on its own SUMMARY and then
+        // continues the conversation with a nudge as a SECOND run on the SAME thread. The transport
+        // resolves a request to its run through the seeded brief, so a brief dropped when
+        // `sendThreadInput` resolved made that continuation die with "the writer harness received a
+        // request whose brief names no Storyline Run" — the Writer thread the Author saw fail at
+        // 297k tokens. This pins the brief for the thread's life instead.
+        const store = Store.empty();
+        const story = storyOf(store, 'Context Limit');
+        const runtime = new MockToolRuntime(store, story.id);
+        let turns = 0;
+        const chat = new MockChatClient(async () => {
+            turns += 1;
+
+            // Turn 1 reaches the compaction trigger; turn 2 is the summary the pass asked for;
+            // turn 3 is the continuation, which only runs if the brief is still resolvable.
+            if (turns === 1) return { message: msg({ toolCalls: calls([{ name: 'readGoals', args: {} }]) }) };
+
+            return { message: { content: turns === 2 ? 'SUMMARY ANSWER' : 'CONTINUED ANSWER' } };
+        });
+        const createHarness = ((configuration: Parameters<typeof harness>[0]) =>
+            harness({
+                ...configuration,
+                // A limit above this catalogue's floor and far below the seeded brief's estimate.
+                pluginSettings: {
+                    get: (plugin: string, key: string) => {
+                        if (plugin !== 'context-compaction') return undefined;
+                        if (key === 'contextLimit') return 150_000;
+                        if (key === 'minTokens') return 10;
+
+                        return undefined;
+                    }
+                }
+            })) as typeof harness;
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock', createHarness });
+
+        const result = await manager.run({
+            storyId: story.id,
+            phase: 'summary',
+            label: 'run_1',
+            roleName: 'writer',
+            roleKind: 'writer',
+            model: 'mock',
+            system: `BRIEF ${'x'.repeat(1_000_000)}`,
+            kickoff: 'write',
+            context: contextFor(store, runtime, story.id),
+            runtime,
+            tally: createTally()
+        });
+
+        // A host run resolves on the compaction answer (the engine's depth-1 contract).
+        expect(result.text).toBe('SUMMARY ANSWER');
+
+        // The continuation nudge is fire-and-forget; its request is the proof the brief survived.
+        await vi.waitFor(() => expect(chat.callCount).toBeGreaterThanOrEqual(3), { timeout: 10_000 });
+
+        manager.dispose();
+    });
+
     it('reports a running thread’s live steps and drops them once it closes (U-8)', async () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');

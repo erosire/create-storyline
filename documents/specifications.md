@@ -331,7 +331,9 @@ The store is the Dashboard's, not the harness's. Collections below are normative
 
 ### 4.15 `revisions` — competing attempts at one unit
 
-`story_id`, `unit_kind` (`summary` | `plotline` | `chapter`), `unit_ref`, `body`, `run_ref`, `template_ref`, `brief_hash`, `state` (`competing`, `selected`, `merged_into`, `discarded`), `verdict_refs`, `selection_note`.
+`story_id`, `unit_kind` (`summary` | `plotline` | `chapter`), `unit_ref`, `body`, `run_ref`, `template_ref`, `brief_hash`, `state` (`pending`, `drafted`, `competing`, `selected`, `merged_into`, `discarded`), `verdict_refs`, `selection_note`.
+
+**A draft is `pending` while its Writer is still working on it, and `drafted` once that Writer's run returns.** A later write in the same run extends the same `pending` row rather than filing a second, partial draft. When the run closes, the server checks the draft: a Summary must carry every prose block (§4.2 — `premise`, `promise`, `theme`, `tone`, `ending`, `world_rules`), and only then is it `drafted` for review. A Summary that closes short of a block stays `pending` and is handed back to its Writer with the missing blocks named. Readers, Checkers and the Editor read `drafted` drafts and never a `pending` one; `competing` is the historical spelling of a reviewable draft and is read as `drafted`.
 
 **D-21** Revisions of one unit are visible **side by side** to an Editor and to the Author, and to nobody else: a Writer's brief names the unit and its contract, never its sibling drafts (P2, P13).
 **D-22** When an Editor selects or merges, the server MUST delete every non-selected revision of that unit in the same commit. Deletion is hard, not a flag — a discarded draft that lingers is context rot with a badge on it. The `selection_note` and the verdicts survive; the prose does not.

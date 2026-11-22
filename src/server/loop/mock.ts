@@ -40,6 +40,7 @@ import { MockChatClient, calls, msg } from '../llm/mock';
 import { Store } from '../store/store';
 import { LoopEngine } from './engine';
 import { LIVE_RUN_STATES } from './records';
+import { seedReviewKey } from './work';
 import { DEFAULT_GLOBAL_MAX_CONCURRENT } from './types';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
@@ -68,6 +69,10 @@ export interface CrewBehaviour {
         | ((round: number) => { cost: Cost; title: string; criterion?: string } | undefined);
     /** The Editor's verdict on each finding it verifies (W4e: the disputed false positive). */
     verdictFor?: FindingVerdict;
+    /** The pre-phase Seed review's answer (default `accept`). */
+    seedVerdict?: 'accept' | 'restructure';
+    /** The Reader's independent confirmation of an Editor-approved finding (default `confirm`). */
+    readerConfirm?: 'confirm' | 'dispute';
     /** Ideas the verify-ideas job confirms or refutes; default `verified`. */
     ideaVerdict?: 'verified' | 'refuted';
     /**
@@ -94,6 +99,11 @@ export interface RigOptions {
     summaryReaders?: number;
     /** The crew's scripted behaviour (above). */
     crew?: CrewBehaviour;
+    /**
+     * Phase ①'s Seed review is already closed (default true) so a rig that is about the draft
+     * pipeline starts where it used to. Set false to watch the review gate the first Writer.
+     */
+    seedReviewed?: boolean;
     /** Extra tool overrides, on top of the rig's two (a test that wants a refusing tool). */
     tools?: Record<string, MockToolHandler>;
     /** `flat_rounds` / `regress_tolerance` overrides for the stall rows (L-21). */
@@ -278,6 +288,29 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
         });
 
         storyId = created.story_id;
+    }
+
+    // Phase ①'s first thread is the Seed review. The rig seeds it CLOSED by default so existing
+    // draft-pipeline tests start at the Writer they are about; `seedReviewed: false` is the
+    // test that watches the review run first and hold the Writer back.
+    if (options.attach !== true && options.seedReviewed !== false) {
+        const reviewed = store.stories.require(storyId);
+
+        store.runs.create(
+            {
+                story_id: storyId,
+                work_item_ref: seedReviewKey(reviewed),
+                role: 'editor',
+                state: 'torn_down',
+                started_at: new Date().toISOString(),
+                ended_at: new Date().toISOString(),
+                tokens: 0,
+                kind: 'work',
+                no_op: false,
+                delegated: []
+            },
+            { run_ref: null, why: 'seed: phase ① Seed review already accepted (work.ts seedReviewClosed)' }
+        );
     }
 
     // L-1's switch is ON for every rig: `start()` with `autoSweep: false` means "the loop is running, and
@@ -484,6 +517,25 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
     }
 
     switch (item.kind) {
+        case 'seed_review': {
+            const verdict = crew.seedVerdict ?? 'accept';
+
+            return [
+                {
+                    name: 'reviewSeed',
+                    args:
+                        verdict === 'accept'
+                            ? { verdict, why: 'the Seed names a protagonist, a want, an obstacle and a change' }
+                            : {
+                                  verdict,
+                                  missing: ['world', 'stakes'],
+                                  notes: 'the Seed does not say what the world costs or what failure takes away',
+                                  why: 'the Author has to supply the missing structure before phase ①'
+                              }
+                }
+            ];
+        }
+
         case 'write_unit': {
             const unit = item.unit;
 
@@ -584,7 +636,11 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
 
             const drafts = store.revisions
                 .list()
-                .filter((revision) => revision.unit_ref === unit.ref && revision.state === 'competing')
+                .filter(
+                    (revision) =>
+                        revision.unit_ref === unit.ref &&
+                        (revision.state === 'drafted' || revision.state === 'competing')
+                )
                 .sort((left, right) => left.id.localeCompare(right.id));
             const winner = drafts[0];
 
@@ -614,14 +670,63 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                         : { verdict: 'confirmed' as const };
 
                 // D-33/D-34a: one claim the Author can read in one pass, and the cost it DESERVES.
+                const calls: ScriptCall[] = [
+                    {
+                        name: 'verifyFinding',
+                        args: {
+                            finding_id: findingId,
+                            verdict: verdict.verdict,
+                            ...(verdict.cost === undefined || finding === undefined ? {} : { cost: verdict.cost }),
+                            title: finding?.title ?? 'a claim to check',
+                            evidence: `checked against the artifact: ${finding?.evidence ?? ''}`
+                        }
+                    }
+                ];
+
+                // Phase ①'s granular pipeline approves in the same thread, so the Reader's own
+                // confirmation has an approved finding to check. A dispute needs no approval, and
+                // phase ①'s bar is critical/major — a minor/taste note is recorded, never work.
+                const story = store.stories.get(item.storyId);
+                const blocking = finding !== undefined && (finding.cost === 'critical' || finding.cost === 'major');
+                const covered = finding !== undefined && (story?.auto_approve ?? []).includes(finding.cost);
+
+                if (
+                    finding !== undefined &&
+                    verdict.verdict === 'confirmed' &&
+                    covered &&
+                    (story?.phase !== 'summary' || blocking)
+                ) {
+                    calls.push({
+                        name: 'approveFinding',
+                        args: {
+                            finding_id: findingId,
+                            decision: 'auto',
+                            why: 'the Editor confirmed the claim and the Story dial covers it; the Reader performs the independent second look'
+                        }
+                    });
+                }
+
+                return calls;
+            }).flat();
+        }
+
+        case 'confirm_finding': {
+            const refs = item.findingRefs ?? [];
+
+            return refs.map((findingId) => {
+                const finding = store.findings.get(findingId);
+                const verdict = crew.readerConfirm ?? 'confirm';
+
                 return {
-                    name: 'verifyFinding',
+                    name: 'confirmFinding',
                     args: {
                         finding_id: findingId,
-                        verdict: verdict.verdict,
-                        ...(verdict.cost === undefined || finding === undefined ? {} : { cost: verdict.cost }),
-                        title: finding?.title ?? 'a claim to check',
-                        evidence: `checked against the artifact: ${finding?.evidence ?? ''}`
+                        verdict,
+                        evidence: `independent re-read of the cited passage on ${finding?.target_ref ?? 'the unit'}: ${finding?.evidence ?? ''}`,
+                        why:
+                            verdict === 'confirm'
+                                ? 'the Reader checked the passage itself and the defect holds'
+                                : 'the Reader checked the passage itself and does not believe the defect'
                     }
                 };
             });

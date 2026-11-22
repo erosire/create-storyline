@@ -17,6 +17,7 @@ import {
     type Summary,
     type Verdict
 } from '../../shared/types';
+import { SEED_STRUCTURE_AREAS, type SeedStructureArea } from '../../shared/summary';
 import {
     chapterRows,
     commitSelection,
@@ -199,7 +200,7 @@ const selectRevision: ToolDefinition = {
                 }
             );
         }
-        if (winner.state !== 'competing') {
+        if (winner.state !== 'drafted' && winner.state !== 'competing') {
             throw new ToolRefusal(
                 'D-22',
                 `revision ${winner.id} is already ${winner.state}, so there is nothing left to select`,
@@ -646,6 +647,119 @@ function enumDimension() {
     } as Record<string, unknown>;
 }
 
+// ── the pre-phase Seed review ──────────────────────────────────────────────
+
+/**
+ * Phase ①'s first job: the Editor reads the Author's Seed before any Writer expands it. The
+ * Seed is Author truth and read-only for every crew (P5), so the only honest outcomes are
+ * "accept" (nothing to write) and "restructure" (an escalation naming the missing structure).
+ * This exists as its own report tool so the review thread ends with a report rather than a
+ * no-op turn (S-4), and so the loop can hold the Writers until the review has closed.
+ */
+const reviewSeed: ToolDefinition = {
+    name: 'reviewSeed',
+    description:
+        "Record the pre-phase-① review of the Author's Seed: accept it as structured enough to expand, or ask the Author for the missing structure. The Seed is read-only for every crew (P5), so this reports rather than edits.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            verdict: {
+                type: 'string',
+                enum: ['accept', 'restructure'],
+                description: 'accept = the Seed is structured enough; restructure = the Author must add what is missing.'
+            },
+            missing: arr(
+                `The structure areas the Seed does not supply: ${SEED_STRUCTURE_AREAS.join(', ')}.`,
+                str('One structure area.')
+            ),
+            notes: str('What is weak and what the Author should add — the Reader/Writer brief will not repeat it.'),
+            why: whyArg('Why this is the right verdict for this Seed (T-5).')
+        },
+        required: ['verdict', 'why']
+    },
+    writes: 'tasks',
+    level: 'write',
+    primaryArg: 'verdict',
+    mutating: true,
+    expectsArg: false,
+    onlyKinds: ['editor'],
+    requires: ['verdict', 'why'],
+    async execute(ctx): Promise<ToolResult> {
+        const verdict = String(ctx.args.verdict ?? '');
+        const why = whyOf(ctx);
+
+        if (verdict !== 'accept' && verdict !== 'restructure') {
+            throw new ToolRefusal('T-11', 'reviewSeed needs verdict "accept" or "restructure".', {
+                field: 'verdict',
+                received: verdict,
+                fix: 'accept the Seed, or name what must be restructured'
+            });
+        }
+
+        if (verdict === 'accept') {
+            return okValue({
+                verdict,
+                state: 'accepted',
+                next: 'the first Writer may expand the Seed (phase ①, D-4)'
+            });
+        }
+
+        const raw = Array.isArray(ctx.args.missing) ? (ctx.args.missing as unknown[]).map(String) : [];
+        const missing: SeedStructureArea[] = raw.filter((area) =>
+            (SEED_STRUCTURE_AREAS as readonly string[]).includes(area)
+        ) as SeedStructureArea[];
+        const unknown = raw.filter((area) => !(SEED_STRUCTURE_AREAS as readonly string[]).includes(area));
+
+        if (unknown.length > 0) {
+            throw new ToolRefusal('T-11', `reviewSeed named structure areas it does not check: ${unknown.join(', ')}`, {
+                field: 'missing',
+                expected: [...SEED_STRUCTURE_AREAS],
+                received: unknown,
+                fix: 'use the six areas the Seed is reviewed against'
+            });
+        }
+
+        if (missing.length === 0) {
+            throw new ToolRefusal('T-11', 'a restructure verdict has to name at least one missing area.', {
+                field: 'missing',
+                expected: [...SEED_STRUCTURE_AREAS],
+                fix: 'name the areas the Author has to add'
+            });
+        }
+
+        const notes = typeof ctx.args.notes === 'string' ? ctx.args.notes.trim() : '';
+        const { task } = openTask(
+            ctx.store,
+            ctx.storyId,
+            {
+                kind: 'escalation',
+                title: `Restructure the Seed: ${missing.join(', ')}`,
+                detail: [
+                    `The Seed is missing: ${missing.join(', ')}.`,
+                    notes,
+                    `Why: ${why}`
+                ]
+                    .filter(Boolean)
+                    .join('\n'),
+                owner_role: 'author',
+                priority: 1
+            },
+            buildAttribution(ctx, why)
+        );
+
+        return ok(
+            {
+                verdict,
+                missing,
+                task_id: task.id,
+                next: 'the Author edits the Seed; the next Seed revision re-runs this review before any Writer (P5, D-25a)'
+            },
+            task.rev,
+            `Seed review asked the Author for ${missing.join(', ')}`
+        );
+    }
+};
+
 // ── the verification gates ──────────────────────────────────────────────────
 
 /**
@@ -1083,6 +1197,7 @@ export const editorTools: ToolDefinition[] = [
     requestMerge,
     rejectAll,
     compareRevisions,
+    reviewSeed,
     verifyIdea,
     verifyFinding,
     approveFinding,

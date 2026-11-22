@@ -162,5 +162,14 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(screen.queryByText('Summary — Phrase 1')).toBeNull();
         expect(screen.queryByText('The Summary on record')).toBeNull();
         expect(screen.queryByText(/Revisions ·/)).toBeNull();
+
+        // The cost and the state are one unit on one line: "major confirmed", not a state
+        // floated to the far edge of the row, and the state names its own colour (D-33/D-34).
+        const row = screen.getByText('The draft loses the stray').closest('.find-row')!;
+        const tags = row.querySelector('.find-tags')!;
+        const state = row.querySelector('.find-state')!;
+        expect(tags.textContent).toBe('majorconfirmed');
+        expect(tags.contains(state)).toBe(true);
+        expect(state.className).toContain('find-state--confirmed');
     });
 });

@@ -48,7 +48,8 @@ describe('AgentsPanel — the global employee roster', () => {
 
         const panel = screen.getByTestId('agents-panel');
         expect(within(panel).getByText('Employee')).toBeTruthy();
-        expect(within(panel).getByText('4 threads running')).toBeTruthy();
+        // The header is the roster's name only: each tile's badge already answers "how many?".
+        expect(within(panel).queryByText(/threads? running/i)).toBeNull();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
         expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual(['checker', 'editor', 'reader', 'writer']);

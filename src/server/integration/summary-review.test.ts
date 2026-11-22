@@ -57,6 +57,28 @@ describe("phase ①: the Author's Writer → Reader → Editor loop", () => {
         expect(view.summary?.premise).toContain('A nobody inherits a lighthouse');
     });
 
+    it('keeps an incomplete Summary out of the review, then sends one Writer to add the missing block (§4.15)', async () => {
+        // The first attempt ends its run short of `ending`. The row stays `pending` — no Reader may
+        // read it — and the sweep hands it back with the block named; that run writes the whole set.
+        const fixture = await bootStoryline({ readerIdeas: 0, omitSummaryField: 'ending' });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 1, readers: 1 });
+        await openDial(fixture, storyId);
+
+        await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 60);
+
+        const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
+        const completion = refs.findIndex((ref) => ref.startsWith('wi_complete_summary_1_'));
+        const firstReader = refs.findIndex((ref) => ref.startsWith('wi_read_revision_'));
+
+        expect(completion).toBeGreaterThanOrEqual(0);
+        // The Reader only started after the completion Writer had closed its draft.
+        expect(firstReader).toBeGreaterThan(completion);
+
+        const view = await storyView(fixture, storyId);
+
+        expect(view.summary?.ending).toContain('The last keeper climbs the last gallery');
+    });
+
     it('writes three drafts per round, keeps one, and starts the next round from it', async () => {
         // One defect on the first draft of the first round, then clean. The first Editor choice
         // keeps revision_1; the next round must write three NEW revisions (4, 5, 6) from it.
@@ -180,7 +202,7 @@ describe("phase ①: the Author's Writer → Reader → Editor loop", () => {
 
         // The Editor's turn between the Readers and the Writer: the unconfirmed finding is
         // verified BEFORE the fix pass that answers it (D-33, D-34).
-        const verifyAt = refs.findIndex((ref) => ref.startsWith('wi_verify_findings_'));
+        const verifyAt = refs.findIndex((ref) => ref.startsWith('wi_verify_finding_'));
         const fixAt = refs.findIndex((ref) => ref.startsWith('wi_fix_summary_1'));
 
         expect(verifyAt).toBeGreaterThanOrEqual(0);
@@ -196,15 +218,16 @@ describe("phase ①: the Author's Writer → Reader → Editor loop", () => {
         // Two samples × two Readers, plus the corrected draft's own two passes (at least).
         expect(readerPasses).toBeGreaterThanOrEqual(6);
 
-        // Phase ①'s Editor IS the approval gate: the confirmed finding was sent back with no
-        // Author tap, and the fix pass closed it.
+        // Phase ①'s Editor IS the approval gate: this granular thread confirmed AND approved the
+        // finding with no Author tap, the Reader confirmed it independently, and the fix pass closed it.
         const finding = fixture.store.findings.list().find((row) => row.story_id === storyId);
 
         expect(finding).toMatchObject({
             criterion_ref: 'C-14',
             cost: 'major',
             state: 'fixed',
-            approved_by: 'auto'
+            approved_by: 'auto',
+            reader_confirmed: true
         });
 
         const row = await storyRow(fixture, storyId);

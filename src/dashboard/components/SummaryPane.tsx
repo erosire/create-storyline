@@ -17,7 +17,7 @@ import {
     type Story,
     type Summary
 } from '../../shared/types';
-import type { BacktrackTarget } from './story-contract';
+import { isReviewableRevision, type BacktrackTarget } from './story-contract';
 import type { SummaryRevisionEntry } from './story-nav';
 
 /** §4.2's prose fields, in the order the Writer fills them. `chapter_count` is excluded: D-3b makes it Author truth, never prose. */
@@ -107,9 +107,13 @@ function RevisionFindingList({ entry }: { entry: SummaryRevisionEntry }) {
             {entry.findings.map((finding) => (
                 <li className={`find-row find-row--${finding.cost}`} key={finding.id}>
                     <div className="find-head">
-                        <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                        {/* The cost and where the finding stands read as one unit: the badge says what
+                            it costs, the state says what has happened to it (D-33/D-34). */}
+                        <span className="find-tags">
+                            <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
+                            <span className={`find-state find-state--${finding.state}`}>{finding.state}</span>
+                        </span>
                         <span className="find-title">{finding.title}</span>
-                        <span className="find-state">{finding.state}</span>
                     </div>
                     <p className="find-meta">
                         {finding.criterion_ref} · on this revision ({finding.id})
@@ -152,7 +156,9 @@ function RevisionCard({
     onSelectRevision?: (unitRef: string, revisionId: string) => void;
 }) {
     const { revision } = entry;
-    const competing = revision.state === 'competing';
+    // §4.15: the Author may take a `drafted` revision. A `pending` one is still being written —
+    // and a Shortcut that installed half a Summary would blank the blocks it has not reached.
+    const competing = isReviewableRevision(revision);
 
     return (
         <article
@@ -185,7 +191,13 @@ function RevisionCard({
                 }
                 onClick={() => summary && onSelectRevision?.(summary.id, revision.id)}
             >
-                {competing ? 'Use this revision' : revision.state === 'selected' ? 'Selected' : 'Discarded'}
+                {competing
+                    ? 'Use this revision'
+                    : revision.state === 'selected'
+                      ? 'Selected'
+                      : revision.state === 'pending'
+                        ? 'Pending'
+                        : 'Discarded'}
             </button>
         </article>
     );

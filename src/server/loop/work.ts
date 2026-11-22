@@ -44,6 +44,7 @@ import {
     runsForItem,
     storyChapters,
     selectedSummaryRevision,
+    storyFindings,
     storyPlotlines,
     storySummary,
     summaryBlockingFindings,
@@ -66,10 +67,37 @@ import {
     type Task,
     type Template,
     type UnitKind,
-    type Chapter
+    type Chapter,
+    type Revision
 } from '../../shared/types';
+import { missingSummaryBlocksOf } from '../../shared/summary';
 import type { WorkItem, WorkUnitRef } from '../run/types';
 import type { Store } from '../store';
+
+/**
+ * Phase ①'s first job: one Editor pass over the Author's Seed per Seed revision. The key names
+ * the Story revision, so an Author edit (D-25a) re-arms the review and the Writers wait for it;
+ * a closed run is the whole memory of "the Seed has been looked at" (L-3).
+ */
+export function seedReviewKey(story: Story): string {
+    // The key follows the SEED TEXT, not the Story row's `rev`: the engine legitimately bumps
+    // `rev` on sweep bookkeeping (status, levels, digest), and keying on it re-opened the review
+    // on every sweep. The Seed is immutable unless the Author edits it (P5, D-25a), so a stable
+    // hash of its text is the honest identity of "this revision of the input".
+    let hash = 2166136261;
+
+    for (let index = 0; index < story.idea.length; index += 1) {
+        hash ^= story.idea.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return `wi_seed_review_${story.id}_${(hash >>> 0).toString(36)}`;
+}
+
+/** Has the current Seed revision been through its review? Live does not count — Writers wait. */
+export function seedReviewClosed(store: Store, story: Story): boolean {
+    return runsForItem(store, seedReviewKey(story)).some((run) => !isLiveRun(run));
+}
 
 /** The four writer triggers, as data, so a test can assert WHY a draft was spawned (L-22's honesty). */
 export const WRITE_TRIGGERS = {
@@ -157,6 +185,19 @@ function draftedBefore(store: Store, unitRef: string): boolean {
     if (unitRef === '') return false;
 
     return store.runs.list().some((run) => (run.work_item_ref ?? '').startsWith(`wi_write_${unitRef}`));
+}
+
+/**
+ * Is a Writer still on this unit? `createStory` opens every Story with an EMPTY Summary row, so
+ * `draftedBefore` alone cannot tell "the Writer is writing it right now" from "the Summary was
+ * written in place": the live Writer's run is already a `wi_write_*` row, and the row it will fill
+ * carries only `chapter_count`. Phase ①'s in-place review path must wait for that run to close —
+ * Readers read a finished artifact, never the empty row a live Writer has not reached yet (§4.15).
+ */
+function writerIsLiveOn(store: Store, storyId: string, unitRef: string): boolean {
+    return liveRuns(store, storyId).some(
+        (run) => run.role === 'writer' && (run.work_item_ref ?? '').includes(`_${unitRef}_`)
+    );
 }
 
 /**
@@ -365,6 +406,10 @@ export function writeTrigger(
     /** Drafts the current divergence pass still owes (see `divergenceGap`). */
     owing = 0
 ): { trigger: string; tasks: Task[] } | undefined {
+    // Phase ①'s first thread is the Editor's Seed review. No Writer expands a Seed that has not
+    // been read for structure yet, and an Author edit (a new Story rev) re-arms it (D-4, P5).
+    if (story.phase === 'summary' && !seedReviewClosed(store, story)) return undefined;
+
     // While drafts are competing the unit's next step is normally a checker or an Editor, not a fourth
     // draft nobody asked for. The exception is D-17d: the Author asked for N blind attempts, and the
     // first one landing must not cancel the ones still owed (L-16's drafts are siblings).
@@ -404,6 +449,51 @@ export function writeTrigger(
     }
 
     return undefined;
+}
+
+/**
+ * Phase ①'s completeness gate, seen from the loop: a Summary draft whose Writer run closed with
+ * blocks missing stays `pending` (§4.15), and this sweep hands it back to a Writer with the missing
+ * blocks named. One job per draft — the work is finishing THIS draft, not sampling a new round —
+ * and the claim key names the revision so a second sweep cannot double-dispatch it.
+ *
+ * A draft whose run is still live is not offered: the Writer is still writing it, and the run's own
+ * close is what moves the row to `drafted` (`loop/engine.ts:settleJob`).
+ */
+function summaryCompletionJobs(
+    store: Store,
+    story: Story
+): Array<{ revision: Revision; key: string; missing: string[] }> {
+    if (story.phase !== 'summary') return [];
+
+    const jobs: Array<{ revision: Revision; key: string; missing: string[] }> = [];
+    // One completion Writer per unit per sweep: two live runs on the same unit would race the
+    // same `pending` row through `editSummary`'s reuse rule (T-4 is not a scheduling mechanism).
+    const units = new Set<string>();
+
+    for (const revision of store.revisions.list()) {
+        if (revision.story_id !== story.id || revision.unit_kind !== 'summary' || revision.state !== 'pending')
+            continue;
+        if (units.has(revision.unit_ref)) continue;
+
+        const run = revision.run_ref === undefined ? undefined : store.runs.get(revision.run_ref);
+
+        if (run !== undefined && isLiveRun(run)) continue;
+        if (unitIsBusy(store, story.id, revision.unit_ref)) continue;
+
+        const missing = missingSummaryBlocksOf(revision);
+
+        if (missing.length === 0) continue;
+
+        // The unit ref rides the key so `unitIsBusy` (which matches on the unit) sees a completion
+        // run in flight and this sweep cannot double-dispatch the same draft.
+        const prefix = `wi_complete_${revision.unit_ref}_${revision.id}`;
+
+        units.add(revision.unit_ref);
+        jobs.push({ revision, key: claimKey(prefix, dispatchCount(store, prefix) + 1), missing });
+    }
+
+    return jobs;
 }
 
 /** Does the finding behind a task touch this unit? L-11a's `related_refs` are part of the answer. */
@@ -537,6 +627,31 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     const out: WorkCandidate[] = [];
     const units = phaseUnits(store, story);
 
+    // -- Phase ①'s first pass: the Editor reads the Seed before anyone expands it -----------------
+    // One thread per Seed revision. It is priority 0 so a fresh Story dispatches this before any
+    // Writer, and `writeTrigger` refuses the first draft until this run has closed.
+    if (story.phase === 'summary') {
+        const key = seedReviewKey(story);
+
+        if (runsForItem(store, key).length === 0) {
+            const built = candidate(
+                store,
+                story,
+                'seed_review',
+                'editor',
+                undefined,
+                key,
+                'review the Seed for structure before phase ① expands it',
+                0,
+                {
+                    note: 'Seed review: check protagonist, want, obstacle, stakes, world and change; accept it with reviewSeed, or ask the Author for the missing structure.'
+                }
+            );
+
+            if (built) out.push(built);
+        }
+    }
+
     // -- The Author's directive, before everything else -------------------------------------------
     // The Author's one channel is the Editor (V-1): a propagating directive is a job for the Editor,
     // whose review turns it into queued tasks. THIS is the boundary that is not a delegate — the
@@ -610,22 +725,71 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         }
     }
 
-    if (unconfirmed.length > 0) {
-        const ids = unconfirmed.map((finding) => finding.id);
-        const generation = dispatchCount(store, 'wi_verify_findings') + 1;
+    // D-33/D-38: one Editor thread PER finding. A batch of findings made the Editor's brief (and
+    // its reply) grow with every Reader report, which is where a 1M-token thread came from; a
+    // single finding per Work Item keeps each thread small and its decision auditable.
+    for (const finding of unconfirmed) {
+        const prefix = `wi_verify_finding_${finding.id}`;
+        const generation = dispatchCount(store, prefix) + 1;
+        const unit =
+            ctx.phase === 'summary'
+                ? finding.target_ref === story.id
+                    ? wholeStoryUnit(ctx.phase)
+                    : { kind: 'summary' as UnitKind, ref: finding.target_ref }
+                : wholeStoryUnit(ctx.phase);
         const built = candidate(
             store,
             story,
             'verify_findings',
             'editor',
-            wholeStoryUnit(ctx.phase),
-            claimKey('wi_verify_findings', generation, `${ids.length}_${ids[0]}_${last(ids)}`),
-            `${ids.length} unconfirmed finding${ids.length === 1 ? '' : 's'} need an Editor's verdict (D-33, L-1)`,
+            unit,
+            claimKey(prefix, generation),
+            `verify finding ${finding.id} and approve it when it holds (D-33)`,
             1,
-            { findingRefs: ids }
+            {
+                findingRefs: [finding.id],
+                note: `Verify finding ${finding.id} only. Confirm it when the defect is real, approve it in the same run, and dispute it when it is not — no other finding belongs to this thread.`
+            }
         );
 
         if (built) out.push(built);
+    }
+
+    // Phase ①'s independent second look. The Editor's verify/approval is not enough to spend a
+    // Writer round: one Reader thread re-checks each confirmed or approved finding and calls
+    // `confirmFinding`. The fix pass (below) waits for `reader_confirmed`.
+    if (story.phase === 'summary') {
+        for (const finding of storyFindings(store, story.id)) {
+            if (finding.state !== 'confirmed' && finding.state !== 'approved') continue;
+            if (finding.reader_confirmed === true) continue;
+            // Phase ①'s bar is critical/major (D-30, D-34): a minor/taste note is recorded, and
+            // spending a Reader thread and a Writer round on it is exactly the batch-to-bloat the
+            // granular pipeline exists to avoid.
+            if (finding.cost !== 'critical' && finding.cost !== 'major') continue;
+
+            const key = `wi_confirm_finding_${finding.id}`;
+
+            if (runsForItem(store, key).length > 0) continue;
+
+            const built = candidate(
+                store,
+                story,
+                'confirm_finding',
+                'reader',
+                finding.target_ref === story.id
+                    ? wholeStoryUnit(ctx.phase)
+                    : { kind: 'summary', ref: finding.target_ref },
+                key,
+                `confirm finding ${finding.id} independently — the Editor approved it (phase ①)`,
+                1,
+                {
+                    findingRefs: [finding.id],
+                    note: `Confirm finding ${finding.id} only. The Editor approved it. Do your own independent check of the cited passage: confirm it when the defect is real, or dispute it when it is not. This thread exists to switch exactly this finding to Confirm.`
+                }
+            );
+
+            if (built) out.push(built);
+        }
     }
 
     const verifiable = ideasToVerify(store, story.id, story.phase);
@@ -697,6 +861,9 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
                 }
             } else if (
                 draftedBefore(store, summaryRef) &&
+                // The Writer's run must be CLOSED: a live run has not filed its draft yet, and the
+                // empty Summary row `createStory` opens with is not an artifact a Reader may rate.
+                !writerIsLiveOn(store, story.id, summaryRef) &&
                 // An installed selection already went through the revision readers; this fallback is
                 // only for a Summary that was written IN PLACE (a one-sample template or the loop
                 // rig's tool double). Reading the installed text again would re-open the phase forever.
@@ -814,8 +981,38 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         }
     }
 
-    // -- Writers: the fix work a decision unblocked, then the drafts (§6.2's chapter pass) --------
-    const fixJobs = fixWork(store, story, ctx.phase);
+    // -- Writers: finish an incomplete Summary draft, then the work a decision unblocked ----------
+    //
+    // Phase ①'s completeness gate (§4.15): a draft whose Writer run closed short of a Summary
+    // block is still `pending`, so it goes back to a Writer with those blocks named. The unit's
+    // ordinary draft/fix work waits for it: a second Writer on the same draft would race the row
+    // this one is completing (T-4).
+    const completionJobs = summaryCompletionJobs(store, story);
+
+    for (const job of completionJobs) {
+        const built = candidate(
+            store,
+            story,
+            'write_unit',
+            'writer',
+            { kind: 'summary', ref: job.revision.unit_ref },
+            job.key,
+            `complete Summary draft ${job.revision.id}: missing ${job.missing.join(', ')} (phase ①, §4.15)`,
+            2,
+            {
+                note:
+                    `Summary draft ${job.revision.id} of ${job.revision.unit_ref} is still pending: it is missing ` +
+                    `${job.missing.join(', ')}. Call editSummary with those blocks so the draft is complete — ` +
+                    `Readers review it only after every block is present (phase ①, §4.15).`
+            }
+        );
+
+        if (built) out.push(built);
+    }
+
+    const fixJobs = fixWork(store, story, ctx.phase).filter(
+        (job) => !completionJobs.some((completion) => completion.revision.unit_ref === job.unit)
+    );
 
     for (const job of fixJobs) {
         const built = candidate(
@@ -834,6 +1031,10 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     }
 
     for (const unit of units) {
+        // An incomplete draft already owns this unit's next Writer: finishing the draft comes
+        // before a new sample or a fix pass on the same artifact (T-4).
+        if (completionJobs.some((job) => job.revision.unit_ref === unit.ref)) continue;
+
         // A unit with an explicit fix job already has its Writer: the `wi_fix_*` Work Item clears
         // the approved findings/task, and the generic draft would be a second Writer racing it on
         // the same artifact (T-4's compare-and-swap is not a scheduling mechanism).
@@ -1026,6 +1227,11 @@ function fixWork(
     };
 
     for (const finding of actionableFindings(store, story)) {
+        // Phase ①: an approval (or the dial) authorises the repair only after the Reader's own
+        // independent confirmation. Without this the Writer would act on the Editor's word alone,
+        // which is exactly the second look the phase's granular pipeline adds.
+        if (story.phase === 'summary' && finding.reader_confirmed !== true) continue;
+
         const task = openTasks(store, story.id).find((row) => row.finding_ref === finding.id);
 
         // A whole-book defect is filed against the STORY row, because that is what the whole-level

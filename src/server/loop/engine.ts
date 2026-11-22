@@ -99,6 +99,7 @@ import {
 } from './types';
 import { BUILT_IN_TEMPLATES, DEFAULT_ASSIGNMENT, validateAssignment } from '../templates';
 import { defaultGoal } from '../../shared/criteria';
+import { missingSummaryBlocksOf } from '../../shared/summary';
 import type { Chapter, Cost, Finding, Story, StoryPhase, Task } from '../../shared/types';
 import type { RunResult, WorkItem } from '../run/types';
 import type { Store } from '../store';
@@ -374,6 +375,10 @@ export class LoopEngine implements EngineApi {
                 // another round. Later phases keep the Author's dial.
                 const summaryRevision = story.phase === 'summary';
                 if (summaryRevision && finding.cost !== 'critical' && finding.cost !== 'major') continue;
+                // Phase ①'s order is Editor verify → Reader confirm → Writer fix. The Editor's
+                // approval (or this dial) is not enough on its own: a confirmed finding waits for
+                // its own Reader thread before it can become work (D-33, phase ①'s second look).
+                if (summaryRevision && finding.reader_confirmed !== true) continue;
                 // The Author's dial still wins, even in phase ①: a narrowed dial parks a major
                 // finding for the Author's approval instead of silently authorising it.
                 if (!story.auto_approve.includes(finding.cost)) continue;
@@ -489,6 +494,11 @@ export class LoopEngine implements EngineApi {
         const probeRound = await this.judgeProbeRound(story, at);
 
         story = probeRound.story;
+
+        // §4.15: settle any `pending` draft whose Writer is gone before the sweep measures the book.
+        // The normal path is `settleJob` closing the run; this is the same gate for a draft written
+        // after its run closed (a context-compaction continuation) or recovered after a restart.
+        await this.reconcileDrafts(story.id);
 
         // L-1 steps 1 and 6: the levels, the trend, and the round. The measurement runs before the
         // decision because L-37a's precedence requires the stall to be computable, and the stall needs
@@ -960,24 +970,57 @@ export class LoopEngine implements EngineApi {
                 );
             }
 
-            if (!isFixPass) return;
+            if (isFixPass) {
+                for (const ref of item.findingRefs ?? []) {
+                    const finding = store.findings.get(ref);
 
-            for (const ref of item.findingRefs ?? []) {
-                const finding = store.findings.get(ref);
+                    if (finding === undefined || finding.state === 'fixed' || finding.state === 'discarded') continue;
 
-                if (finding === undefined || finding.state === 'fixed' || finding.state === 'discarded') continue;
+                    if (!closed) continue;
 
-                if (!closed) continue;
+                    store.findings.update(
+                        finding.id,
+                        { state: 'fixed' },
+                        {
+                            run_ref: item.id,
+                            why: `the fix pass run ${item.id} closed it (D-34); a re-raised fingerprint reads as a regression (L-16a)`
+                        },
+                        [{ id: finding.id, rev: finding.rev }]
+                    );
+                }
+            }
 
-                store.findings.update(
-                    finding.id,
-                    { state: 'fixed' },
-                    {
-                        run_ref: item.id,
-                        why: `the fix pass run ${item.id} closed it (D-34); a re-raised fingerprint reads as a regression (L-16a)`
-                    },
-                    [{ id: finding.id, rev: finding.rev }]
-                );
+            // §4.15, the draft gate: a revision exists as `pending` while its Writer is working on
+            // it. The run is closed now, so the draft is either complete enough to review
+            // (`drafted`) or the next sweep hands it back to its Writer with the missing blocks
+            // named (`loop/work.ts:summaryCompletionJobs`). Only `drafted` rows reach Readers,
+            // Checkers and the Editor — a reviewer never reads a half-written Summary again.
+            if (item.kind === 'write_unit') {
+                // The run's own draft (`run_ref`) or the draft its unit names: a completion run
+                // extends an older `pending` row, so it keeps that row's original `run_ref` while
+                // its Work Item names the summary it is finishing.
+                const unitRef = item.unit?.ref ?? '';
+
+                for (const revision of store.revisions.list()) {
+                    if (revision.story_id !== item.storyId) continue;
+                    if (revision.unit_ref !== unitRef && revision.run_ref !== result.runId) continue;
+                    if (revision.state !== 'pending') continue;
+
+                    const missing =
+                        revision.unit_kind === 'summary' ? missingSummaryBlocksOf(revision) : ([] as string[]);
+
+                    if (missing.length > 0) continue;
+
+                    store.revisions.update(
+                        revision.id,
+                        { state: 'drafted' },
+                        {
+                            run_ref: result.runId,
+                            why: `the Writer run ${result.runId} closed and its ${revision.unit_kind} draft is complete, so it is handed to the review crew (§4.15)`
+                        },
+                        [{ id: revision.id, rev: revision.rev }]
+                    );
+                }
             }
         });
 
@@ -1014,6 +1057,55 @@ export class LoopEngine implements EngineApi {
                 ? `the Editor queued ${tasksCreated} task${tasksCreated === 1 ? '' : 's'} for ${directive.id} (D-19)`
                 : `the Editor review of ${directive.id} ended ${result.ended}; ${tasksCreated} task${tasksCreated === 1 ? '' : 's'} queued instead (D-19)`
         );
+    }
+
+    /**
+     * §4.15's reconciliation: a draft is reviewable when no Writer is on it and it is complete.
+     * A Summary short of a block stays `pending` (the sweep's completion job finishes it); every
+     * other unit's draft becomes `drafted` once its run is no longer live, which is the same rule
+     * `settleJob` applies when the run closes normally.
+     */
+    private async reconcileDrafts(storyId: string): Promise<void> {
+        const pending = this.store.revisions
+            .list()
+            .filter((revision) => revision.story_id === storyId && revision.state === 'pending');
+
+        if (pending.length === 0) return;
+
+        const live = liveRuns(this.store, storyId);
+        const promote = pending.filter((revision) => {
+            const run = revision.run_ref === undefined ? undefined : this.store.runs.get(revision.run_ref);
+
+            if (run !== undefined && isLiveRun(run)) return false;
+            // A completion run keeps the draft's original `run_ref`, so the Work Item's unit ref is
+            // what says a Writer is still on it (L-5: one writer per unit at a time).
+            if (
+                revision.unit_ref.length > 0 &&
+                live.some((candidate) => (candidate.work_item_ref ?? '').includes(revision.unit_ref))
+            ) {
+                return false;
+            }
+
+            return revision.unit_kind !== 'summary' || missingSummaryBlocksOf(revision).length === 0;
+        });
+
+        if (promote.length === 0) return;
+
+        await this.store.commit('loop_draft_gate', () => {
+            for (const revision of promote) {
+                if (this.store.revisions.get(revision.id)?.state !== 'pending') continue;
+
+                this.store.revisions.update(
+                    revision.id,
+                    { state: 'drafted' },
+                    {
+                        run_ref: revision.run_ref ?? null,
+                        why: `no Writer is on ${revision.id} any more and its draft is complete, so it is handed to the review crew (§4.15)`
+                    },
+                    [{ id: revision.id, rev: revision.rev }]
+                );
+            }
+        });
     }
 
     /** The task rows one or more runs created, read from the journal's attribution (P11). */

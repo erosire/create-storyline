@@ -148,8 +148,14 @@ export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
  * §4.15 `state` — competing attempts at one unit. Everything but `selected` is deleted in
  * the selection commit (P13, D-22); the states exist so the deletion and the Author's
  * restore path (D-24) are expressible, not so drafts linger.
+ *
+ * A Writer's draft has its own two-step life before it competes: `pending` while that Writer
+ * is still working on the revision (a later `editSummary`/`editChapter` in the same run extends
+ * the same row), then `drafted` once the run closes and the draft is complete enough to review.
+ * Only `drafted` (and the legacy `competing` rows written before this lifecycle existed) are
+ * offered to Readers, Checkers and the Editor.
  */
-export const REVISION_STATES = ['competing', 'selected', 'merged_into', 'discarded'] as const;
+export const REVISION_STATES = ['pending', 'drafted', 'competing', 'selected', 'merged_into', 'discarded'] as const;
 export type RevisionState = (typeof REVISION_STATES)[number];
 
 /** §4.16 `state` — the agent→Author direction only (D-20, D-20a). */
@@ -538,6 +544,14 @@ export interface Finding extends StoredRecord {
     confirmed_by?: string | null;
     /** The Author, or `auto` (D-35) — the gate that starts Writer work (D-34). */
     approved_by?: string | null;
+    /**
+     * Phase ①'s independent second look: a Reader re-checks an Editor-confirmed finding after the
+     * approval and marks it valid. The Writer's fix pass waits for this flag in the Summary phase,
+     * so an Editor approval alone does not spend a Writer round on a suspicion nobody confirmed.
+     */
+    reader_confirmed?: boolean;
+    /** The Reader run that gave the independent confirmation, for P11's audit trail. */
+    reader_confirmed_by?: string | null;
     seen_count: number;
     /**
      * L-11a: other records this defect touches (a chapter or plotline ref each), so one finding

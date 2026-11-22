@@ -11,7 +11,7 @@
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
 import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
-import { buildRevisionUnits, isDecidedIdea } from './story-contract';
+import { buildRevisionUnits, isDecidedIdea, isPendingRevision, isReviewableRevision } from './story-contract';
 import type { RevisionUnit, StoryViewData } from './story-contract';
 
 /** The four reading phrases, in the Author's order. */
@@ -122,7 +122,7 @@ export function summaryRevisionUnit(view: StoryViewData): RevisionUnit | undefin
         return undefined;
     }
 
-    const competing = unit.revisions.filter((revision) => revision.state === 'competing');
+    const competing = unit.revisions.filter(isReviewableRevision);
 
     return competing.length === 0 ? undefined : { ...unit, revisions: competing };
 }
@@ -302,11 +302,13 @@ export function summaryHasCompetingRevisions(view: StoryViewData): boolean {
 
     if (summary === null || summary === undefined) return false;
 
+    // Pending drafts are not competition yet, but they are still open work: the Summary must not
+    // look ready for review while a Writer is still filling its blocks (§4.15).
     return view.revisions.some(
         (revision) =>
             revision.unit_kind === 'summary' &&
             revision.unit_ref === summary.id &&
-            revision.state === 'competing'
+            (isReviewableRevision(revision) || isPendingRevision(revision))
     );
 }
 
@@ -494,7 +496,7 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
     }
 
     const summaryDrafts = view.revisions.filter(
-        (revision) => revision.unit_kind === 'summary' && revision.state === 'competing'
+        (revision) => revision.unit_kind === 'summary' && isReviewableRevision(revision)
     );
     if (summaryDrafts.length > 0) {
         add({ panel: 'summary', label: 'choose a draft', tone: 'awaiting' });

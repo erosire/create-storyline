@@ -210,6 +210,9 @@ export function summaryBlockingFindings(store: Store, story: Story, unitRef: str
 
     return storyFindings(store, story.id).filter((finding) => {
         if (finding.state !== 'confirmed' && finding.state !== 'approved') return false;
+        // Phase ①'s second look: the Reader's independent confirmation is what makes a blocking
+        // defect real work. Until it lands, a confirmed/approved row must not spend a Writer round.
+        if (finding.reader_confirmed !== true) return false;
         if (finding.cost !== 'critical' && finding.cost !== 'major') return false;
 
         // A draft-scoped finding names its draft in L-11a's related_refs. A finding with none is
@@ -531,13 +534,19 @@ export function createdAfter(
     return left.created_at > right.created_at;
 }
 
+/**
+ * A draft a reviewer may read: `drafted` once its Writer run closed, and `competing` for rows a
+ * store written before the pending/drafted lifecycle still carries (§4.15).
+ */
+export const isReviewableDraft = (revision: Revision): boolean =>
+    revision.state === 'drafted' || revision.state === 'competing';
+
 /** The competing drafts of one unit, oldest draft first — the order the select brief renders them in. */
 export function competingRevisions(store: Store, storyId: string, unitRef: string): Revision[] {
     return store.revisions
         .list()
         .filter(
-            (revision) =>
-                revision.story_id === storyId && revision.unit_ref === unitRef && revision.state === 'competing'
+            (revision) => revision.story_id === storyId && revision.unit_ref === unitRef && isReviewableDraft(revision)
         )
         .sort(recency);
 }
@@ -547,7 +556,18 @@ export function unitsWithCompetingRevisions(store: Store, storyId: string): stri
     const units = new Set<string>();
 
     for (const revision of store.revisions.list()) {
-        if (revision.story_id === storyId && revision.state === 'competing') units.add(revision.unit_ref);
+        if (revision.story_id === storyId && isReviewableDraft(revision)) units.add(revision.unit_ref);
+    }
+
+    return [...units].sort();
+}
+
+/** The drafts a Writer is still writing — the units whose review has not started yet. */
+export function unitsWithPendingRevisions(store: Store, storyId: string): string[] {
+    const units = new Set<string>();
+
+    for (const revision of store.revisions.list()) {
+        if (revision.story_id === storyId && revision.state === 'pending') units.add(revision.unit_ref);
     }
 
     return [...units].sort();

@@ -254,6 +254,157 @@ describe('the W2 call pipeline', () => {
         expect(result.phase).toBe('chapters');
     });
 
+    it('files a Summary draft as pending and keeps ONE row while its Writer extends it (§4.15)', async () => {
+        // A Story that assigns a diverging Writer template files Summary writes as competing drafts
+        // (`isDivergenceMode`). The row starts `pending`: the Writer may take several calls to fill
+        // the six §4.2 blocks, and a second call in the same run must extend the same draft, not
+        // file a second partial one.
+        store.stories.update(
+            story.id,
+            { phase: 'summary', template_refs: ['diverging'] },
+            { why: 'seed: phase ① with a diverging Writer template' }
+        );
+        store.templates.create(
+            {
+                name: 'diverging',
+                title: 'Diverging Writer',
+                roles: [{ name: 'writer', kind: 'writer', prompt: 'write the Summary' }],
+                serves_phase: ['summary'],
+                done_definition: 'the Summary carries its blocks',
+                attempts: 2,
+                builtin: false,
+                editable: true
+            },
+            { why: 'seed: diverging writer template' }
+        );
+
+        const first = await call('writer', 'editSummary', {
+            premise: 'The lamp logs its own keepers.',
+            expects: [{ id: 'summary_1', rev: 1 }],
+            why: 'the first block'
+        });
+
+        expect(first.ok).toBe(true);
+
+        const revisionId = String((first as { revision_id?: string }).revision_id);
+
+        expect(store.revisions.list()).toHaveLength(1);
+        expect(store.revisions.require(revisionId).state).toBe('pending');
+
+        const second = await call('writer', 'editSummary', {
+            tone: 'close third person, tidal',
+            expects: [{ id: 'summary_1', rev: 1 }],
+            why: 'the tone block'
+        });
+
+        expect(second.ok).toBe(true);
+
+        // Still one draft: the second call extended the pending row instead of filing another.
+        const rows = store.revisions.list();
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].id).toBe(revisionId);
+        expect(rows[0].state).toBe('pending');
+        // The draft carries the blocks written so far; the installed Summary's fields are inherited
+        // where the Writer has not spoken, and the Writer's own text wins where it has.
+        expect((rows[0].body as { fields: Record<string, unknown> }).fields).toMatchObject({
+            premise: 'The lamp logs its own keepers.',
+            tone: 'close third person, tidal'
+        });
+    });
+
+    it('lets the loop’s completion run extend the incomplete draft it was sent for (§4.15)', async () => {
+        store.stories.update(
+            story.id,
+            { phase: 'summary', template_refs: ['diverging'] },
+            { why: 'seed: phase ① with a diverging Writer template' }
+        );
+        store.templates.create(
+            {
+                name: 'diverging',
+                title: 'Diverging Writer',
+                roles: [{ name: 'writer', kind: 'writer', prompt: 'write the Summary' }],
+                serves_phase: ['summary'],
+                done_definition: 'the Summary carries its blocks',
+                attempts: 2,
+                builtin: false,
+                editable: true
+            },
+            { why: 'seed: diverging writer template' }
+        );
+
+        // The Writer whose draft is short has already closed its run; the loop's completion job is
+        // a SECOND run for the same unit and must extend that same pending row.
+        const first = store.runs.create(
+            {
+                story_id: story.id,
+                work_item_ref: 'wi_write_summary_1_1_a1',
+                role: 'writer',
+                state: 'torn_down',
+                started_at: '2026-11-23T10:00:00.000Z',
+                ended_at: '2026-11-23T10:00:10.000Z',
+                tokens: 10,
+                kind: 'work',
+                no_op: false,
+                delegated: []
+            },
+            { run_ref: null, why: 'seed: the first Writer run closed' }
+        );
+        const revision = store.revisions.create(
+            {
+                story_id: story.id,
+                unit_kind: 'summary',
+                unit_ref: 'summary_1',
+                body: { fields: { premise: 'the first block', promise: 'the second block' } },
+                run_ref: first.id,
+                state: 'pending',
+                verdict_refs: []
+            },
+            { run_ref: first.id, why: 'seed: the draft is missing four blocks' }
+        );
+        const completion = store.runs.create(
+            {
+                story_id: story.id,
+                work_item_ref: `wi_complete_summary_1_${revision.id}_1`,
+                role: 'writer',
+                state: 'working',
+                started_at: '2026-11-23T10:01:00.000Z',
+                tokens: 0,
+                kind: 'work',
+                no_op: false,
+                delegated: []
+            },
+            { run_ref: null, why: 'seed: the completion Writer run' }
+        );
+
+        const runtime = createToolRuntime(store);
+        const context = runtime.createContext(sessionFor(story.id, 'writer', { runId: completion.id }));
+        const result = await runtime.execute(context, 'editSummary', {
+            tone: 'close third person',
+            theme: 'belonging',
+            ending: 'the light goes out',
+            world_rules: 'the lamp logs its keepers',
+            expects: [{ id: 'summary_1', rev: 1 }],
+            why: 'the four blocks the completion brief named'
+        });
+
+        expect(result.ok).toBe(true);
+
+        const rows = store.revisions.list();
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].id).toBe(revision.id);
+        expect(rows[0].state).toBe('pending');
+        expect((rows[0].body as { fields: Record<string, unknown> }).fields).toMatchObject({
+            premise: 'the first block',
+            promise: 'the second block',
+            tone: 'close third person',
+            theme: 'belonging',
+            ending: 'the light goes out',
+            world_rules: 'the lamp logs its keepers'
+        });
+    });
+
     it('refuses a ref that belongs to another Story naming T-3 (T-3 scope)', async () => {
         const other = seedStory(store, 'Other Story');
         const otherChapter = store.chapters.create(
@@ -412,7 +563,7 @@ describe('the W2 call pipeline', () => {
         expect((result.similar as string[]).slice(0, 3)).toEqual(['editChapter', 'editCast', 'editLedger']);
         // §8.1 (8) + §8.2 (10) + §8.3 (6) + §8.4 (17) + §8.5 (4). Every session holds all of them
         // whatever its kind (T-6a), so the count is itself a conformance number.
-        expect(result.catalogue_size).toBe(45);
+        expect(result.catalogue_size).toBe(47);
     });
 
     it('refuses an unknown role kind naming T-0 rather than defaulting it (T-0)', async () => {
