@@ -8,12 +8,13 @@
 import {
     STORY_FOLDERS,
     STORY_PHRASES,
+    attentionFor,
     castMembers,
     chaptersInOrder,
     plotlinesInOrder,
     summaryReadyForReview
 } from './story-nav';
-import type { StorySelection } from './story-nav';
+import type { StoryAttention, StorySelection } from './story-nav';
 import type { StoryViewData } from './story-contract';
 
 function CheckIcon() {
@@ -41,6 +42,20 @@ function ChevronIcon() {
 
 function isActive(selection: StorySelection, panel: StorySelection['panel'], ref?: string): boolean {
     return selection.panel === panel && (selection.ref ?? undefined) === ref;
+}
+
+/** The rail's one status mark: a dot plus the reason, never a second paragraph of detail. */
+function AttentionMark({ attention }: { attention: StoryAttention }) {
+    return (
+        <span className="outline-attention" data-tone={attention.tone} title={attention.label}>
+            <span className="outline-attention__dot" aria-hidden="true" />
+            <span className="sr-only">{attention.label}</span>
+        </span>
+    );
+}
+
+function attentionClass(attention: StoryAttention | undefined): string {
+    return attention ? ` outline-item--attention outline-item--${attention.tone}` : '';
 }
 
 export interface StoryOutlineProps {
@@ -95,16 +110,21 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                           title: `Chapter ${chapter.order} — ${chapter.title}`
                                       }));
 
+                        const phraseAttention = attentionFor(view, phrase.key);
+
                         return (
                             <li className="outline-phase" key={phrase.key}>
                                 <button
                                     type="button"
-                                    className={`outline-item outline-item--phrase${selection.panel === phrase.key ? ' outline-item--active' : ''}`}
+                                    className={`outline-item outline-item--phrase${selection.panel === phrase.key ? ' outline-item--active' : ''}${attentionClass(phraseAttention)}`}
                                     aria-current={isActive(selection, phrase.key) ? 'page' : undefined}
+                                    data-attention={phraseAttention?.tone}
+                                    title={phraseAttention?.label}
                                     onClick={() => onSelect({ panel: phrase.key })}
                                 >
                                     <span className="outline-index">Phrase {phrase.number}</span>
                                     <span className="outline-name">{phrase.title}</span>
+                                    {phraseAttention ? <AttentionMark attention={phraseAttention} /> : null}
                                     {phrase.key === 'summary' && ready ? (
                                         <span className="outline-ready" title="ready for review">
                                             <CheckIcon />
@@ -120,18 +140,27 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
 
                                 {children.length > 0 ? (
                                     <ul className="outline-children">
-                                        {children.map((child) => (
-                                            <li key={child.ref}>
-                                                <button
-                                                    type="button"
-                                                    className={`outline-child${isActive(selection, phrase.key, child.ref) ? ' outline-child--active' : ''}`}
-                                                    onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
-                                                >
-                                                    <ChevronIcon />
-                                                    <span>{child.title}</span>
-                                                </button>
-                                            </li>
-                                        ))}
+                                        {children.map((child) => {
+                                            const childAttention = attentionFor(view, phrase.key, child.ref);
+
+                                            return (
+                                                <li key={child.ref}>
+                                                    <button
+                                                        type="button"
+                                                        className={`outline-child${isActive(selection, phrase.key, child.ref) ? ' outline-child--active' : ''}${attentionClass(childAttention)}`}
+                                                        data-attention={childAttention?.tone}
+                                                        title={childAttention?.label}
+                                                        onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
+                                                    >
+                                                        <ChevronIcon />
+                                                        <span>{child.title}</span>
+                                                        {childAttention ? (
+                                                            <AttentionMark attention={childAttention} />
+                                                        ) : null}
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
                                     </ul>
                                 ) : null}
                             </li>
@@ -143,18 +172,25 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
             <div className="outline-group">
                 <h2 className="outline-heading">Folders</h2>
                 <ul className="outline-folders">
-                    {STORY_FOLDERS.map((folder) => (
-                        <li key={folder.key}>
-                            <button
-                                type="button"
-                                className={`outline-item outline-item--folder${isActive(selection, folder.key) ? ' outline-item--active' : ''}`}
-                                aria-current={isActive(selection, folder.key) ? 'page' : undefined}
-                                onClick={() => onSelect({ panel: folder.key })}
-                            >
-                                <span className="outline-name">{folder.title}</span>
-                            </button>
-                        </li>
-                    ))}
+                    {STORY_FOLDERS.map((folder) => {
+                        const folderAttention = attentionFor(view, folder.key);
+
+                        return (
+                            <li key={folder.key}>
+                                <button
+                                    type="button"
+                                    className={`outline-item outline-item--folder${isActive(selection, folder.key) ? ' outline-item--active' : ''}${attentionClass(folderAttention)}`}
+                                    aria-current={isActive(selection, folder.key) ? 'page' : undefined}
+                                    data-attention={folderAttention?.tone}
+                                    title={folderAttention?.label}
+                                    onClick={() => onSelect({ panel: folder.key })}
+                                >
+                                    <span className="outline-name">{folder.title}</span>
+                                    {folderAttention ? <AttentionMark attention={folderAttention} /> : null}
+                                </button>
+                            </li>
+                        );
+                    })}
                 </ul>
             </div>
         </nav>

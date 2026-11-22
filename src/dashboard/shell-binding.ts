@@ -20,7 +20,7 @@
 //       IdeasTray        → selectIdea(ideaId) · discardIdea(ideaId) · deferIdea  [one id]
 //       GoalPanel        → patchGoal(goalId, { criteria }) · setChapterBar(chapterId, override)
 //       PlotlineChapters → unapproveChapter(chapterId)                            [one id]
-//       StoryView rail   → askAssistant({ storyId, field, note }) · createTemplate(body)
+//       StoryView rail   → createTemplate(body)
 //     Every binding below accepts either form and fills the missing scope from the Story the
 //     shell is showing — the shell is the only thing that knows it. Where an id is genuinely
 //     unrecoverable the call rejects with a NAMED message (the top bar shows it, L-13) instead of
@@ -158,7 +158,7 @@ export interface ShellActions {
      * L-23 / U-1a — the stalled screen's "issue a directive" exit. The pane supplies only the text;
      * the Story is the shell's scope (D-29's rule, same as every other local call).
      */
-    sendDirective?(storyIdOrText?: string, text?: string): Promise<unknown>;
+    sendDirective?(storyIdOrText?: string, text?: string, refs?: string[]): Promise<unknown>;
 }
 
 /**
@@ -373,9 +373,9 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
         // L-23 / U-1a — the stalled screen's directive exit. The pane hands over only the sentence, so
         // a one-argument call reads as the TEXT and the shell supplies the Story; the pinned
         // (storyId, text) shape passes straight through (D-29's rule, as for the Idea tray).
-        sendDirective: (first, second) =>
+        sendDirective: (first, second, refs) =>
             second === undefined
-                ? store.sendDirective(storyId, first ?? '')
-                : store.sendDirective(first ?? storyId, second)
+                ? store.sendDirective(storyId, first ?? '', refs)
+                : store.sendDirective(first ?? storyId, second, refs)
     };
 }

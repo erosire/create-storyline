@@ -50,7 +50,7 @@ export function NewStoryForm() {
                 void submit();
             }}
         >
-            <h2 className="panel__title">Start a story</h2>
+            <h2 className="panel__title">Start a Story</h2>
             <p className="panel__hint">the Seed is yours and read-only for every crew, forever (P5).</p>
 
             <label className="field">

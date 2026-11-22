@@ -962,6 +962,22 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
         );
     });
 
+    it('carries the focused pane’s artifact refs into the directive (U-9 / U-4)', async () => {
+        const { app, store } = makeApp();
+
+        await call(app, 'POST', '/stories', { title: 'Focused', idea: 'A ridge over water.', chapter_count: 1 });
+        seedChapter(store, 'story_1', { order: 1 });
+
+        const reply = await call(app, 'POST', '/stories/story_1/directives', {
+            text: 'make it colder',
+            refs: ['chapter_1']
+        });
+
+        expect(reply.status).toBe(200);
+        // The sentence does not name the chapter; the ref does, so the Editor's direction is about it.
+        expect(store.directives.require('directive_1').impact).toContain('chapter_1');
+    });
+
     it('assigns templates wholesale and refuses a bad assignment by name (D-17b)', async () => {
         const { app, store } = makeApp();
 

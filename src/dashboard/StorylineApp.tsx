@@ -1,28 +1,22 @@
-// §10.1 — the four-region shell: STORIES | THE STORY | EMPLOYEES + TEMPLATES, with the DIRECTIVE
-// bar at the foot of the content column (it belongs to the Story/desk, not to the whole window).
+// §10.1 — the four-region shell: STORIES | THE STORY | EMPLOYEES, with the DIRECTIVE bar at the
+// foot of the content column (it belongs to the Story/desk, not to the whole window).
 //
 // WHY THIS FILE IS ONLY A SHELL: §10.1 fixes the regions; the later waves fill them. Anything
 // that reads a Story's contents (the Seed card, the Summary pane, the Ideas tray, the prose
-// editor, the crew and template cards) is W10/W11's surface, so it is imported from the
+// editor, the crew cards) is W10/W11's surface, so it is imported from the
 // component that owns it and rendered into the region the layout names. The shell's own job is
 // three things and nothing else: the store lifecycle, the home-vs-story switch (U-10: the queue
 // IS the home view), and keeping the directive bar at the bottom of the content (U-9) — fixed to
 // the viewport on a phone, where the content column is the whole screen (like the harness composer).
 //
-// THE RIGHT REGION, AND WHY IT MOVES (judgment call, stated in the report): `StoryView` (W10)
-// renders the EMPLOYEE rail and the TEMPLATES catalogue itself, because they are two halves of one
-// readable tree — "the distance between the contract and its prose" (U-4) needs the harness
-// that produced it beside it. So with a Story selected the centre region SPANS the story and
-// employee columns and StoryView's own rail lands exactly in the third column of §10.1's grid
-// (`data-open`). With no Story selected there is nothing for the rail to be about, so the shell
-// renders the global EMPLOYEE roster there itself and the catalogue waits for a Story (the pinned
-// TemplatesPanel takes a `story`, and on the home view there is none). The employee thread
-// surface uses that third column too, so the rail stays reachable while the centre shows threads.
+// THE RIGHT REGION IS ALWAYS THE EMPLOYEE ROSTER: the shell keeps all three columns in place
+// whether it is showing the home desk, a Story, or an employee's threads. The centre changes with
+// the Author's selection; the roster does not move into the content column.
 //
 // THE MODEL THE REGIONS SPEAK, in one place (V-1). Every Story owns its own harness: its
 // knowledge directory and its phase sessions are scoped to that Story, and nothing crosses
 // between stories. The EMPLOYEES are the one global thing — the right rail is the roster the
-// Author configures once and every Story's threads run as agents under. A phrase (P1/P3/P4) is
+// server defines once and every Story's threads run as agents under. A phrase (P1/P3/P4) is
 // one phase session against the Story's Goal; each Run it dispatches is one thread inside that
 // session. The phrase/thread history is NOT a rail panel: clicking an employee tile replaces the
 // centre with that employee's threads, grouped by Story then phrase. There is no main agent: the
@@ -32,10 +26,10 @@
 import { useEffect, useState } from 'react';
 
 import { AgentThreadsView } from './components/AgentThreadsView';
-import { AuthorQueue } from './components/AuthorQueue';
 import { DirectiveBar } from './components/DirectiveBar';
 import { AgentsPanel } from './components/AgentsPanel';
-import { NewStoryForm } from './components/NewStoryForm';
+import { HomeDesk } from './components/HomeDesk';
+import type { HomeTab } from './components/HomeDesk';
 import { StoriesPanel } from './components/StoriesPanel';
 import { StoryOutline } from './components/StoryOutline';
 import { StoryView } from './components/StoryView';
@@ -68,6 +62,8 @@ function Shell() {
 
     /** Which phrase or folder the content area is showing (the rail's one piece of UI state). */
     const [selection, setSelection] = useState<StorySelection>(DEFAULT_STORY_SELECTION);
+    /** The home desk's tab: it labels the input when no Story is open. */
+    const [homeTab, setHomeTab] = useState<HomeTab>('requests');
 
     // A Story opens on its Summary; a different book must not keep the last one's pane.
     useEffect(() => {
@@ -86,11 +82,20 @@ function Shell() {
         void store.selectAgent(selectedAgent === kind ? null : kind);
     };
 
+    /**
+     * The left rail is navigation too: opening a phrase or folder changes the centre, so an
+     * employee's thread surface must stop being the selected thing at the same moment.
+     */
+    const selectPanel = (next: StorySelection): void => {
+        void store.selectAgent(null);
+        setSelection(next);
+    };
+
     return (
         <div className="station" data-theme="ink" data-testid="station">
             <TopBar />
 
-            <div className="station__regions" data-open={activeStoryId && !selectedAgent ? 'true' : 'false'}>
+            <div className="station__regions">
                 {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). Below the
                     list sits the selected Story's own phrase rail — the four phrases and the
                     folders the content area can open, and nothing else. */}
@@ -98,7 +103,7 @@ function Shell() {
                     <div className="region__body region__body--stack">
                         <StoriesPanel />
                         {activeStoryId ? (
-                            <StoryOutline view={storyData} selection={selection} onSelect={setSelection} />
+                            <StoryOutline view={storyData} selection={selection} onSelect={selectPanel} />
                         ) : null}
                     </div>
                 </aside>
@@ -134,7 +139,7 @@ function Shell() {
                                     onKillRun={(runId) => void store.killRun(runId)}
                                 />
                             </div>
-                            <DirectiveBar />
+                            <DirectiveBar selection={selection} />
                         </>
                     ) : activeStoryId ? (
                         <>
@@ -151,63 +156,46 @@ function Shell() {
                             <div className="region__body">
                                 {view ? (
                                     /* W10: the rail chooses the pane; the content area renders
-                                       exactly that phrase or folder. The right-hand rail is the
-                                       employee roster + template catalogue (U-8). */
+                                       exactly that phrase or folder. */
                                     <StoryView
                                         view={storyData as StoryViewData}
                                         selection={selection}
                                         actions={shellActions(store, activeStoryId)}
-                                        railLead={
-                                            <AgentsPanel
-                                                agents={agents}
-                                                models={agentModels}
-                                                onSetModel={(kind, model) => store.setAgentModel(kind, model)}
-                                                onSelectAgent={openAgent}
-                                                selectedAgent={selectedAgent}
-                                            />
-                                        }
                                     />
                                 ) : (
                                     /* U-11: no spinner while the first read is in flight. */
                                     <p className="panel__empty">reading the story…</p>
                                 )}
                             </div>
-                            <DirectiveBar />
+                            <DirectiveBar selection={selection} homeTab={homeTab} />
                         </>
                     ) : (
                         <>
                             <div className="region__body region__body--home">
-                                <AuthorQueue />
-                                <NewStoryForm />
+                                <HomeDesk tab={homeTab} onTab={setHomeTab} />
                             </div>
-                            <DirectiveBar />
+                            <DirectiveBar homeTab={homeTab} />
                         </>
                     )}
                 </main>
 
-                {/* Region 3 — the GLOBAL AGENTS (and, inside a Story, the template catalogue that
-                    configures the roster). The phrase/thread history is not a rail panel: the
-                    tile opens it in the centre. */}
-                {activeStoryId && !selectedAgent ? null : (
-                    <aside className="region region--crew" data-region="crew" aria-label="Employees">
-                        <div className="region__body">
-                            {/* The roster is global: every Story's phase sessions run threads under
-                                these employees, and an employee is an agent only while its thread
-                                lives. Clicking a tile shows that employee's retained threads in the
-                                centre. */}
-                            <AgentsPanel
-                                agents={agents}
-                                models={agentModels}
-                                onSetModel={(kind, model) => store.setAgentModel(kind, model)}
-                                onSelectAgent={openAgent}
-                                selectedAgent={selectedAgent}
-                            />
-                            <p className="panel__hint">
-                                the employees are global — open a Story to edit the roster its phrases run (U-8).
-                            </p>
-                        </div>
-                    </aside>
-                )}
+                {/* Region 3 — the GLOBAL AGENTS. The phrase/thread history is not a rail panel:
+                    the tile opens it in the centre. */}
+                <aside className="region region--crew" data-region="crew" aria-label="Employees">
+                    <div className="region__body">
+                        {/* The roster is global: every Story's phase sessions run threads under
+                            these employees, and an employee is an agent only while its thread
+                            lives. Clicking a tile shows that employee's retained threads in the
+                            centre. */}
+                        <AgentsPanel
+                            agents={agents}
+                            models={agentModels}
+                            onSetModel={(kind, model) => store.setAgentModel(kind, model)}
+                            onSelectAgent={openAgent}
+                            selectedAgent={selectedAgent}
+                        />
+                    </div>
+                </aside>
             </div>
         </div>
     );

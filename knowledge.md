@@ -31,7 +31,7 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 | Brief     | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2).                                                                           |
 | Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`).                                       |
 | Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill.                                                                           |
-| API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`).                                                                                                       |
+| API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`). `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport.               |
 | Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`.                                                                                                                                                           |
 
 ## Things that are easy to get wrong
@@ -76,7 +76,7 @@ dispatched: drained" }`. Ideas land while a phase is still working, which is why
 Story, then dispose its harness — sessions and threads go with it),
 `POST /stories/:id/stop|resume|clear-pending|lock`, `POST /stories/:id/backtrack {phase}`,
 `PATCH /stories/:id/goal {criteria:[{op:add|remove|setHard}], threshold_soft}`,
-`POST /stories/:id/directives {text}`, `POST /stories/:id/assistant {target,text}`,
+`POST /stories/:id/directives {text, refs?}`, `POST /stories/:id/assistant {target,text}`,
 `POST /stories/:id/complete`, `POST /stories/:id/templates`,
 `POST /stories/:id/chapters/:chapterId/sections/:sectionId {content}` (D-37: only while stopped),
 `POST /stories/:id/chapters/:chapterId/unapprove`, `PATCH /stories/:id/chapters/:chapterId/bar`,
@@ -276,7 +276,7 @@ rail makes one decision (which pane is open), so it carries no commentary.
 `StoryView.tsx` renders exactly the selected phrase or folder. The stacked view (Seed + phase
 strip + status + dial + Summary + Ideas + plotlines/chapters + revisions + Goal + costs + Digest)
 was replaced; the status line is the one piece of chrome above the pane, and the right-hand rail
-still carries the employee roster and template catalogue. The pane switch:
+carries the employee roster. The three columns stay in place on every view. The pane switch:
 
 - **Summary** — `SummaryPane`. It marks the phrase with a tick when
   `story-nav.ts:summaryReadyForReview` is true (the Summary is signed, or the Summary phase's
@@ -326,10 +326,42 @@ Writers inside its own run.
 The UI follows that model:
 
 - The Story row in the left rail is a toggle: clicking the open Story closes it and returns the
-  Author to the queue, not only the centre's Dismiss.
+  Author to the queue, not only the centre's Dismiss. While an employee's thread surface is open,
+  the first click on that Story row returns to the Story; a left-rail phrase/folder click also
+  clears the employee selection, because both rails are navigation (U-4/U-8).
 - `DirectiveBar` is the last child of the content region (`StorylineApp.tsx`), so it sits at the
-  bottom of the content, not as a window-wide footer. The hint names the Story's Editor. On screens
-  at or below 820px the stylesheet docks it to the viewport as a minimal composer — one field and a
-  send glyph, no label row or hint, with `safe-area-inset-bottom` respected.
-- `AgentsPanel` renders the roster only: rank, model, status, and one line saying the Editor is the
-  Author's channel. The old `entry` chip and the `AgentStatusRow.entry` field are gone.
+  bottom of the content, not as a window-wide footer. It speaks for the rail's selection: the label
+  and placeholder name the Summary, a chapter, a plotline, etc., and `sendDirective` carries that
+  artifact's refs so the Editor updates the content in focus even when the sentence never names it
+  (2026-11-22). On screens at or below 820px the stylesheet docks it to the viewport as a minimal
+  composer — one field and a send glyph, no label row or hint, with `safe-area-inset-bottom`
+  respected.
+- `AgentsPanel` renders the roster only: rank, model, status. The old `entry` chip and the
+  `AgentStatusRow.entry` field are gone. The roster and its templates are defined in code at server
+  boot; the UI offers no template editor.
+
+## The compact story row and the tabbed desk (2026-11-22)
+
+The left rail's Story row is now a navigation decision, not a report: title plus **one** mark —
+`needs your signature`, `needs your pick`, `needs your approval`, `nothing left to act on`, or
+`stuck` — and nothing else. The levels, phase strip, trend, `status_reason`, crew line and the
+per-row moves left the row. The Story's own phrase rail carries the detail: `story-nav.ts`'s
+`storyAttention` turns `pending_kind` plus the open Findings, Ideas, Summary drafts and completion
+preview into highlighted rail entries (`StoryOutline`), so opening a Story shows _where_ the Author
+is needed without repeating the server's report in the list. Stop/Resume/Clear/Delete appear on the
+open row only.
+
+The home view is two tabs (`components/HomeDesk.tsx`):
+
+- **Requests** — the Author's queue (`AuthorQueue`). A finding, Idea, escalation or capability gap
+  only appears when it needs a decision; the server's auto-approve dial already removed the findings
+  the loop covers. An escalation carries its answer box on the request itself, and the answer is a
+  directive to that Story's Editor.
+- **Create New Story** — the title/Seed/chapter form. The input at the foot of the content is the
+  prompt path: its label reads **Create New Story**, and the line opens the Story from its text and
+  sends it to that Story's Editor, which queues the work and can use `requestAuthor` (P7) if the
+  direction leaves a question, which then appears under Requests.
+
+The old per-field `Ask assistant` control is gone from `SummaryPane`; the Author's channel is the
+directive bar, addressed to the Editor. The bar is present on every view, including Requests, and
+carries only one input field with a floating label.

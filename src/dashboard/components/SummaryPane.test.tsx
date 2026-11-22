@@ -1,9 +1,9 @@
 // U-4 / U-16 / L-30 / §8.6 — the Summary pane.
 //
-// Three things are pinned here: a LOCKED pane states that Backtrack is the only way in and offers
-// it with the deletion sentence (L-31, L-32); the confirm is two-step, so the destructive sentence
-// is read before the click that commits it; and every field carries §8.6's Ask-assistant affordance,
-// which is the only field-level write v1 has (the read-only-in-v1 gap is stated on the pane).
+// Two things are pinned here: a LOCKED pane states that Backtrack is the only way in and offers it
+// with the deletion sentence (L-31, L-32); the confirm is two-step, so the destructive sentence is
+// read before the click that commits it. There is deliberately no per-field "Ask assistant" control:
+// the Author's direction goes through the directive bar, addressed to the Editor (D-19).
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { SummaryPane } from './SummaryPane';
@@ -66,27 +66,15 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(screen.getByText(/read-only in v1: the pinned API has no Author summary write/)).toBeTruthy();
     });
 
-    it('offers §8.6\u2019s one-field assistant run per field, and disables it when the route is absent', async () => {
-        const { actions, calls } = fixtureActions();
-        const { rerender } = render(
+    it('has no per-field assistant control — the directive bar is the Author’s channel', () => {
+        render(
             <SummaryPane
-                story={fixtureStory()}
-                summary={fixtureSummary()}
-                onAskAssistant={(field) =>
-                    void actions.requestAssistant?.('s1', { target: 'summary', text: `Rewrite the ${field}.` })
-                }
+                story={{ ...fixtureStory(), summary_locked: false }}
+                summary={{ ...fixtureSummary(), locked: false }}
             />
         );
 
-        // One affordance per field (D-3): a field-level run, not a pane-level one.
-        expect(screen.getAllByRole('button', { name: 'Ask assistant' }).length).toBe(6);
-        await click(screen.getAllByRole('button', { name: 'Ask assistant' })[0]);
-        expect(calls.requestAssistant).toEqual([['s1', { target: 'summary', text: 'Rewrite the premise.' }]]);
-
-        // Without the verb, the control stays visible and says the endpoint has not landed.
-        rerender(<SummaryPane story={fixtureStory()} summary={fixtureSummary()} />);
-        const disabled = screen.getAllByRole('button', { name: 'Ask assistant' });
-        expect(disabled.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
-        expect(disabled[0].getAttribute('title')).toBe('Assistant runs land with the API (§8.6)');
+        expect(screen.queryByRole('button', { name: 'Ask assistant' })).toBeNull();
+        expect(screen.getByText(/Use the directive bar below/)).toBeTruthy();
     });
 });

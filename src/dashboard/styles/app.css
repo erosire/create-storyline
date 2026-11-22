@@ -299,15 +299,11 @@
 
 .station__regions {
     display: grid;
-    /* The centre column stays widest: the distance between the contract and its prose is the
-       product (U-4), and the knowledge tree needs a third of the left column. */
+    /* Three columns always: STORIES, THE STORY, EMPLOYEES. The centre column stays widest: the
+       distance between the contract and its prose is the product (U-4). */
     grid-template-columns: 320px minmax(0, 1fr) 370px;
     gap: 10px;
     min-height: 0;
-}
-
-.station__regions[data-open='true'] {
-    grid-template-columns: 320px minmax(0, 1fr);
 }
 
 .region {
@@ -348,10 +344,69 @@
 }
 
 .region__body--home {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 330px;
-    gap: 16px;
-    align-content: start;
+    display: block;
+}
+
+/* ------------------------------------------------------------------ the home desk tabs */
+
+.home {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+
+.home__tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--line-strong);
+}
+
+.home__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 13px;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+}
+
+.home__tab:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.home__tab[data-active='true'] {
+    border-color: var(--line-strong);
+    border-bottom-color: var(--accent);
+    background: var(--surface);
+    color: var(--text-strong);
+}
+
+.home__tab-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.home__panel--create {
+    display: block;
 }
 
 .region__body--stack {
@@ -413,7 +468,6 @@
 
 .panel__hint,
 .queue__hint,
-.directive-bar__hint,
 .panel__empty {
     margin: 0 0 8px;
     color: var(--muted);
@@ -528,6 +582,8 @@
 }
 
 .story-row__title {
+    flex: 1;
+    min-width: 0;
     max-width: 100%;
     overflow: hidden;
     color: var(--text-strong);
@@ -536,6 +592,37 @@
     letter-spacing: 0.005em;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* The row's one status: whether this Story needs the Author. The rail, not this row, says where. */
+.story-row__attention {
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.story-row__attention[data-tone='awaiting'] {
+    border-color: var(--calm);
+    background: var(--calm-bg);
+    color: var(--calm);
+}
+
+.story-row__attention[data-tone='stalled'] {
+    border-color: var(--urgent);
+    background: var(--urgent-bg);
+    color: var(--urgent);
+    font-weight: 700;
+}
+
+.story-row__attention[data-tone='finished'] {
+    border-color: var(--finished);
+    background: var(--finished-bg);
+    color: var(--finished);
 }
 
 .phase-strip {
@@ -825,6 +912,15 @@
     overflow-wrap: anywhere;
 }
 
+/* A tool-gap report is a wall of run context. The request is the first lines; the full report
+   stays available as the paragraph's tooltip. */
+.queue-item__detail--clamp {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
+
 .queue-item__evidence {
     display: flex;
     gap: 8px;
@@ -891,12 +987,27 @@
     gap: 6px;
 }
 
+.queue-item__answer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.queue-item__answer .field__input {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 9px;
+    font-size: 12px;
+}
+
 /* ------------------------------------------------------------------ forms */
 
 .new-story {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-width: 760px;
     padding: 16px;
     border: 1px solid var(--line-strong);
     border-radius: var(--radius);
@@ -938,8 +1049,7 @@
     border-color: var(--dim);
 }
 
-.field__input:focus,
-.directive-bar__input:focus {
+.field__input:focus {
     border-color: var(--accent);
     background: var(--surface);
     outline: 1px solid var(--accent);
@@ -965,7 +1075,7 @@
 
 .directive-bar {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
@@ -985,6 +1095,24 @@
     background: var(--surface);
 }
 
+.directive-bar__field {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 7px 12px 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.directive-bar__field:focus-within {
+    border-color: var(--accent);
+    outline: 1px solid var(--accent);
+    outline-offset: 0;
+}
+
 .directive-bar__send-glyph {
     display: none;
     font-size: 11px;
@@ -995,37 +1123,30 @@
     display: inline;
 }
 
+/* One input box with its label floating inside the border: the label states the action, and
+   nothing else is printed around the field. */
 .directive-bar__label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
     color: var(--accent);
-    font-size: 10.5px;
+    font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.12em;
+    text-overflow: ellipsis;
     text-transform: uppercase;
+    white-space: nowrap;
 }
 
 .directive-bar__input {
     width: 100%;
-    padding: 9px 12px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: var(--text-strong);
     font-family: inherit;
     font-size: 13.5px;
-}
-
-.directive-bar__input::placeholder {
-    color: var(--dim);
-}
-
-.directive-bar__input:disabled {
-    background: var(--surface-2);
-    color: var(--dim);
-}
-
-.directive-bar__hint {
-    grid-column: 1 / -1;
-    margin: 0;
+    outline: none;
 }
 
 /* ------------------------------------------------------------------ buttons */
@@ -1222,6 +1343,54 @@
     border-color: var(--line-strong);
     background: var(--surface-2);
     color: var(--text-strong);
+}
+
+/* The rail's attention highlight: the pane the Author should open, without a line of commentary. */
+.outline-item--attention {
+    border-color: var(--calm);
+    background: var(--calm-bg);
+}
+
+.outline-item--attention:hover {
+    border-color: var(--calm);
+    background: var(--calm-bg);
+}
+
+.outline-item--attention.outline-item--stalled {
+    border-color: var(--urgent);
+    background: var(--urgent-bg);
+}
+
+.outline-item--attention.outline-item--finished {
+    border-color: var(--finished);
+    background: var(--finished-bg);
+}
+
+.outline-item--attention .outline-index {
+    color: currentColor;
+}
+
+.outline-attention {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    color: var(--calm);
+}
+
+.outline-attention[data-tone='stalled'] {
+    color: var(--urgent);
+}
+
+.outline-attention[data-tone='finished'] {
+    color: var(--finished);
+}
+
+.outline-attention__dot {
+    display: block;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
 }
 
 .outline-item--phrase {
@@ -1533,10 +1702,6 @@
         grid-template-columns: 280px minmax(0, 1fr);
     }
 
-    .station__regions[data-open='true'] {
-        grid-template-columns: 280px minmax(0, 1fr);
-    }
-
     .region--crew {
         grid-column: 1 / -1;
     }
@@ -1555,8 +1720,7 @@
 
     /* One column, like the harness: the three regions become a single scrolling page and the
        directive bar alone stays in reach (the harness's composer behaviour). */
-    .station__regions,
-    .station__regions[data-open='true'] {
+    .station__regions {
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -1595,9 +1759,8 @@
         white-space: normal;
     }
 
-    /* The minimal composer: ONE field and a send control, with no label row and no hint line
-       (the harness's phone shape). It is fixed at the viewport foot, so a long Story never
-       buries the Author's channel. */
+    /* The minimal composer: ONE field and a send control (the harness's phone shape). It is
+       fixed at the viewport foot, so a long Story never buries the Author's channel. */
     .directive-bar,
     .region--story > .directive-bar {
         position: fixed;
@@ -1615,30 +1778,18 @@
         background: var(--surface);
     }
 
-    /* Still the input's accessible name; visually the field is the whole bar. */
+    .directive-bar__field {
+        flex: 1;
+        min-width: 0;
+        padding: 5px 10px 4px;
+    }
+
     .directive-bar__label {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
-        border: 0;
+        font-size: 9px;
     }
 
     .directive-bar__input {
-        flex: 1;
-        min-width: 0;
-        width: auto;
-        height: 36px;
-        padding: 8px 12px;
-        border-radius: 8px;
         font-size: 13.5px;
-    }
-
-    .directive-bar__hint {
-        display: none;
     }
 
     .directive-bar .button--send {

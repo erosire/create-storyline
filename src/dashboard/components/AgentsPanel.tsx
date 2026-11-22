@@ -121,7 +121,7 @@ export function AgentsPanel({
     return (
         <aside className="sv-pane sv-agents" data-testid="agents-panel" aria-label="Employees">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Employees — global (U-8)</h3>
+                <h3 className="sv-pane-title">Employee</h3>
                 <span className="sv-pane-badge">
                     {working} thread{working === 1 ? '' : 's'} running
                 </span>
@@ -236,13 +236,6 @@ export function AgentsPanel({
                     );
                 })}
             </ul>
-
-            {/* The Author's channel is the Editor: a directive is addressed to it, it turns that
-                direction into queued tasks, and the loop opens the threads the tasks need. This is
-                routing, not a rank and not a delegation (R15, V-2). */}
-            <p className="sv-agents-note">
-                the Editor is your channel — a directive becomes its tasks, and the loop opens the threads.
-            </p>
         </aside>
     );
 }

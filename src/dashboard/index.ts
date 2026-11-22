@@ -7,6 +7,7 @@ export * from './shell-binding';
 export * from './state';
 export { AuthorQueue } from './components/AuthorQueue';
 export { DirectiveBar } from './components/DirectiveBar';
+export { HomeDesk } from './components/HomeDesk';
 export { AgentsPanel } from './components/AgentsPanel';
 export { StoryOutline } from './components/StoryOutline';
 export { NewStoryForm } from './components/NewStoryForm';

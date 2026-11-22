@@ -38,15 +38,13 @@ export default defineConfig({
         port: 4510,
         // THE DEV PROXY: `/v1/storyline` is the one root the UI dials, so
         // proxying it makes `yarn dev` on :4510 same-origin with the gateway on
-        // :5000 — REST AND WEBSOCKET. `ws: true` is not optional: live story
-        // deltas ride `wss?://<origin>/v1/storyline/stream` with the
-        // `harness.v1` subprotocol, and without the socket upgrade path the
-        // dashboard would stream nothing in development.
+        // :5000. REST and the SSE feed (`GET /v1/storyline/stream`) share that
+        // origin; the dashboard has no second transport and never dials a
+        // harness socket or the model provider directly.
         proxy: {
             '/v1/storyline': {
                 target: DEV_API_TARGET,
-                changeOrigin: true,
-                ws: true
+                changeOrigin: true
             }
         },
         // Never watch the repo-root scratch directory (see AGENTS.md "Scratch

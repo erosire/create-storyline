@@ -10,13 +10,9 @@ import type { DashboardStore } from './state';
 
 vi.mock('./components/StoryView', () => ({
     // The one thing the shell owes the story view is the bound props; the stub proves they
-    // arrived by reading the Story title back out of the view object and by painting the
-    // global rail lead the shell handed it.
-    StoryView: (props: { view: { story: { title: string } }; railLead?: unknown }) => (
-        <div data-testid="story-view">
-            {props.view.story.title}
-            {props.railLead as never}
-        </div>
+    // arrived by reading the Story title back out of the view object.
+    StoryView: (props: { view: { story: { title: string } } }) => (
+        <div data-testid="story-view">{props.view.story.title}</div>
     )
 }));
 /** Mounts the shell inside `act`: its mount effect starts the stream and the first reads. */
@@ -33,41 +29,54 @@ function harness() {
 }
 
 describe('StorylineApp — the four regions (§10.1)', () => {
-    it("opens on the Author's queue with the agents rail and the directive bar in place (U-10)", async () => {
+    it("opens on the tabbed Author's desk, with Requests first and the input bar present (U-10)", async () => {
         const { store } = harness();
         await store.reload();
         await mount(store);
 
         expect(screen.getAllByTestId('station')).toHaveLength(1);
         expect(document.querySelectorAll('[data-region]')).toHaveLength(3);
+        // The home desk is two tabs: Requests first, Create New Story second.
+        expect(screen.getByTestId('home-desk')).toBeTruthy();
         expect(screen.getByTestId('author-queue')).toBeTruthy();
-        expect(screen.getByTestId('new-story-form')).toBeTruthy();
+        expect(screen.queryByTestId('new-story-form')).toBeNull();
+        expect(screen.getByRole('tab', { name: /Requests/ }).getAttribute('aria-selected')).toBe('true');
         // The phrases/thread history is not a rail panel; the agents roster is.
         expect(screen.getByTestId('agents-panel')).toBeTruthy();
         expect(screen.getAllByTestId('agents-panel')).toHaveLength(1);
-        // The directive bar is the content column's footer, not a window-wide strip.
+        // The input is always there; with no Story it is the home prompt path.
         expect(screen.getByTestId('directive-bar')).toBeTruthy();
-        expect(document.querySelector('[data-region="story"] > .directive-bar')).toBe(
-            screen.getByTestId('directive-bar')
-        );
-        // With no Story open the centre region is one column, not the spanned story+rail pair.
-        expect(document.querySelector<HTMLElement>('.station__regions')?.dataset.open).toBe('false');
+        expect(document.querySelector<HTMLElement>('.directive-bar__label')?.textContent).toBe('Directive');
     });
 
-    it('swaps the queue for the story view and hands the third column to its crew rail (U-1b / §10.1)', async () => {
+    it('switches to the Create New Story tab for the form and labels the prompt (U-12)', async () => {
+        const { store } = harness();
+        await store.reload();
+        await mount(store);
+
+        await click(screen.getByRole('tab', { name: 'Create New Story' }));
+
+        expect(screen.getByTestId('home-create')).toBeTruthy();
+        expect(screen.getByTestId('new-story-form')).toBeTruthy();
+        expect(screen.getByText('Start a Story')).toBeTruthy();
+        expect(screen.queryByTestId('author-queue')).toBeNull();
+        expect(document.querySelector<HTMLElement>('.directive-bar__label')?.textContent).toBe(
+            'Create New Story'
+        );
+    });
+
+    it('swaps the queue for the story view and keeps the crew in the third column (U-1b / §10.1)', async () => {
         const { store } = harness();
         await store.reload();
         await mount(store);
 
         await click(screen.getByRole('button', { name: /Hollow Sea/ }));
 
-        // The bound view reached the story view, and the shell's own crew region steps aside
-        // because the rail inside the story view owns the third column now.
+        // The bound view reached the story view; the three regions stay side by side.
         expect(screen.getByTestId('story-view').textContent).toContain('Hollow Sea');
-        // The employee tiles stay on the right rail, global to every Story, while the centre changes.
+        expect(document.querySelectorAll('[data-region]')).toHaveLength(3);
         expect(screen.getAllByTestId('agents-panel')).toHaveLength(1);
-        expect(document.querySelector('[data-region="crew"]')).toBeNull();
-        expect(document.querySelector<HTMLElement>('.station__regions')?.dataset.open).toBe('true');
+        expect(document.querySelector('[data-region="crew"]')).toBeTruthy();
         // U-9: the directive bar is the content column's footer and is scoped to the selected Story.
         expect(document.querySelector('[data-region="story"] > .directive-bar')).toBe(
             screen.getByTestId('directive-bar')
@@ -111,8 +120,7 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(store.getSnapshot().selectedAgent).toBe('writer');
         expect(client.listAgentThreads).toHaveBeenCalledWith('writer');
         expect(screen.getByTestId('agent-threads')).toBeTruthy();
-        // The centre changed; the roster stayed as the third column, and the story rail stepped aside.
-        expect(document.querySelector<HTMLElement>('.station__regions')?.dataset.open).toBe('false');
+        // The centre changed; the roster stayed as the third column.
         expect(screen.getByTestId('agents-panel')).toBeTruthy();
         expect(screen.queryByTestId('story-view')).toBeNull();
 
@@ -121,6 +129,41 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(store.getSnapshot().selectedAgent).toBeNull();
         expect(screen.getByTestId('story-view')).toBeTruthy();
         expect(screen.queryByTestId('agent-threads')).toBeNull();
+    });
+
+    it('deselects the employee when the left rail opens a phrase (U-8 / U-4)', async () => {
+        const { store } = harness();
+        await store.reload();
+        await store.openStory('story_1');
+        await mount(store);
+
+        await click(screen.getByRole('button', { name: /open Writer threads/ }));
+        expect(store.getSnapshot().selectedAgent).toBe('writer');
+        expect(screen.getByTestId('agent-threads')).toBeTruthy();
+
+        // The left rail is navigation: opening a phrase changes the centre, so the employee's
+        // thread surface must stop being selected in the same click.
+        await click(screen.getByRole('button', { name: /Phrase 1/ }));
+
+        expect(store.getSnapshot().selectedAgent).toBeNull();
+        expect(screen.getByTestId('story-view')).toBeTruthy();
+        expect(screen.queryByTestId('agent-threads')).toBeNull();
+    });
+
+    it('brings the Story back when its own row is clicked from an employee thread surface (U-4 / U-8)', async () => {
+        const { store } = harness();
+        await store.reload();
+        await store.openStory('story_1');
+        await mount(store);
+
+        await click(screen.getByRole('button', { name: /open Writer threads/ }));
+        expect(store.getSnapshot().selectedAgent).toBe('writer');
+
+        await click(screen.getByRole('button', { name: /Hollow Sea/ }));
+
+        expect(store.getSnapshot().selectedAgent).toBeNull();
+        expect(store.getSnapshot().activeStoryId).toBe('story_1');
+        expect(screen.getByTestId('story-view')).toBeTruthy();
     });
 
     it('deselects the employee when the open tile itself is clicked again (U-8)', async () => {

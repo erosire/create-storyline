@@ -49,7 +49,7 @@ describe('AgentsPanel — the global employee roster', () => {
         render(<AgentsPanel agents={working} />);
 
         const panel = screen.getByTestId('agents-panel');
-        expect(within(panel).getByText('Employees — global (U-8)')).toBeTruthy();
+        expect(within(panel).getByText('Employee')).toBeTruthy();
         expect(within(panel).getByText('1 thread running')).toBeTruthy();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
@@ -122,7 +122,7 @@ describe('AgentsPanel — the global employee roster', () => {
 
         const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
         expect(within(editor).getByText('Editor')).toBeTruthy();
-        expect(within(panel).getByText(/the Editor is your channel/)).toBeTruthy();
+        expect(within(panel).queryByText(/the Editor is your channel/)).toBeNull();
     });
 
     it('states the model on the tile as plain text backed by the catalogue dropdown (U-8, T-6b)', () => {

@@ -6,6 +6,11 @@
 // so the rules live in one place (L-0/L-6/L-7/L-17/L-25/L-31), and every projection is delegated to
 // `./projections` so the criteria engine stays the only level calculator (L-14/W3).
 //
+// THE PUBLISHED CONTRACT is `src/storyline-server.swagger.yaml`. Every path, request body, response
+// shape and error class in this table has one entry there; `./contract.test.ts` fails when the two
+// sets drift. The dashboard is a CLIENT of that contract — it has no second transport and no server
+// import, and `src/dashboard/server-boundary.test.ts` enforces the boundary.
+//
 // ERROR SHAPE — the product's sentences, not log lines (L-13). Every non-2xx body is `{error: string}`
 // and the client re-throws that text verbatim (`ApiError`), so:
 //   * 400 — the body was not the shape the route needs (a missing/ill-typed field).
@@ -162,6 +167,7 @@ interface UndoBody {
 
 interface DirectiveBody {
     text?: unknown;
+    refs?: unknown;
 }
 
 interface TemplateAssignBody {
@@ -1197,7 +1203,24 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
-        return verb(c, story.id, () => engine.processDirective(story.id, parsed.body.text as string));
+        if (
+            parsed.body.refs !== undefined &&
+            (!Array.isArray(parsed.body.refs) || parsed.body.refs.some((ref) => typeof ref !== 'string'))
+        ) {
+            return errorResponse(
+                c,
+                400,
+                '`refs` must be a list of artifact ids — the pane the Author was looking at (U-9, D-19).'
+            );
+        }
+
+        return verb(c, story.id, () =>
+            engine.processDirective(
+                story.id,
+                parsed.body.text as string,
+                (parsed.body.refs as string[] | undefined) ?? []
+            )
+        );
     });
 
     /**

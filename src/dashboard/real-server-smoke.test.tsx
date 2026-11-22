@@ -61,7 +61,7 @@ describe('the dashboard over the real server', () => {
         await fixture.close();
     });
 
-    it('a Story nobody has worked on renders its unreached levels as `n/a`, never as a score (L-14)', async () => {
+    it('a Story nobody has worked on renders from the server without inventing a level (L-14)', async () => {
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
 
         expect(await storyRow(fixture, storyId)).toMatchObject({ id: 'story_1', phase: 'summary', status: 'ready' });
@@ -78,18 +78,18 @@ describe('the dashboard over the real server', () => {
             screen.getAllByText('A nobody inherits a lighthouse that chooses its own keepe...').length
         ).toBeGreaterThan(0);
 
-        // L-14: the level the Story is in shows `n/m` with the failure named, and the three it has not
-        // reached show `n/a` — a level nobody has judged is not a level with zero passing.
         const text = String(document.body.textContent);
 
-        expect(text).toContain('1/2 · failing: C-14');
-        expect(text.split('n/a')).toHaveLength(4);
+        // The navigation row says the server's status and nothing it recomputed. Levels live on
+        // the panes now; the compact row must not smuggle a second rendering in.
+        expect(text).toContain('ready');
+        expect(text).not.toContain('n/a');
 
-        // And the reason the row carries is the server's sentence, verbatim.
+        // The Story view prints the server's own reason sentence.
         expect(text).toContain('phase summary is open: the Seed is being expanded (L-29 stops it at the lock)');
     });
 
-    it('the same screen after one sweep shows the crew working and the Summary level passing', async () => {
+    it('the same screen after one sweep keeps rendering the real Story payload', async () => {
         await fixture.tick();
 
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
@@ -104,12 +104,12 @@ describe('the dashboard over the real server', () => {
 
         const text = String(document.body.textContent);
 
-        // The Summary level moved to a passing score while the other three stay unreached.
-        expect(text).toContain('2/2');
-        expect(text.split('n/a')).toHaveLength(4);
+        expect(
+            screen.getAllByText('A nobody inherits a lighthouse that chooses its own keepe...').length
+        ).toBeGreaterThan(0);
+        expect(text).toContain('Summary — Phrase 1');
 
-        // The crew rail is the server's run rows: the templates that actually ran, not a fixture list.
+        // The crew is the server's run rows: the templates that actually ran, not a fixture list.
         expect(runs.map((run) => run.template_ref)).toEqual(['writer-summary', 'writer-summary', 'writer-summary']);
-        expect(text).toContain('writer-summary');
     });
 });

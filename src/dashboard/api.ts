@@ -1,11 +1,16 @@
-// §10 / W9-W13 — the browser-side client for the pinned `/v1/storyline` surface.
+// §10 / W9-W13 — the browser-side client for the server's `/v1/storyline` surface.
 //
-// WHY THIS FILE IS ALSO A CONTRACT: T7 builds the server against the SAME pinned shape at
-// the same time this wave builds the UI. Everything the dashboard renders therefore lives
-// here under a name both sides agreed to: the method names (T9 imports exactly these), the
-// row/view projections (`StoryRow`, `StoryView`, `QueueItem`), and the SSE event names. The
-// record shapes themselves are NOT redefined — they come from `src/shared/types.ts` (§4 is
-// normative in name and field), and only the server-computed PROJECTIONS are declared here.
+// THE ONE NETWORK LAYER. The server owns the HTTP contract in `src/storyline-server.swagger.yaml`;
+// this module is the dashboard's only implementation of it. Components render store snapshots and
+// call store methods; neither imports a server module, calls the model provider, opens a harness
+// socket, or executes a harness tool. A second transport in the UI would be a second backend, and
+// the dashboard is deliberately a client of the Storyline server and nothing else.
+//
+// Everything the dashboard renders therefore lives here under a name both sides agreed to: the
+// method names (T9 imports exactly these), the row/view projections (`StoryRow`, `StoryView`,
+// `QueueItem`), and the SSE event names. The record shapes themselves are NOT redefined — they
+// come from `src/shared/types.ts` (§4 is normative in name and field), and only the server-computed
+// PROJECTIONS are declared here.
 //
 // PROJECTIONS VS RECORDS: `StoryRow` is not `Story` — it carries the criteria engine's
 // rendered strings (`levels`, `progress`, `blocked_on`, §6.7 L-14/W3 "renders as
@@ -217,11 +222,15 @@ export interface QueueItem {
 // Mutation payloads (bodies are pinned by the route table; the ops are the §5.1 dial verbs)
 // ---------------------------------------------------------------------------
 
-/** `POST /stories` body. `chapter_count` is Author truth — declared, never agent-chosen (D-3b). */
+/**
+ * `POST /stories` body. `chapter_count` is Author truth — declared, never agent-chosen (D-3b).
+ * The route lets the server name an untitled Story from its Seed, which is what the Create Story
+ * tab's "tell the Editor" path uses; the form still sends all three fields.
+ */
 export interface CreateStoryInput {
-    title: string;
+    title?: string;
     idea: string;
-    chapter_count: number;
+    chapter_count?: number;
 }
 
 /**
@@ -498,8 +507,12 @@ export interface ApiClient {
     selectRevisionAuthor(storyId: string, revisionId: string, note?: string): Promise<StoryRow>;
     /** U-13a / D-23 — the Author asks for named drafts to be merged; the drafts stay competing. */
     mergeRevisions(storyId: string, request: RevisionMergeRequest): Promise<StoryRow>;
-    /** U-9 / D-19 — one line addressed to the Editor; it records a `directives` row and propagates. */
-    sendDirective(storyId: string, text: string): Promise<StoryRow>;
+    /**
+     * U-9 / D-19 — one line addressed to the Editor; it records a `directives` row and propagates.
+     * `refs` names the artifact the Author is looking at, so the Editor updates the focused pane
+     * even when the sentence never spells out a chapter or plotline.
+     */
+    sendDirective(storyId: string, text: string, refs?: string[]): Promise<StoryRow>;
     /** L-26 — the Author's acceptance is what closes the leftovers (L-25b). */
     acceptCompletion(storyId: string): Promise<StoryRow>;
     /** D-17b — the assignment list, replaceable wholesale (the count is the Author's call). */
@@ -733,7 +746,8 @@ export const api: ApiClient = {
         ),
     // U-13a / D-23. Same task the Checker's `requestMerge` opens; the desk shows one entry either way.
     mergeRevisions: (storyId, request) => post<StoryRow>(storyPath(storyId, '/revisions/merge'), request),
-    sendDirective: (storyId, text) => post<StoryRow>(storyPath(storyId, '/directives'), { text }),
+    sendDirective: (storyId, text, refs) =>
+        post<StoryRow>(storyPath(storyId, '/directives'), refs && refs.length > 0 ? { text, refs } : { text }),
     acceptCompletion: (storyId) => post<StoryRow>(storyPath(storyId, '/complete')),
     assignTemplates: (storyId, template_ids) => post<StoryRow>(storyPath(storyId, '/templates'), { template_ids }),
     patchGoal: (storyId, body) => patch<GoalSurface>(storyPath(storyId, '/goal'), body),

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { AuthorQueue } from './AuthorQueue';
-import { click, queueItem, renderShell } from '../testing/shell-fakes';
+import { click, queueItem, renderShell, type } from '../testing/shell-fakes';
 import type { QueueItem } from '../api';
 
 function desk(): QueueItem[] {
@@ -106,6 +106,11 @@ describe('AuthorQueue — the home screen (U-10 / U-10a / U-10b)', () => {
         expect(within(escalation).getByRole('heading', { level: 4 }).textContent).toContain(
             'should the sea have a name at all?'
         );
+
+        // P7's answer is on the request itself: one line to the Editor, no detour into the Story.
+        await type(within(escalation).getByTestId('queue-answer'), 'the sea is nameless — make ch6 agree');
+        await click(within(escalation).getByTestId('queue-answer-send'));
+        expect(client.sendDirective).toHaveBeenCalledWith('story_2', 'the sea is nameless — make ch6 agree', []);
 
         const gap = items()[3] as HTMLElement;
         expect(gap.textContent).toContain('compare two chapters side by side');

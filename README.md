@@ -56,10 +56,16 @@ that drives it, from one origin.
   `journal.jsonl`; the journal is the state, and a restart replays it). The REST API is mounted
   at `/v1/storyline`, and `GET /v1/storyline/stream` is a server-sent events feed of the Store's
   own commit groups (a `ready` frame first, then one frame per commit, debounced).
-- **UI** (`src/dashboard/`) — the Author's desk: the Stories panel, the Author's queue, the crew
-  rail, the Ideas tray, the Goal panel, the phase strip, the prose editor. It dials the same
-  origin at `/v1/storyline`.
-- **The contract** is `documents/specifications.md`. Every behaviour note in the code cites the
+- **UI** (`src/dashboard/`) — the Author's desk: the compact Stories panel with an attention-first
+  phrase rail, the tabbed home desk (Requests / Create New Story), the pane-aware directive bar, the
+  crew rail, the Ideas tray, the Goal panel and the prose editor. It dials the same origin at
+  `/v1/storyline` and holds no authoritative state; `src/dashboard/api.ts` is its only transport.
+- **The HTTP contract** is `src/storyline-server.swagger.yaml` (OpenAPI 3.0.3), the same pattern as
+  the harness server's contract: every route, body, projection, status code, and the SSE feed at
+  `/v1/storyline/stream` in one document. The UI renders server projections and mutates only through
+  these operations; it never imports a server module, calls the model provider, or executes a harness
+  tool directly.
+- **The product contract** is `documents/specifications.md`. Every behaviour note in the code cites the
   id it serves (`L-` loop, `D-` design decision, `U-` UI, `S-` service, `T-` tool, `G-` goal,
   `E-` engine, `P-` principle, `V-` vocabulary), so a reader can go from a line of code to the
   paragraph that demanded it, and back.
@@ -97,8 +103,8 @@ Precedence is `flag` → `STORYLINE_*` → built-in default.
 | Built dashboard      | `--no-static`                            | `STORYLINE_STATIC_ROOT` | `dist` when it exists, otherwise no static root          |
 
 The crew needs a model. Exactly three variables say where it is, and nothing else about the
-harness is configuration — the roles, the tools, the criteria and the caps are Template cards the
-Author edits in the running product:
+harness is runtime configuration — the roles, the tools, the criteria and the caps are templates
+defined in code at server boot; changing them is a code change and a restart:
 
 | Variable                      | Meaning                                                                                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |

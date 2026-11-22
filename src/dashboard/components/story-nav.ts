@@ -11,7 +11,7 @@
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
 import type { Chapter, Plotline, Verdict } from '../../shared/types';
-import { buildRevisionUnits } from './story-contract';
+import { buildRevisionUnits, isDecidedIdea } from './story-contract';
 import type { RevisionUnit, StoryViewData } from './story-contract';
 
 /** The four reading phrases, in the Author's order. */
@@ -235,4 +235,208 @@ export function selectionExists(view: StoryViewData, selection: StorySelection):
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Attention — what the rail highlights, and what the directive bar addresses
+// ---------------------------------------------------------------------------
+
+/** The tone a rail highlight uses: a wait is calm, a stall is urgent, leftovers are finished. */
+export type StoryAttentionTone = 'awaiting' | 'stalled' | 'finished';
+
+/** One place in the rail that needs the Author. */
+export interface StoryAttention {
+    panel: StoryPanelKey;
+    ref?: string;
+    label: string;
+    tone: StoryAttentionTone;
+}
+
+/** The phrase the loop is currently in, as the rail's own key. */
+function currentPhrase(story: StoryViewData['story']): StoryPhraseKey {
+    return story.phase;
+}
+
+/**
+ * Everything the rail should highlight. This is the inverse of the old Stories-panel row: the
+ * row now says only "needs you", and the detail of *where* lives on the rail the Author is about
+ * to use. A record can add attention even when `pending_kind` names a different hold — an open
+ * finding is still open while the Story waits on a sign-off.
+ */
+export function storyAttention(view: StoryViewData): StoryAttention[] {
+    const { story } = view;
+    const items: StoryAttention[] = [];
+    const add = (item: StoryAttention): void => {
+        if (!items.some((existing) => existing.panel === item.panel && (existing.ref ?? '') === (item.ref ?? ''))) {
+            items.push(item);
+        }
+    };
+
+    if (story.pending_kind === 'stalled') {
+        add({ panel: currentPhrase(story), label: 'stuck', tone: 'stalled' });
+    } else if (story.pending_kind === 'phase_signoff') {
+        add({ panel: currentPhrase(story), label: 'sign off', tone: 'awaiting' });
+    } else if (story.pending_kind === 'idea_selection') {
+        add({ panel: 'ideas', label: 'pick an Idea', tone: 'awaiting' });
+    } else if (story.pending_kind === 'finding_approval') {
+        add({ panel: 'findings', label: 'approve findings', tone: 'awaiting' });
+    } else if (story.pending_kind === 'drained') {
+        add({ panel: 'findings', label: 'leftovers', tone: 'finished' });
+    }
+
+    const findings = view.findings.filter(
+        (finding) => finding.state === 'confirmed' && !(story.auto_approve ?? []).includes(finding.cost)
+    );
+    if (findings.length > 0) {
+        add({
+            panel: 'findings',
+            label: `${findings.length} finding${findings.length === 1 ? '' : 's'} to approve`,
+            tone: 'awaiting'
+        });
+
+        // The chapters the findings point at are the ones the Author will have to reopen; mark
+        // them in the rail too, so "where" is visible without opening the Findings folder.
+        for (const finding of findings) {
+            for (const ref of [finding.target_ref, ...(finding.related_refs ?? [])]) {
+                if (view.chapters.some((chapter) => chapter.id === ref)) {
+                    add({ panel: 'chapters', ref, label: 'open finding', tone: 'awaiting' });
+                }
+            }
+        }
+    }
+
+    const ideas = view.ideas.filter((idea) => idea.phase === story.phase && !isDecidedIdea(idea));
+    if (ideas.length > 0) {
+        add({
+            panel: 'ideas',
+            label: `${ideas.length} Idea${ideas.length === 1 ? '' : 's'} to decide`,
+            tone: 'awaiting'
+        });
+
+        for (const idea of ideas) {
+            if (idea.unit_ref && view.chapters.some((chapter) => chapter.id === idea.unit_ref)) {
+                add({ panel: 'chapters', ref: idea.unit_ref, label: 'Idea for this chapter', tone: 'awaiting' });
+            }
+            if (idea.unit_ref && view.plotlines.some((plotline) => plotline.id === idea.unit_ref)) {
+                add({ panel: 'plotlines', ref: idea.unit_ref, label: 'Idea for this plotline', tone: 'awaiting' });
+            }
+        }
+    }
+
+    const summaryDrafts = view.revisions.filter(
+        (revision) => revision.unit_kind === 'summary' && revision.state === 'competing'
+    );
+    if (summaryDrafts.length > 0) {
+        add({ panel: 'summary', label: 'choose a draft', tone: 'awaiting' });
+    }
+
+    if (view.completion_preview && story.status !== 'completed') {
+        add({ panel: 'chapters', label: 'completion proposed', tone: 'finished' });
+    }
+
+    return items;
+}
+
+/** The attention item, if any, that belongs to one rail entry. */
+export function attentionFor(
+    view: StoryViewData,
+    panel: StorySelection['panel'],
+    ref?: string
+): StoryAttention | undefined {
+    return storyAttention(view).find((item) => item.panel === panel && (item.ref ?? undefined) === ref);
+}
+
+// ---------------------------------------------------------------------------
+// The directive bar's focus
+// ---------------------------------------------------------------------------
+
+/**
+ * What the Author is looking at, in the terms the Editor's brief needs. `refs` are the artifact
+ * rows the direction is about; the server resolves them one hop wider (dependents), so the Editor
+ * receives the focused Summary/chapter/plotline even when the sentence itself never names it.
+ */
+export interface DirectiveFocus {
+    /** The bar's label, e.g. "Summary → Editor" or "Chapter 3 — The Water Line → Editor". */
+    label: string;
+    /** The sentence it is talking about, e.g. "the Summary" or "this chapter". */
+    target: string;
+    placeholder: string;
+    refs: string[];
+}
+
+/** The slices the directive bar reads; the raw `getStory` payload satisfies it too. */
+export type DirectiveFocusView = Pick<StoryViewData, 'story' | 'summary' | 'cast' | 'plotlines' | 'chapters'>;
+
+/** The focus the directive bar should show for the rail's current selection. */
+export function directiveFocus(view: DirectiveFocusView, selection: StorySelection): DirectiveFocus {
+    if (selection.panel === 'seed') {
+        return {
+            label: 'Seed → Editor',
+            target: 'the Seed (read-only for every agent — P5)',
+            placeholder: 'what should the Editor do with this Seed?',
+            refs: []
+        };
+    }
+
+    if (selection.panel === 'summary') {
+        return {
+            label: 'Summary → Editor',
+            target: 'the Summary',
+            placeholder: 'e.g. tighten the premise · keep the ending',
+            refs: view.summary ? [view.summary.id] : []
+        };
+    }
+
+    if (selection.panel === 'characters') {
+        const member = selection.ref ? view.cast.find((candidate) => candidate.id === selection.ref) : undefined;
+        return {
+            label: member ? `${member.name || member.id} → Editor` : 'Characters → Editor',
+            target: member ? `${member.name || member.id}'s sheet` : 'the cast sheet',
+            placeholder: 'e.g. give Hale a want that fights her need',
+            refs: member ? [member.id] : []
+        };
+    }
+
+    if (selection.panel === 'plotlines') {
+        const plotline = selection.ref ? view.plotlines.find((candidate) => candidate.id === selection.ref) : undefined;
+        return {
+            label: plotline
+                ? `Plotline ${plotline.order}${plotline.heading ? ` — ${plotline.heading}` : ''} → Editor`
+                : 'Plotlines → Editor',
+            target: plotline ? 'this plotline' : 'the plotline set',
+            placeholder: 'e.g. make this plotline pay off the set-up · keep the order',
+            refs: plotline
+                ? [plotline.id]
+                : [...view.plotlines].sort((left, right) => left.order - right.order).map((row) => row.id)
+        };
+    }
+
+    if (selection.panel === 'chapters') {
+        const chapter = selection.ref ? view.chapters.find((candidate) => candidate.id === selection.ref) : undefined;
+        return {
+            label: chapter ? `Chapter ${chapter.order} — ${chapter.title} → Editor` : 'Chapters → Editor',
+            target: chapter ? 'this chapter' : 'the chapter set',
+            placeholder: 'e.g. kill the mentor here · make it colder',
+            refs: chapter
+                ? [chapter.id]
+                : [...view.chapters].sort((left, right) => left.order - right.order).map((row) => row.id)
+        };
+    }
+
+    const folder = STORY_FOLDERS.find((candidate) => candidate.key === selection.panel);
+    const placeholders: Partial<Record<StoryPanelKey, string>> = {
+        continuity: 'e.g. make the ledger agree on the drowned road',
+        goal: 'e.g. add a hard criterion for point of view',
+        ideas: 'e.g. take the hum idea · discard the repeat',
+        findings: 'e.g. approve the C-14 finding · discard the minor ones',
+        digest: 'e.g. re-derive the Digest from the current Summary',
+        settings: 'e.g. auto-approve minor findings for this Story'
+    };
+
+    return {
+        label: `${folder?.title ?? 'Story'} → Editor`,
+        target: `the ${folder?.title ?? 'Story'} folder`,
+        placeholder: placeholders[selection.panel] ?? 'what should change here?',
+        refs: []
+    };
 }

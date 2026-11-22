@@ -1,9 +1,12 @@
 // W9 acceptance — "three Stories in three phases and three statuses; the one awaiting the
-// Author is on top, and it is visibly a different kind of wait from the stalled one", plus
-// the W13 additions U-1b (two colours), U-1c (drained reads finished), U-12a (phase strip)
-// and U-2/U-3 (crew line, Stop).
+// Author is on top, and it is visibly a different kind of wait from the stalled one".
+//
+// THE ROW IS NOW ONE DECISION: it names the Story and says whether it needs the Author. Levels,
+// the phase strip, the trend and the full status_reason live on the Story's own panes, whose rail
+// highlights the artifact (`StoryOutline`). These tests pin that compact contract and the
+// stop/resume/delete controls being available on the open row.
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { within } from '@testing-library/react';
 import { StoriesPanel } from './StoriesPanel';
 import { click, renderShell, storyRow } from '../testing/shell-fakes';
 
@@ -66,131 +69,63 @@ const rowIds = () =>
     Array.from(document.querySelectorAll('li.story-row')).map((node) => (node as HTMLElement).dataset.story);
 const rowFor = (id: string) => document.querySelector<HTMLElement>(`li.story-row[data-story="${id}"]`) as HTMLElement;
 
-describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () => {
+describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c)', () => {
     it('puts the Story awaiting the Author on top, then the stall, then ready, then done (U-1)', async () => {
         await renderShell(<StoriesPanel />, fixture());
-        // Exact order, not "is first": awaiting (sign-off · drained) → stalled → ready → completed.
         expect(rowIds()).toEqual(['story_1', 'story_4', 'story_2', 'story_3', 'story_5']);
     });
 
-    it('renders every row with its status badge, level strings, and trend arrow (U-1 / L-14)', async () => {
+    it('names the Story and one attention mark; the detail lives inside the Story', async () => {
         await renderShell(<StoriesPanel />, fixture());
 
-        const badge = rowFor('story_2').querySelector('.badge') as HTMLElement;
-        expect(badge.textContent).toBe('pending');
+        expect(rowFor('story_1').querySelector('.story-row__title')?.textContent).toBe('Hollow Sea');
+        expect(rowFor('story_1').querySelector('.story-row__attention')?.textContent).toBe('needs your signature');
+        expect(rowFor('story_2').querySelector('.story-row__attention')?.textContent).toBe('stuck');
+        expect(rowFor('story_4').querySelector('.story-row__attention')?.textContent).toBe('leftovers need you');
+        expect(rowFor('story_3').querySelector('.badge')?.textContent).toBe('ready');
 
-        // The engine's rendered strings pass through untouched — the client never recomputes.
-        const levels = rowFor('story_2').querySelectorAll('[data-level]');
-        expect(Array.from(levels).map((node) => (node as HTMLElement).dataset.level)).toEqual([
-            'summary',
-            'plotlines',
-            'chapters',
-            'whole'
-        ]);
-        expect(rowFor('story_2').querySelector('[data-level="plotlines"] .level__value')?.textContent).toBe('5/7');
-        expect(rowFor('story_2').querySelector('[data-level="chapters"] .level__value')?.textContent).toBe('n/a');
-
-        // L-15's arrow, from the enum rather than a re-derived number.
-        expect(rowFor('story_2').querySelector('[data-trend]')?.textContent).toBe('→');
-        expect(rowFor('story_3').querySelector('[data-trend]')?.getAttribute('data-trend')).toBe('improving');
-        expect(rowFor('story_3').querySelector('[data-trend]')?.textContent).toBe('↑');
+        // The levels/trend/phase strip are no longer on the navigation row.
+        expect(rowFor('story_2').querySelector('[data-level]')).toBeNull();
+        expect(rowFor('story_2').querySelector('[data-trend]')).toBeNull();
+        expect(rowFor('story_2').querySelector('.phase-strip')).toBeNull();
+        expect(rowFor('story_2').textContent).not.toContain('C-4 has failed');
     });
 
-    it('marks the signed phases on the strip with lock icons and the current phase (U-12a)', async () => {
+    it('keeps awaiting, stalled and drained visibly different (U-1b / U-1c / L-34)', async () => {
         await renderShell(<StoriesPanel />, fixture());
 
-        const strip = within(rowFor('story_3')).getByTestId('phase-strip');
-        const marks = Array.from(strip.querySelectorAll('[data-phase]')) as HTMLElement[];
-        expect(marks.map((mark) => mark.dataset.phase)).toEqual(['summary', 'plotlines', 'chapters']);
-        expect(marks.map((mark) => mark.dataset.locked)).toEqual(['true', 'true', 'false']);
-        expect(marks.map((mark) => mark.dataset.state)).toEqual(['signed', 'signed', 'current']);
-        // The lock glyph is only on signed phases (U-12a: "a lock icon on each phase it has signed").
-        expect(strip.querySelectorAll('.phase-mark__lock')).toHaveLength(2);
-        expect(marks[2]?.textContent).toBe('③');
-    });
-
-    it('makes an awaiting Story and a stalled Story two different kinds of wait (U-1b / L-34)', async () => {
-        await renderShell(<StoriesPanel />, fixture());
-
-        // The tone is the whole mechanism, and it is on the row AND the badge so the
-        // stylesheet paints both (L-34: distinguishable at a glance).
         expect(rowFor('story_1').dataset.tone).toBe('awaiting');
         expect(rowFor('story_2').dataset.tone).toBe('stalled');
-        expect(rowFor('story_1').querySelector('.badge')?.getAttribute('data-tone')).toBe('awaiting');
-        expect(rowFor('story_2').querySelector('.badge')?.getAttribute('data-tone')).toBe('stalled');
+        expect(rowFor('story_4').dataset.tone).toBe('awaiting');
+        expect(rowFor('story_4').getAttribute('data-pending-kind')).toBe('drained');
 
-        // U-1b's sign-off wait is the state the product aims at; the stall prints L-22's
-        // named reason rather than "consistency low".
-        expect(rowFor('story_1').querySelector('.story-row__wait-label')?.textContent).toBe('awaiting your signature');
-        expect(rowFor('story_2').querySelector('.story-row__wait-label')?.textContent).toBe('stuck');
-        expect(rowFor('story_2').querySelector('.story-row__wait-detail')?.textContent).toContain(
-            'C-4 has failed on chapters 6–9 for 11 rounds'
-        );
-    });
-
-    it('reads a drained Story as finished: what the crew stopped finding, and exactly two moves (U-1c / L-37)', async () => {
-        await renderShell(<StoriesPanel />, fixture());
-
-        const row = rowFor('story_4');
-        // The leftovers sentence, verbatim from the server's projection.
-        expect(row.querySelector('.story-row__wait-detail')?.textContent).toBe(
-            'no critical or major left · 12 minor and 4 taste awaiting you'
-        );
-
-        // U-1c: the two moves L-37 allows, and nothing else competing with them.
-        const moves = within(row.querySelector<HTMLElement>('[data-slot="moves"]') as HTMLElement)
-            .getAllByRole('button')
-            .map((button) => button.textContent);
-        expect(moves).toEqual(['Work the leftovers', 'Complete']);
-        // A drained row gets no Stop/Resume/Clear — only the always-available Delete (P1).
-        expect(
-            Array.from(row.querySelectorAll<HTMLButtonElement>('[data-slot="controls"] button')).map(
-                (button) => button.textContent
-            )
-        ).toEqual(['Delete']);
+        expect(rowFor('story_1').querySelector('.story-row__attention')?.getAttribute('data-tone')).toBe('awaiting');
+        expect(rowFor('story_2').querySelector('.story-row__attention')?.getAttribute('data-tone')).toBe('stalled');
+        expect(rowFor('story_4').querySelector('.story-row__attention')?.getAttribute('data-tone')).toBe('finished');
 
         // The word "drained" is an internal name and must never reach the screen.
-        expect(row.textContent).not.toMatch(/drained/i);
+        expect(rowFor('story_4').textContent).not.toMatch(/drained/i);
     });
 
-    it('offers the sign-off as the one click that clears it (U-1b)', async () => {
-        const { client } = await renderShell(<StoriesPanel />, fixture());
-        const lock = within(rowFor('story_1')).getByRole('button', { name: 'Lock phase ①' });
-        await click(lock);
-        expect(client.lockPhase).toHaveBeenCalledTimes(1);
-        expect(client.lockPhase).toHaveBeenCalledWith('story_1');
-    });
-
-    it('sends "work the leftovers" to that Story\'s queue and "complete" to the acceptance (L-37 / L-26)', async () => {
-        const { client, store } = await renderShell(<StoriesPanel />, fixture());
-
-        await click(within(rowFor('story_4')).getByRole('button', { name: 'Work the leftovers' }));
-        // The Author stays in the panel and lands on this Story's leftovers: the queue is
-        // filtered to it, and its row has been opened so the Story view is one click away.
-        expect(store.getSnapshot().queueStoryFilter).toBe('story_4');
-        expect(client.getStory).toHaveBeenCalledWith('story_4');
-
-        await click(within(rowFor('story_4')).getByRole('button', { name: 'Complete' }));
-        expect(client.acceptCompletion).toHaveBeenCalledWith('story_4');
-    });
-
-    it('shows what the crews are doing to a running Story, and Stop pulls the cord on it (U-2 / U-3 / U-11 / P8)', async () => {
+    it('shows the open Story’s controls only on the open row, and Stop pulls its cord (U-3 / P8)', async () => {
         const { client } = await renderShell(<StoriesPanel />, fixture());
 
-        const crew = rowFor('story_3').querySelector('.story-row__crew') as HTMLElement;
-        expect(crew.textContent).toContain('3 crews on it');
-        // U-11: the line is story text ("hole in act 2"), not an activity ticker.
-        expect(crew.textContent).toContain('chapters 4–7 drafted · hole in act 2');
+        expect(rowFor('story_3').querySelector('[data-slot="controls"]')).toBeNull();
 
-        await click(within(rowFor('story_3')).getByRole('button', { name: 'Stop' }));
-        expect(client.stop).toHaveBeenCalledTimes(1);
+        const open = within(rowFor('story_3')).getByRole('button', { name: /Second Death/ });
+        await click(open);
+
+        const controls = rowFor('story_3').querySelector('[data-slot="controls"]') as HTMLElement;
+        await click(within(controls).getByRole('button', { name: 'Stop' }));
         expect(client.stop).toHaveBeenCalledWith('story_3');
     });
 
     it('deletes a Story and everything it owns only after the confirming click (P1)', async () => {
         const { client } = await renderShell(<StoriesPanel />, fixture());
-        const row = rowFor('story_5');
+        const open = within(rowFor('story_5')).getByRole('button', { name: /Ash Lantern/ });
+        await click(open);
 
+        const row = rowFor('story_5');
         await click(within(row).getByRole('button', { name: 'Delete' }));
         expect(client.deleteStory).not.toHaveBeenCalled();
         expect(within(row).getByText(/Delete "Ash Lantern" and everything it owns/)).toBeTruthy();
@@ -202,7 +137,6 @@ describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () =
     it('selecting a row opens the Story (U-4)', async () => {
         const { store } = await renderShell(<StoriesPanel />, fixture());
         const open = within(rowFor('story_2')).getByRole('button', { name: /Salt Cartography/ });
-        expect(open).toBeTruthy();
         await click(open);
         expect(store.getSnapshot().activeStoryId).toBe('story_2');
         expect(rowFor('story_2').dataset.active).toBe('true');
@@ -215,8 +149,6 @@ describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () =
         await click(open);
         expect(store.getSnapshot().activeStoryId).toBe('story_2');
 
-        // The left rail is a toggle: the same click on the active row puts the Author back on
-        // the queue, so no Story can become un-closable from the list.
         await click(open);
         expect(store.getSnapshot().activeStoryId).toBeNull();
         expect(rowFor('story_2').dataset.active).toBe('false');

@@ -73,6 +73,30 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
         expect(ticks.length).toBe(0);
     });
 
+    it('highlights the rail entries that need the Author, without printing the report (U-1c)', () => {
+        const view = fixtureView();
+        const { container } = render(
+            <StoryOutline view={view} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        // The fixture waits on an Idea pick and has competing Summary drafts.
+        const ideas = Array.from(container.querySelectorAll<HTMLElement>('.outline-item')).find((element) =>
+            element.textContent?.includes('Ideas')
+        )!;
+        const summary = Array.from(container.querySelectorAll<HTMLElement>('.outline-item--phrase')).find((element) =>
+            element.textContent?.includes('Summary')
+        )!;
+
+        expect(ideas.getAttribute('data-attention')).toBe('awaiting');
+        expect(ideas.getAttribute('title')).toContain('Idea');
+        expect(summary.getAttribute('data-attention')).toBe('awaiting');
+        expect(summary.getAttribute('title')).toBe('choose a draft');
+
+        // The reason is a dot and a tooltip, not a paragraph of detail on the rail.
+        expect(ideas.querySelector('.outline-attention')).toBeTruthy();
+        expect(ideas.textContent).not.toContain('Reader proposed');
+    });
+
     it('opens the phrase or the exact entry the Author clicked', () => {
         const selections: StorySelection[] = [];
         const { getByText } = render(

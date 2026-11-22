@@ -46,9 +46,7 @@ describe('StoryView — one selected phrase in the content area', () => {
         expect(screen.queryByRole('region', { name: 'Seed' })).toBeNull();
         expect(screen.queryByRole('navigation', { name: 'Story phases' })).toBeNull();
         // U-1c: the status line is the one piece of context outside the pane.
-        expect((container.querySelector('.sv-story-status-badge') as HTMLElement).textContent).toBe(
-            'pending — idea_selection'
-        );
+        expect((container.querySelector('.sv-story-status-badge') as HTMLElement).textContent).toBe('needs your pick');
         expect(
             screen.getByText('The Reader proposed three directions; the Author has not chosen one (D-28).')
         ).toBeTruthy();
@@ -264,11 +262,11 @@ describe('StoryView — the folders keep their own verbs (U-10a, U-14, U-15, D-3
         expect(digest.textContent).toContain('engine-derived, no agent wrote it (D-12a)');
     });
 
-    it('carries the TEMPLATES + EMPLOYEES rail on every pane (U-8)', () => {
-        renderView({ selection: { panel: 'goal' } });
+    it('leaves the employee rail to the shell (U-8)', () => {
+        const { container } = renderView({ selection: { panel: 'goal' } });
 
-        expect(screen.queryByRole('complementary', { name: 'Phrases' })).toBeNull();
-        expect(screen.getByRole('complementary', { name: 'Templates' })).toBeTruthy();
+        expect(container.querySelector('.sv-story-rail')).toBeNull();
+        expect(screen.queryByRole('complementary', { name: 'Templates' })).toBeNull();
     });
 });
 

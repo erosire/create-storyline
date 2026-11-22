@@ -1,18 +1,15 @@
 // U-4 / U-16 — the Summary pane (phase ①'s artifact).
 //
-// WHY IT IS READ-ONLY IN v1 (judgment call, reported to the orchestrator): U-4 lets the Author
-// edit the Summary while phase ① is unlocked, but the pinned client contract T8 and T9 were
-// given has NO summary-write method — its author verbs are `editSection` (chapter prose, D-37)
-// and the goal/template/idea/proposal set. Inventing an endpoint would break against T8's
-// `api.ts`, so the pane renders every field read-only, keeps U-4's **"Ask assistant"**
-// affordance (which is what §8.6 actually describes: an Author-invoked run with write rights on
-// ONE Summary field, for one run), and states the gap on the pane. The Author's own typing
-// surface in v1 is the chapter prose editor (U-17).
+// WHY IT IS READ-ONLY IN v1: U-4 lets the Author edit the Summary while phase ① is unlocked, but
+// the pinned client contract has NO summary-write method — its author verbs are `editSection`
+// (chapter prose, D-37) and the goal/template/idea/proposal set. The pane therefore renders every
+// field read-only and states the gap. The Author's way to change it is the directive bar at the
+// foot of the content: viewing the Summary labels that bar "Summary → Editor", and the Editor
+// reviews the direction and updates the Summary in focus (D-19).
 //
 // Once locked, D-3/L-30 make the pane read-only for every agent and the only way in is the
-// Author's Backtrack — so the pane says that, on the pane (U-16: "the UI should say so on every
-// locked pane"), and offers the same Ask-assistant affordance for the one thing the Author
-// cannot do themselves.
+// Author's Backtrack, so the pane says that on the pane (U-16: "the UI should say so on every
+// locked pane") and offers the Backtrack control.
 import { ConfirmButton } from './story-phase-controls';
 import type { BacktrackTarget, RevisionUnit } from './story-contract';
 import type { Revision, Story, Summary } from '../../shared/types';
@@ -38,8 +35,6 @@ export interface SummaryPaneProps {
      */
     onBacktrack?: (phase: BacktrackTarget) => void;
     backtrackNote?: string;
-    /** §8.6: an assistant run on ONE field. Absent until the API grows it — then the button is disabled and says so. */
-    onAskAssistant?: (field: string) => void;
     /** U-13 / D-24 — the competing overviews, already grouped by unit. */
     unit?: RevisionUnit;
     /** The draft whose newest verdict recommends `advance`, if any (see `recommendedRevisionId`). */
@@ -149,7 +144,6 @@ export function SummaryPane({
     summary,
     onBacktrack,
     backtrackNote,
-    onAskAssistant,
     unit,
     recommendedRevisionId,
     onSelectRevision,
@@ -196,8 +190,8 @@ export function SummaryPane({
                 <p className="sv-summary-note">
                     {/* The honest statement of the v1 gap: no Author summary write in the pinned contract. */}
                     This pane is read-only in v1: the pinned API has no Author summary write, so the Writer expands it
-                    (D-3) and Ask assistant (§8.6) is the one field-level route in. The Author&apos;s own editing
-                    surface is the chapter prose editor (U-17).
+                    (D-3). Use the directive bar below to tell the Editor what to change here; it reviews the direction
+                    and updates the Summary. The Author&apos;s own editing surface is the chapter prose editor (U-17).
                 </p>
             ) : (
                 <p className="sv-summary-note">
@@ -228,20 +222,6 @@ export function SummaryPane({
                             <dd className="sv-summary-value">
                                 {/* `sv-summary-text` is a plain read-only block: the pane never pretends to be a textarea it cannot save. */}
                                 <span className="sv-summary-text">{text || 'not written yet'}</span>
-                                {/* §8.6: one field, only when asked — hence one affordance per field, not one per pane. */}
-                                <button
-                                    type="button"
-                                    className="sv-ask-assistant"
-                                    disabled={!onAskAssistant}
-                                    title={
-                                        onAskAssistant
-                                            ? `Ask an assistant run to change ${label} only (§8.6)`
-                                            : 'Assistant runs land with the API (§8.6)'
-                                    }
-                                    onClick={() => onAskAssistant?.(key)}
-                                >
-                                    Ask assistant
-                                </button>
                             </dd>
                         </div>
                     );

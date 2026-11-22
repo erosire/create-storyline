@@ -12,9 +12,8 @@
 // so a stale click can never blank the screen.
 //
 // WHAT REMAINS OUTSIDE THE PANES: the story's status line (U-1c) is one line of chrome above the
-// artifact, and the employee/template rail is the third column. Both are context, not content.
+// artifact. The employee rail is the shell's third column, not part of this content region.
 import '../styles/story.css';
-import type { ReactNode } from 'react';
 import { CharactersPane } from './CharactersPane';
 import { CompletionPrompt } from './CompletionPrompt';
 import { GoalPanel } from './GoalPanel';
@@ -23,7 +22,6 @@ import { PlotlineChapters } from './PlotlineChapters';
 import { PlotlinesPane } from './PlotlinesPane';
 import { StalledReview } from './story-stalled-review';
 import { SummaryPane } from './SummaryPane';
-import { TemplatesPanel } from './TemplatesPanel';
 import { PhaseControls } from './story-phase-controls';
 import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
 import {
@@ -34,7 +32,7 @@ import {
     summaryRevisionUnit
 } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause } from './story-contract';
+import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, storyStatusLabel } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 
 /** D-2a/L-34/L-37a: awaiting the Author is calm, stalled is urgent — and neither is an error. */
@@ -62,12 +60,6 @@ export interface StoryViewProps {
     now?: string;
     /** L-25's clean-ledger line, when the caller has it (the pinned view carries no `ledger` state string). */
     ledgerState?: string;
-    /**
-     * The first block of the right rail, supplied by the shell. It carries the global employee
-     * roster — the standing identities every phase session of this story runs as agents, with
-     * Rank A called out — above the template catalogue.
-     */
-    railLead?: ReactNode;
     /** The rail's selection; absent means the Summary, which is the phrase a Story opens on. */
     selection?: StorySelection;
 }
@@ -76,7 +68,6 @@ export function StoryView({
     view,
     actions = {},
     ledgerState,
-    railLead,
     selection = DEFAULT_STORY_SELECTION
 }: StoryViewProps) {
     const { story } = view;
@@ -99,9 +90,7 @@ export function StoryView({
         <div className="sv-story">
             <div className="sv-story-main">
                 <p className={`sv-story-status ${statusClass(story.status, story.pending_kind)}`}>
-                    <span className="sv-story-status-badge">
-                        {story.status === 'pending' ? `pending — ${story.pending_kind}` : story.status}
-                    </span>
+                    <span className="sv-story-status-badge">{storyStatusLabel(story.status, story.pending_kind)}</span>
                     {story.status_reason ? <span className="sv-story-reason">{story.status_reason}</span> : null}
                 </p>
 
@@ -126,16 +115,6 @@ export function StoryView({
                             }
                             onBacktrack={
                                 actions.backtrack ? (phase) => void actions.backtrack?.(story.id, phase) : undefined
-                            }
-                            // §8.6: one assistant run on ONE field of the Summary.
-                            onAskAssistant={
-                                actions.requestAssistant
-                                    ? (field) =>
-                                          void actions.requestAssistant?.(story.id, {
-                                              target: 'summary',
-                                              text: `Rewrite the ${field}.`
-                                          })
-                                    : undefined
                             }
                         />
 
@@ -230,17 +209,6 @@ export function StoryView({
                 {active.panel === 'findings' ? <FindingsPane view={view} /> : null}
                 {active.panel === 'digest' ? <DigestPane view={view} /> : null}
                 {active.panel === 'settings' ? <SettingsPane view={view} actions={actions} /> : null}
-            </div>
-
-            <div className="sv-story-rail">
-                {railLead}
-                <TemplatesPanel
-                    templates={view.templates}
-                    story={story}
-                    onCreate={actions.createTemplate}
-                    onPatch={actions.patchTemplate}
-                    onAssign={actions.assignTemplates}
-                />
             </div>
         </div>
     );

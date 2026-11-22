@@ -16,6 +16,7 @@
 // one-click-per-item. U-10b's third move — "approve a whole chapter's worth" — is on the chapter
 // row in PlotlineChapters, where the Author is looking at exactly that chapter's findings.
 
+import { useState } from 'react';
 import { useDashboard, useDashboardStore } from '../state';
 import type { QueueItem } from '../api';
 
@@ -44,6 +45,59 @@ export function groupByStory(items: QueueItem[]): Array<{ storyId: string; story
         }
     }
     return groups;
+}
+
+/**
+ * P7's answer surface: the crew's question is answerable where it was asked. The answer is a
+ * directive to the Story's Editor, which is the one channel D-19 gives the Author — not a chat
+ * reply. A refused write keeps the typed answer (L-13).
+ */
+function EscalationAnswer({ storyId }: { storyId: string }) {
+    const store = useDashboardStore();
+    const [answer, setAnswer] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const send = async () => {
+        const text = answer.trim();
+        if (!text || busy) {
+            return;
+        }
+
+        setBusy(true);
+        const result = await store.sendDirective(storyId, text);
+        setBusy(false);
+        if (result) {
+            setAnswer('');
+        }
+    };
+
+    return (
+        <form
+            className="queue-item__answer"
+            onSubmit={(event) => {
+                event.preventDefault();
+                void send();
+            }}
+        >
+            <input
+                className="field__input"
+                data-testid="queue-answer"
+                name="answer"
+                value={answer}
+                placeholder="your answer — it goes to the Editor"
+                autoComplete="off"
+                onChange={(event) => setAnswer(event.target.value)}
+            />
+            <button
+                type="submit"
+                className="button button--primary"
+                data-testid="queue-answer-send"
+                disabled={busy || answer.trim().length === 0}
+            >
+                Answer
+            </button>
+        </form>
+    );
 }
 
 export function AuthorQueue() {
@@ -197,13 +251,14 @@ export function AuthorQueue() {
                                                 <span className="queue-item__evidence-text">{item.evidence}</span>
                                             </p>
                                         ) : null}
+                                        <EscalationAnswer storyId={item.story_id} />
                                         <span className="queue-item__actions">
                                             <button
                                                 type="button"
-                                                className="button button--move"
+                                                className="button button--ghost"
                                                 onClick={() => void store.openStory(item.story_id)}
                                             >
-                                                answer in the story
+                                                open the story
                                             </button>
                                         </span>
                                     </>
@@ -212,16 +267,13 @@ export function AuthorQueue() {
                                 {item.kind === 'tool_gap' ? (
                                     <>
                                         {/* T-6c / T-12: a brief asked for an action no tool backs,
-                                            so it asked rather than improvising (the named hole). */}
-                                        <h4 className="queue-item__claim">a crew asked for a tool it does not have</h4>
-                                        <p className="queue-item__detail">{item.title}</p>
-                                        {item.detail ? <p className="queue-item__detail">{item.detail}</p> : null}
-                                        {item.evidence ? (
-                                            <p className="queue-item__evidence">
-                                                <span className="queue-item__evidence-label">wanted for</span>
-                                                <span className="queue-item__evidence-text">{item.evidence}</span>
-                                            </p>
-                                        ) : null}
+                                            so it asked rather than improvising (the named hole).
+                                            The report itself can be long; the request tab shows the
+                                            ask, not the whole transcript. */}
+                                        <h4 className="queue-item__question">a crew needs a capability</h4>
+                                        <p className="queue-item__detail queue-item__detail--clamp" title={item.title}>
+                                            {item.title}
+                                        </p>
                                         <span className="queue-item__actions">
                                             <button
                                                 type="button"

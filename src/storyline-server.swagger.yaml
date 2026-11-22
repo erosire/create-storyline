@@ -1,0 +1,2811 @@
+# ---------------------------------------------------------------------------
+# Storyline - REST + SSE contract
+#
+# Codegrounded sources this document is read off (it describes the build, not a wish):
+#   src/server/api/routes.ts        - route table, body validation, error mapping, SSE feed
+#   src/server/api/projections.ts   - StoryRow / StoryView / GoalSurface / QueueItem projections
+#   src/server/api/server.ts        - mount root `/v1/storyline`, provider triple, static UI
+#   src/server/run/story-engine.ts  - agent roster projection, retained thread shape
+#   src/server/knowledge/*          - the Story knowledge directory projection
+#   src/shared/types.ts             - the normative §4 record shapes and enums
+#
+# WHAT THIS API IS. A local, operator-facing control plane for Storyline: the book (stories,
+# summaries, plotlines, chapters, cast, ledger, goals, findings, ideas, proposals, revisions,
+# runs, directives, tasks, digests) plus the loop that works on it. The SERVER owns every
+# durable record and every computed projection. The dashboard is a CLIENT: it renders what
+# these routes answer and mutates only through them. It holds no authoritative copy of a row,
+# never writes the book itself, and never derives a level, pass/fail string, queue decision,
+# or lock gate. One browser application is bundled beside this server, but it is not a second
+# backend - `src/dashboard/api.ts` is its whole interaction surface.
+#
+# MOUNT AND TRANSPORT. Every route below is mounted under `/v1/storyline`. REST reads answer
+# JSON. `GET /v1/storyline/stream` is a Server-Sent Events feed of the Store's commit groups;
+# it is a HINT, not a payload: a frame names what changed and the client re-reads the resource
+# from the authoritative route (P1/P3: the store is the memory). A dropped frame is harmless.
+#
+# ERROR SHAPE. Every non-2xx answer is `{ "error": string }`. The sentence is product copy, not
+# a log line: the dashboard re-throws it verbatim so the Author reads which rule refused the
+# write (L-13). The status classes are:
+#   * 400 - the body is missing a field, has the wrong type, or names a value outside the route's
+#           accepted set;
+#   * 404 - a path id the server does not hold (checked before any engine call);
+#   * 409 - every refusal the loop raises, including a stale compare-and-swap write and a
+#           lifecycle gate such as "pause the Story before editing prose" (D-37);
+#   * 502 - the provider whose model catalogue `GET /agents/models` proxies did not answer.
+#
+# WRITE RETURNS. Author-facing writes answer with the projection the dashboard re-renders:
+# a Story mutation answers the refreshed `StoryRow`; a Goal write answers the refreshed
+# `GoalSurface`; a template write answers the `Template`; a kill answers the `Run`. The route
+# never returns the raw journal and never asks the client to infer a side effect.
+#
+# ENDPOINT GRAMMAR. Collection paths are nouns (`/stories`, `/agents`, `/templates`, `/runs`,
+# `/queue`). A Story-scoped verb is a `POST` beneath the Story that owns it
+# (`/stories/{id}/lock`, `/stories/{id}/findings/{findingId}/approve`). Field edits on a record
+# are `PATCH` (`/stories/{id}`, `/stories/{id}/goal`, `/stories/{id}/chapters/{chapterId}/bar`,
+# `/templates/{templateId}`). Deletion is `DELETE /stories/{id}`. There is no second spelling
+# of a mutation and no client-side state-changing shortcut.
+openapi: 3.0.3
+info:
+  title: Storyline API
+  version: 1.0.0
+  description: >-
+    THE CONTRACT THE STORYLINE SERVER IMPLEMENTS, mounted at `/v1/storyline`. Every read the
+    workstation renders and every write it performs is one of these operations. The browser
+    application is a renderer and an operator surface; the server owns the Story records, the
+    event journal, the run execution, the criteria engine, the digest, and the knowledge
+    directory. A client never gets a second copy of the book and never recomputes a server
+    projection.
+
+    THE STORY LOOP. A Story starts from an Author-written Seed. The loop dispatches the
+    assigned harness templates at the Story's current phase, records every run, every finding,
+    every Idea, every draft and every directive, and stops only at the decisions §4/§10 reserve
+    for the Author: a phase sign-off, an Idea selection, a finding approval, a completion
+    acceptance, or a stall. The route table exposes those decisions as explicit verbs, so the
+    UI cannot accidentally take one by editing a record.
+
+    THE EMPLOYEES. Writer, Editor, Reader and Checker are global standing identities. They are
+    NOT agents until a thread executes under one; `GET /agents` is the roster and
+    `GET /agents/{kind}/threads` is the retained history the tile opens. `PATCH /agents/{kind}`
+    is the single roster write, and it changes only the model that kind asks for.
+
+    THE STREAM. `GET /stream` is a Server-Sent Events feed. A frame is an event name plus the
+    affected Story id (empty for a workspace-wide change). The client refetches the resource it
+    is showing; it never trusts a pushed body. A proxy that buffers the stream degrades to a
+    bounded poll, which is a real, slower mode rather than a silent freeze.
+
+    THE UI BOUNDARY. The shipped dashboard talks to exactly this origin at exactly this mount.
+    It may import the shared data-model types for compile-time shape checking, but it may not
+    import a server module, call the provider, open a harness socket, or execute a harness tool
+    directly. The one exception is the test suite, which boots the real server to verify that
+    the UI renders the wire; production code has one network layer, `src/dashboard/api.ts`.
+servers:
+  - url: http://127.0.0.1:5000
+    description: Storyline host, canonical mount `/v1/storyline`
+tags:
+  - name: Stories
+    description: The Stories panel, the Story view, and the Story-level controls.
+  - name: Knowledge
+    description: The durable per-Story knowledge directory projection.
+  - name: Findings
+    description: The Author's approval / discard decisions on a finding.
+  - name: Ideas
+    description: The Author's select / discard / defer decisions on an Idea.
+  - name: Prose
+    description: Section edits, undo, chapter locks, and per-chapter Goal overrides.
+  - name: Revisions
+    description: Competing drafts, the Author's selection, and merge requests.
+  - name: Proposals
+    description: The propose-only channel an agent uses to ask the Author for an edit.
+  - name: Directives
+    description: The directive bar's one-line channel to the Editor.
+  - name: Goal
+    description: The Goal panel's threshold and criterion edits.
+  - name: Assistant
+    description: The Author-invoked §8.6 assistant run.
+  - name: Agents
+    description: The global employee roster, its models, and retained threads.
+  - name: Templates
+    description: The §4.12 harness-template catalogue.
+  - name: Runs
+    description: Recorded ephemeral harnesses spawn-to-teardown.
+  - name: Queue
+    description: The cross-Story Author queue (the home desk).
+  - name: Stream
+    description: The Server-Sent Events change feed.
+paths:
+  /v1/storyline/stories:
+    get:
+      tags: [Stories]
+      operationId: listStories
+      summary: List the Stories panel rows
+      description: >-
+        One `StoryRow` per Story, already ordered by the server's attention rule: stalled Stories
+        first, then Stories waiting on the Author, then everything else, with `id` breaking ties.
+        Each row carries the criteria engine's rendered level strings (`n/m`, `n/a`, or
+        `n/m · failing: ...`), the live run count, the dial, and whether completion is proposed.
+        The dashboard renders these rows directly and never re-sorts or re-derives a level.
+      responses:
+        '200':
+          description: All Story rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoryRow'
+    post:
+      tags: [Stories]
+      operationId: createStory
+      summary: Create a Story from an Author Seed
+      description: >-
+        Creates the Story with its empty Summary and default Goal. `idea` is the Seed and is
+        required; `title` is optional (the server may name an untitled Story from the Seed);
+        `chapter_count` is Author truth and defaults to the server's own count when omitted
+        (D-3b: declared, never agent-chosen). The answer is the rendered row, not the raw record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStoryRequest'
+            examples:
+              basic:
+                summary: Seed plus title and count
+                value:
+                  title: The Salt Cartographer
+                  idea: A mapmaker finds her own coastline redrawn on a chart she surveyed herself.
+                  chapter_count: 2
+      responses:
+        '200':
+          description: Created Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    get:
+      tags: [Stories]
+      operationId: getStory
+      summary: Read the whole Story region
+      description: >-
+        The one round trip THE STORY region needs: the Story record plus the Summary, plotlines,
+        chapters, cast, ledger, Goal surface, Ideas, revisions (and their verdicts), findings,
+        proposals, runs, assigned template ids, cost distribution, completion preview, current
+        Digest, and the retained round history. Every slice is the §4 collection as stored;
+        computed values come from the criteria/digest engines, never from the client.
+      responses:
+        '200':
+          description: Story view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Stories]
+      operationId: patchStory
+      summary: Edit the four Author-owned Story row fields
+      description: >-
+        Changes the display title, the Seed, the declared chapter count, or the cost dial. At
+        least one field must be present. Editing the Seed is a backtrack to phase ① (D-25a);
+        changing the count grows or shrinks the chapter set through the engine (D-3c). A title or
+        dial edit is attributed to the Author in one commit. The answer is the refreshed row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchStoryRequest'
+            examples:
+              dial:
+                summary: Let only critical and major findings skip the desk
+                value:
+                  auto_approve: [critical, major]
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Stories]
+      operationId: deleteStory
+      summary: Delete a Story and everything its harness owns
+      description: >-
+        Stops the Story, removes its knowledge directory, deletes every Story-scoped §4 record,
+        disposes its harness sessions and threads, and removes its retained thread log. The
+        receipt names the Story that is gone. There is no cascade in the other direction: a
+        delete of one Story never touches another.
+      responses:
+        '200':
+          description: Deletion receipt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteStoryResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/knowledge:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    get:
+      tags: [Knowledge]
+      operationId: getStoryKnowledge
+      summary: Read the Story's durable knowledge directory
+      description: >-
+        Eight folders (summary, plotlines, chapters, cast, continuity, goal, ideas, findings),
+        one knowledge article per folder, each entry a paragraph. The server re-derives the
+        sections from the book and flushes the article bytes before answering, so a commit that
+        landed since the last sync is visible and durable in this response. An unavailable
+        knowledge store answers `degraded: true` rather than failing the read.
+      responses:
+        '200':
+          description: Knowledge tree.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryKnowledgeTree'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/storyline/stories/{id}/stop:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: stopStory
+      summary: Pause the Story
+      description: >-
+        D-37's Pause & edit. Stops dispatch and kills in-flight runs, leaving the Story in the
+        `stopped` status. The prose pane opens only while the Story is stopped. The answer is
+        the refreshed row.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: resumeStory
+      summary: Hand the Story back to the loop
+      description: >-
+        D-37a/D-37b's hand-back. Re-derives the Digest and marks the dependents that need a
+        recheck, then re-arms the Story. The answer is the refreshed row.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/clear-pending:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: clearPendingStory
+      summary: Clear the tasks keeping a pending Story waiting
+      description: >-
+        L-36 / U-1b's one click. The engine closes the pending tasks and re-arms the Story when
+        nothing remains; the answer is the refreshed row. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/lock:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: lockStoryPhase
+      summary: Lock the Story's current phase
+      description: >-
+        U-16's sign-off. The engine's own 409 is the product copy when the Ideas tray is not
+        empty (L-7a); this route additionally refuses a phase whose Goal does not pass, naming
+        the failing criteria (U-16). On success the phase's artifacts become read-only and the
+        Story advances. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/backtrack:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: backtrackStory
+      summary: Reopen an earlier phase and delete the later artifacts
+      description: >-
+        L-31/L-32's only way a lock opens. The client confirms first because the move deletes
+        later work; the server always treats the request as confirmed because that gate is the
+        dashboard's. Phase ③ is the Story's current phase and is not a backtrack target.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktrackRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/findings/{findingId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/FindingId'
+    post:
+      tags: [Findings]
+      operationId: approveFinding
+      summary: Approve one finding and start its repair work
+      description: >-
+        D-34/D-35's approval. The `why` is mandatory and auditable (D-8/T-5); the engine files
+        the fix work, and the answer is the refreshed Story row. An unknown finding, or one that
+        belongs to another Story, is 404 before the engine runs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhyRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/findings/{findingId}/discard:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/FindingId'
+    post:
+      tags: [Findings]
+      operationId: discardFinding
+      summary: Discard one finding
+      description: >-
+        D-34's discard. The `why` is mandatory; the row moves to `discarded` with Author
+        attribution, and a Story parked on finding approval is re-armed when its desk becomes
+        empty (L-36). The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhyRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/chapters/{chapterId}/findings/approve-all:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ChapterId'
+    post:
+      tags: [Findings]
+      operationId: approveChapterFindings
+      summary: Approve every confirmed finding a chapter is waiting on
+      description: >-
+        U-10b's chapter-scale approval. The server selects `confirmed` findings whose
+        `target_ref` OR L-11a `related_refs` name the chapter, then approves each one through
+        its own engine commit, so the audit still records one decision per finding. The `why` is
+        required and is carried by every approval. The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhyRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/ideas/{ideaId}/select:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/IdeaId'
+    post:
+      tags: [Ideas]
+      operationId: selectIdea
+      summary: Select an Idea
+      description: >-
+        U-15/D-29's decision. The engine decides the tray and files the absorb work in one
+        commit. An Idea that cites sources may only be selected once the Editor's verdict is
+        `verified`, unless the Author supplies a non-blank `note` as the explicit "I know"
+        (D-27/C-15); that refusal is 409 with the server's sentence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/ideas/{ideaId}/discard:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/IdeaId'
+    post:
+      tags: [Ideas]
+      operationId: discardIdea
+      summary: Discard an Idea
+      description: >-
+        U-15's tray decision. Writes the `discarded` state with Author attribution and, when the
+        tray becomes empty, moves a parked Story from Idea selection to phase sign-off (L-7a).
+        The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/ideas/{ideaId}/defer:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/IdeaId'
+    post:
+      tags: [Ideas]
+      operationId: deferIdea
+      summary: Defer an Idea
+      description: >-
+        U-15's third tray decision. Writes the `deferred` state with Author attribution and
+        applies the same empty-tray hand-back as a discard. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/proposals/{proposalId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ProposalId'
+    post:
+      tags: [Proposals]
+      operationId: acceptProposal
+      summary: Accept a pending proposal
+      description: >-
+        U-5/D-20's accept. The engine applies the proposal through its own verb, attributes the
+        write, and answers the refreshed Story row. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/proposals/{proposalId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ProposalId'
+    post:
+      tags: [Proposals]
+      operationId: rejectProposal
+      summary: Reject a pending proposal
+      description: >-
+        U-5/D-20a's reject. The engine closes the proposal and answers the refreshed Story row.
+        The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/chapters/{chapterId}/sections/{sectionId}:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ChapterId'
+      - $ref: '#/components/parameters/SectionId'
+    post:
+      tags: [Prose]
+      operationId: editSection
+      summary: Write one chapter section as the Author
+      description: >-
+        P9a/D-37/U-17. `content` is the complete section text, not a patch. The engine refuses
+        the write unless the Story is stopped (D-37), and that refusal is the 409 the greyed
+        pane's tooltip shows. When the chapter has competing drafts, the Author's own edit
+        outranks them: the newest draft survives as the record of what was overridden, the
+        rest are deleted in one commit (D-24/D-22). The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SectionContentRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/chapters/{chapterId}/unapprove:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ChapterId'
+    post:
+      tags: [Prose]
+      operationId: unapproveChapter
+      summary: Reopen a chapter's review
+      description: >-
+        L-10's Author override: the chapter wakes the crew again. The engine moves the chapter
+        out of its approved state and answers the refreshed Story row. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/chapters/{chapterId}/bar:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/ChapterId'
+    patch:
+      tags: [Prose]
+      operationId: setChapterBar
+      summary: Set a chapter's Goal override
+      description: >-
+        G-1/§14 item 2. `bar_override` is the one text field stored on the chapter: a
+        whitespace-separated token list such as `-C-7 +1`. An empty string clears the override
+        and restores the Story's bar. The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChapterBarRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/revisions/{revisionId}/select:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/RevisionId'
+    post:
+      tags: [Revisions]
+      operationId: selectRevision
+      summary: Take one competing draft as the version that stands
+      description: >-
+        U-13/D-24's Author override. The draft's stored body installs on its unit, the row is
+        marked `selected` with the `note` (defaulting to the server's own sentence), and every
+        sibling draft for the same unit is deleted in the same commit (D-22). The answer is the
+        refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/revisions/merge:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Revisions]
+      operationId: mergeRevisions
+      summary: Ask for named drafts to be merged
+      description: >-
+        U-13a/D-23. The route validates the unit and at least two drafts, then opens the same
+        `merge` task a Checker's `requestMerge` opens, so the desk shows one entry whoever asked.
+        The drafts stay `competing` until merged prose exists. The answer is the refreshed Story
+        row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevisionMergeRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/undo:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Prose]
+      operationId: undoSection
+      summary: Undo the most recent write to a chapter section
+      description: >-
+        P11/U-5/L-17a. The chapter id and section id name the span; the engine restores the most
+        recent change to that chapter and answers the refreshed Story row. The pinned body also
+        carries `section_id`, which this route logs into the attribution.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UndoRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/directives:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Directives]
+      operationId: sendDirective
+      summary: Send a one-line direction to the Editor
+      description: >-
+        U-9/D-19. Records a `directives` row and lets the engine propagate it to the artifacts it
+        names; `refs` names the pane the Author was looking at. This is a decision channel, not
+        chat. The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DirectiveRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/complete:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: acceptCompletion
+      summary: Accept the completion proposal
+      description: >-
+        L-26. Closes the leftovers the completion preview counted and completes the Story; a
+        Story with nothing proposed answers the engine's own 409. The route takes no body.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/templates:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Templates]
+      operationId: assignTemplates
+      summary: Replace the Story's template assignment
+      description: >-
+        D-17b. `template_ids` is the complete assignment list and the count is the Author's call.
+        A bad assignment is a 409 naming the rule it breaks (T-0); a live-run warning is the
+        dashboard's confirm dialog before the request. The answer is the refreshed Story row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateAssignRequest'
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/goal:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    patch:
+      tags: [Goal]
+      operationId: patchGoal
+      summary: Edit the Goal's threshold and criteria
+      description: >-
+        G-1. `criteria` is an ordered list of ops: `add` installs a criterion, `remove` drops
+        one by id, and `setHard` toggles a criterion's hard flag. The route folds the ops over
+        the Story's evaluated criteria and hands the resulting list to the engine, which replaces
+        the list wholesale. The answer is the refreshed Goal surface because the panel re-reads
+        its own pass/fail lines.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoalUpdateRequest'
+      responses:
+        '200':
+          description: Updated Goal surface.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalSurface'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/assistant:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Assistant]
+      operationId: requestAssistant
+      summary: Spawn the Author-invoked assistant run
+      description: >-
+        §8.6/U-4. `target` is `summary` or `directive` and `text` is the ask; the assistant is a
+        real run that changes one artifact, never a chat reply. The run row is created
+        synchronously before the response, so the answer is that `Run` and the work continues
+        behind it. No live run row means 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantRequest'
+      responses:
+        '200':
+          description: The spawned Run row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/agents:
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      summary: Read the global employee roster
+      description: >-
+        One row per employee kind (writer, editor, reader, checker), in catalogue order, whether
+        or not any Story is selected. A row carries the model the employee asks for, where that
+        model came from, the template roles that name their own model for the kind, every live
+        thread across every Story, and the newest closed runs so a provider fault stays visible
+        (S-3). This is a projection of the global roster; it is not per-Story state.
+      responses:
+        '200':
+          description: Employee roster.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentStatusRow'
+  /v1/storyline/agents/models:
+    get:
+      tags: [Agents]
+      operationId: listAgentModels
+      summary: Read the provider's model catalogue
+      description: >-
+        U-8's dropdown source. The server calls the configured OpenAI-compatible provider root
+        (`{STORYLINE_PROVIDER_BASE_URL}/models`) with the configured bearer, because the browser
+        must never hold that key or reach the provider directly. An upstream that is unreachable
+        or answers unusably is 502 with the server's sentence; a provider that answers an empty
+        list is still 200.
+      responses:
+        '200':
+          description: Provider model catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentModelCatalog'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+  /v1/storyline/agents/{kind}/threads:
+    parameters:
+      - $ref: '#/components/parameters/AgentKind'
+    get:
+      tags: [Agents]
+      operationId: listAgentThreads
+      summary: Read one employee's retained threads
+      description: >-
+        Every thread one employee kind ran, across every Story and every phase session, oldest
+        first. Three sources are merged and de-duplicated server-side: live process history, the
+        durable thread log, and legacy Run rows. `request` and `answer` are the detail surface;
+        an unknown kind is 404 before any read.
+      responses:
+        '200':
+          description: Retained thread list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentThreadList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/storyline/agents/{kind}:
+    parameters:
+      - $ref: '#/components/parameters/AgentKind'
+    patch:
+      tags: [Agents]
+      operationId: setAgentModel
+      summary: Set or clear one employee's model
+      description: >-
+        U-8/T-6b's only roster write. `model` is a non-empty provider id, or `null` to clear the
+        choice and fall back to the template role's model, else the process default. A blank or
+        missing string is 400 rather than a silent clear, because a typo must not unset a running
+        configuration. The answer is the refreshed global roster.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentModelUpdateRequest'
+      responses:
+        '200':
+          description: Refreshed employee roster.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentStatusRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      summary: Read the harness-template catalogue
+      description: >-
+        Every §4.12 template row as stored. Built-ins are marked `builtin: true` and
+        `editable: false`; the Author's own templates are editable. The crew cards resolve a
+        Story's assignment ids against this list.
+      responses:
+        '200':
+          description: Template catalogue.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Template'
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      summary: Create a template or duplicate a built-in
+      description: >-
+        D-17. Send `duplicate_of` to copy an existing row (built-ins are duplicate-only), or
+        `template` to create the Author's own. An Author template is forced to
+        `builtin: false, editable: true` whatever the body says. A duplicate name is 409 and a
+        template that cannot be briefed is 409 naming the rule (T-0). The answer is the created
+        row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplateRequest'
+      responses:
+        '200':
+          description: Created template.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/templates/{templateId}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateId'
+    patch:
+      tags: [Templates]
+      operationId: patchTemplate
+      summary: Edit an Author-owned template
+      description: >-
+        U-8/U-8b/U-8c/U-8d. A partial template; omitted fields keep their value. Built-ins answer
+        409 naming D-17 (duplicate and edit the copy). The merged result is re-validated, so a
+        template that can no longer be briefed is refused with the rule it breaks (T-0). The
+        answer is the updated template row. The route resolves a template by id OR by catalogue
+        name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateUpdateRequest'
+      responses:
+        '200':
+          description: Updated template.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/runs:
+    get:
+      tags: [Runs]
+      operationId: listRuns
+      summary: List recorded runs
+      description: >-
+        §4.13 rows. Without `story_id`, every Story's runs; with it, only that Story's. A run row
+        exists from spawn to teardown and records why it ended (S-3), so the crew panel can show
+        a failed thread after it is gone.
+      parameters:
+        - name: story_id
+          in: query
+          required: false
+          description: Restrict the list to one Story.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Run'
+  /v1/storyline/runs/{runId}/kill:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: killRun
+      summary: Kill one run
+      description: >-
+        P8/U-7's cord. Aborts the run's own controller; the executor closes the row in its
+        `finally` block (S-3). The answer is the row as it stands immediately after the kill
+        request; a later stream frame carries the closed row. An unknown run is 404.
+      responses:
+        '200':
+          description: Run row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/storyline/queue:
+    get:
+      tags: [Queue]
+      operationId: getQueue
+      summary: Read the cross-Story Author queue
+      description: >-
+        U-10's home desk. Aggregates the four decisions only the Author can make - confirmed
+        findings the dial does not cover, undecided Ideas for the current phase, escalations,
+        and reported tool gaps - across every Story, sorted by Story then creation time. `title`
+        and `detail` are the Editor's rewritten reading surface (D-34a). The dashboard renders
+        this order; it does not re-triage.
+      responses:
+        '200':
+          description: Author queue.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QueueItem'
+  /v1/storyline/stream:
+    get:
+      tags: [Stream]
+      operationId: openStorylineStream
+      summary: Open the Server-Sent Events change feed
+      description: >-
+        THE live-update surface, and the only one. A `GET` opens a `text/event-stream` response
+        and sends a `ready` event before any commit, then one event per debounced commit group.
+        Event names are `story` (the affected Story id in `data`), `runs` (a run changed; the
+        Story id when known), and `queue` (the desk changed; the Story id when known). `data` is
+        always a hint, never a payload: the client refetches the resource it renders. Closing the
+        connection changes no server state and cancels no run.
+      responses:
+        '200':
+          description: An open `text/event-stream`.
+          headers:
+            Cache-Control:
+              description: Always `no-cache`; the stream is live.
+              schema:
+                type: string
+                example: no-cache
+            Connection:
+              description: Always `keep-alive`.
+              schema:
+                type: string
+                example: keep-alive
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >-
+                  SSE frames. Each frame is `event: <story|runs|queue>` followed by
+                  `data: <story id or empty>`; the first frame is `event: ready` with empty
+                  data. The server debounces commit bursts so one sweep is one frame per topic.
+      x-sse:
+        events:
+          - event: ready
+            data: ''
+            meaning: The stream is live; a proxy that buffers has not delivered this yet.
+          - event: story
+            data: story id, or empty for a workspace-wide change
+            meaning: Re-read `GET /stories` and, when the id is shown, `GET /stories/{id}`.
+          - event: runs
+            data: story id, or empty
+            meaning: Re-read `GET /runs` and `GET /agents`.
+          - event: queue
+            data: story id, or empty
+            meaning: Re-read `GET /queue`.
+        reconnect:
+          policy: >-
+            The client opens this feed with `EventSource`; the browser retries on its own. If the
+            transport is unavailable or errors twice, the client degrades to a 5-second poll of
+            the same resources, which is slower but complete.
+        ordering:
+          rule: >-
+            Frames are hints only. A dropped, duplicated, or reordered frame cannot corrupt the
+            view because every handler re-reads the authoritative route.
+components:
+  parameters:
+    StoryId:
+      name: id
+      in: path
+      required: true
+      description: Story row id (`story_N`, minted by the store), unique within the book.
+      schema:
+        type: string
+    FindingId:
+      name: findingId
+      in: path
+      required: true
+      description: Finding row id. The route verifies the row belongs to the Story in the path.
+      schema:
+        type: string
+    ChapterId:
+      name: chapterId
+      in: path
+      required: true
+      description: Chapter row id. The route verifies the row belongs to the Story in the path.
+      schema:
+        type: string
+    SectionId:
+      name: sectionId
+      in: path
+      required: true
+      description: One addressable chapter section id (D-7); the route verifies the chapter lists it.
+      schema:
+        type: string
+    IdeaId:
+      name: ideaId
+      in: path
+      required: true
+      description: Idea row id. The route verifies the row belongs to the Story in the path.
+      schema:
+        type: string
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      description: Revision (draft) row id. The route verifies the row belongs to the Story in the path.
+      schema:
+        type: string
+    ProposalId:
+      name: proposalId
+      in: path
+      required: true
+      description: Proposal row id. The route verifies the row belongs to the Story in the path.
+      schema:
+        type: string
+    RunId:
+      name: runId
+      in: path
+      required: true
+      description: Run row id (`run_N`), unique within the book.
+      schema:
+        type: string
+    TemplateId:
+      name: templateId
+      in: path
+      required: true
+      description: >-
+        Template row id or its catalogue `name`; the route resolves either, which is the same
+        handle a Story's `template_refs` uses.
+      schema:
+        type: string
+    AgentKind:
+      name: kind
+      in: path
+      required: true
+      description: One of the four global employee kinds. Any other value is 404.
+      schema:
+        $ref: '#/components/schemas/RoleKind'
+  responses:
+    BadRequest:
+      description: >-
+        The body is not the shape the route needs: a missing required field, a wrong type, an
+        empty string where text is required, or a value outside the accepted set. The message
+        names the field and the rule.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          examples:
+            missing-seed:
+              value:
+                error: 'a Story needs a Seed: `idea` must be a non-empty string (P5: it is what the book is measured against).'
+    NotFound:
+      description: >-
+        No resource with that identity exists, or it belongs to another Story. A Story-scoped
+        route checks the Story first and the child row second, so a wrong id never reaches an
+        engine verb.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          examples:
+            story-missing:
+              value:
+                error: 'no story named story_999 is in the book (P1: the store is the memory)'
+    Conflict:
+      description: >-
+        The engine refused the operation in its current state. This is the product copy, not a
+        stack trace: a non-empty Ideas tray refusing a lock, a running Story refusing a prose
+        edit, a built-in template refusing an edit, a stale compare-and-swap write, or a
+        completion with nothing proposed. Nothing is written by a refused call.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          examples:
+            prose-while-running:
+              value:
+                error: 'cannot write prose: pause the Story before editing prose (D-37)'
+            builtin-template:
+              value:
+                error: 'template writer-summary is built-in — duplicate it and edit the copy (D-17).'
+    BadGateway:
+      description: The provider whose model catalogue this server proxies could not be reached or answered unusably.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+  schemas:
+    # ---------------------------------------------------------------------
+    # Primitives
+    # ---------------------------------------------------------------------
+    ErrorBody:
+      type: object
+      description: The one failure envelope every non-2xx route returns.
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          description: The product sentence the dashboard re-throws verbatim (L-13). Never a stack trace or a secret.
+    DeleteStoryResult:
+      type: object
+      description: Receipt of a Story deletion; names the Story that is gone.
+      required: [deleted]
+      additionalProperties: false
+      properties:
+        deleted:
+          type: string
+    AnyValue:
+      description: Arbitrary JSON value. The record shapes that use it are deliberately open (P15).
+    StoredRecord:
+      type: object
+      description: The four bookkeeping fields every §4 record carries.
+      required: [id, rev, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        rev:
+          type: integer
+          minimum: 1
+          description: Compare-and-swap token. A tool write sends the rev it read and a stale write is refused.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    # ---------------------------------------------------------------------
+    # Enums
+    # ---------------------------------------------------------------------
+    StoryPhase:
+      type: string
+      enum: [summary, plotlines, chapters]
+    StoryStatus:
+      type: string
+      enum: [ready, pending, completed, stopped]
+    PendingKind:
+      type: string
+      enum: [phase_signoff, idea_selection, finding_approval, drained, stalled, none]
+    Trend:
+      type: string
+      enum: [improving, flat, regressing, unknown]
+    Cost:
+      type: string
+      enum: [critical, major, minor, taste]
+    RoleKind:
+      type: string
+      enum: [writer, editor, reader, checker]
+    FindingState:
+      type: string
+      enum: [unconfirmed, confirmed, approved, fixed, disputed, discarded]
+    IdeaState:
+      type: string
+      enum: [proposed, verified, refuted, unverifiable, selected, discarded, deferred]
+    ChapterState:
+      type: string
+      enum: [outlined, drafting, in_pass, in_review, needs_author, done, needs_recheck]
+    TaskState:
+      type: string
+      enum: [open, claimed, blocked, done, wontfix]
+    RunState:
+      type: string
+      enum: [spawning, working, reporting, torn_down, failed, abandoned]
+    DirectiveState:
+      type: string
+      enum: [queued, propagating, done, rejected]
+    RevisionState:
+      type: string
+      enum: [competing, selected, merged_into, discarded]
+    ProposalState:
+      type: string
+      enum: [pending, accepted, rejected]
+    UnitKind:
+      type: string
+      enum: [summary, plotline, chapter]
+    LedgerKind:
+      type: string
+      enum: [setup, payoff, fact, timeline, world_rule]
+    LedgerStatus:
+      type: string
+      enum: [open, paid, conflict, stale]
+    IdeaKind:
+      type: string
+      enum: [direction, possibility, fact, warning]
+    VerdictRecommendation:
+      type: string
+      enum: [advance, fix, stuck]
+    IdeaVerdict:
+      type: string
+      enum: [verified, refuted, unverifiable]
+    SectionOrigin:
+      type: string
+      enum: [writer, author]
+    RoleAggregation:
+      type: string
+      enum: [majority, merge, lead]
+    CriterionChecker:
+      type: string
+      enum: [code, judge]
+    AgentRank:
+      type: string
+      enum: [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z]
+    QueueItemKind:
+      type: string
+      enum: [finding, idea, escalation, tool_gap]
+    AgentThreadState:
+      type: string
+      enum: [running, torn_down, failed, abandoned]
+    # ---------------------------------------------------------------------
+    # §4 records
+    # ---------------------------------------------------------------------
+    ChapterSection:
+      type: object
+      description: One addressable paragraph block of chapter prose (D-7).
+      required: [id, text, origin]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        origin:
+          $ref: '#/components/schemas/SectionOrigin'
+        last_run_ref:
+          type: string
+          nullable: true
+        last_why:
+          type: string
+    Story:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required:
+            - title
+            - phase
+            - idea
+            - summary_locked
+            - plotlines_locked
+            - pending_kind
+            - status
+            - trend
+            - auto_approve
+            - author_stop
+            - digest_rev
+            - template_refs
+            - chapter_deps
+          properties:
+            title:
+              type: string
+            phase:
+              $ref: '#/components/schemas/StoryPhase'
+            idea:
+              type: string
+              description: P5's Seed, Author-written and read-only for every agent.
+            summary_locked:
+              type: boolean
+            plotlines_locked:
+              type: boolean
+            pending_kind:
+              $ref: '#/components/schemas/PendingKind'
+            status:
+              $ref: '#/components/schemas/StoryStatus'
+            status_reason:
+              type: string
+            consistency:
+              type: string
+            trend:
+              $ref: '#/components/schemas/Trend'
+            goal_ref:
+              type: string
+            auto_approve:
+              type: array
+              items:
+                $ref: '#/components/schemas/Cost'
+            author_stop:
+              type: boolean
+            progress:
+              type: string
+            blocked_on:
+              type: string
+            digest_rev:
+              type: integer
+            template_refs:
+              type: array
+              items:
+                type: string
+            chapter_deps:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+    Summary:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, chapter_count, locked]
+          properties:
+            story_id:
+              type: string
+            chapter_count:
+              type: integer
+              minimum: 1
+            premise:
+              type: string
+            promise:
+              type: string
+            theme:
+              type: string
+            tone:
+              type: string
+            ending:
+              type: string
+            world_rules:
+              type: string
+            locked:
+              type: boolean
+    Plotline:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, order, contract_locked, aligned, needs_recheck]
+          properties:
+            story_id:
+              type: string
+            chapter_ref:
+              type: string
+            order:
+              type: integer
+            heading:
+              type: string
+            must_happen:
+              type: string
+            must_change:
+              type: string
+            pov:
+              type: string
+            setups:
+              type: string
+            payoffs:
+              type: string
+            contract_locked:
+              type: boolean
+            aligned:
+              type: boolean
+            needs_recheck:
+              type: boolean
+    Chapter:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, order, title, sections, state, author_locked, round]
+          properties:
+            story_id:
+              type: string
+            plotline_ref:
+              type: string
+            order:
+              type: integer
+            title:
+              type: string
+            summary:
+              type: string
+            sections:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChapterSection'
+            state:
+              $ref: '#/components/schemas/ChapterState'
+            current_revision:
+              type: string
+            author_locked:
+              type: boolean
+            bar_override:
+              type: string
+            round:
+              type: integer
+            last_score:
+              type: string
+    CastMember:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, name]
+          properties:
+            story_id:
+              type: string
+            name:
+              type: string
+            want:
+              type: string
+            need:
+              type: string
+            arc:
+              type: string
+            voice:
+              type: string
+            state_now:
+              type: string
+            traits:
+              type: string
+            gender:
+              type: string
+    LedgerEntry:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, kind, subject, status]
+          properties:
+            story_id:
+              type: string
+            kind:
+              $ref: '#/components/schemas/LedgerKind'
+            subject:
+              type: string
+            detail:
+              type: string
+            chapter_ref:
+              type: string
+            status:
+              $ref: '#/components/schemas/LedgerStatus'
+            fingerprint:
+              type: string
+    Task:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, kind, title, state, priority, attempts]
+          properties:
+            story_id:
+              type: string
+            kind:
+              type: string
+            title:
+              type: string
+            detail:
+              type: string
+            owner_role:
+              type: string
+            state:
+              $ref: '#/components/schemas/TaskState'
+            priority:
+              type: integer
+            criterion_ref:
+              type: string
+            finding_ref:
+              type: string
+            attempts:
+              type: integer
+    Digest:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, body, stale]
+          properties:
+            story_id:
+              type: string
+            body:
+              type: string
+            stale:
+              type: boolean
+            current:
+              type: boolean
+            journal_seq:
+              type: integer
+    Criterion:
+      type: object
+      required: [id, label, question, checker, hard, fix_hint]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        question:
+          type: string
+        checker:
+          $ref: '#/components/schemas/CriterionChecker'
+        hard:
+          type: boolean
+        fix_hint:
+          type: string
+    Goal:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [title, threshold_soft, criteria, flat_rounds, regress_tolerance]
+          properties:
+            story_id:
+              type: string
+            title:
+              type: string
+            threshold_soft:
+              type: number
+            criteria:
+              type: array
+              items:
+                $ref: '#/components/schemas/Criterion'
+            flat_rounds:
+              type: integer
+            regress_tolerance:
+              type: integer
+    VerdictCriterion:
+      type: object
+      required: [criterion, result, evidence]
+      additionalProperties: false
+      properties:
+        criterion:
+          type: string
+        result:
+          type: boolean
+        evidence:
+          type: string
+        finding_ref:
+          type: string
+    Verdict:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, target_ref, target_kind, round, criteria_passed, hard_pass, soft_count, recommendation]
+          properties:
+            story_id:
+              type: string
+            target_ref:
+              type: string
+            target_kind:
+              type: string
+            run_ref:
+              type: string
+            template_ref:
+              type: string
+            round:
+              type: integer
+            criteria_passed:
+              type: array
+              items:
+                $ref: '#/components/schemas/VerdictCriterion'
+            hard_pass:
+              type: boolean
+            soft_count:
+              type: integer
+            recommendation:
+              $ref: '#/components/schemas/VerdictRecommendation'
+    Finding:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required:
+            - story_id
+            - target_ref
+            - criterion_ref
+            - title
+            - evidence
+            - cost
+            - fingerprint
+            - state
+            - seen_count
+          properties:
+            story_id:
+              type: string
+            target_ref:
+              type: string
+            criterion_ref:
+              type: string
+            title:
+              type: string
+            detail:
+              type: string
+            evidence:
+              type: string
+            cost:
+              $ref: '#/components/schemas/Cost'
+            fingerprint:
+              type: string
+            state:
+              $ref: '#/components/schemas/FindingState'
+            confirmed_by:
+              type: string
+              nullable: true
+            approved_by:
+              type: string
+              nullable: true
+            seen_count:
+              type: integer
+            related_refs:
+              type: array
+              items:
+                type: string
+    TemplateRole:
+      type: object
+      required: [name, kind, prompt]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/RoleKind'
+        prompt:
+          type: string
+        model:
+          type: string
+        web:
+          type: boolean
+        agents:
+          type: integer
+        aggregate:
+          $ref: '#/components/schemas/RoleAggregation'
+    Template:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [name, title, roles, serves_phase, done_definition, attempts, builtin, editable]
+          properties:
+            name:
+              type: string
+            title:
+              type: string
+            description:
+              type: string
+            roles:
+              type: array
+              items:
+                $ref: '#/components/schemas/TemplateRole'
+            serves_phase:
+              type: array
+              items:
+                $ref: '#/components/schemas/StoryPhase'
+            done_definition:
+              type: string
+            selection_rules:
+              type: string
+            attempts:
+              type: integer
+            delegation:
+              type: array
+              items:
+                type: string
+            escalation_rule:
+              type: string
+            next_phase:
+              type: string
+              description: A `StoryPhase`, or an empty string for no next phase.
+            max_concurrent:
+              type: integer
+            builtin:
+              type: boolean
+            editable:
+              type: boolean
+    RunDelegation:
+      type: object
+      required: [role, task, tokens]
+      additionalProperties: false
+      properties:
+        role:
+          type: string
+        task:
+          type: string
+        summary:
+          type: string
+        tokens:
+          type: integer
+    Run:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, role, state, started_at, tokens, kind, delegated]
+          properties:
+            story_id:
+              type: string
+            work_item_ref:
+              type: string
+            template_ref:
+              type: string
+            role:
+              $ref: '#/components/schemas/RoleKind'
+            session_ref:
+              type: string
+            state:
+              $ref: '#/components/schemas/RunState'
+            started_at:
+              type: string
+              format: date-time
+            ended_at:
+              type: string
+              format: date-time
+              nullable: true
+            tokens:
+              type: integer
+            brief_hash:
+              type: string
+            kind:
+              type: string
+              enum: [work, assistant]
+            no_op:
+              type: boolean
+            end_reason:
+              type: string
+            delegated:
+              type: array
+              items:
+                $ref: '#/components/schemas/RunDelegation'
+    Directive:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, text, state, impact]
+          properties:
+            story_id:
+              type: string
+            text:
+              type: string
+            state:
+              $ref: '#/components/schemas/DirectiveState'
+            impact:
+              type: array
+              items:
+                type: string
+    Revision:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, unit_kind, unit_ref, body, state, verdict_refs]
+          properties:
+            story_id:
+              type: string
+            unit_kind:
+              $ref: '#/components/schemas/UnitKind'
+            unit_ref:
+              type: string
+            body:
+              $ref: '#/components/schemas/AnyValue'
+            run_ref:
+              type: string
+            template_ref:
+              type: string
+            brief_hash:
+              type: string
+            state:
+              $ref: '#/components/schemas/RevisionState'
+            verdict_refs:
+              type: array
+              items:
+                type: string
+            selection_note:
+              type: string
+    IdeaSource:
+      type: object
+      required: [url_or_title, claim, accessed_at]
+      additionalProperties: false
+      properties:
+        url_or_title:
+          type: string
+        claim:
+          type: string
+        accessed_at:
+          type: string
+    IdeaVerification:
+      type: object
+      required: [verdict, evidence, meets_guidelines, checked_by_run, checked_at]
+      additionalProperties: false
+      properties:
+        verdict:
+          $ref: '#/components/schemas/IdeaVerdict'
+        evidence:
+          type: string
+        meets_guidelines:
+          type: boolean
+        checked_by_run:
+          type: string
+        checked_at:
+          type: string
+    Idea:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, phase, body, kind, author, sources, fingerprint, seen_count, state]
+          properties:
+            story_id:
+              type: string
+            phase:
+              $ref: '#/components/schemas/StoryPhase'
+            unit_ref:
+              type: string
+            body:
+              type: string
+            kind:
+              $ref: '#/components/schemas/IdeaKind'
+            author:
+              type: string
+            sources:
+              type: array
+              items:
+                $ref: '#/components/schemas/IdeaSource'
+            fingerprint:
+              type: string
+            seen_count:
+              type: integer
+            state:
+              $ref: '#/components/schemas/IdeaState'
+            verification:
+              allOf:
+                - $ref: '#/components/schemas/IdeaVerification'
+              nullable: true
+            selection_note:
+              type: string
+            absorbed_into:
+              type: string
+    Proposal:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          required: [story_id, target_ref, target_field, patch, why, state]
+          properties:
+            story_id:
+              type: string
+            target_ref:
+              type: string
+            target_field:
+              type: string
+            patch:
+              $ref: '#/components/schemas/AnyValue'
+            why:
+              type: string
+            run_ref:
+              type: string
+            state:
+              $ref: '#/components/schemas/ProposalState'
+    # ---------------------------------------------------------------------
+    # §10 projections
+    # ---------------------------------------------------------------------
+    StoryLevels:
+      type: object
+      required: [summary, plotlines, chapters, whole]
+      additionalProperties: false
+      properties:
+        summary:
+          type: string
+        plotlines:
+          type: string
+        chapters:
+          type: string
+        whole:
+          type: string
+    StoryRow:
+      type: object
+      description: >-
+        One Stories-panel row, computed by the server: rendered level strings, live run count,
+        completion flag, and the attention-first position. The client renders it; it never
+        re-derives a level or a status sentence.
+      required:
+        - id
+        - title
+        - phase
+        - status
+        - pending_kind
+        - summary_locked
+        - plotlines_locked
+        - levels
+        - trend
+        - auto_approve
+        - active_runs
+        - completion_proposed
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        phase:
+          $ref: '#/components/schemas/StoryPhase'
+        status:
+          $ref: '#/components/schemas/StoryStatus'
+        pending_kind:
+          $ref: '#/components/schemas/PendingKind'
+        status_reason:
+          type: string
+        summary_locked:
+          type: boolean
+        plotlines_locked:
+          type: boolean
+        levels:
+          $ref: '#/components/schemas/StoryLevels'
+        trend:
+          $ref: '#/components/schemas/Trend'
+        progress:
+          type: string
+        blocked_on:
+          type: string
+        auto_approve:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cost'
+        active_runs:
+          type: integer
+        completion_proposed:
+          type: boolean
+    FailingCriterion:
+      type: object
+      required: [criterion, fix_hint]
+      additionalProperties: false
+      properties:
+        criterion:
+          type: string
+        fix_hint:
+          type: string
+        evidence:
+          type: string
+    GoalSurface:
+      type: object
+      description: The Goal plus its live pass/fail lines for the current phase and every chapter.
+      required: [goal, phase_progress, failing, chapter_progress]
+      additionalProperties: false
+      properties:
+        goal:
+          $ref: '#/components/schemas/Goal'
+        phase_progress:
+          type: string
+        failing:
+          type: array
+          items:
+            $ref: '#/components/schemas/FailingCriterion'
+        chapter_progress:
+          type: object
+          additionalProperties:
+            type: string
+    CostDistribution:
+      type: object
+      required: [confirmed_per_cost, downgrades]
+      additionalProperties: false
+      properties:
+        confirmed_per_cost:
+          type: object
+          required: [critical, major, minor, taste]
+          additionalProperties: false
+          properties:
+            critical:
+              type: integer
+            major:
+              type: integer
+            minor:
+              type: integer
+            taste:
+              type: integer
+        downgrades:
+          type: integer
+    CompletionPreview:
+      type: object
+      required: [open_findings, open_ideas]
+      additionalProperties: false
+      properties:
+        open_findings:
+          type: integer
+        open_ideas:
+          type: integer
+        oldest:
+          type: string
+    LevelHistoryRow:
+      type: object
+      required:
+        - round
+        - at
+        - phase
+        - levels
+        - fingerprint_closed
+        - fingerprint_reopened
+        - findings_confirmed_new
+        - flat_streak
+        - trend
+      additionalProperties: false
+      properties:
+        round:
+          type: integer
+        at:
+          type: string
+        phase:
+          $ref: '#/components/schemas/StoryPhase'
+        levels:
+          type: object
+          additionalProperties:
+            type: string
+        fingerprint_closed:
+          type: array
+          items:
+            type: string
+        fingerprint_reopened:
+          type: array
+          items:
+            type: string
+        findings_confirmed_new:
+          type: array
+          items:
+            type: string
+        flat_streak:
+          type: integer
+        trend:
+          $ref: '#/components/schemas/Trend'
+        runs_closed:
+          type: integer
+    StoryView:
+      type: object
+      description: The whole THE STORY region in one read.
+      required:
+        - story
+        - summary
+        - plotlines
+        - chapters
+        - cast
+        - ledger
+        - goal
+        - ideas
+        - revisions
+        - findings
+        - proposals
+        - runs
+        - templates
+        - cost_distribution
+        - completion_preview
+        - digest
+      additionalProperties: false
+      properties:
+        story:
+          $ref: '#/components/schemas/Story'
+        summary:
+          allOf:
+            - $ref: '#/components/schemas/Summary'
+          nullable: true
+        plotlines:
+          type: array
+          items:
+            $ref: '#/components/schemas/Plotline'
+        chapters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chapter'
+        cast:
+          type: array
+          items:
+            $ref: '#/components/schemas/CastMember'
+        ledger:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        goal:
+          $ref: '#/components/schemas/GoalSurface'
+        ideas:
+          type: array
+          items:
+            $ref: '#/components/schemas/Idea'
+        revisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Revision'
+        verdicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Verdict'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Finding'
+        proposals:
+          type: array
+          items:
+            $ref: '#/components/schemas/Proposal'
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        templates:
+          type: array
+          description: The assigned template row ids (D-17b), not the catalogue rows.
+          items:
+            type: string
+        cost_distribution:
+          $ref: '#/components/schemas/CostDistribution'
+        completion_preview:
+          allOf:
+            - $ref: '#/components/schemas/CompletionPreview'
+          nullable: true
+        digest:
+          allOf:
+            - $ref: '#/components/schemas/Digest'
+          nullable: true
+        level_history:
+          type: array
+          items:
+            $ref: '#/components/schemas/LevelHistoryRow'
+    QueueItem:
+      type: object
+      description: One decision on the cross-Story Author queue.
+      required: [kind, story_id, story_title, id, title, evidence, created_at]
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: '#/components/schemas/QueueItemKind'
+        story_id:
+          type: string
+        story_title:
+          type: string
+        id:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+        evidence:
+          type: string
+        cost:
+          $ref: '#/components/schemas/Cost'
+        created_at:
+          type: string
+    StoryKnowledgeEntry:
+      type: object
+      required: [key, title, body, tags]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    StoryKnowledgeSection:
+      type: object
+      required: [key, title, article_id, updated_at, entries]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          enum: [summary, plotlines, chapters, cast, continuity, goal, ideas, findings]
+        title:
+          type: string
+        article_id:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          nullable: true
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoryKnowledgeEntry'
+    StoryKnowledgeTree:
+      type: object
+      required: [story_id, story_title, sections, degraded]
+      additionalProperties: false
+      properties:
+        story_id:
+          type: string
+        story_title:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoryKnowledgeSection'
+        degraded:
+          type: boolean
+    AgentModelCatalog:
+      type: object
+      required: [base_url, models]
+      additionalProperties: false
+      properties:
+        base_url:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+    AgentRecentRun:
+      type: object
+      required:
+        - run_id
+        - story_id
+        - story_title
+        - work_item
+        - state
+        - started_at
+        - no_op
+        - tokens
+      additionalProperties: false
+      properties:
+        run_id:
+          type: string
+        story_id:
+          type: string
+        story_title:
+          type: string
+        work_item:
+          type: string
+        state:
+          $ref: '#/components/schemas/RunState'
+        started_at:
+          type: string
+        ended_at:
+          type: string
+        end_reason:
+          type: string
+        no_op:
+          type: boolean
+        tokens:
+          type: integer
+    AgentWorkingThread:
+      type: object
+      required: [story_id, story_title, phase, role_name, work_item, thread_id, started_at]
+      additionalProperties: false
+      properties:
+        story_id:
+          type: string
+        story_title:
+          type: string
+        phase:
+          $ref: '#/components/schemas/StoryPhase'
+        role_name:
+          type: string
+        work_item:
+          type: string
+        thread_id:
+          type: string
+        started_at:
+          type: integer
+          description: Epoch milliseconds when the thread started.
+    AgentTemplateModel:
+      type: object
+      required: [template, role, model]
+      additionalProperties: false
+      properties:
+        template:
+          type: string
+        role:
+          type: string
+        model:
+          type: string
+    AgentStatusRow:
+      type: object
+      required:
+        - kind
+        - title
+        - status
+        - rank
+        - model
+        - model_source
+        - template_models
+        - working
+        - recent
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: '#/components/schemas/RoleKind'
+        title:
+          type: string
+        status:
+          type: string
+          enum: [idle, running]
+        rank:
+          $ref: '#/components/schemas/AgentRank'
+        model:
+          type: string
+        model_source:
+          type: string
+          enum: [agent, default]
+        template_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentTemplateModel'
+        working:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentWorkingThread'
+        recent:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentRecentRun'
+    AgentThreadRecord:
+      type: object
+      required:
+        - thread_id
+        - run_id
+        - story_id
+        - story_title
+        - phase
+        - role
+        - role_name
+        - title
+        - state
+        - started_at
+        - tokens
+        - request
+        - answer
+        - retained
+      additionalProperties: false
+      properties:
+        thread_id:
+          type: string
+        run_id:
+          type: string
+        story_id:
+          type: string
+        story_title:
+          type: string
+        phase:
+          $ref: '#/components/schemas/StoryPhase'
+        role:
+          $ref: '#/components/schemas/RoleKind'
+        role_name:
+          type: string
+        title:
+          type: string
+        state:
+          $ref: '#/components/schemas/AgentThreadState'
+        started_at:
+          type: string
+        ended_at:
+          type: string
+        tokens:
+          type: integer
+        request:
+          type: string
+        answer:
+          type: string
+        error:
+          type: string
+        retained:
+          type: boolean
+    AgentThreadList:
+      type: object
+      required: [kind, threads]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+        threads:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentThreadRecord'
+    # ---------------------------------------------------------------------
+    # Request bodies
+    # ---------------------------------------------------------------------
+    CreateStoryRequest:
+      type: object
+      required: [idea]
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+        idea:
+          type: string
+          minLength: 1
+          description: P5's Seed. A blank or whitespace-only value is 400.
+        chapter_count:
+          type: integer
+          minimum: 1
+    PatchStoryRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+        idea:
+          type: string
+          minLength: 1
+        chapter_count:
+          type: integer
+          minimum: 1
+        auto_approve:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cost'
+    BacktrackRequest:
+      type: object
+      required: [phase]
+      additionalProperties: false
+      properties:
+        phase:
+          type: string
+          enum: [summary, plotlines]
+    WhyRequest:
+      type: object
+      required: [why]
+      additionalProperties: false
+      properties:
+        why:
+          type: string
+          minLength: 1
+          description: The audit sentence an approval or discard must carry (D-8/T-5).
+    NoteRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          description: >-
+            The Author's note. On an Idea selection it is the explicit acknowledgement when a
+            sourced Idea has no `verified` Editor verdict; on a revision selection it lands in
+            `selection_note` and defaults to the server's own sentence when absent or blank.
+    SectionContentRequest:
+      type: object
+      required: [content]
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+          description: The complete section text (not a patch); an empty string is a valid paragraph-free section.
+    RevisionMergeRequest:
+      type: object
+      required: [unit_ref, revision_ids, parts]
+      additionalProperties: false
+      properties:
+        unit_ref:
+          type: string
+        revision_ids:
+          type: array
+          minItems: 2
+          items:
+            type: string
+        parts:
+          type: string
+          description: The merge brief - which half of which draft to take.
+        why:
+          type: string
+          description: Optional audit sentence; the server writes its own when absent.
+    UndoRequest:
+      type: object
+      required: [chapter_id, section_id]
+      additionalProperties: false
+      properties:
+        chapter_id:
+          type: string
+        section_id:
+          type: string
+    DirectiveRequest:
+      type: object
+      required: [text]
+      additionalProperties: false
+      properties:
+        text:
+          type: string
+          minLength: 1
+        refs:
+          type: array
+          items:
+            type: string
+          description: Artifact ids naming the pane the Author is looking at.
+    TemplateAssignRequest:
+      type: object
+      required: [template_ids]
+      additionalProperties: false
+      properties:
+        template_ids:
+          type: array
+          items:
+            type: string
+    ChapterBarRequest:
+      type: object
+      required: [bar_override]
+      additionalProperties: false
+      properties:
+        bar_override:
+          type: string
+          description: 'Whitespace-separated tokens such as `-C-7 +1`; an empty string clears the override.'
+    GoalCriterionOp:
+      type: object
+      required: [op]
+      additionalProperties: false
+      properties:
+        op:
+          type: string
+          enum: [add, remove, setHard]
+        id:
+          type: string
+        criterion:
+          $ref: '#/components/schemas/Criterion'
+        hard:
+          type: boolean
+    GoalUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        threshold_soft:
+          type: number
+        criteria:
+          type: array
+          items:
+            $ref: '#/components/schemas/GoalCriterionOp'
+    AssistantRequest:
+      type: object
+      required: [target, text]
+      additionalProperties: false
+      properties:
+        target:
+          type: string
+          enum: [summary, directive]
+        text:
+          type: string
+          minLength: 1
+    AgentModelUpdateRequest:
+      type: object
+      required: [model]
+      additionalProperties: false
+      properties:
+        model:
+          type: string
+          nullable: true
+          description: A non-empty provider model id, or `null` to clear the roster choice.
+    CreateTemplateRequest:
+      type: object
+      description: >-
+        One of `template` (New) or `duplicate_of` (Duplicate) is required; when both are present
+        the route duplicates the named row. An Author template is always created as
+        `builtin: false, editable: true`.
+      additionalProperties: false
+      properties:
+        template:
+          $ref: '#/components/schemas/Template'
+        duplicate_of:
+          type: string
+    TemplateUpdateRequest:
+      type: object
+      description: A partial template; omitted fields keep their stored value.
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateRole'
+        serves_phase:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoryPhase'
+        done_definition:
+          type: string
+        selection_rules:
+          type: string
+        attempts:
+          type: integer
+        delegation:
+          type: array
+          items:
+            type: string
+        escalation_rule:
+          type: string
+        next_phase:
+          type: string
+        max_concurrent:
+          type: integer
+        builtin:
+          type: boolean
+        editable:
+          type: boolean

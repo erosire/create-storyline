@@ -34,11 +34,13 @@ import type {
     Finding,
     FindingState,
     IdeaState,
+    PendingKind,
     Proposal,
     Revision,
     Run,
     Story,
     StoryPhase,
+    StoryStatus,
     Template,
     TemplateRole,
     Verdict
@@ -85,6 +87,31 @@ export type AssistantRequest = { target: 'summary' | 'directive'; text: string }
 export type { UndoTarget };
 
 /**
+ * The status line's words. The machine's `pending_kind` enum is a contract field, not product
+ * copy: the Author reads "needs your approval", not "finding_approval".
+ */
+export function storyStatusLabel(status: StoryStatus, pendingKind: PendingKind): string {
+    if (status === 'pending') {
+        switch (pendingKind) {
+            case 'phase_signoff':
+                return 'needs your signature';
+            case 'idea_selection':
+                return 'needs your pick';
+            case 'finding_approval':
+                return 'needs your approval';
+            case 'drained':
+                return 'leftovers need you';
+            case 'stalled':
+                return 'stuck';
+            default:
+                return 'pending';
+        }
+    }
+
+    return status === 'completed' ? 'done' : status;
+}
+
+/**
  * P11 / U-5 — resolving the span a proposal or an edit points at into the pair the route needs.
  *
  * `Proposal.target_ref` is addressable at two granularities (D-7): a section id, or the chapter
@@ -117,8 +144,9 @@ export function undoTargetFor(chapter: Chapter, targetRef: string): UndoTarget {
  *     these: no route, so RevisionsCompare rendered the comparison with its Select disabled. U-13
  *     landed `POST /stories/:id/revisions/:revisionId/select`, so the control works and the shell
  *     binds it (see `shell-binding.ts`).
- *   - an Author write to the SUMMARY has no route either; §8.6's `requestAssistant` is the
- *     sanctioned one-field write, and that is what SummaryPane offers (U-4).
+ *   - an Author write to the SUMMARY has no route either. The UI's channel is the pane-aware
+ *     directive bar (D-19); `requestAssistant` stays on the client surface for the server's §8.6
+ *     route, but no pane offers an "Ask assistant" control.
  */
 export interface StoryActions {
     /** P8 / D-37 — halt dispatch and kill in-flight runs. Also the Author's Pause & edit. */

@@ -409,7 +409,8 @@ export function createDashboardStore(client: ApiClient = api) {
             mutate(() => client.mergeRevisions(storyId, request), storyId),
 
         // ---- direction, completion, dial (U-9 / U-14 / U-10a / U-6) -------------------
-        sendDirective: (storyId: string, text: string) => mutate(() => client.sendDirective(storyId, text), storyId),
+        sendDirective: (storyId: string, text: string, refs: string[] = []) =>
+            mutate(() => client.sendDirective(storyId, text, refs), storyId),
         acceptCompletion: (storyId: string) => mutate(() => client.acceptCompletion(storyId), storyId),
         patchStory: (storyId: string, body: StoryPatch) => mutate(() => client.patchStory(storyId, body), storyId),
         /** D-35 / D-35b — one dial write: the gate AND the drain threshold move together. */
