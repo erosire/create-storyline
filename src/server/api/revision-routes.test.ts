@@ -340,8 +340,15 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
 
         expect(reply.status).toBe(200);
         expect(world.store.summaries.require(summary.id).ending).toBe('She floods the valley on purpose.');
-        // Both Summary drafts go, and the chapter's drafts are untouched — the delete is per unit (D-22).
-        expect(world.store.revisions.list().map((row) => row.id)).toEqual(['revision_1', 'revision_2', 'revision_3']);
+        // A Summary selection keeps the losing sample as `discarded` so the Revision 1…N history
+        // survives; the chapter's drafts are untouched. The winner is the only `selected` row.
+        expect(world.store.revisions.list().map((row) => row.id)).toEqual([
+            'revision_1',
+            'revision_2',
+            'revision_3',
+            'revision_4'
+        ]);
         expect(world.store.revisions.require('revision_3').state).toBe('selected');
+        expect(world.store.revisions.require('revision_4').state).toBe('discarded');
     });
 });

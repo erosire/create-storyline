@@ -27,7 +27,7 @@
 // ENGINE ONLY. This module imports `@underload/harness` (agent/harness/tool and their types). It
 // never imports `@underload/harness/server`, never starts a listener, and never uses the harness
 // server's SessionStore: the Storyline server (`api/server.ts`) is the only server.
-import { agent, harness, tool } from '@underload/harness';
+import { BUILTIN_PLUGINS, agent, harness, tool } from '@underload/harness';
 import type {
     Agent,
     AgentRank,
@@ -46,7 +46,12 @@ import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
 import type { RoleKind, Run, Story, StoryPhase } from '../../shared/types';
 import type { Store } from '../store';
-import { StoryThreadLog, type StoryThreadRecord, type StoryThreadState } from './thread-log';
+import {
+    StoryThreadLog,
+    type StoryThreadActivity,
+    type StoryThreadRecord,
+    type StoryThreadState
+} from './thread-log';
 
 // ---------------------------------------------------------------------------
 // The employee roster: the same four standing identities in every Story's harness
@@ -58,6 +63,24 @@ import { StoryThreadLog, type StoryThreadRecord, type StoryThreadState } from '.
  * agents. An employee becomes an agent only for the thread a Run opens under it.
  */
 const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker'];
+
+/**
+ * R2/R3 — the harness engine's CONTEXT plugins this host runs. Both are shipped built-ins:
+ *
+ *   - `context-compaction` stops a long thread's transcript growing without bound: at the
+ *     context limit the conversation summarizes itself, and every turn the summary replaced
+ *     stops being sent (reversibly, through the engine's inclusion flags — nothing is deleted).
+ *   - `context-trimmer` withholds superseded/failed tool units and stale thinking on every
+ *     assistant turn, which is the cheap per-turn half of the same problem.
+ *
+ * `async-ping` (the third built-in) is deliberately left OUT: it keeps a parked server session
+ * awake by sending background pings, while Storyline's runs are host-driven turns whose lease
+ * the executor already refreshes after each model request and tool call (S-4a). Running it
+ * would add provider traffic without keeping any Storyline thread alive.
+ */
+const STORYLINE_BUILTIN_PLUGINS = BUILTIN_PLUGINS.filter(
+    (plugin) => plugin.name === 'context-compaction' || plugin.name === 'context-trimmer'
+);
 
 /**
  * Every configured employee holds the same rank (the harness's authority model, R15). Rank A for
@@ -120,6 +143,48 @@ const wireArguments = (raw: string): string => {
     }
 };
 
+/**
+ * How many live steps one running thread reports. The Author is reading "what is happening
+ * now", not the transcript; the newest steps are the useful ones, and a long run must not grow
+ * an unbounded array in the projection.
+ */
+const MAX_ACTIVITY_STEPS = 40;
+
+/** One activity line is a glance, not a transcript — long tool summaries and prose get clipped. */
+const ACTIVITY_LINE_LIMIT = 600;
+
+/**
+ * S-4a/E-0 — how often a provider request refreshes the run's lease while it is in flight. A
+ * large context can spend minutes composing a turn, and the sweep rightly reads "no tool call
+ * for a while" as a dead owner; waiting on a live request is work too. The beat stops with the
+ * request, so a process that stops running still lets the lease lapse.
+ */
+const STREAM_HEARTBEAT_MS = 30_000;
+
+/** One line of activity, trimmed and bounded for the thread surface. */
+const activityLine = (text: string): string => {
+    const trimmed = text.trim();
+
+    return trimmed.length <= ACTIVITY_LINE_LIMIT ? trimmed : `${trimmed.slice(0, ACTIVITY_LINE_LIMIT - 1)}…`;
+};
+
+/**
+ * The sentence an aborted stream answers with. The abort carries the CAUSE (the Author's cord,
+ * a stopped Story, a lapsed lease), so the thread's retained error names the real one instead
+ * of blaming the Author for every cancellation (S-4a, P8, D-37).
+ */
+const abortSentence = (signal: AbortSignal | undefined): string =>
+    signal?.reason instanceof Error ? signal.reason.message : 'the run was stopped (P8)';
+
+/** A tool call as one activity line: the tool plus the human summary the tool layer wrote. */
+const toolActivityLine = (name: string, result: { ok?: boolean; summary?: string; message?: string; error?: string }): string => {
+    const detail = result.summary ?? result.message ?? result.error;
+
+    if (detail !== undefined && detail.trim().length > 0) return `${name} — ${detail}`;
+
+    return result.ok === false ? `${name} — failed` : name;
+};
+
 /** One live Run's identity and the Storyline context its tool calls execute against. */
 interface EngineRun {
     /** The employee key whose engine profile this run's thread was built under. */
@@ -145,6 +210,8 @@ interface EngineRun {
     kickoff: string;
     /** The final answer; empty while the thread runs. */
     answer: string;
+    /** Live steps, oldest first — what the employee is doing right now (U-8). */
+    activity: StoryThreadActivity[];
     /** The thread's retained state. */
     state: StoryThreadState;
     /** Why the thread failed, when it did. */
@@ -363,13 +430,23 @@ export class StoryHarness {
             entry: STORY_AGENT_ENTRY,
             ranks,
             presets: false,
-            builtinPlugins: [],
+            // The two CONTEXT built-ins (compaction + trimmer), never the parked-session ping.
+            builtinPlugins: STORYLINE_BUILTIN_PLUGINS,
             toolCreation: false,
             tools: this.catalogue,
             knowledgeOwner: `storyline:${storyId}`
         });
 
         this.installDelegate();
+    }
+
+    /**
+     * R2/R3 — the engine plugins this Story's harness actually runs, in application order.
+     * Diagnostics and the plugin test read this; the roster UI has no plugin pane (the host
+     * fixes the set in {@link STORYLINE_BUILTIN_PLUGINS}).
+     */
+    get pluginNames(): readonly string[] {
+        return this.engine.plugins;
     }
 
     /**
@@ -476,7 +553,23 @@ export class StoryHarness {
         }
 
         const cursor = run.tally.executed.length;
-        const result: Awaited<ReturnType<ToolRuntime['execute']>> = await run.runtime.execute(run.context, name, args);
+        // The step is visible while the tool runs, then rewritten with what it answered — the
+        // surface reads "readChapter — running…" and becomes "readChapter — <summary>".
+        const step = this.noteActivity(run, `${name} — running…`);
+
+        // S-4a: a long tool (a web fetch, a large read) is work too; beat while it is in flight so
+        // a slow call is not mistaken for a dead owner by the sweep.
+        const beating =
+            run.heartbeat === undefined ? undefined : setInterval(() => run.heartbeat?.(), STREAM_HEARTBEAT_MS);
+        let result: Awaited<ReturnType<ToolRuntime['execute']>>;
+
+        try {
+            result = await run.runtime.execute(run.context, name, args);
+        } finally {
+            if (beating !== undefined) clearInterval(beating);
+        }
+
+        step.text = activityLine(toolActivityLine(name, result));
 
         // S-4a: the lease is refreshed on every tool call, exactly as the hand-written loop did.
         run.heartbeat?.();
@@ -591,11 +684,25 @@ export class StoryHarness {
             }
 
             if (run.signal?.aborted === true) {
-                yield { type: 'error', message: 'the run was stopped by the Author (P8)' };
+                yield { type: 'error', message: abortSentence(run.signal) };
                 return;
             }
 
+            this.noteActivity(run, `waiting on the model (turn ${run.turns + 1})`);
+
             let response;
+
+            // S-4a/E-0: waiting on a live provider request is work too. A 175k-token context can
+            // spend minutes composing one turn, and the lease would otherwise call a healthy run
+            // dead. Beat for as long as the request is in flight; a stopped process still lets the
+            // lease lapse because the beat dies with the process.
+            run.heartbeat?.();
+            let beating: ReturnType<typeof setInterval> | undefined;
+
+            if (run.heartbeat !== undefined) {
+                const beat = run.heartbeat;
+                beating = setInterval(() => beat(), STREAM_HEARTBEAT_MS);
+            }
 
             try {
                 response = await this.chat.complete({
@@ -606,7 +713,7 @@ export class StoryHarness {
                 });
             } catch (error) {
                 if ((error as { name?: string } | undefined)?.name === 'AbortError') {
-                    yield { type: 'error', message: 'the run was stopped by the Author (P8)' };
+                    yield { type: 'error', message: abortSentence(request.signal ?? run.signal) };
                     return;
                 }
 
@@ -619,6 +726,8 @@ export class StoryHarness {
                     message: error instanceof Error ? error.message : String(error)
                 };
                 return;
+            } finally {
+                if (beating !== undefined) clearInterval(beating);
             }
 
             // S-6/E-0: tokens are informational, recorded on every provider turn the run caused.
@@ -627,7 +736,10 @@ export class StoryHarness {
 
             const content = response.message.content ?? '';
 
-            if (content.length > 0) yield { type: 'text', delta: content };
+            if (content.length > 0) {
+                this.noteActivity(run, content);
+                yield { type: 'text', delta: content };
+            }
 
             // The engine requires tool-call ids to be unique for the whole conversation, while
             // an OpenAI-compatible provider commonly reuses `call_1` per turn. Nesting the turn
@@ -738,6 +850,7 @@ export class StoryHarness {
             request: spec.system,
             kickoff: spec.kickoff,
             answer: '',
+            activity: [],
             state: 'running',
             runtime: spec.runtime,
             context: spec.context,
@@ -801,6 +914,23 @@ export class StoryHarness {
         }
     }
 
+    /**
+     * Appends one live step to a running thread, bounded to the newest {@link MAX_ACTIVITY_STEPS}
+     * and to {@link ACTIVITY_LINE_LIMIT} characters. The returned entry is mutable so a tool call
+     * can turn "running…" into its answer without a second row.
+     */
+    private noteActivity(run: EngineRun, text: string): StoryThreadActivity {
+        const entry: StoryThreadActivity = { at: new Date().toISOString(), text: activityLine(text) };
+
+        run.activity.push(entry);
+
+        if (run.activity.length > MAX_ACTIVITY_STEPS) {
+            run.activity.splice(0, run.activity.length - MAX_ACTIVITY_STEPS);
+        }
+
+        return entry;
+    }
+
     /** One `EngineRun` as the retained bar record, with the Story title read from the book now. */
     private recordOf(run: EngineRun): StoryThreadRecord {
         const story = this.store.stories.get(run.storyId) as Story | undefined;
@@ -822,6 +952,11 @@ export class StoryHarness {
             request,
             answer: run.answer,
             ...(run.error === undefined ? {} : { error: run.error }),
+            // U-8: the live steps exist only while the thread runs. A closed thread is judged
+            // on its request and answer, and the retained JSONL never needs the step feed.
+            ...(run.endedAt === undefined && run.activity.length > 0
+                ? { activity: run.activity.map((entry) => ({ ...entry })) }
+                : {}),
             retained: true
         };
     }

@@ -508,9 +508,13 @@ export async function fileRevision(
 }
 
 /**
- * D-22: the selection installs the winner and deletes the losers in the SAME commit, so a
- * fresh Writer on the next chapter cannot see two texts. `install` does the unit write inside
- * the commit; the delete follows it.
+ * D-22: the selection installs the winner and clears the other competing drafts in the SAME
+ * commit, so a fresh Writer on the next chapter cannot see two texts. `install` does the unit write
+ * inside the commit, then the alternatives are dealt with.
+ *
+ * A Summary pass is the one exception: phase ①'s Overview 1…N tree must keep every Writer sample
+ * after the Editor picks one, so those losers are kept as `discarded` rows (`view.revisions`) rather
+ * than hard-deleted. Chapter and plotline selection still delete hard, as D-22 requires.
  */
 export async function commitSelection(
     ctx: ToolExecutionContext,
@@ -539,10 +543,73 @@ export async function commitSelection(
                         row.story_id === storyId &&
                         row.unit_kind === winner.unit_kind &&
                         row.unit_ref === winner.unit_ref &&
+                        (row.state === 'competing' || row.state === 'selected') &&
                         row.id !== winner.id
                 );
-            deleted = losers.map((row) => row.id);
-            for (const loser of losers) store.revisions.delete(loser.id, buildAttribution(ctx, why));
+
+            // Phase ① keeps the Author's sampling visible. A Summary selection still installs the
+            // winner, but the losing samples are parked as `discarded` instead of being erased: the
+            // left rail's Overview 1…N tree is the record of what the Writers actually sampled and
+            // what the Readers and the Editor said about each one. Every other unit keeps D-22's
+            // hard delete, because a chapter's losers have no second reader in this surface.
+            if (winner.unit_kind === 'summary') {
+                const loserIds = new Set(losers.map((loser) => loser.id));
+
+                for (const loser of losers) {
+                    store.revisions.update(loser.id, { state: 'discarded' }, buildAttribution(ctx, why));
+                }
+
+                // A discarded draft is history, not work. Its findings stay in the book (nothing is
+                // deleted), but they no longer hold the Summary open or keep a Writer task alive.
+                // The kept draft gets its own fresh Readers, which is where a real defect returns.
+                const discardedFindings = store.findings
+                    .list()
+                    .filter(
+                        (finding) =>
+                            finding.story_id === storyId &&
+                            (finding.state === 'unconfirmed' ||
+                                finding.state === 'confirmed' ||
+                                finding.state === 'approved') &&
+                            (finding.related_refs ?? []).some((ref) => loserIds.has(ref))
+                    );
+
+                for (const finding of discardedFindings) {
+                    store.findings.update(
+                        finding.id,
+                        { state: 'discarded' },
+                        buildAttribution(ctx, `${why} · ${finding.id} was filed against a discarded draft`)
+                    );
+
+                    for (const task of store.tasks.list()) {
+                        if (task.story_id !== storyId || task.finding_ref !== finding.id) continue;
+                        if (task.state !== 'open' && task.state !== 'claimed') continue;
+
+                        store.tasks.update(
+                            task.id,
+                            { state: 'wontfix' },
+                            buildAttribution(ctx, `${why} · ${finding.id} is history on a discarded draft`)
+                        );
+                    }
+                }
+
+                // A merge request is answered by this choice. A rewrite request is the Author's
+                // "another round" and survives the choice — the next round starts from this winner.
+                for (const task of store.tasks.list()) {
+                    if (task.story_id !== storyId) continue;
+                    if (task.kind !== 'merge') continue;
+                    if (task.state !== 'open' && task.state !== 'claimed') continue;
+                    if (task.detail?.includes(winner.unit_ref) !== true && !task.title.includes(winner.unit_ref)) continue;
+
+                    store.tasks.update(
+                        task.id,
+                        { state: 'wontfix' },
+                        buildAttribution(ctx, `${why} · the selection answered this ${task.kind} request`)
+                    );
+                }
+            } else {
+                deleted = losers.map((row) => row.id);
+                for (const loser of losers) store.revisions.delete(loser.id, buildAttribution(ctx, why));
+            }
         },
         expects
     );

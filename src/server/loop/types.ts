@@ -399,6 +399,10 @@ export interface CreateStoryInput {
     auto_approve?: Cost[];
     /** §4.12 slugs to assign. Defaults to `DEFAULT_ASSIGNMENT` (D-17b). */
     template_refs?: string[];
+    /** Phase ①: how many Writers expand the Seed (the Author's sampling size; standard 5). */
+    summary_sampling?: number;
+    /** Phase ①: how many Readers critique each sample (the Author's setting; standard 5). */
+    summary_readers?: number;
 }
 
 /** What `changeChapterCount` returns, because D-3c's removal needs an explicit confirmation first. */
@@ -469,6 +473,13 @@ export interface EngineApi {
 
     /** L-36/U-1b: one click removes the tasks that would otherwise be dispatched. */
     clearPending(storyId: string): Promise<void>;
+
+    /**
+     * Phase ①'s Author veto: "not final yet — write another round". Queues one `rewrite` task on
+     * the Summary, which is the same record a re-brief uses, so the next sweep produces the next
+     * three drafts. No draft is deleted; the selected revision stays the base.
+     */
+    requestSummaryRevision(storyId: string, note?: string): Promise<void>;
 
     /** L-6a/L-7/L-7a: the sign-off. Locks the phase's artifact, empties that phase's Ideas (D-36). */
     lockPhase(storyId: string, phase: StoryPhase): Promise<void>;

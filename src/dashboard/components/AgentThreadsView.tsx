@@ -10,12 +10,15 @@
 // P4 Chapters), and inside a phrase they are oldest first, newest last. Nothing is pruned: a
 // thread closed months ago is still here for revision.
 //
-// WHY THE DETAIL IS ONLY REQUEST + ANSWER: the reference harness UI has a clickable segment
-// timeline; the Author does not need it here. The two things a thread is judged by are what it
-// was asked and what it said, so opening a bar shows exactly those two blocks.
+// WHY THE DETAIL IS REQUEST + ANSWER, PLUS LIVE STEPS WHILE RUNNING: the reference harness UI
+// has a clickable segment timeline; the Author does not need it here. The two things a thread is
+// judged by are what it was asked and what it said, so a CLOSED bar shows exactly those two
+// blocks. A RUNNING bar shows the same collapsed request and, below it, the steps the employee
+// is taking right now; the answer replaces those steps the moment the thread closes.
 import '../styles/story.css';
 import { useMemo, useState } from 'react';
 import { PHASE_LABELS, PHASE_ORDER, formatElapsed } from './story-contract';
+import { MarkdownText } from './MarkdownText';
 import type { AgentThreadRecord } from '../api';
 import type { StoryPhase } from '../../shared/types';
 
@@ -105,9 +108,22 @@ export interface AgentThreadsViewProps {
 export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreadsViewProps) {
     const groups = useMemo(() => groupThreads(threads), [threads]);
     const [open, setOpen] = useState<Set<string>>(() => new Set());
+    /** U-8: the request is collapsed by default, at every state — open the bar, then the block. */
+    const [requests, setRequests] = useState<Set<string>>(() => new Set());
 
     const toggle = (threadId: string): void => {
         setOpen((current) => {
+            const next = new Set(current);
+
+            if (next.has(threadId)) next.delete(threadId);
+            else next.add(threadId);
+
+            return next;
+        });
+    };
+
+    const toggleRequest = (threadId: string): void => {
+        setRequests((current) => {
             const next = new Set(current);
 
             if (next.has(threadId)) next.delete(threadId);
@@ -140,8 +156,17 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                             <ul className="sv-thread-list">
                                 {group.threads.map((thread) => {
                                     const expanded = open.has(thread.thread_id);
+                                    const requestVisible = requests.has(thread.thread_id);
                                     const code = PHASE_CODE[thread.phase];
                                     const duration = formatElapsed(thread.started_at, thread.ended_at, now);
+                                    const answerText =
+                                        thread.answer.length > 0
+                                            ? thread.answer
+                                            : thread.error !== undefined
+                                              ? thread.state === 'abandoned'
+                                                  ? `the thread was abandoned before answering: ${thread.error}`
+                                                  : `the thread failed before answering: ${thread.error}`
+                                              : 'no answer was recorded.';
 
                                     return (
                                         <li
@@ -192,21 +217,67 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                             {expanded ? (
                                                 <div className="sv-thread__detail">
                                                     <section className="sv-thread__block">
-                                                        <h5 className="sv-thread__block-title">Request</h5>
-                                                        <pre className="sv-thread__text">{thread.request}</pre>
+                                                        <button
+                                                            type="button"
+                                                            className="sv-thread__block-toggle"
+                                                            aria-expanded={requestVisible}
+                                                            onClick={() => toggleRequest(thread.thread_id)}
+                                                        >
+                                                            <span className="sv-thread__block-title">Request</span>
+                                                            <span className="sv-thread__block-caret" aria-hidden="true">
+                                                                {requestVisible ? '▾' : '▸'}
+                                                            </span>
+                                                        </button>
+                                                        {requestVisible ? (
+                                                            <div className="sv-thread__text">
+                                                                <MarkdownText>{thread.request}</MarkdownText>
+                                                            </div>
+                                                        ) : null}
                                                     </section>
-                                                    <section className="sv-thread__block">
-                                                        <h5 className="sv-thread__block-title">Answer</h5>
-                                                        <pre className="sv-thread__text">
-                                                            {thread.answer.length > 0
-                                                                ? thread.answer
-                                                                : thread.state === 'running'
-                                                                  ? 'still working — the answer lands when the thread closes.'
-                                                                  : thread.error !== undefined
-                                                                    ? `the thread failed before answering: ${thread.error}`
-                                                                    : 'no answer was recorded.'}
-                                                        </pre>
-                                                    </section>
+
+                                                    {thread.state === 'running' ? (
+                                                        /* U-8 — below the collapsed request: what the employee is
+                                                           doing at this moment. The answer lands when the thread
+                                                           closes, and this block is what it replaces. */
+                                                        <section
+                                                            className="sv-thread__block sv-thread__block--live"
+                                                            aria-label="Happening now"
+                                                        >
+                                                            <h5 className="sv-thread__block-title">Happening now</h5>
+                                                            {thread.activity !== undefined && thread.activity.length > 0 ? (
+                                                                <ol className="sv-thread__activity">
+                                                                    {thread.activity.map((step, index) => (
+                                                                        <li
+                                                                            className="sv-thread__activity-step"
+                                                                            key={`${step.at}:${index}`}
+                                                                        >
+                                                                            <span className="sv-thread__activity-elapsed">
+                                                                                +{formatElapsed(thread.started_at, step.at, now)}
+                                                                            </span>
+                                                                            <span className="sv-thread__activity-text">{step.text}</span>
+                                                                        </li>
+                                                                    ))}
+                                                                    <li className="sv-thread__activity-step sv-thread__activity-step--live">
+                                                                        <span className="sv-thread__activity-elapsed" aria-hidden="true">
+                                                                            ···
+                                                                        </span>
+                                                                        <span className="sv-thread__activity-text">working…</span>
+                                                                    </li>
+                                                                </ol>
+                                                            ) : (
+                                                                <p className="sv-thread__activity-empty">
+                                                                    the thread is working — no step has landed yet.
+                                                                </p>
+                                                            )}
+                                                        </section>
+                                                    ) : (
+                                                        <section className="sv-thread__block">
+                                                            <h5 className="sv-thread__block-title">Answer</h5>
+                                                            <div className="sv-thread__text">
+                                                                <MarkdownText>{answerText}</MarkdownText>
+                                                            </div>
+                                                        </section>
+                                                    )}
                                                 </div>
                                             ) : null}
                                         </li>

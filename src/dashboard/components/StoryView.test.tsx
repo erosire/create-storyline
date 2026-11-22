@@ -101,7 +101,7 @@ describe('StoryView — one selected phrase in the content area', () => {
 });
 
 describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)', () => {
-    it('marks the recommended overview and lets the Author take it or choose the other', async () => {
+    it('marks the recommended revision and lets the Author take it', async () => {
         const view = fixtureView();
         const unit = buildRevisionUnits(view).find((candidate) => candidate.unitKind === 'summary')!;
         const seed = unit.revisions[0]!;
@@ -140,7 +140,7 @@ describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)'
         expect(drafts[1].dataset.recommended).toBe('true');
         expect(within(drafts[1]).getByText('Editor recommends')).toBeTruthy();
 
-        await click(screen.getByRole('button', { name: 'Take the recommended overview' }));
+        await click(within(drafts[1]).getByRole('button', { name: 'Use this revision' }));
         expect(harness.calls.selectRevision).toEqual([['sum1', 'rv-sum-b']]);
     });
 
@@ -158,16 +158,23 @@ describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)'
         const lock = document.querySelector('.sv-lock-button') as HTMLButtonElement;
         expect(lock.disabled).toBe(true);
         expect(lock.getAttribute('title')).toContain('the Goal has not passed: C-8, C-11 still failing');
-        expect(lock.textContent).toBe('Lock phase Summary');
+        expect(lock.textContent).toBe('Accept final Summary → Phrase 2');
+
+        // "Not final yet" is a queue entry, not a backtrack: no draft is deleted.
+        await click(screen.getByRole('button', { name: 'Request another revision round' }));
+        expect(harness.calls.requestSummaryRevision).toEqual([['s1']]);
 
         // The gate clears: Goal passes and the phase's tray is decided.
         const cleared = {
             ...view,
             goal: { ...view.goal, failing: [] },
+            revisions: view.revisions.map((revision) =>
+                revision.unit_kind === 'summary' ? { ...revision, state: 'selected' as const } : revision
+            ),
             ideas: view.ideas.map((idea) => ({ ...idea, state: 'selected' as const }))
         };
         render(<StoryView view={cleared} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
-        const locks = screen.getAllByRole('button', { name: 'Lock phase Summary' });
+        const locks = screen.getAllByRole('button', { name: 'Accept final Summary → Phrase 2' });
         const enabled = locks[locks.length - 1] as HTMLButtonElement;
         expect(enabled.disabled).toBe(false);
 

@@ -24,7 +24,7 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
         }
 
         for (const folder of ['Continuity', 'Goal', 'Ideas', 'Findings', 'Digest', 'Settings']) {
-            expect(screen.getByText(folder)).toBeTruthy();
+            expect(screen.getAllByText(folder).length).toBeGreaterThan(0);
         }
 
         // The removed clutter: a harness-memory subtitle, a note count and the per-folder sentence.
@@ -47,6 +47,11 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
             ...view,
             story: { ...fixtureStory(), phase: 'summary' as const, summary_locked: false },
             summary: fixtureSummary(),
+            // The tick waits for the round to have a winner; the fixture's competing draft is
+            // parked as discarded so this row represents a finished round.
+            revisions: view.revisions.map((revision) =>
+                revision.unit_kind === 'summary' ? { ...revision, state: 'selected' as const } : revision
+            ),
             goal: { ...view.goal, failing: [] }
         };
         const { container } = render(
@@ -99,7 +104,7 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
 
     it('opens the phrase or the exact entry the Author clicked', () => {
         const selections: StorySelection[] = [];
-        const { getByText } = render(
+        const { getByText, container } = render(
             <StoryOutline
                 view={fixtureView()}
                 selection={DEFAULT_STORY_SELECTION}
@@ -107,19 +112,66 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
             />
         );
 
-        fireEvent.click(getByText('Overview'));
+        fireEvent.click(getByText('Revision 1'));
         fireEvent.click(getByText('Hale'));
         fireEvent.click(getByText('Plotline 2 — Ghost Index'));
         fireEvent.click(getByText('Chapter 3 — The Water Line'));
-        fireEvent.click(getByText('Findings'));
+        const findingsFolder = Array.from(container.querySelectorAll<HTMLElement>('.outline-item--folder')).find(
+            (element) => element.textContent?.includes('Findings')
+        )!;
+        fireEvent.click(findingsFolder);
 
         expect(selections).toEqual([
-            { panel: 'summary', ref: 'overview' },
+            { panel: 'summary', ref: 'revision:rv-sum-a' },
             { panel: 'characters', ref: 'cast_member_1' },
             { panel: 'plotlines', ref: 'p2' },
             { panel: 'chapters', ref: 'c3' },
             { panel: 'findings' }
         ]);
+    });
+
+    it('files each Writer round as a flat Revision 1…N entry with its finding count', () => {
+        const view = fixtureView();
+        const rounds = ['rv-extra-1', 'rv-extra-2', 'rv-extra-3', 'rv-extra-4', 'rv-extra-5'].map(
+            (id, index) => ({
+                id,
+                rev: 1,
+                created_at: `2026-11-11T11:5${index}:00.000Z`,
+                updated_at: `2026-11-11T11:5${index}:00.000Z`,
+                story_id: 's1',
+                unit_kind: 'summary' as const,
+                unit_ref: 'sum1',
+                body: { fields: { premise: `revision ${index + 1}` } },
+                run_ref: `run_writer_${index + 1}`,
+                template_ref: 't-builtin',
+                state:
+                    index === 0
+                        ? ('selected' as const)
+                        : index === 1
+                          ? ('discarded' as const)
+                          : ('competing' as const),
+                verdict_refs: []
+            })
+        );
+        const sampleView = { ...view, revisions: rounds };
+
+        const selections: StorySelection[] = [];
+        const { container } = render(
+            <StoryOutline view={sampleView} selection={DEFAULT_STORY_SELECTION} onSelect={(next) => selections.push(next)} />
+        );
+
+        const summary = Array.from(container.querySelectorAll<HTMLElement>('.outline-phase')).find((element) =>
+            element.textContent?.includes('Summary')
+        )!;
+
+        for (const label of ['Revision 1', 'Revision 2', 'Revision 3', 'Revision 4', 'Revision 5']) {
+            expect(summary.textContent).toContain(label);
+        }
+        // No Overview tree and no nested Findings/Revisions list: each revision is a leaf.
+        expect(summary.querySelectorAll('.outline-grandchildren').length).toBe(0);
+
+        fireEvent.click(screen.getByText('Revision 3'));
+        expect(selections).toContainEqual({ panel: 'summary', ref: 'revision:rv-extra-3' });
     });
 
     it('keeps an empty Characters phrase clickable and childless', () => {

@@ -29,6 +29,8 @@ import {
     recommendedRevisionId,
     selectionExists,
     summaryReadyForReview,
+    summaryRevisionFocus,
+    summaryRevisions,
     summaryRevisionUnit
 } from './story-nav';
 import type { StorySelection } from './story-nav';
@@ -64,12 +66,7 @@ export interface StoryViewProps {
     selection?: StorySelection;
 }
 
-export function StoryView({
-    view,
-    actions = {},
-    ledgerState,
-    selection = DEFAULT_STORY_SELECTION
-}: StoryViewProps) {
+export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT_STORY_SELECTION }: StoryViewProps) {
     const { story } = view;
     const active: StorySelection = selectionExists(view, selection) ? selection : { panel: selection.panel };
 
@@ -81,7 +78,10 @@ export function StoryView({
 
     const summaryUnit = summaryRevisionUnit(view);
     const recommended = recommendedRevisionId(summaryUnit);
-    // U-13 / D-24 — the Author's pick among the Summary's competing overviews.
+    // Phase ①'s rail opens one flat Revision; the pane renders that version and its findings.
+    const revisionFocus = summaryRevisionFocus(view, active);
+    const revisions = summaryRevisions(view);
+    // U-13 / D-24 — the Author's pick among the Summary's competing revisions.
     const onSelectRevision = actions.selectRevision
         ? (unitRef: string, revisionId: string) => void actions.selectRevision?.(unitRef, revisionId)
         : undefined;
@@ -105,10 +105,19 @@ export function StoryView({
                         <SummaryPane
                             story={story}
                             summary={view.summary}
-                            unit={summaryUnit}
+                            revisions={revisions}
                             recommendedRevisionId={recommended}
                             onSelectRevision={onSelectRevision}
+                            focus={revisionFocus}
                             readyForReview={summaryReadyForReview(view)}
+                            sampling={story.summary_sampling}
+                            readers={story.summary_readers}
+                            onSetSummaryReview={
+                                actions.setSummaryReview
+                                    ? (sampling, readers) =>
+                                          void actions.setSummaryReview?.(story.id, sampling, readers)
+                                    : undefined
+                            }
                             // U-4: the pane's own Backtrack, naming the deletions (L-32).
                             backtrackNote={
                                 story.summary_locked ? backtrackStatement(story, 'summary', view) : undefined

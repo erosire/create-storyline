@@ -72,10 +72,13 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
             20
         );
 
-        // Two attempts per chapter, one survivor: the losers are deleted at selection rather than kept
-        // as a second row, so the ledger is exactly one `selected` draft per unit.
+        // Two attempts per chapter, one survivor: the chapter losers are deleted at selection rather
+        // than kept as a second row, so the ledger is exactly one `selected` draft per chapter. The
+        // phase ① samples are the exception — `discarded` so Overview 1…N survives on the rail.
         expect(revisionStates(fixture.store, storyId)).toEqual([
             'revision_1:summary_1/selected',
+            'revision_2:summary_1/discarded',
+            'revision_3:summary_1/discarded',
             'revision_4:chapter_1/selected',
             'revision_6:chapter_2/selected',
             'revision_8:chapter_3/selected'
@@ -102,18 +105,18 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // The dial was open when the finding landed, so the whole ladder ran without an Author click:
         // open → verified → approved → task → repaired. Settling on the task being `done` is the proof
         // the ladder completed; what the finding row then reads is asserted below.
-        await fixture.settle(async () => findingStates(fixture.store, storyId).includes('finding_1:fixed/major'), 24);
+        await fixture.settle(async () => findingStates(fixture.store, storyId).includes('finding_1:fixed/critical'), 24);
 
-        expect(findingStates(fixture.store, storyId)).toEqual(['finding_1:fixed/major']);
+        expect(findingStates(fixture.store, storyId)).toEqual(['finding_1:fixed/critical']);
 
         const view = await storyView(fixture, storyId);
 
-        // The finding is the Checker's (`raiseFinding` on the chapter unit, C-7), and the cost the
-        // ledger ends on is `major`: the Editor's verification is what re-weights it (L-23), which is
-        // why the row reads `fixed/major` rather than the `critical` it was filed as.
+        // The finding is the Checker's (`raiseFinding` on the chapter unit, C-7). The Editor's quick
+        // validity check confirms it and keeps the filed cost — re-weighting is an explicit
+        // correction, not part of marking the finding valid (D-33, D-34).
         expect(view.findings[0]).toMatchObject({
             id: 'finding_1',
-            cost: 'major',
+            cost: 'critical',
             state: 'fixed',
             target_ref: 'chapter_3',
             criterion_ref: 'C-7',

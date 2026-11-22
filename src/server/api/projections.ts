@@ -39,7 +39,7 @@ import type {
 import type { CriteriaEngine, LevelReport, LevelStatus } from '../criteria/engine';
 import type { DigestBuilder } from '../digest/digest';
 import type { CommitEvent, Store } from '../store';
-import type { Cost, Finding, Idea, Run, Story, StoryPhase, Task } from '../../shared/types';
+import type { Cost, Finding, Idea, Revision, Run, Story, StoryPhase, Task } from '../../shared/types';
 import type { StreamKind } from '../../dashboard/api';
 import type { StoryThreadRecord } from '../run/thread-log';
 
@@ -291,6 +291,51 @@ export function goalSurface(deps: ProjectionDeps, story: Story): GoalSurface {
     return { goal: criteria.resolveGoal(store, story), phase_progress: status.progress, failing, chapter_progress };
 }
 
+/**
+ * The Summary sampling history for the rail. Live rows are the authority; a hard-deleted Summary
+ * draft from an older selection is recovered from the journal, which stores the deleted record as
+ * the `delete` event's patch (P11's undo source). Without this, a Story that selected a Summary
+ * before phase ① kept its samples would show only the winner and its latest correction — the rail's
+ * Overview 1…N would silently lose the Writer samples the Author asked for.
+ *
+ * The recovered row is presented as `discarded`, which is the truthful reading after a later
+ * selection: it is no longer the installed or competing text, but its findings and the Editor's
+ * note are still provenance. Chapter/plotline deletions are not resurrected; D-22's hard delete
+ * still owns those surfaces.
+ */
+function viewRevisions(store: Store, story: Story): Revision[] {
+    const live = store.revisions.list().filter((revision) => revision.story_id === story.id);
+    const summary = storySummary(store, story.id);
+
+    if (summary === null || summary === undefined) return live;
+
+    const liveIds = new Set(live.map((revision) => revision.id));
+    const archived = new Map<string, Revision>();
+
+    for (const event of store.journal) {
+        if (event.collection !== 'revisions' || event.op !== 'delete') continue;
+
+        const deleted = event.patch as Revision | undefined;
+
+        if (
+            deleted === undefined ||
+            deleted.story_id !== story.id ||
+            deleted.unit_kind !== 'summary' ||
+            deleted.unit_ref !== summary.id ||
+            liveIds.has(deleted.id) ||
+            archived.has(deleted.id)
+        ) {
+            continue;
+        }
+
+        archived.set(deleted.id, { ...deleted, state: 'discarded' });
+    }
+
+    return [...archived.values(), ...live].sort(
+        (left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // §10.2 U-4…U-17 — the whole Story view (one round trip, W9)
 // ---------------------------------------------------------------------------
@@ -299,6 +344,8 @@ export function goalSurface(deps: ProjectionDeps, story: Story): GoalSurface {
  * `GET /stories/:id` — every slice THE STORY region renders, in the order the panes read them. The
  * §4 collections are returned as-is (P1: the dashboard reads records, it does not receive copies of
  * them); only the computed slices (`goal`, `cost_distribution`, `completion_preview`) are built here.
+ * `revisions` is the one history-aware slice: phase ①'s flat Revision history also reads the Summary
+ * samples an older selection hard-deleted (see `viewRevisions`).
  */
 export function storyView(deps: ProjectionDeps, story: Story): StoryView {
     const { store, criteria, digest } = deps;
@@ -315,7 +362,8 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
         ledger: store.ledger.list().filter((entry) => entry.story_id === story.id),
         goal: goalSurface(deps, story),
         ideas: storyIdeas(store, story.id),
-        revisions: store.revisions.list().filter((revision) => revision.story_id === story.id),
+        // Phase ①'s sampling tree reads the Summary drafts' full history (see `viewRevisions`).
+        revisions: viewRevisions(store, story),
         // U-13 (D-21): the side-by-side panes must show the judgement that goes with each draft. §6.2a
         // files verdicts per revision — the Checker appends the verdict to `revisions.verdict_refs`
         // (tools/checker.ts) — and the §4.9 rows still travel as their own slice so the panes can match

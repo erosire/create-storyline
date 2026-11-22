@@ -130,8 +130,9 @@ function Shell() {
                             </div>
                             <div className="region__body">
                                 {/* U-8: every thread the employee ran, across every Story and every
-                                    phrase session, oldest first. The detail on a bar is its request and
-                                    its answer; there is no segment timeline. */}
+                                    phrase session, oldest first. A closed bar's detail is its request
+                                    and its answer; a running bar adds the live steps below the
+                                    collapsed request, so the Author sees what is happening now. */}
                                 <AgentThreadsView
                                     kind={selectedAgent}
                                     threads={agentThreads[selectedAgent] ?? []}

@@ -1,6 +1,6 @@
 // The Story runtime on the harness engine: one harness per Story, one session per phase, one
 // thread per Run, and a status projection that spans stories.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { harness } from '@underload/harness';
 import { MockChatClient, calls, makeRecorder, msg } from '../llm/mock';
 import type { ChatMessage, ChatResponse } from '../llm/client';
@@ -130,6 +130,73 @@ describe('StoryHarnessManager — one harness per Story', () => {
             request: 'BRIEF A\n\n---\n\nwrite',
             answer: 'done'
         });
+
+        manager.dispose();
+    });
+
+    it('runs the engine’s context plugins and leaves the background ping off (R2/R3)', () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const chat = new MockChatClient(async (): Promise<ChatResponse> => ({ message: { content: 'done' } }));
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        // Compaction is the bound on a thread's context growth; the trimmer is its per-turn half.
+        // `async-ping` is a parked-session keepalive and must not add provider traffic here.
+        expect([...manager.forStory(story.id).pluginNames].sort()).toEqual(['context-compaction', 'context-trimmer']);
+
+        manager.dispose();
+    });
+
+    it('reports a running thread’s live steps and drops them once it closes (U-8)', async () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const chat = new MockChatClient(async (): Promise<ChatResponse> => {
+            await gate;
+
+            return { message: { content: 'done' } };
+        });
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+        let beats = 0;
+
+        const running = manager.run({
+            storyId: story.id,
+            phase: 'summary',
+            label: 'run_1',
+            roleName: 'writer',
+            roleKind: 'writer',
+            model: 'mock',
+            system: 'BRIEF',
+            kickoff: 'write',
+            context: contextFor(store, runtime, story.id),
+            runtime,
+            tally: createTally(),
+            heartbeat: () => {
+                beats += 1;
+            }
+        });
+
+        await vi.waitFor(() => expect(chat.callCount).toBeGreaterThan(0));
+
+        const live = manager.threads('writer')[0]!;
+        expect(live.state).toBe('running');
+        expect(live.activity?.map((step) => step.text)).toContain('waiting on the model (turn 1)');
+        // S-4a: the lease is refreshed while the provider request is in flight, not only after
+        // a tool call — a slow turn must not read as a dead owner.
+        expect(beats).toBeGreaterThan(0);
+
+        release();
+        await running;
+
+        const closed = manager.threads('writer')[0]!;
+        expect(closed.activity).toBeUndefined();
+        expect(closed.answer).toBe('done');
 
         manager.dispose();
     });

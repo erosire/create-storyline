@@ -118,7 +118,7 @@ export function PhaseControls({ view, actions, lock, showLock = true }: PhaseCon
                 <div className="sv-lock-block">
                     <ConfirmButton
                         className="sv-lock-button"
-                        label={`Lock phase ${PHASE_LABELS[gate.phase]}`}
+                        label={gate.phase === 'summary' ? 'Accept final Summary → Phrase 2' : `Lock phase ${PHASE_LABELS[gate.phase]}`}
                         confirmText={gate.statement}
                         // U-16: enabled only when the Goal passes AND the tray is empty.
                         disabled={!gate.canLock}
@@ -143,6 +143,21 @@ export function PhaseControls({ view, actions, lock, showLock = true }: PhaseCon
                                 <li key={reason}>{reason}</li>
                             ))}
                         </ul>
+                    ) : null}
+                    {gate.phase === 'summary' && !story.summary_locked ? (
+                        <button
+                            type="button"
+                            className="sv-summary-revise-button"
+                            disabled={!actions.requestSummaryRevision}
+                            title={
+                                actions.requestSummaryRevision
+                                    ? 'Queue another round of three fresh Summary drafts from the selected revision. Nothing is deleted.'
+                                    : 'The request-revision route is not available in this shell.'
+                            }
+                            onClick={() => void actions.requestSummaryRevision?.(story.id)}
+                        >
+                            Request another revision round
+                        </button>
                     ) : null}
                 </div>
             ) : null}

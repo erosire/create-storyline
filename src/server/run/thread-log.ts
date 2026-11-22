@@ -18,6 +18,14 @@ import type { RoleKind, StoryPhase } from '../../shared/types';
 /** The four states a thread bar can read. */
 export type StoryThreadState = 'running' | 'torn_down' | 'failed' | 'abandoned';
 
+/** One step a RUNNING thread has taken — what the employee is doing right now (U-8). */
+export interface StoryThreadActivity {
+    /** When the step landed (ISO 8601). */
+    at: string;
+    /** One line: the tool it called (with its result), or the prose turn it produced. */
+    text: string;
+}
+
 /** One retained thread, field-for-field what `GET /agents/:kind/threads` renders. */
 export interface StoryThreadRecord {
     /** The engine thread id; stable for the life of this record. */
@@ -44,6 +52,11 @@ export interface StoryThreadRecord {
     answer: string;
     /** The failure text when the thread ended without an answer. */
     error?: string;
+    /**
+     * Live steps of a thread that is still running, oldest first. Omitted once the thread
+     * closes (and therefore never written to the log): a completed bar is Request + Answer.
+     */
+    activity?: StoryThreadActivity[];
     /** False for a legacy Run row whose pre-retention transcript is gone. */
     retained: boolean;
 }

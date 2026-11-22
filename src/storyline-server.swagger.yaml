@@ -306,6 +306,38 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/summary/revise:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: requestSummaryRevision
+      summary: Ask for another Summary revision round
+      description: >-
+        Phase ①'s "not final yet". Queues a Writer round of `summary_sampling` fresh Summary
+        drafts from the selected revision. Nothing is deleted; the selected revision remains
+        the base. The answer is the refreshed Story row.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+                  description: Optional Author note carried into the Writer brief.
+      responses:
+        '200':
+          description: Updated Story row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryRow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/storyline/stories/{id}/clear-pending:
     parameters:
       - $ref: '#/components/parameters/StoryId'
@@ -970,7 +1002,8 @@ paths:
         Every thread one employee kind ran, across every Story and every phase session, oldest
         first. Three sources are merged and de-duplicated server-side: live process history, the
         durable thread log, and legacy Run rows. `request` and `answer` are the detail surface;
-        an unknown kind is 404 before any read.
+        a RUNNING thread also carries `activity` (the steps it is taking right now), which is
+        dropped when the thread closes. An unknown kind is 404 before any read.
       responses:
         '200':
           description: Retained thread list.
@@ -2576,8 +2609,24 @@ components:
           type: string
         error:
           type: string
+        activity:
+          type: array
+          description: >-
+            Live steps of a thread that is still running, oldest first. Omitted once the thread
+            closes.
+          items:
+            $ref: '#/components/schemas/AgentThreadActivity'
         retained:
           type: boolean
+    AgentThreadActivity:
+      type: object
+      required: [at, text]
+      additionalProperties: false
+      properties:
+        at:
+          type: string
+        text:
+          type: string
     AgentThreadList:
       type: object
       required: [kind, threads]

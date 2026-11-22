@@ -954,6 +954,8 @@ export function fixtureActions() {
         patchGoal: record('patchGoal'),
         setChapterBar: record('setChapterBar'),
         setAutoApprove: record('setAutoApprove'),
+        setSummaryReview: record('setSummaryReview'),
+        requestSummaryRevision: record('requestSummaryRevision'),
         assignTemplates: record('assignTemplates'),
         createTemplate: record('createTemplate'),
         patchTemplate: record('patchTemplate'),

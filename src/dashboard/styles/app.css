@@ -1488,6 +1488,33 @@
     color: var(--text-strong);
 }
 
+/* Phase ① files Findings and Revisions under each Overview, one rail level deeper. */
+.outline-grandchildren {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 1px 0 2px;
+    padding: 0 0 0 18px;
+    border-left: 1px solid var(--line-strong);
+    list-style: none;
+}
+
+.outline-child--sub {
+    padding: 4px 7px;
+    font-size: 11px;
+}
+
+.outline-child--sub .outline-count {
+    flex: none;
+    margin-left: auto;
+    padding: 0 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 9.5px;
+    font-variant-numeric: tabular-nums;
+}
+
 .outline-child > span:last-child {
     min-width: 0;
     overflow: hidden;

@@ -573,7 +573,10 @@ export class Store {
 
         const merged = mergeEvents(Array.isArray(snapshotJournal) ? snapshotJournal : [], logged);
 
-        store.events.push(...merged);
+        // NOT `push(...merged)`: that passes every event as a call argument, and a long-lived
+        // book (six figures of journal rows) exhausts the call stack during boot. A loop has
+        // the same result without the argument-count ceiling.
+        for (const event of merged) store.events.push(event);
 
         // A malformed settings section does the same thing a malformed collection does: it
         // rehydrates as absent rather than costing the Author the book (see the note above).

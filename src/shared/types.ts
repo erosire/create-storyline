@@ -224,6 +224,26 @@ export interface ChapterSection {
 // ---------------------------------------------------------------------------
 
 /**
+ * Phase ①'s standard sampling size: how many Writers expand one Seed into competing Summary
+ * drafts. D-17d makes `attempts` the Author's setting; this is the default the built-in
+ * `writer-summary` template ships with, and the fallback a Story without an override reads.
+ *
+ * A ROUND IS THREE DRAFTS. Three is enough for a real choice (one kept, two discarded) without
+ * turning the first pass into a lottery. Every later round is three fresh drafts written from
+ * the kept Summary, so the rail is a linear Revision 1…N history, not a tree.
+ */
+export const DEFAULT_SUMMARY_SAMPLING = 3;
+
+/**
+ * Phase ①'s standard Reader count: how many Readers critique each Summary draft before the
+ * Editor reviews their findings. The Author may change it per Story.
+ */
+export const DEFAULT_SUMMARY_READERS = 5;
+
+/** The largest sample/reader count the API accepts — a typo guard, not a model constraint. */
+export const SUMMARY_REVIEW_LIMIT = 20;
+
+/**
  * §4.1 — one work of fiction, the unit of the loop (P3: a Story IS its records).
  *
  * D-1: `phase`, `status`, `pending_kind` and the two lock flags are owned by the loop
@@ -236,6 +256,9 @@ export interface ChapterSection {
  *     Author's call, so this is a list, not a single ref).
  *   - `chapter_deps` — L-9's declared dependency set. Not for sequencing (all chapters are
  *     in flight together, L-8): it says which chapters a change must propagate to.
+ *   - `summary_sampling` / `summary_readers` — the phase-① pipeline's two dials: how many
+ *     Writer samples one Summary gets and how many Readers critique each sample. Author
+ *     settings, absent means the standard above.
  */
 export interface Story extends StoredRecord {
     title: string;
@@ -261,6 +284,10 @@ export interface Story extends StoredRecord {
     template_refs: string[];
     /** L-9: `chapter_id -> the chapter ids a change to it must propagate to`. */
     chapter_deps: Record<string, string[]>;
+    /** Phase ①: how many Writers expand one Seed into competing Summary drafts (default 3). */
+    summary_sampling?: number;
+    /** Phase ①: how many Readers critique each Summary draft before the Editor sees it (default 5). */
+    summary_readers?: number;
 }
 
 // ---------------------------------------------------------------------------

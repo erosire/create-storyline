@@ -7,7 +7,16 @@
  * Writer cannot inherit two texts. Every selection carries a `selection_note` naming the rule
  * applied (T-2a) — it is the Author's only window into automated taste (L-17).
  */
-import type { Chapter, Finding, Idea, Plotline, Revision, Summary, Verdict } from '../../shared/types';
+import {
+    DEFAULT_SUMMARY_READERS,
+    type Chapter,
+    type Finding,
+    type Idea,
+    type Plotline,
+    type Revision,
+    type Summary,
+    type Verdict
+} from '../../shared/types';
 import {
     chapterRows,
     commitSelection,
@@ -150,7 +159,7 @@ const listRevisions: ToolDefinition = {
 const selectRevision: ToolDefinition = {
     name: 'selectRevision',
     description:
-        "Install one draft as the unit's content and record why it won. The other drafts are deleted in the same write, so nothing downstream can inherit two texts.",
+        "Install one draft as the unit's content and record why it won. Other units delete their losing drafts in the same write; a Summary keeps them as `discarded` history so The Revision 1…N rail survives. A Summary draft is a complete field set: selecting it updates the fields it carries and leaves anything it omits as it stands.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -200,6 +209,66 @@ const selectRevision: ToolDefinition = {
                     fix: 'listRevisions to see what is still competing, or restore the record as the Author'
                 }
             );
+        }
+
+        // PHASE ① IS A COMPLETE ROUND, THEN A CHOICE. The sweep already withholds the select job
+        // until all Reader passes close, but a directive/verify run can call the tool directly.
+        // Without this guard, one early Editor turn can install a Summary from a one-draft round
+        // and leave the Author with no three-way choice at all.
+        if (unitKind === 'summary' && ctx.story.phase === 'summary') {
+            const pending = pendingRevisions(store, storyId, 'summary', target.id);
+            const readers = ctx.story.summary_readers ?? DEFAULT_SUMMARY_READERS;
+            const unreviewed = pending.filter((draft) => {
+                const readerVerdicts = draft.verdict_refs
+                    .map((id) => store.verdicts.get(id))
+                    .filter((verdict) => {
+                        if (verdict === undefined) return false;
+                        const run = verdict.run_ref === undefined ? undefined : store.runs.get(verdict.run_ref);
+
+                        return run?.role === 'reader' || /reader/i.test(verdict.template_ref ?? '');
+                    });
+
+                return readerVerdicts.length < readers;
+            });
+
+            if (unreviewed.length > 0) {
+                throw new ToolRefusal(
+                    'D-23',
+                    `the Summary round is still being read: ${unreviewed.map((draft) => draft.id).join(', ')} ${unreviewed.length === 1 ? 'has' : 'have'} fewer than ${readers} Reader passes — the choice is the last step`,
+                    {
+                        unit_ref: target.id,
+                        unreviewed: unreviewed.map((draft) => draft.id),
+                        readers,
+                        fix: 'wait for the Reader passes to close; then select exactly one draft'
+                    }
+                );
+            }
+
+            const draftIds = new Set(pending.map((draft) => draft.id));
+            const unconfirmed = store.findings
+                .list()
+                .filter(
+                    (finding) =>
+                        finding.story_id === storyId &&
+                        finding.state === 'unconfirmed' &&
+                        // Phase ①'s bar is critical/major: minor/taste notes are recorded, not
+                        // show-stoppers, so they must not hold the choice (D-30, D-34).
+                        (finding.cost === 'critical' || finding.cost === 'major') &&
+                        (finding.target_ref === target.id ||
+                            (finding.related_refs ?? []).some((ref) => draftIds.has(ref)))
+                );
+
+            if (unconfirmed.length > 0) {
+                throw new ToolRefusal(
+                    'D-23',
+                    `the Summary round still has ${unconfirmed.length} unconfirmed Reader finding${unconfirmed.length === 1 ? '' : 's'} — the Editor verifies every one before choosing`,
+                    {
+                        unit_ref: target.id,
+                        findings: unconfirmed.map((finding) => finding.id),
+                        fix: 'verify the findings, then select exactly one draft'
+                    }
+                );
+            }
         }
 
         // D-38/U-8d: this may be the agent's sentence PLUS the panel's appended dissent ("… | 2 of 3
@@ -303,6 +372,21 @@ const requestMerge: ToolDefinition = {
     async execute(ctx): Promise<ToolResult> {
         const { store, storyId } = ctx;
         const { target, unitKind } = await resolveUnit(ctx, ctx.args.unit_ref);
+
+        // PHASE ① HAS ONE ANSWER: keep the best complete Summary. A merge would need a new text
+        // composed from several drafts, and the Author's loop is deliberately a choice between
+        // three complete versions, not a fourth draft assembled by the Editor.
+        if (unitKind === 'summary' && ctx.story.phase === 'summary') {
+            throw new ToolRefusal(
+                'D-23',
+                'phase ① chooses one best Summary; it does not merge drafts — call selectRevision on exactly one, or rejectAll if none deserves the Author',
+                {
+                    unit_ref: target.id,
+                    fix: `listRevisions ${target.id}, then selectRevision`
+                }
+            );
+        }
+
         const requested = (Array.isArray(ctx.args.revision_ids) ? ctx.args.revision_ids : []).map(String);
         if (requested.length < 2) {
             throw new ToolRefusal(
@@ -666,15 +750,15 @@ const verifyIdea: ToolDefinition = {
 };
 
 /**
- * §8.2 `verifyFinding`: confirm or dispute a suspicion (D-33) and rewrite it into the Author's
- * reading surface (D-34) — one clear claim, the evidence line, and the cost it actually deserves.
- * Only a confirmed finding can be approved, spawn a task, invalidate a chapter, or count toward
- * `pending`.
+ * §8.2 `verifyFinding`: a QUICK validity check (D-33). The Editor marks the suspicion `confirmed`
+ * or `disputed` and records the reason; the Reader already supplied the detail and the reference,
+ * so a rewrite is optional rather than the job (D-34). Only a confirmed finding can be approved,
+ * spawn a task, invalidate a chapter, or count toward `pending`.
  */
 const verifyFinding: ToolDefinition = {
     name: 'verifyFinding',
     description:
-        'Confirm or dispute a finding, and rewrite it into the wording the Author reads: one clear claim, the evidence, and the cost it deserves. A disputed finding costs no Writer pass.',
+        'Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Reader’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -685,19 +769,19 @@ const verifyFinding: ToolDefinition = {
                 description: 'Whether the suspicion holds up (D-33).'
             },
             cost: COST_ENUM,
-            title: str('Optional rewrite: the finding as one clear claim (D-34).'),
-            detail: str('Optional rewrite: the supporting detail.'),
-            evidence: str('What the check consisted of and what it showed.'),
+            title: str('Optional correction: the finding as one clear claim (D-34).'),
+            detail: str('Optional correction: the supporting detail.'),
+            evidence: str('Optional: what the check consisted of and what it showed.'),
             why: whyArg(),
             expects: EXPECTS_ARG
         },
-        required: ['finding_id', 'verdict', 'cost', 'evidence', 'why']
+        required: ['finding_id', 'verdict', 'why']
     },
     writes: 'findings',
     level: 'verify',
     primaryArg: 'finding_id',
     mutating: true,
-    requires: ['finding_id', 'verdict', 'cost', 'evidence', 'why'],
+    requires: ['finding_id', 'verdict', 'why'],
     async execute(ctx, expects): Promise<ToolResult> {
         const target = await mustResolveRef(ctx, ctx.args.finding_id, 'finding_id', ['findings']);
         const finding = target.record as Finding;
@@ -714,7 +798,13 @@ const verifyFinding: ToolDefinition = {
         }
 
         const verdict = String(ctx.args.verdict ?? '');
-        const cost = String(ctx.args.cost ?? '');
+        // Quick check: the Reader already triaged the cost, so an omitted cost keeps it. An
+        // explicit cost is the Editor deliberately correcting it (D-34a).
+        const cost =
+            typeof ctx.args.cost === 'string' && ctx.args.cost.trim().length > 0
+                ? String(ctx.args.cost)
+                : finding.cost;
+        const check = typeof ctx.args.evidence === 'string' ? ctx.args.evidence.trim() : '';
         const why = whyOf(ctx);
         // D-34: the ORIGINAL wording is what the Author must be able to compare against, and the
         // §4.10 record has no `raised_*` fields — so it is reported here, and the store's commit
@@ -729,7 +819,7 @@ const verifyFinding: ToolDefinition = {
         const patch: Record<string, unknown> = {
             state: verdict === 'confirmed' ? 'confirmed' : 'disputed',
             cost,
-            evidence: `${finding.evidence}\n\nEditor check: ${String(ctx.args.evidence ?? '').trim()}`,
+            evidence: check.length > 0 ? `${finding.evidence}\n\nEditor check: ${check}` : finding.evidence,
             confirmed_by: ctx.actorLabel
         };
         if (typeof ctx.args.title === 'string' && ctx.args.title.trim()) patch.title = ctx.args.title.trim();

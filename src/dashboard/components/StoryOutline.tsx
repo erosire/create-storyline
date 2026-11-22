@@ -12,9 +12,11 @@ import {
     castMembers,
     chaptersInOrder,
     plotlinesInOrder,
-    summaryReadyForReview
+    summaryReadyForReview,
+    summaryRevisionRef,
+    summaryRevisions
 } from './story-nav';
-import type { StoryAttention, StorySelection } from './story-nav';
+import type { StoryAttention, StorySelection, SummaryRevisionEntry } from './story-nav';
 import type { StoryViewData } from './story-contract';
 
 function CheckIcon() {
@@ -42,6 +44,24 @@ function ChevronIcon() {
 
 function isActive(selection: StorySelection, panel: StorySelection['panel'], ref?: string): boolean {
     return selection.panel === panel && (selection.ref ?? undefined) === ref;
+}
+
+/** One entry under a phrase. A Summary entry is one flat Revision and its finding count. */
+interface OutlineChildSpec {
+    ref: string;
+    title: string;
+    count?: number;
+    state?: string;
+}
+
+/** Phase ① is a flat Revision 1…N list — no Overview/sub-tree. */
+function summaryChildren(revisions: SummaryRevisionEntry[]): OutlineChildSpec[] {
+    return revisions.map((entry) => ({
+        ref: summaryRevisionRef(entry.revision.id),
+        title: `Revision ${entry.index}`,
+        count: entry.findings.length,
+        state: entry.revision.state
+    }));
 }
 
 /** The rail's one status mark: a dot plus the reason, never a second paragraph of detail. */
@@ -77,6 +97,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
     const cast = castMembers(view);
     const plotlines = plotlinesInOrder(view);
     const chapters = chaptersInOrder(view);
+    const revisions = summaryRevisions(view);
 
     return (
         <nav className="outline" aria-label="Story phrases" data-testid="story-outline">
@@ -95,9 +116,9 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                 <h2 className="outline-heading">Phrases</h2>
                 <ol className="outline-phases">
                     {STORY_PHRASES.map((phrase) => {
-                        const children =
+                        const children: OutlineChildSpec[] =
                             phrase.key === 'summary'
-                                ? [{ ref: 'overview', title: 'Overview' }]
+                                ? summaryChildren(revisions)
                                 : phrase.key === 'characters'
                                   ? cast.map((member) => ({ ref: member.id, title: member.name || member.id }))
                                   : phrase.key === 'plotlines'
@@ -149,11 +170,20 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                         type="button"
                                                         className={`outline-child${isActive(selection, phrase.key, child.ref) ? ' outline-child--active' : ''}${attentionClass(childAttention)}`}
                                                         data-attention={childAttention?.tone}
-                                                        title={childAttention?.label}
+                                                        data-state={child.state}
+                                                        title={
+                                                            childAttention?.label ??
+                                                            (child.state === undefined
+                                                                ? undefined
+                                                                : `${child.title} · ${child.state}`)
+                                                        }
                                                         onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
                                                     >
                                                         <ChevronIcon />
                                                         <span>{child.title}</span>
+                                                        {child.count !== undefined ? (
+                                                            <span className="outline-count">{child.count}</span>
+                                                        ) : null}
                                                         {childAttention ? (
                                                             <AttentionMark attention={childAttention} />
                                                         ) : null}

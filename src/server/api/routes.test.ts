@@ -185,6 +185,22 @@ describe('§10.2 U-1 — the Stories panel', () => {
         expect(view.story.title).toBe('The Keeper');
         expect(view.story.auto_approve).toEqual(['critical']);
 
+        // Phase ①'s two counts are Author settings too: the Summary pane's dials are the only way
+        // to ask for ten Writer samples without editing a built-in template (D-17, D-17d).
+        const counts = await call(app, 'PATCH', '/stories/story_1', {
+            summary_sampling: 10,
+            summary_readers: 7
+        });
+
+        expect(counts.status).toBe(200);
+        expect(
+            (
+                (await call(app, 'GET', '/stories/story_1')).body as {
+                    story: { summary_sampling: number; summary_readers: number };
+                }
+            ).story
+        ).toMatchObject({ summary_sampling: 10, summary_readers: 7 });
+
         // D-3c: growing creates `outlined` chapters and shrinking drops the extras. The confirm is the
         // DASHBOARD's gate (it asks before sending), so the route always grants it — `loop/engine.test.ts`
         // pins the unconfirmed refusal, and this pins what the shipped contract actually does.
@@ -235,7 +251,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
 
         expect(nothing.status).toBe(400);
         expect(errorOf(nothing)).toBe(
-            'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve (D-35).'
+            'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_readers (D-35, D-17d).'
         );
 
         expect([
@@ -243,8 +259,11 @@ describe('§10.2 U-1 — the Stories panel', () => {
             (await call(app, 'PATCH', '/stories/story_1', { idea: '' })).status,
             (await call(app, 'PATCH', '/stories/story_1', { chapter_count: 0 })).status,
             (await call(app, 'PATCH', '/stories/story_1', { chapter_count: 1.5 })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { auto_approve: ['enjoyable'] })).status
-        ]).toEqual([400, 400, 400, 400, 400]);
+            (await call(app, 'PATCH', '/stories/story_1', { auto_approve: ['enjoyable'] })).status,
+            (await call(app, 'PATCH', '/stories/story_1', { summary_sampling: 0 })).status,
+            (await call(app, 'PATCH', '/stories/story_1', { summary_readers: 21 })).status,
+            (await call(app, 'PATCH', '/stories/story_1', { summary_readers: 2.5 })).status
+        ]).toEqual([400, 400, 400, 400, 400, 400, 400, 400]);
 
         const missing = await call(app, 'PATCH', '/stories/story_missing', { title: 'Nowhere' });
 
@@ -694,10 +713,12 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
         await call(app, 'POST', '/stories', { title: 'First Book', idea: 'A map.', chapter_count: 1 });
         await call(app, 'POST', '/stories', { title: 'Second Book', idea: 'A lighthouse.', chapter_count: 1 });
 
-        // `minor` is outside the default dial, so it really is on the desk (D-35).
+        // Narrow the dial to critical so the major finding really is on the desk (D-35). In
+        // phase ① only critical/major findings become Author work; minor/taste notes do not.
+        await call(app, 'PATCH', '/stories/story_1', { auto_approve: ['critical'] });
         seedFinding(store, 'story_1', {
             state: 'confirmed',
-            cost: 'minor',
+            cost: 'major',
             title: 'the bell is unpaid',
             evidence: 'ch2 sec_1',
             fingerprint: 'C-9|ch2'
@@ -735,7 +756,7 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
                 id: 'finding_1',
                 title: 'the bell is unpaid',
                 evidence: 'ch2 sec_1',
-                cost: 'minor'
+                cost: 'major'
             },
             {
                 kind: 'idea',

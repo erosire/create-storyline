@@ -28,9 +28,11 @@ import {
     loopStory,
     repeatIdeas,
     storyIdeas,
+    storySummary,
+    summaryBlockingFindings,
     undecidedIdeas,
     storyFindings,
-    unconfirmedFindings,
+    unconfirmedBlockingFindings,
     unitsWithCompetingRevisions
 } from './records';
 import { pendingDirectives } from './directives';
@@ -96,7 +98,7 @@ export const ideasAwaitingVerification = (store: Store, story: Story): Idea[] =>
  */
 export function drainPreconditions(store: Store, story: Story): { met: boolean; unmet: string[] } {
     const tasks = dispatchableTasks(store, story.id);
-    const unconfirmed = unconfirmedFindings(store, story.id);
+    const unconfirmed = unconfirmedBlockingFindings(store, story);
     const competing = unitsWithCompetingRevisions(store, story.id);
     const unverified = ideasAwaitingVerification(store, story);
     const unmet: string[] = [];
@@ -223,7 +225,9 @@ export function leftovers(store: Store, story: Story): Leftovers {
     return {
         findings: open.length,
         ideas: ideas.length,
-        awaiting: open.filter((finding) => finding.state === 'confirmed' && !dialCovers(story, finding.cost)).length
+        // The same reader the decision machine uses, so phase ①'s minor/taste notes are never
+        // reported as "awaiting you" when the Author's bar is critical/major.
+        awaiting: findingsAwaitingAuthor(store, story).length
     };
 }
 
@@ -373,11 +377,38 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // owed and the sweep dispatches `verify_ideas` instead. The sign-off and the pick are unchanged as
     // the fallback: they fire on the next sweep, over a tray the Editor has actually answered.
     const verificationOwed = ideasAwaitingVerification(store, story).length;
+    // A suspicion nobody has confirmed or disputed is still work (D-33/L-37.2); a sign-off
+    // before the Editor has answered it would take the choice on an unread critique.
+    const findingsUnconfirmed = unconfirmedBlockingFindings(store, story).length;
+
+    // Phase ①'s Editor sends a valid critique back to the Writer as a queued FIX task. Signing the
+    // phase off while that task is still open would park the correction forever — the loop would
+    // have judged the draft, marked the defect valid, and then stopped before acting on it. Only
+    // `fix` work blocks the stop: an `absorb` row for a selected Idea is next phase's brief (D-29),
+    // not a correction to the draft the Author is about to sign.
+    const queued = dispatchableTasks(store, story.id);
+    const fixesQueued = queued.filter((task) => task.kind === 'fix').length;
+
+    // Phase ① is not done because the two Goal criteria pass. Its own bar is the Summary round:
+    // another three drafts are owed while the selected Summary still carries a critical/major
+    // finding, or while the Author asked for another revision. Minor/taste notes never hold it.
+    const summary = story.phase === 'summary' ? storySummary(store, story.id) : undefined;
+    const summaryBlocking =
+        summary === undefined ? [] : summaryBlockingFindings(store, story, summary.id);
+    const summaryRoundQueued =
+        story.phase === 'summary'
+            ? queued.filter((task) => task.kind === 'fix' || task.kind === 'rewrite' || task.kind === 'merge')
+                  .length
+            : 0;
+    const phaseWorkQueued = story.phase === 'summary' ? summaryRoundQueued : fixesQueued;
 
     if (
         input.goalStatus.passed &&
         competing.length === 0 &&
         verificationOwed === 0 &&
+        findingsUnconfirmed === 0 &&
+        phaseWorkQueued === 0 &&
+        summaryBlocking.length === 0 &&
         story.phase !== 'chapters' &&
         !phaseIsLocked(story)
     ) {

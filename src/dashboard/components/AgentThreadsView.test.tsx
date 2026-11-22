@@ -127,7 +127,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.queryByRole('button', { name: 'kill run' })).toBeNull();
     });
 
-    it('shows exactly the request and the answer when a bar is opened', () => {
+    it('collapses the request by default and shows Request + Answer for a closed thread (U-8)', () => {
         render(<AgentThreadsView kind="writer" threads={[thread({})]} now={NOW} />);
 
         const bar = screen.getByRole('button', { name: /write_unit summary summary_1/ });
@@ -135,13 +135,87 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
         fireEvent.click(bar);
 
-        expect(screen.getByText('Request')).toBeTruthy();
-        expect(screen.getByText('Write the Summary from the Seed.')).toBeTruthy();
+        const request = screen.getByRole('button', { name: 'Request' });
+        expect(request.getAttribute('aria-expanded')).toBe('false');
+        // The brief is collapsed: only its header is rendered.
+        expect(screen.queryByText('Write the Summary from the Seed.')).toBeNull();
         expect(screen.getByText('Answer')).toBeTruthy();
         expect(screen.getByText('The Summary is written.')).toBeTruthy();
 
+        fireEvent.click(request);
+
+        expect(request.getAttribute('aria-expanded')).toBe('true');
+        expect(screen.getByText('Write the Summary from the Seed.')).toBeTruthy();
+
         fireEvent.click(bar);
         expect(screen.queryByText('Write the Summary from the Seed.')).toBeNull();
+    });
+
+    it('outputs what a running thread is doing below the collapsed request, then drops it on close (U-8)', () => {
+        const { rerender } = render(
+            <AgentThreadsView
+                kind="writer"
+                threads={[
+                    thread({
+                        state: 'running',
+                        ended_at: undefined,
+                        answer: '',
+                        activity: [{ at: '2026-11-22T12:00:05.000Z', text: 'readChapter — Chapter 1 read' }]
+                    })
+                ]}
+                now={NOW}
+            />
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /write_unit summary summary_1/ }));
+
+        expect(screen.getByText('Happening now')).toBeTruthy();
+        expect(screen.getByText('readChapter — Chapter 1 read')).toBeTruthy();
+        expect(screen.getByText('+5s')).toBeTruthy();
+        // The request is still collapsed, and a running thread has no answer block yet.
+        expect(screen.getByRole('button', { name: 'Request' }).getAttribute('aria-expanded')).toBe('false');
+        expect(screen.queryByText('Write the Summary from the Seed.')).toBeNull();
+        expect(screen.queryByText('Answer')).toBeNull();
+
+        rerender(<AgentThreadsView kind="writer" threads={[thread({})]} now={NOW} />);
+
+        expect(screen.queryByText('Happening now')).toBeNull();
+        expect(screen.getByText('Answer')).toBeTruthy();
+        expect(screen.getByText('The Summary is written.')).toBeTruthy();
+    });
+
+    it('renders the request and the answer as formatted Markdown (U-8)', () => {
+        render(
+            <AgentThreadsView
+                kind="writer"
+                threads={[
+                    thread({
+                        request: '# ROLE — writer\n\nRead the Seed with `readSeed`.\n\n## Criteria\n\n- C-14\n- C-13',
+                        answer: '## What happened\n\n- **Read** the Seed\n- Wrote the Summary\n\n```ts\nconst ok = true;\n```'
+                    })
+                ]}
+                now={NOW}
+            />
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: /write_unit summary summary_1/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Request' }));
+
+        const blocks = screen.getByTestId('agent-threads').querySelectorAll('.sv-markdown');
+        expect(blocks).toHaveLength(2);
+
+        const request = blocks[0]!;
+        expect(request.querySelector('h1')?.textContent).toBe('ROLE — writer');
+        expect(request.querySelector('p code')?.textContent).toBe('readSeed');
+        expect(Array.from(request.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['C-14', 'C-13']);
+
+        const answer = blocks[1]!;
+        expect(answer.querySelector('h2')?.textContent).toBe('What happened');
+        expect(answer.querySelector('li strong')?.textContent).toBe('Read');
+        expect(answer.querySelector('pre code')?.textContent).toContain('const ok = true;');
+
+        // The blocks are prose, not preformatted text that shows the Markdown source.
+        expect(screen.getByTestId('agent-threads').querySelector('pre.sv-thread__text')).toBeNull();
     });
 
     it('renders nothing when the agent has no threads, and still shows a legacy run’s retained answer', () => {

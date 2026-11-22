@@ -258,6 +258,17 @@ function renderSummaryFields(store: Store, storyId: string, fieldClip: number): 
  * Body is JSON-rendered when it is not a string, because §4.15 leaves `body`'s shape to the
  * unit kind and a plotline draft body is a field set, not prose.
  */
+function renderRevision(revision: Revision, fieldClip: number): string {
+    const verdicts = revision.verdict_refs.length > 0 ? revision.verdict_refs.join(', ') : 'none';
+    const body = typeof revision.body === 'string' ? revision.body : JSON.stringify(revision.body ?? '');
+
+    // T-7: bounded in the brief too — an Editor reads the drafts it is choosing between,
+    // not the whole book around them (E-1).
+    return [`revision_id=${revision.id} · state=${revision.state} · verdicts: ${verdicts}`, clip(body, fieldClip)].join(
+        '\n'
+    );
+}
+
 function renderCompetingRevisions(store: Store, unitRef: string, fieldClip: number): string {
     if (!unitRef) return '';
 
@@ -270,19 +281,24 @@ function renderCompetingRevisions(store: Store, unitRef: string, fieldClip: numb
 
     if (competing.length === 0) return '(no competing revisions for this unit)';
 
-    return competing
-        .map((revision) => {
-            const verdicts = revision.verdict_refs.length > 0 ? revision.verdict_refs.join(', ') : 'none';
-            const body = typeof revision.body === 'string' ? revision.body : JSON.stringify(revision.body ?? '');
+    return competing.map((revision) => renderRevision(revision, fieldClip)).join('\n\n');
+}
 
-            // T-7: bounded in the brief too — an Editor reads the drafts it is choosing
-            // between, not the whole book around them (E-1).
-            return [
-                `revision_id=${revision.id} · state=${revision.state} · verdicts: ${verdicts}`,
-                clip(body, fieldClip)
-            ].join('\n');
-        })
-        .join('\n\n');
+/**
+ * The drafts a job may see. A Reader review names ONE sample (`revisionRef`) because D-21 keeps
+ * the competing drafts to the Editor and the Author; `select`/`merge` (and only those) see the
+ * whole set, which is the set they are choosing between.
+ */
+function renderRevisionsForItem(store: Store, item: WorkItem, fieldClip: number): string {
+    if (item.revisionRef !== undefined && item.revisionRef.length > 0) {
+        const revision = store.revisions.get(item.revisionRef);
+
+        return revision === undefined
+            ? `(revision ${item.revisionRef} is gone — the sample was chosen or deleted)`
+            : renderRevision(revision, fieldClip);
+    }
+
+    return renderCompetingRevisions(store, item.unit?.ref ?? '', fieldClip);
 }
 
 // ---------------------------------------------------------------------------
@@ -428,11 +444,19 @@ function jobStatement(item: WorkItem): string {
         case 'write_unit':
             return 'Write the unit named above (you are the only thing that writes story artifacts — P10, D-17b). Deliver the contract, then report with `submitVerdict`.';
         case 'check_unit':
-            return 'Judge the unit against the criteria above and report with `submitVerdict` (P4: does it deliver its contract?). Every failing criterion needs an evidence line (D-15).';
+            // Phase ①'s per-draft review is a READER pass (D-30), not a consistency check: the
+            // reader compares the sample to the Seed the Author wrote and files what is missing
+            // or contradicted. The role prompt carries the angle; this names the obligation and
+            // its stopping rule — the pass is bounded, not an open-ended hunt for polish.
+            return item.roleName === 'reader'
+                ? 'Read the Summary sample named above (it is carried in this brief; call `readSummary` only if the brief does not carry it or says it was clipped) against the Seed. Use tools to check a specific doubt, not to survey the book; for a factual point one citable source is enough. Find the issues that matter and file them with `raiseFinding` — `detail` (what is wrong and where), the criterion, the quoted passage, the evidence line, and the cost you actually believe. Report critical and major issues first: `critical` means the Summary contradicts itself or the Seed (a story-logic inconsistency); `major` means a promised element is broken or missing; `minor` and `taste` are notes and must not keep you searching. Rate the sample with `submitVerdict` against the revision named above. This is a REVIEW PASS: report defects, do not propose Ideas. You do not have to be exhaustive — once the critical/major issues you found are reported, stop; an empty pass is valid.'
+                : 'Judge the unit against the criteria above and report with `submitVerdict` (P4: does it deliver its contract?). Every failing criterion needs an evidence line (D-15).';
         case 'select':
-            return 'Choose between the competing revisions below by applying the selection rules to the drafts side by side, then `selectRevision` on exactly one, or `requestMerge` when the right unit is made of parts (L-19), or `rejectAll` when none deserves it (L-18). The `selection_note` must name the rule you applied and what you preferred in each draft (L-17, T-2a).';
+            return item.unit?.kind === 'summary'
+                ? 'Choose exactly ONE of the complete Summaries below, applying the selection rules side by side, and call `selectRevision` on it. The other drafts are kept as discarded history, never deleted. Phase ① does not merge: the next round, if one is needed, writes three complete drafts from the winner. Use `rejectAll` only when no draft deserves the Author. The `selection_note` must name the rule you applied and what you preferred in each draft (L-17, T-2a).'
+                : 'Choose between the competing revisions below by applying the selection rules to the drafts side by side, then `selectRevision` on exactly one, or `requestMerge` when the right unit is made of parts (L-19), or `rejectAll` when none deserves it (L-18). The `selection_note` must name the rule you applied and what you preferred in each draft (L-17, T-2a).';
         case 'verify_findings':
-            return 'Verify each finding listed below against the artifact: `verifyFinding` to confirm or dispute it, rewriting title/detail/evidence into one claim the Author can read in one pass and setting the cost it actually deserves (D-33, D-34, D-34a).';
+            return 'For each finding listed below, run ONE quick validity check: read its `detail`, `evidence` and the passage it quotes, then call `verifyFinding` with `confirmed` when the defect is real or `disputed` when it is not. Put the reason in `why`; add `evidence` only when the check itself shows something the Reader did not. Keep the Reader’s title, detail and cost unless they are clearly wrong — the Reader already supplied the reference, so do not re-investigate the book or rewrite the finding. The phase waits on these verdicts, so be fast and decisive. In phase \u2460, `critical` is a story-logic contradiction and `major` is a broken promise; `minor`/`taste` are recorded notes and never block the Summary round.';
         case 'verify_ideas':
             return 'Verify each Idea listed below: re-read the cited source or find a second one, then `verifyIdea` with the verdict, the evidence, and `meets_guidelines` answered separately from the fact-check (D-27, D-31). Where you cannot check it from here, `markUnverifiable` is the honest answer.';
         case 'merge':
@@ -564,6 +588,20 @@ interface Part {
 }
 
 /**
+ * D-30 — a Reader's phase-① REVIEW pass. The role prompt describes the Reader's whole
+ * capability (including Ideas and research, for jobs that ask for them); a review pass narrows
+ * that to "judge this sample": defects only, critical/major first, and no open-ended mining for
+ * minor polish. The banner is rendered BEFORE the role prompt because it is the binding mode.
+ */
+const isReaderReview = (item: WorkItem): boolean => item.kind === 'check_unit' && item.roleName === 'reader';
+
+const READER_REVIEW_MODE =
+    'PASS MODE — REVIEW (this overrides any wider instruction in the role prompt below). The Summary sample and the Seed are in this brief; call `readSummary` only if the brief does not carry the sample or says it was clipped. Use the read tools your angle needs — the ledger only where a continuity point turns on it — and research only the specific factual claim you doubt (one citable source is enough). Do not read the whole book or unrelated artifacts, and do not propose Ideas in this pass. Report the critical and major issues first — minor and taste notes are optional and must not keep you searching. Every finding must carry `detail` (what is wrong and where — section, paragraph or lines), `evidence` (the quote or line range), `criterion_ref`, and the cost you believe; add `related_refs` when the defect touches another record. You do not need to be exhaustive: once the issues that matter are reported, stop; an empty pass is valid.';
+
+const READER_REVIEW_DONE =
+    'Done means: every critical and major issue you found is filed with its detail, quoted passage, criterion and evidence line; the sample is rated with `submitVerdict`; and you stopped once those issues were reported instead of hunting minor polish. No Idea is filed in a review pass.';
+
+/**
  * Assembles the brief for one Work Item out of the store alone (S-2). Pure: the same store
  * state and the same item produce byte-identical text, which is what `runs.brief_hash` (§4.13)
  * and D-12a's reconstructibility promise both depend on.
@@ -591,14 +629,22 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
     const parts: Part[] = [];
 
     // 1. The role prompt (S-2's first element): D-17a makes it the ONLY thing separating this
-    //    run from every other kind holding the same tool catalogue (T-6a).
-    const roleLines = [
+    //    run from every other kind holding the same tool catalogue (T-6a). A Reader REVIEW pass
+    //    gets its mode banner first, and its own done-definition: the template's angle prompt
+    //    describes the whole Reader capability (Ideas, research), while this pass is bounded.
+    const roleLines: string[] = [];
+
+    if (isReaderReview(item)) roleLines.push(READER_REVIEW_MODE);
+
+    roleLines.push(
         harness.role?.prompt ??
             '(no role prompt was found for this template — follow the job, the criteria and the permission line below, and treat the absence as a template defect to report, D-17a)'
-    ];
+    );
 
     if (harness.warning) roleLines.push(`WARNING: ${harness.warning}`);
-    if (harness.template?.done_definition) roleLines.push(`Done means: ${harness.template.done_definition}`);
+
+    if (isReaderReview(item)) roleLines.push(READER_REVIEW_DONE);
+    else if (harness.template?.done_definition) roleLines.push(`Done means: ${harness.template.done_definition}`);
     // D-17c: `selection_rules` is the Editor's brief in the Author's own words — and C-13 is
     // defined against it, so a checker grading C-13 needs it too (P12: without it the crew is
     // guessing at the Author's taste).
@@ -681,7 +727,9 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
     // 10. The competing drafts, for the two kinds only that may see them (D-21). Rendered last
     //     because it is the section the trim ladder exists for: N whole drafts is the only part
     //     of a brief that can outrun E-1 by itself.
-    const showsRevisions = (item.kind === 'select' || item.kind === 'merge') && !!item.unit?.ref;
+    const showsRevisions =
+        ((item.kind === 'select' || item.kind === 'merge') && !!item.unit?.ref) ||
+        (item.kind === 'check_unit' && item.revisionRef !== undefined);
 
     return renderWithinBudget(parts, store, item, story, showsRevisions);
 }
@@ -861,7 +909,7 @@ function renderWithinBudget(
     for (const step of TRIM_LADDER) {
         const input: RenderInput = {
             notes: renderChangeNotes(store, item.storyId, item.unit?.ref, step.notes),
-            revisions: showsRevisions ? renderCompetingRevisions(store, item.unit?.ref ?? '', step.clip) : '',
+            revisions: showsRevisions ? renderRevisionsForItem(store, item, step.clip) : '',
             clip: step.clip
         };
 
@@ -882,14 +930,14 @@ function renderWithinBudget(
             story,
             {
                 notes: renderChangeNotes(store, item.storyId, item.unit?.ref, 0),
-                revisions: showsRevisions ? renderCompetingRevisions(store, item.unit?.ref ?? '', lastStep.clip) : '',
+                revisions: showsRevisions ? renderRevisionsForItem(store, item, lastStep.clip) : '',
                 clip: lastStep.clip
             },
             lastStep.clip
         ),
         {
             notes: '',
-            revisions: showsRevisions ? renderCompetingRevisions(store, item.unit?.ref ?? '', lastStep.clip) : '',
+            revisions: showsRevisions ? renderRevisionsForItem(store, item, lastStep.clip) : '',
             clip: lastStep.clip
         },
         showsRevisions

@@ -23,16 +23,16 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 
 ## The stack, bottom up
 
-| Layer     | Path                      | What it owns                                                                                                                                                                                                                                                                         |
-| --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`.                                            |
-| Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                             |
-| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Explorer/assistant), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
-| Brief     | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2).                                                                           |
-| Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`).                                       |
-| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill.                                                                           |
-| API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`). `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport.               |
-| Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`.                                                                                                                                                           |
+| Layer     | Path                      | What it owns                                                                                                                                                                                                                                                                                                   |
+| --------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`.                                                                      |
+| Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                                                       |
+| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Explorer/assistant), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on.                           |
+| Brief     | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2).                                                                                                     |
+| Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`).                                                                 |
+| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill.                                                                                                     |
+| API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`). `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport. |
+| Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`.                                                                                                                                                                                     |
 
 ## Things that are easy to get wrong
 
@@ -339,6 +339,42 @@ The UI follows that model:
 - `AgentsPanel` renders the roster only: rank, model, status. The old `entry` chip and the
   `AgentStatusRow.entry` field are gone. The roster and its templates are defined in code at server
   boot; the UI offers no template editor.
+
+## Phase ① is a sampled Writer → Reader → Editor pipeline (2026-11-22)
+
+The Summary is no longer drafted and immediately handed to an Editor. The Author set the phase to
+a sampled review loop, and both counts are the Author's settings:
+
+- **Sampling** — `writer-summary` ships `attempts: 5`, and a Story may override it with
+  `stories.summary_sampling` (`POST /stories` or `PATCH /stories/:id`). Ten means ten Writers
+  expanding the Seed into ten competing Summary drafts.
+- **Readers per sample** — `stories.summary_readers`, standard five, set by the same routes and by
+  the two count controls in `SummaryPane`. Each completed draft gets that many Reader passes.
+- **The order is per draft, not per stage.** `loop/work.ts` generates the Reader jobs for a
+  revision as soon as the revision exists, so a Reader starts on the first finished sample while
+  other Writers are still running. The claim key names the revision
+  (`wi_read_<revision>_a<n>`), and a revised draft is a new revision with fresh Readers.
+- **Readers read the Seed and ONE draft.** The Work Item carries `revisionRef`, and the brief's
+  revision section renders only that draft (D-21 keeps the rest from a Reader). The job tells the
+  Reader to file `raiseFinding` with an evidence line and to rate the draft with `submitVerdict`;
+  a Reader never edits (D-26, D-30, T-9).
+- **The Editor verifies the critique before choosing.** `wi_verify_findings` runs on each
+  unconfirmed report as it lands; `verifyFinding` confirms or disputes it. In phase ① every
+  confirmed finding is approved by the loop (the Editor's mark that the critique is valid), which
+  creates the Writer's fix task. The Editor's `select` waits until every competing draft has all
+  its Reader passes closed and no finding is unconfirmed — the choice is the last look, never the
+  first.
+- **A revision is one corrected draft.** `divergenceGap` stops sampling once an Editor selection
+  exists, so a valid critique sends back one `wi_fix_*` Writer job, not the whole sampling set
+  again. That draft gets its own Readers, the Editor verifies them, and the loop repeats until a
+  selection leaves no valid finding and the phase Goal passes. A phase sign-off also waits while a
+  confirmed finding's fix task is still open, so the correction is never parked by the stop.
+- No consistency checker runs in phase ① in this pipeline: the review crew is the Readers and the
+  Editor, as the Author specified. Checkers still serve phases ② and ③.
+
+`src/server/loop/summary-pipeline.test.ts` pins the plan (two drafts × five Readers each, no
+Editor choice early) and `src/server/integration/summary-review.test.ts` pins the real-server
+order, including a valid critique returning to the Writer as a new read-then-selected draft.
 
 ## The compact story row and the tabbed desk (2026-11-22)
 

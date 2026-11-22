@@ -173,6 +173,67 @@ export function tasksForUnit(store: Store, storyId: string, unitRef: string): Ta
 }
 
 /**
+ * The Summary's draft history, oldest first. Phase ①'s rail is a flat Revision 1…N list:
+ * every round adds `summary_sampling` drafts, the Editor keeps one, and the two it did not
+ * keep stay in the book as `discarded` rows (not deleted).
+ */
+export function summaryRevisionsFor(store: Store, storyId: string, unitRef: string): Revision[] {
+    return store.revisions
+        .list()
+        .filter(
+            (revision) =>
+                revision.story_id === storyId &&
+                revision.unit_kind === 'summary' &&
+                revision.unit_ref === unitRef
+        )
+        .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+}
+
+/** The draft the Summary row currently carries. At most one Summary revision is `selected`. */
+export function selectedSummaryRevision(
+    store: Store,
+    storyId: string,
+    unitRef: string
+): Revision | undefined {
+    return last(summaryRevisionsFor(store, storyId, unitRef).filter((revision) => revision.state === 'selected'));
+}
+
+/**
+ * The findings that still block a Summary from being final: critical or major findings on the
+ * SELECTED draft. Findings on a discarded sibling are history, not work — the next Reader round
+ * reads the kept draft fresh. Minor and taste findings never block (they are not show-stoppers).
+ */
+export function summaryBlockingFindings(store: Store, story: Story, unitRef: string): Finding[] {
+    const selected = selectedSummaryRevision(store, story.id, unitRef);
+
+    if (selected === undefined) return [];
+
+    return storyFindings(store, story.id).filter((finding) => {
+        if (finding.state !== 'confirmed' && finding.state !== 'approved') return false;
+        if (finding.cost !== 'critical' && finding.cost !== 'major') return false;
+
+        // A draft-scoped finding names its draft in L-11a's related_refs. A finding with none is
+        // about the Summary as a whole and therefore still blocks the final choice.
+        const related = finding.related_refs ?? [];
+
+        return related.length === 0 ? finding.target_ref === unitRef : related.includes(selected.id);
+    });
+}
+
+/**
+ * Writer tasks a Summary round must answer: the fixes an Editor approved, the Author's
+ * "another revision" request, and an L-18 re-brief. Merge requests are excluded — they are a
+ * single Writer pass and are handled separately so they can run while drafts are competing.
+ */
+export function summaryRoundTasks(store: Store, storyId: string, unitRef: string): Task[] {
+    return dispatchableTasks(store, storyId).filter(
+        (task) =>
+            task.kind !== 'merge' &&
+            (task.detail?.includes(unitRef) === true || task.title.includes(unitRef) === true)
+    );
+}
+
+/**
  * L-36/U-1b's "clear pending": decline every queued job without touching the findings behind it.
  * `wontfix` is §4.7's word for a task that will not be done, and the finding stays where the Author
  * left it, so the queue can be emptied without silently discarding a defect.
@@ -211,10 +272,31 @@ export const findingsIn = (findings: Finding[], states: Finding['state'][]): Fin
 export const unconfirmedFindings = (store: Store, storyId: string): Finding[] =>
     storyFindings(store, storyId).filter((finding) => finding.state === 'unconfirmed');
 
-/** D-34: `confirmed` findings the dial does NOT cover — the pile on the Author's desk. */
+/**
+ * Phase ①'s bar is critical/major (D-30, D-34): a Reader may file clarity and description notes
+ * at `minor`/`taste`, and the Editor records them, but they are not show-stoppers. Those notes
+ * must not hold the Editor's choice, the fix pass or the phase sign-off — only a suspicion that
+ * would actually cost the Writer a pass does. Every other phase keeps D-33's all-costs rule.
+ */
+export const unconfirmedBlockingFindings = (store: Store, story: Story): Finding[] =>
+    unconfirmedFindings(store, story.id).filter(
+        (finding) =>
+            story.phase !== 'summary' || finding.cost === 'critical' || finding.cost === 'major'
+    );
+
+/**
+ * D-34: `confirmed` findings the dial does NOT cover — the pile on the Author's desk.
+ *
+ * PHASE ①'S BAR IS CRITICAL/MAJOR. A Reader may file clarity and description notes at
+ * `minor`/`taste`, and the Editor records them, but they are not show-stoppers and never ask
+ * the Author for an approval decision. The Summary round only carries critical/major work.
+ */
 export function findingsAwaitingAuthor(store: Store, story: Story): Finding[] {
     return storyFindings(store, story.id).filter(
-        (finding) => finding.state === 'confirmed' && !dialCovers(story, finding.cost)
+        (finding) =>
+            finding.state === 'confirmed' &&
+            !dialCovers(story, finding.cost) &&
+            !(story.phase === 'summary' && (finding.cost === 'minor' || finding.cost === 'taste'))
     );
 }
 

@@ -58,7 +58,16 @@ import type { DigestBuilder } from '../digest/digest';
 import type { CriteriaEngine } from '../criteria/engine';
 import type { GoalPatch as EngineGoalPatch } from '../loop/types';
 import type { LoopEngine } from '../loop/engine';
-import type { Cost, Criterion, Revision, Run, Story, StoryPhase, Template } from '../../shared/types';
+import {
+    SUMMARY_REVIEW_LIMIT,
+    type Cost,
+    type Criterion,
+    type Revision,
+    type Run,
+    type Story,
+    type StoryPhase,
+    type Template
+} from '../../shared/types';
 import type { GoalCriterionOp } from '../../dashboard/api';
 import type { StoryKnowledge } from '../knowledge';
 import type { StoryThreadLog } from '../run/thread-log';
@@ -135,6 +144,10 @@ interface StoryCreateBody {
     title?: unknown;
     idea?: unknown;
     chapter_count?: unknown;
+    /** Phase ①'s sampling size (defaults to the standard five). */
+    summary_sampling?: unknown;
+    /** Phase ①'s Reader passes per sample (defaults to the standard five). */
+    summary_readers?: unknown;
 }
 
 interface StoryPatchBody {
@@ -142,6 +155,10 @@ interface StoryPatchBody {
     idea?: unknown;
     chapter_count?: unknown;
     auto_approve?: unknown;
+    /** Phase ①'s sampling size (Writer expansions of the Seed). */
+    summary_sampling?: unknown;
+    /** Phase ①'s Reader passes per sample. */
+    summary_readers?: unknown;
 }
 
 interface WhyBody {
@@ -305,7 +322,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (!parsed.ok) return parsed.response;
 
-        const { title, idea, chapter_count } = parsed.body;
+        const { title, idea, chapter_count, summary_sampling, summary_readers } = parsed.body;
 
         if (typeof idea !== 'string' || idea.trim().length === 0) {
             return errorResponse(
@@ -326,13 +343,31 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
+        for (const [field, value] of [
+            ['summary_sampling', summary_sampling],
+            ['summary_readers', summary_readers]
+        ] as const) {
+            if (
+                value !== undefined &&
+                (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > SUMMARY_REVIEW_LIMIT)
+            ) {
+                return errorResponse(
+                    c,
+                    400,
+                    `\`${field}\` must be a whole number from 1 to ${SUMMARY_REVIEW_LIMIT} (D-17d/D-38a: the count is the Author's setting).`
+                );
+            }
+        }
+
         let storyId: string;
 
         try {
             const created = await engine.createStory({
                 ...(typeof title === 'string' && title.trim().length > 0 ? { title } : {}),
                 idea,
-                ...(chapter_count === undefined ? {} : { chapter_count })
+                ...(chapter_count === undefined ? {} : { chapter_count }),
+                ...(summary_sampling === undefined ? {} : { summary_sampling: summary_sampling as number }),
+                ...(summary_readers === undefined ? {} : { summary_readers: summary_readers as number })
             });
 
             storyId = created.story_id;
@@ -394,13 +429,15 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             body.title !== undefined ||
             body.idea !== undefined ||
             body.chapter_count !== undefined ||
-            body.auto_approve !== undefined;
+            body.auto_approve !== undefined ||
+            body.summary_sampling !== undefined ||
+            body.summary_readers !== undefined;
 
         if (!hasEdit)
             return errorResponse(
                 c,
                 400,
-                'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve (D-35).'
+                'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_readers (D-35, D-17d).'
             );
 
         if (body.title !== undefined && (typeof body.title !== 'string' || body.title.trim().length === 0)) {
@@ -429,8 +466,29 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
+        for (const [field, value] of [
+            ['summary_sampling', body.summary_sampling],
+            ['summary_readers', body.summary_readers]
+        ] as const) {
+            if (
+                value !== undefined &&
+                (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > SUMMARY_REVIEW_LIMIT)
+            ) {
+                return errorResponse(
+                    c,
+                    400,
+                    `\`${field}\` must be a whole number from 1 to ${SUMMARY_REVIEW_LIMIT} (D-17d/D-38a: the count is the Author's setting).`
+                );
+            }
+        }
+
         return verb(c, story.id, async () => {
-            if (body.title !== undefined || body.auto_approve !== undefined) {
+            if (
+                body.title !== undefined ||
+                body.auto_approve !== undefined ||
+                body.summary_sampling !== undefined ||
+                body.summary_readers !== undefined
+            ) {
                 await store.commit('patch_story', () => {
                     const fresh = requireStory(store, story.id);
 
@@ -438,15 +496,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                         fresh.id,
                         {
                             ...(body.title === undefined ? {} : { title: body.title as string }),
-                            ...(body.auto_approve === undefined ? {} : { auto_approve: body.auto_approve as Cost[] })
+                            ...(body.auto_approve === undefined ? {} : { auto_approve: body.auto_approve as Cost[] }),
+                            ...(body.summary_sampling === undefined
+                                ? {}
+                                : { summary_sampling: body.summary_sampling as number }),
+                            ...(body.summary_readers === undefined
+                                ? {}
+                                : { summary_readers: body.summary_readers as number })
                         },
                         authorAttr(
                             authorWhy(
                                 'PATCH /stories/:id',
                                 story.id,
-                                typeof body.auto_approve === 'undefined'
-                                    ? 'title'
-                                    : `the dial is now [${(body.auto_approve as string[]).join(', ')}] (D-35)`
+                                body.auto_approve !== undefined
+                                    ? `the dial is now [${(body.auto_approve as string[]).join(', ')}] (D-35)`
+                                    : body.title !== undefined
+                                      ? 'title'
+                                      : `phase ① now samples ${body.summary_sampling ?? 'the existing'} Writers with ${body.summary_readers ?? 'the existing'} Readers per draft`
                             )
                         ),
                         [{ id: fresh.id, rev: fresh.rev }]
@@ -511,6 +577,25 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
         return verb(c, story.id, () => engine.resumeStory(story.id));
+    });
+
+    /**
+     * Phase ①'s "not final yet": the Author asks for another round of three Summary drafts.
+     * It queues a rewrite task on the selected Summary; nothing is deleted, and the next sweep
+     * dispatches the writers. Accepting instead is the ordinary phase lock.
+     */
+    app.post('/stories/:id/summary/revise', async (c) => {
+        const story = storyOf(c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        const parsed = await readBody<NoteBody>(c);
+
+        if (!parsed.ok) return parsed.response;
+
+        const note = typeof parsed.body.note === 'string' ? parsed.body.note : '';
+
+        return verb(c, story.id, () => engine.requestSummaryRevision(story.id, note));
     });
 
     /** L-36 / U-1b — the one click that clears the tasks keeping a `pending` Story waiting. */
@@ -986,7 +1071,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                     { id: draft.id, rev: draft.rev }
                 ]);
 
-                // D-22: the losers disappear in the same commit, whoever made the choice.
+                // D-22 / P13: losing drafts leave the unit in the same commit. For a Summary they
+                // are KEPT as `discarded` history — the Revision 1…N rail is the Author's record of
+                // what the round tried. Every other unit still deletes hard, as D-22 requires.
+                const losing: string[] = [];
+
                 for (const sibling of store.revisions
                     .list()
                     .filter(
@@ -996,7 +1085,45 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                             row.unit_ref === draft.unit_ref &&
                             row.id !== draft.id
                     )) {
-                    store.revisions.delete(sibling.id, attribution, [{ id: sibling.id, rev: sibling.rev }]);
+                    if (draft.unit_kind === 'summary') {
+                        losing.push(sibling.id);
+                        store.revisions.update(sibling.id, { state: 'discarded' }, attribution, [
+                            { id: sibling.id, rev: sibling.rev }
+                        ]);
+                    } else {
+                        store.revisions.delete(sibling.id, attribution, [{ id: sibling.id, rev: sibling.rev }]);
+                    }
+                }
+
+                if (draft.unit_kind === 'summary') {
+                    const loserIds = new Set(losing);
+
+                    for (const finding of store.findings.list()) {
+                        if (finding.story_id !== story.id) continue;
+                        if (
+                            finding.state !== 'unconfirmed' &&
+                            finding.state !== 'confirmed' &&
+                            finding.state !== 'approved'
+                        )
+                            continue;
+                        if (!(finding.related_refs ?? []).some((ref) => loserIds.has(ref))) continue;
+
+                        store.findings.update(finding.id, { state: 'discarded' }, attribution);
+
+                        for (const task of store.tasks.list()) {
+                            if (task.story_id !== story.id || task.finding_ref !== finding.id) continue;
+                            if (task.state !== 'open' && task.state !== 'claimed') continue;
+                            store.tasks.update(task.id, { state: 'wontfix' }, attribution);
+                        }
+                    }
+
+                    for (const task of store.tasks.list()) {
+                        if (task.story_id !== story.id || task.kind !== 'merge') continue;
+                        if (task.state !== 'open' && task.state !== 'claimed') continue;
+                        if (task.detail?.includes(draft.unit_ref) !== true && !task.title.includes(draft.unit_ref))
+                            continue;
+                        store.tasks.update(task.id, { state: 'wontfix' }, attribution);
+                    }
                 }
             });
         } catch (error) {

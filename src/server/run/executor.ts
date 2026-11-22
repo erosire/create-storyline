@@ -83,6 +83,39 @@ interface RunScope {
 const END_COMPLETED = 'completed — the model returned no tool call and the run reported';
 
 /**
+ * Why a live run was aborted. The Author's cord is only ONE of the ways a run stops being its
+ * own (P8): the sweep also kills a Story's crew when the Story is stopped or paused (D-37), a
+ * directive that changes the book out from under a run (L-24), a Story delete (P1), and a lease
+ * that lapsed (S-4a). Naming the cause is what stops the UI from telling the Author that they
+ * pulled a cord they never touched.
+ */
+type RunKillReason = 'author' | 'lease' | 'stop' | 'directive' | 'delete';
+
+/** The abort sentence and the closed row's `end_reason`, one per cause. */
+const ABORT_TEXT: Record<RunKillReason, { abort: string; end: string }> = {
+    author: {
+        abort: 'killed by the Author (P8, U-7)',
+        end: 'killed — the Author pulled the cord (P8, U-7)'
+    },
+    lease: {
+        abort: 'abandoned — the lease lapsed (S-4a, D-36)',
+        end: 'abandoned — the lease lapsed (S-4a, D-36)'
+    },
+    stop: {
+        abort: 'abandoned — the Story was stopped (P8, D-37)',
+        end: 'abandoned — the Story was stopped (P8, D-37)'
+    },
+    directive: {
+        abort: 'abandoned — a directive changed the book under it (P8, L-24)',
+        end: 'abandoned — a directive changed the book under it (P8, L-24)'
+    },
+    delete: {
+        abort: 'abandoned — the Story was deleted (P1)',
+        end: 'abandoned — the Story was deleted (P1)'
+    }
+};
+
+/**
  * The one-line request a thread bar shows. The sweep's note is the most specific thing the
  * Author wrote; otherwise the job kind and the unit it names are the honest summary. The full
  * brief (the actual request) is retained separately by the Story harness.
@@ -114,8 +147,8 @@ export class RunExecutor {
 
     /** Live runs this instance owns, so `kill(runId)` has something to abort (P8, U-7). */
     private readonly controllers = new Map<string, AbortController>();
-    /** Runs the Author killed, kept so the teardown can name `killed` rather than a generic abort. */
-    private readonly killed = new Set<string>();
+    /** Live runs that were aborted, with the cause, so teardown names the real reason (S-3). */
+    private readonly killed = new Map<string, RunKillReason>();
 
     constructor(deps: RunExecutorDeps) {
         this.store = deps.store;
@@ -170,22 +203,26 @@ export class RunExecutor {
     // -------------------------------------------------------------------------
 
     /**
-     * Kills one live run. The abort surfaces as a cancellation in whatever the run is doing
-     * (a chat request, between turns, or inside a tool call's next loop iteration), and the run
-     * row closes as `abandoned` with `end_reason: killed` — teardown still runs, because S-3 has
-     * no exception for a stop.
+     * Kills one live run with the CAUSE of the abort. The abort surfaces as a cancellation in
+     * whatever the run is doing (a chat request, between turns, or inside a tool call's next
+     * loop iteration), and the run row closes as `abandoned` with the cause's `end_reason` —
+     * teardown still runs, because S-3 has no exception for a stop.
+     *
+     * `reason` defaults to the Author's cord because that is the route's meaning; the sweep
+     * passes the real cause (a stopped Story, a lapsed lease) so a run killed by a timeout is
+     * never reported as an Author kill (S-4a, D-36).
      *
      * A kill for a run this instance does not own is ignored: the sweep owns the lease, and a
      * server restart abandons stale rows on boot (L-3) rather than through this method.
      */
-    kill(runId: string): void {
+    kill(runId: string, reason: RunKillReason = 'author'): void {
         const controller = this.controllers.get(runId);
 
         if (controller === undefined) return;
 
-        this.killed.add(runId);
+        this.killed.set(runId, reason);
 
-        const abort = new Error(`run ${runId} killed by the Author (P8, U-7)`);
+        const abort = new Error(`run ${runId} ${ABORT_TEXT[reason].abort}`);
 
         abort.name = 'AbortError';
         controller.abort(abort);
@@ -393,9 +430,11 @@ export class RunExecutor {
             const noOp = tally.reports.length === 0;
 
             if (wasAborted(error, controller.signal)) {
-                // Two different causes, one state: the Author's cord says `killed`, everything
-                // else (lease expiry, Story stop) is an abandonment the sweep can explain (S-4a, L-2).
-                const killed = this.killed.has(runId);
+                // Same state, different causes: the Author's cord says `killed`; a stopped
+                // Story, a directive, a delete or a lapsed lease each say what really happened
+                // (S-4a, L-2, D-37). A caller signal with no recorded cause keeps the generic
+                // sentence.
+                const killReason = this.killed.get(runId);
 
                 result = {
                     runId,
@@ -409,9 +448,10 @@ export class RunExecutor {
                     ended_at: new Date().toISOString(),
                     tokens: tally.tokens,
                     no_op: noOp,
-                    end_reason: killed
-                        ? 'killed — the Author pulled the cord (P8, U-7)'
-                        : 'abandoned — the caller signal aborted (lease expiry or Story stop, S-4a)'
+                    end_reason:
+                        killReason === undefined
+                            ? 'abandoned — the caller signal aborted (lease expiry or Story stop, S-4a)'
+                            : ABORT_TEXT[killReason].end
                 };
             } else {
                 const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -654,6 +694,20 @@ export class RunExecutor {
                 const current = this.store.runs.get(runId);
 
                 if (current === undefined) return;
+
+                // The sweep may already have closed the row with its own reason — a lapsed
+                // lease writes S-4a's sentence before the aborted run's promise settles. S-3
+                // means the row closes exactly once, not that this method must be the one that
+                // writes it: keep the sweep's state and reason, and land only the accounting.
+                if (current.ended_at !== undefined && current.ended_at !== null) {
+                    this.store.runs.update(
+                        runId,
+                        { tokens: patch.tokens, no_op: patch.no_op },
+                        { run_ref: runId, why: 'teardown — the row was already closed by the sweep (S-3, S-4a)' }
+                    );
+
+                    return;
+                }
 
                 this.store.runs.update(runId, patch, {
                     run_ref: runId,

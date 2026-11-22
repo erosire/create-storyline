@@ -327,7 +327,7 @@ export class LoopEngine implements EngineApi {
         // holds however the stop was written (the Author owns `status`, D-2a).
         if (story.status === 'stopped' || story.author_stop) {
             for (const run of liveRuns(store, story.id)) {
-                this.executor.kill(run.id);
+                this.executor.kill(run.id, 'stop');
                 killed.push(run.id);
             }
         }
@@ -339,7 +339,7 @@ export class LoopEngine implements EngineApi {
         for (const run of lapsedRuns(store, Date.parse(at), this.config.leaseIdleMs)) {
             if (run.story_id !== story.id) continue;
 
-            this.executor.kill(run.id);
+            this.executor.kill(run.id, 'lease');
             killed.push(run.id);
             leasesLapsed.push(run.work_item_ref ?? run.id);
 
@@ -368,13 +368,26 @@ export class LoopEngine implements EngineApi {
 
             for (const finding of storyFindings(store, story.id)) {
                 if (finding.state !== 'confirmed') continue;
+                // Phase ①'s loop is Writer → Reader → Editor, and the Editor's confirmation IS the
+                // authorisation to revise (the Reader's suspicion has been marked valid). Only the
+                // round's blocking costs travel back: minor/taste notes are recorded, not turned into
+                // another round. Later phases keep the Author's dial.
+                const summaryRevision = story.phase === 'summary';
+                if (summaryRevision && finding.cost !== 'critical' && finding.cost !== 'major') continue;
+                // The Author's dial still wins, even in phase ①: a narrowed dial parks a major
+                // finding for the Author's approval instead of silently authorising it.
                 if (!story.auto_approve.includes(finding.cost)) continue;
                 if (finding.approved_by !== null && finding.approved_by !== undefined) continue;
 
                 store.findings.update(
                     finding.id,
                     { state: 'approved', approved_by: AUTO_APPROVED_BY },
-                    { run_ref: null, why: `the Story's dial covers ${finding.cost}; approved on the spot (D-35)` },
+                    {
+                        run_ref: null,
+                        why: summaryRevision
+                            ? `the Editor confirmed ${finding.id} in phase ①; the valid critique goes back to the Writer`
+                            : `the Story's dial covers ${finding.cost}; approved on the spot (D-35)`
+                    },
                     [{ id: finding.id, rev: finding.rev }]
                 );
 
@@ -695,41 +708,59 @@ export class LoopEngine implements EngineApi {
         return { story: requireStory(store, story.id), judged: true };
     }
 
-    /** Writes one decision as one commit: status, kind, reason, what it is blocked on, probe, completion. */
+    /**
+     * Writes one decision as one commit: status, kind, reason, what it is blocked on, probe, completion.
+     *
+     * A decision that changed nothing writes NOTHING. This is not an optimisation: the Digest is
+     * derived from the Story's journal events (D-12a/D-14), so a no-op `loop_decision` every sweep
+     * made the Digest permanently stale and rebuilt it once a second even on a stopped Story. The
+     * sweep is a timer, not a story change.
+     */
     private async applyDecision(storyIn: Story, decision: StoryDecision, at: string): Promise<Story> {
-        await this.store.commit('loop_decision', () => {
-            const story = requireStory(this.store, storyIn.id);
+        const story = requireStory(this.store, storyIn.id);
+        const patch: Record<string, unknown> = {
+            status: decision.status,
+            pending_kind: decision.pending_kind,
+            status_reason: decision.status_reason,
+            blocked_on: decision.blocked_on,
+            // §4.1's one-line human summary the loop maintains, in the shape the spec's example
+            // gives ("7 chapters · act 2 has a hole · 3 setups unpaid").
+            progress: this.progressLine(story),
+            ...(decision.probe === undefined ? {} : { probe: decision.probe })
+        };
+        const current = story as unknown as Record<string, unknown>;
+        const changed = Object.entries(patch).some(
+            ([key, value]) => JSON.stringify(current[key]) !== JSON.stringify(value)
+        );
 
-            this.store.stories.update(
-                story.id,
-                {
-                    status: decision.status,
-                    pending_kind: decision.pending_kind,
-                    status_reason: decision.status_reason,
-                    blocked_on: decision.blocked_on,
-                    // §4.1's one-line human summary the loop maintains, in the shape the spec's example
-                    // gives ("7 chapters · act 2 has a hole · 3 setups unpaid").
-                    progress: this.progressLine(story),
-                    ...(decision.probe === undefined ? {} : { probe: decision.probe })
-                },
-                { run_ref: null, why: `sweep decision: ${decision.why} (L-1 step 3, D-2a)` },
-                [{ id: story.id, rev: story.rev }]
-            );
+        if (!changed && decision.completion === undefined) return story;
+
+        await this.store.commit('loop_decision', () => {
+            const fresh = requireStory(this.store, storyIn.id);
+
+            if (changed) {
+                this.store.stories.update(
+                    fresh.id,
+                    patch as Partial<Story>,
+                    { run_ref: null, why: `sweep decision: ${decision.why} (L-1 step 3, D-2a)` },
+                    [{ id: fresh.id, rev: fresh.rev }]
+                );
+            }
 
             // L-25: the proposal is the loop TELLING the Author the book is finished by its own
             // standards. Nothing closes until the Author accepts (L-26), and U-14's prompt needs the
             // counts, which the proposal carries.
             if (decision.completion !== undefined) {
-                const fresh = requireStory(this.store, story.id);
+                const latest = requireStory(this.store, story.id);
 
                 this.store.stories.update(
-                    fresh.id,
+                    latest.id,
                     { completion: decision.completion },
                     {
                         run_ref: null,
                         why: `the loop proposes completion (L-25); ${decision.completion.leftovers.findings} findings and ${decision.completion.leftovers.ideas} Ideas will be discarded (L-25b)`
                     },
-                    [{ id: fresh.id, rev: fresh.rev }]
+                    [{ id: latest.id, rev: latest.rev }]
                 );
             }
         });
@@ -793,11 +824,16 @@ export class LoopEngine implements EngineApi {
 
             if (perTemplate >= entry.candidate.max_concurrent) continue;
 
-            // L-5: two loops must not edit the same artifact at once. Any live job already naming this
-            // unit holds it, so the second one waits for the lease rather than racing the compare-and-swap.
+            // L-5: two loops must not EDIT the same artifact at once. Any live job already naming
+            // this unit holds it, so the second one waits for the lease rather than racing the
+            // compare-and-swap. A Reader pass is the exception the Author's phase-① pipeline needs:
+            // it only reads its draft and writes findings/verdicts (never the artifact), and its
+            // claim key names the REVISION, so it can start on a finished sample while the other
+            // Writers are still writing theirs (the pipeline is per-draft, not per-stage).
             const unitRef = entry.candidate.item.unit?.ref;
+            const readerPass = entry.candidate.item.kind === 'check_unit' && entry.candidate.item.roleName === 'reader';
 
-            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id) {
+            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !readerPass) {
                 const busy = liveRuns(store, entry.story.id).some((run) => (run.work_item_ref ?? '').includes(unitRef));
 
                 if (busy) continue;
@@ -1115,7 +1151,10 @@ export class LoopEngine implements EngineApi {
                     digest_rev: 0,
                     // D-17b: write permission comes from a template ASSIGNED to the Story.
                     template_refs: refs,
-                    chapter_deps: {}
+                    chapter_deps: {},
+                    // The Author's phase-① pipeline dials (D-17d/D-38a: counts are settings).
+                    ...(input.summary_sampling === undefined ? {} : { summary_sampling: input.summary_sampling }),
+                    ...(input.summary_readers === undefined ? {} : { summary_readers: input.summary_readers })
                 },
                 authorAttr(`the Author opened a Story from a Seed (D-2a: it starts ready)`)
             );
@@ -1195,7 +1234,7 @@ export class LoopEngine implements EngineApi {
 
         // The cord is written first: a run closed before the row says `stopped` would read as a crew that
         // finished on its own, and the journal would tell the wrong story about why the pass ended.
-        for (const run of liveRuns(this.store, storyId)) this.executor.kill(run.id);
+        for (const run of liveRuns(this.store, storyId)) this.executor.kill(run.id, 'stop');
 
         await this.settle();
     }
@@ -1211,7 +1250,7 @@ export class LoopEngine implements EngineApi {
 
         // The in-flight phrases stop first: a run that outlives its Story would teardown into rows
         // this method is about to delete, and S-3's unconditional close would then be a lost update.
-        for (const run of liveRuns(this.store, storyId)) this.executor.kill(run.id);
+        for (const run of liveRuns(this.store, storyId)) this.executor.kill(run.id, 'delete');
 
         await this.settle();
 
@@ -1279,6 +1318,72 @@ export class LoopEngine implements EngineApi {
     async clearPending(storyId: string): Promise<void> {
         await this.store.commit('clear_pending', () => {
             wontfixTasks(this.store, storyId);
+        });
+    }
+
+    /**
+     * Phase ① — "not final yet": the Author asks for another three-draft round. This is a queue
+     * entry, not a backtrack: the selected Summary stays the base, every discarded draft stays as
+     * history, and the next sweep sees the `rewrite` task and dispatches three fresh Writers.
+     */
+    async requestSummaryRevision(storyId: string, note = ''): Promise<void> {
+        await this.store.commit('request_summary_revision', () => {
+            const store = this.store;
+            const story = requireStory(store, storyId);
+
+            if (story.phase !== 'summary') {
+                throw new Error(
+                    `another Summary revision is phase ① only: ${story.id} is in phase ${story.phase}`
+                );
+            }
+
+            if (story.summary_locked) {
+                throw new Error(
+                    `the Summary is locked (P5, L-30); backtrack to phase ① before asking for another revision`
+                );
+            }
+
+            const summary = storySummary(store, story.id);
+
+            if (summary === undefined) throw new Error(`no Summary exists yet for ${story.id}`);
+
+            const title = 'Author requested a fresh Summary round';
+            const existing = openTasks(store, story.id).find(
+                (task) => task.kind === TASK_KINDS.rewrite && task.title === title
+            );
+
+            if (existing === undefined) {
+                store.tasks.create(
+                    {
+                        story_id: story.id,
+                        kind: TASK_KINDS.rewrite,
+                        title,
+                        detail: `The Author asked for another three-draft Summary round.${note.trim() ? ` Note: ${note.trim()}` : ''} · ${summary.id}`,
+                        owner_role: 'writer',
+                        state: 'open',
+                        priority: 0,
+                        attempts: 0
+                    },
+                    authorAttr(`the Author asked for another Summary round for ${story.id} (D-24, U-13)`)
+                );
+            }
+
+            // A paused Story stays paused (P8); a pending sign-off becomes dispatchable again.
+            if (!story.author_stop && (story.status === 'pending' || story.status === 'completed')) {
+                const fresh = requireStory(store, story.id);
+
+                store.stories.update(
+                    fresh.id,
+                    {
+                        status: 'ready',
+                        pending_kind: 'none',
+                        status_reason: 'the Author asked for another Summary round',
+                        blocked_on: ''
+                    },
+                    authorAttr('the Author asked for another Summary round (D-24)'),
+                    [{ id: fresh.id, rev: fresh.rev }]
+                );
+            }
         });
     }
 
@@ -1926,7 +2031,7 @@ export class LoopEngine implements EngineApi {
                 text,
                 refs,
                 at: new Date().toISOString(),
-                killRun: (runId) => this.executor.kill(runId)
+                killRun: (runId) => this.executor.kill(runId, 'directive')
             });
 
             // L-27: a directive returns the Story to `ready`. A completed book is re-opened; a

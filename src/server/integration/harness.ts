@@ -85,6 +85,10 @@ export interface CrewContext {
     /** The phase the brief's PHASE section names — where a Reader's Idea belongs. */
     phase: string;
     unitTarget?: string;
+    /** The competing draft a review job names (`revision_id=` in the brief), if any. */
+    draftIds: string[];
+    /** True for phase ①'s per-draft Reader pass (the job note carries `Reader pass N of M`). */
+    reviewPass: boolean;
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
     /** D-19: the directive this review thread must turn into tasks. */
@@ -108,6 +112,11 @@ export interface CrewOptions {
     raiseFindings?: Cost;
     /** How many Ideas each Reader run files; the shipped default of 1 matches §6.7's probe round. */
     readerIdeas?: number;
+    /**
+     * A Reader review pass files one defect at this cost (phase ①'s Writer → Reader → Editor loop).
+     * The function form decides per pass, so a test can make the flaw a one-round event.
+     */
+    readerFinds?: Cost | ((ctx: CrewContext) => Cost | undefined);
     /** Verify Ideas as `refuted` instead of `confirmed`, so the tray gets a real rejection (D-27). */
     refuteIdeas?: boolean;
     /** Extra tool calls a Checker run makes on a chapter unit before reporting (U-3's drill). */
@@ -257,6 +266,7 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         findingIds: [...brief.matchAll(/^- (finding_\d+) \[/gm)].map((match) => match[1]),
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
+        reviewPass: /Reader pass \d+ of \d+/.test(brief),
         phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
     };
 }
@@ -551,12 +561,12 @@ const editorScript: CrewScript = (ctx) => {
     for (const id of findingIds) {
         specs.push({
             name: 'verifyFinding',
+            // D-33 quick check: mark it valid and give the reason; the Reader's cost stands unless
+            // the Editor deliberately corrects it.
             args: {
                 finding_id: id,
                 verdict: 'confirmed',
-                cost: 'major',
-                evidence: 'Probe: re-read the named lines.',
-                why: 'D-33 verification.'
+                why: 'D-33 verification: the cited passage shows the defect.'
             }
         });
     }
@@ -620,9 +630,61 @@ const checkerScript: CrewScript = (ctx) => {
 
 /** The Research crew: probe Ideas about the Story as it runs (§6.7), Explorer research (D-25). */
 const readerScript: CrewScript = (ctx) => {
-    const ideas = ctx.options.readerIdeas ?? 1;
+    // The scripted crew files its Ideas ONCE per Story. A probe round on a Story whose tray was
+    // just decided must not silently restock it and turn a Goal test into a tray test.
+    const alreadyFiled = ctx.store.ideas.list().filter((idea) => idea.story_id === ctx.story?.id).length;
+    const ideas = Math.max(0, (ctx.options.readerIdeas ?? 1) - alreadyFiled);
 
     if (ctx.results.length > 0) return { content: `Reported (${ctx.template}).` };
+
+    // Phase ①'s per-draft Reader pass: judge the sample against the Seed, report on the draft,
+    // and file a defect when the story's seat finds one. It proposes no Ideas — an Idea is the
+    // probe round's output (D-26/D-30), and a review that also restocks the tray never closes.
+    if (ctx.reviewPass) {
+        const revisionId = ctx.draftIds[0];
+
+        if (revisionId === undefined) return { content: `No draft named in the Reader brief (${ctx.template}).` };
+
+        const lines = ctx.criteria.map((id) => ({
+            criterion: id,
+            result: !ctx.options.failCriteria?.includes(id),
+            evidence: ctx.options.failCriteria?.includes(id)
+                ? `the Reader pass saw the Seed element missing — ${id} fails here.`
+                : 'the draft delivers this criterion against the Seed.'
+        }));
+        const specs: CrewCall[] = [
+            {
+                name: 'submitVerdict',
+                args: {
+                    target_ref: revisionId,
+                    criteria_passed: lines,
+                    recommendation: lines.some((line) => !line.result) ? 'fix' : 'advance'
+                }
+            }
+        ];
+
+        const cost =
+            typeof ctx.options.readerFinds === 'function' ? ctx.options.readerFinds(ctx) : ctx.options.readerFinds;
+
+        if (cost !== undefined) {
+            specs.push({
+                name: 'raiseFinding',
+                args: {
+                    target_ref: ctx.unitTarget,
+                    criterion_ref: lines.find((line) => !line.result)?.criterion ?? 'C-14',
+                    title: `Reader: the draft drifts from the Seed (${ctx.template})`,
+                    // D-30: the Editor needs the what-and-where line, not just the proof.
+                    detail: `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId}.`,
+                    evidence: `the Reader pass read ${revisionId} against the Seed and found the promise unpaid`,
+                    cost,
+                    related_refs: [revisionId],
+                    why: 'The Reader angle: what a reader of this Author would object to (D-30).'
+                }
+            });
+        }
+
+        return { toolCalls: specs };
+    }
 
     if (ctx.template === 'reader-explorer') {
         return {
@@ -785,6 +847,8 @@ export function createCrewClient(
             criteria: parsed.criteria,
             phase: parsed.phase,
             unitTarget: parsed.unitTarget,
+            draftIds: parsed.draftIds,
+            reviewPass: parsed.reviewPass,
             directiveRef: parsed.directiveRef,
             directiveTargets: parsed.directiveTargets,
             options
@@ -920,10 +984,22 @@ export const SLICE_SEED =
     'A nobody inherits a lighthouse that chooses its own keeper, and the lamp has been waiting for her.';
 
 /** Creates the slice's Story through the real route and returns its id. */
-export async function createSliceStory(fixture: StorylineFixture, chapterCount = 3): Promise<string> {
+export async function createSliceStory(
+    fixture: StorylineFixture,
+    chapterCount = 3,
+    /**
+     * Phase ①'s counts for the walk. The tests use a small sample/reader set so a deterministic
+     * scripted crew can finish the pipeline inside a bounded number of sweeps; the product's
+     * standard (five Writers, five Readers per draft) is the default the route applies when these
+     * are omitted, and is pinned separately.
+     */
+    review: { sampling?: number; readers?: number } = {}
+): Promise<string> {
     const { status, body } = await fixture.api<{ id: string }>('POST', '/stories', {
         idea: SLICE_SEED,
-        chapter_count: chapterCount
+        chapter_count: chapterCount,
+        summary_sampling: review.sampling ?? 3,
+        summary_readers: review.readers ?? 1
     });
 
     if (status !== 200) throw new Error(`POST /stories failed: ${status} ${JSON.stringify(body)}`);

@@ -155,6 +155,8 @@ export interface StoryActions {
     resume?: (storyId: string) => Promise<unknown> | unknown;
     /** U-16 — locks the CURRENT phase; the server 409s naming the Ideas tray when it is non-empty (L-7a). */
     lockPhase?: (storyId: string) => Promise<unknown> | unknown;
+    /** Phase ① — "not final yet": queue another three-draft Summary round from the selected revision. */
+    requestSummaryRevision?: (storyId: string, note?: string) => Promise<unknown> | unknown;
     /** L-31/L-32 — the only way a lock opens; deletes every later phase's artifacts. */
     backtrack?: (storyId: string, phase: BacktrackTarget) => Promise<unknown> | unknown;
     /** D-37 / D-20a — a direct Author write, refused while the Story runs (naming D-37). */
@@ -190,6 +192,11 @@ export interface StoryActions {
     setChapterBar?: (storyId: string, chapterId: string, barOverride: string) => Promise<unknown> | unknown;
     /** D-35 / D-35b — the dial: the approval gate and the drain threshold are the same write. */
     setAutoApprove?: (storyId: string, costs: Cost[]) => Promise<unknown> | unknown;
+    /**
+     * Phase ①'s two counts: how many Writer samples one Summary gets, and how many Readers
+     * critique each sample (D-17d/D-38a: the Author's settings, never engine constants).
+     */
+    setSummaryReview?: (storyId: string, sampling: number, readers: number) => Promise<unknown> | unknown;
     /** U-8 / D-17b — the crew is a list, and the count is the Author's call (D-38a). */
     assignTemplates?: (storyId: string, templateIds: string[]) => Promise<unknown> | unknown;
     /** D-17 — New sends a template body; Duplicate names the row to copy (built-ins are duplicate-only). */
@@ -307,6 +314,51 @@ export function lockCheck(view: StoryViewData): LockCheck {
         reasons.push(
             `${openIdeas.length} Idea${openIdeas.length === 1 ? '' : 's'} still in the tray — each must be selected, discarded, or deferred first (L-7a)`
         );
+    }
+
+    // PHASE ①'S OWN BAR. The Summary is accepted only when the current round has a winner and
+    // that winner has no critical/major flaw left. Minor/taste notes never hold the final Summary.
+    if (phase === 'summary' && story.summary_locked === false && view.summary) {
+        const summary = view.summary;
+        const competing = view.revisions.filter(
+            (revision) =>
+                revision.unit_kind === 'summary' &&
+                revision.unit_ref === summary.id &&
+                revision.state === 'competing'
+        );
+
+        if (competing.length > 0) {
+            reasons.push(
+                `${competing.length} Summary revision${competing.length === 1 ? '' : 's'} still competing — wait for the Editor's choice`
+            );
+        }
+
+        const selected = view.revisions
+            .filter(
+                (revision) =>
+                    revision.unit_kind === 'summary' &&
+                    revision.unit_ref === summary.id &&
+                    revision.state === 'selected'
+            )
+            .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+            .slice(-1)[0];
+
+        const blocking = selected
+            ? view.findings.filter(
+                  (finding) =>
+                      (finding.state === 'confirmed' || finding.state === 'approved') &&
+                      (finding.cost === 'critical' || finding.cost === 'major') &&
+                      ((finding.related_refs ?? []).length === 0
+                          ? finding.target_ref === summary.id
+                          : (finding.related_refs ?? []).includes(selected.id))
+              )
+            : [];
+
+        if (blocking.length > 0) {
+            reasons.push(
+                `${blocking.length} critical/major finding${blocking.length === 1 ? '' : 's'} still open on the selected Summary — the next round has to clear them`
+            );
+        }
     }
 
     const statements: Record<StoryPhase, string> = {

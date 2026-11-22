@@ -483,6 +483,20 @@ const raiseFinding: ToolDefinition = {
             );
         }
 
+        // D-30: a Reader's finding is the Editor's input, so it has to carry the what-and-where
+        // line. Evidence alone names the proof; `detail` is what lets the Editor check the claim
+        // against the passage without re-reading the draft — the quick verdict the phase needs.
+        if (ctx.role === 'reader' && detail.trim().length === 0) {
+            throw new ToolRefusal(
+                'D-30',
+                `a Reader finding needs \`detail\`: what is wrong and where (section, paragraph or lines), so the Editor can check it against the passage without re-reading the draft`,
+                {
+                    field: 'detail',
+                    fix: 'call raiseFinding again with detail naming the passage; add related_refs when the defect touches another record'
+                }
+            );
+        }
+
         // D-33: only an Editor's own finding starts `confirmed` — the Editor is the one who
         // confirms, so confirming its own report is not a rubber stamp of someone else's claim.
         const editorIssued = ctx.role === 'editor';

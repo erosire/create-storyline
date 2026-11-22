@@ -4,6 +4,13 @@
 //
 //   writers ×`attempts`  →  competing revisions  →  checkers ×M  →  an Editor selects  →  losers deleted
 //
+// Phase ① is the Author's refinement of that shape: the per-sample review crew is the Readers,
+// and the Editor's own verification comes between their reports and the choice —
+//
+//   writers ×`summary_sampling`  →  competing revisions  →  readers ×`summary_readers` per draft
+//     →  Editor verifies each report  →  Editor selects  →  one corrected draft of the same unit
+//     →  its own Readers  →  the Editor again, until no valid critique remains.
+//
 // and the loop is DRIVEN BY RECORDS, never by a criterion that happens to be red. That distinction is
 // the difference between "the crew works until it drains" (L-37) and "the crew re-drafts the same
 // chapter forever" (§15 step 9's treadmill). So a writer is dispatched only on one of four triggers:
@@ -28,6 +35,7 @@ import {
     findingRefs,
     ideasToVerify,
     isClaimed,
+    isLiveRun,
     last,
     liveRuns,
     maxConcurrentOf,
@@ -35,8 +43,12 @@ import {
     openTasks,
     runsForItem,
     storyChapters,
+    selectedSummaryRevision,
     storyPlotlines,
     storySummary,
+    summaryBlockingFindings,
+    summaryRoundTasks,
+    unconfirmedBlockingFindings,
     unconfirmedFindings,
     unitIsChecked,
     verdictsTargeting,
@@ -45,7 +57,17 @@ import {
 import { pendingDirectives } from './directives';
 import { dialKeyOf, drainPreconditions, probeIsLive } from './status';
 import type { WorkCandidate } from './types';
-import type { RoleKind, StoryPhase, Story, Task, Template, UnitKind, Chapter } from '../../shared/types';
+import {
+    DEFAULT_SUMMARY_READERS,
+    DEFAULT_SUMMARY_SAMPLING,
+    type RoleKind,
+    type StoryPhase,
+    type Story,
+    type Task,
+    type Template,
+    type UnitKind,
+    type Chapter
+} from '../../shared/types';
 import type { WorkItem, WorkUnitRef } from '../run/types';
 import type { Store } from '../store';
 
@@ -68,6 +90,22 @@ export const WRITE_TRIGGERS = {
 /** How many times this prefix has already been dispatched, live or closed — the generation counter. */
 function dispatchCount(store: Store, prefix: string): number {
     return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+}
+
+/**
+ * A generation counter for a claim family whose unit ref comes AFTER the generation in the key
+ * (`wi_select_<n>_<unitRef>`). `dispatchCount` reads the prefix before the number, so this is the
+ * one place a family is counted by its tail instead; without it a unit could only ever be selected
+ * once, and phase ①'s second (corrected) draft would wait for a choice that never comes.
+ */
+function dispatchCountFor(store: Store, prefix: string, unitRef: string): number {
+    return store.runs
+        .list()
+        .filter(
+            (run) =>
+                (run.work_item_ref ?? '').startsWith(prefix) &&
+                (unitRef === '' || (run.work_item_ref ?? '').endsWith(`_${unitRef}`))
+        ).length;
 }
 
 /**
@@ -151,13 +189,108 @@ function selectedPasses(store: Store, unitRef: string): number {
  * choose between drafts that were never written: D-17d's choice is between the attempts the Author asked
  * for, not between however many happened to run before the first one got checked.
  */
-function divergenceGap(store: Store, storyId: string, unitRef: string, attempts: number): number {
+/** The generation encoded in `wi_write_<unitRef>_<generation>_a<attempt>`, or `undefined`. */
+function writeGenerationOf(workItem: string | undefined, unitRef: string): number | undefined {
+    const prefix = `wi_write_${unitRef}_`;
+
+    if (workItem === undefined || !workItem.startsWith(prefix)) return undefined;
+
+    const generation = Number(workItem.slice(prefix.length).split('_')[0]);
+
+    return Number.isInteger(generation) && generation > 0 ? generation : undefined;
+}
+
+/** The highest Writer-round generation this unit has ever started. */
+function summaryWriteGeneration(store: Store, unitRef: string): number {
+    let highest = 0;
+
+    for (const run of store.runs.list()) {
+        const generation = writeGenerationOf(run.work_item_ref, unitRef);
+        if (generation !== undefined && generation > highest) highest = generation;
+    }
+
+    return highest;
+}
+
+/** Attempts in one generation that have produced a draft (or are still writing one). */
+function summaryAttemptsStarted(store: Store, unitRef: string, generation: number): Set<number> {
+    const prefix = `wi_write_${unitRef}_${generation}_a`;
+    const done = new Set<number>();
+    const attemptOf = (workItem: string | undefined): number | undefined => {
+        if (workItem === undefined || !workItem.startsWith(prefix)) return undefined;
+
+        const attempt = Number(workItem.slice(prefix.length));
+
+        return Number.isInteger(attempt) && attempt > 0 ? attempt : undefined;
+    };
+
+    const runById = new Map(store.runs.list().map((run) => [run.id, run]));
+
+    for (const revision of store.revisions.list()) {
+        if (revision.unit_ref !== unitRef) continue;
+
+        const run = revision.run_ref === undefined ? undefined : runById.get(revision.run_ref);
+        const attempt = attemptOf(run?.work_item_ref);
+
+        if (attempt !== undefined) done.add(attempt);
+    }
+
+    for (const run of store.runs.list()) {
+        if (!isLiveRun(run)) continue;
+
+        const attempt = attemptOf(run.work_item_ref);
+
+        if (attempt !== undefined) done.add(attempt);
+    }
+
+    return done;
+}
+
+/**
+ * Phase ①'s gap: a round is `summary_sampling` COMPLETE drafts, and a new round starts only when
+ * the selected Summary still has critical/major work (or the Author asked for one). Counting the
+ * drafts, not the run rows, means a failed Writer attempt is retried instead of silently shrinking
+ * the round — the old `runs.length` count could strand a two-of-three round forever.
+ */
+function summaryRoundGap(store: Store, story: Story, unitRef: string, attempts: number): number {
     if (attempts <= 1) return 0;
+
+    const selected = selectedSummaryRevision(store, story.id, unitRef);
+    const competing = competingRevisions(store, story.id, unitRef).length;
+    // A current round must finish before a queued rewrite/merge is started. The Editor's choice
+    // comes first; the Author's "another round" then starts from the chosen draft.
+    const needsRound =
+        selected === undefined ||
+        (competing === 0 &&
+            (summaryRoundTasks(store, story.id, unitRef).length > 0 ||
+                summaryBlockingFindings(store, story, unitRef).some((finding) => finding.state === 'approved')));
+
+    if (!needsRound) return 0;
+
+    const highest = summaryWriteGeneration(store, unitRef);
+    // While drafts are competing, the current generation is still being filled. Once it has been
+    // chosen (or rejected), the next three drafts are a new generation.
+    const generation = competing > 0 ? Math.max(1, highest) : highest + 1;
+    const started = summaryAttemptsStarted(store, unitRef, generation).size;
+
+    return Math.max(0, attempts - started);
+}
+
+function divergenceGap(store: Store, story: Story, unitRef: string, attempts: number): number {
+    if (attempts <= 1) return 0;
+
+    if (story.phase === 'summary') return summaryRoundGap(store, story, unitRef, attempts);
+
+    // A unit the Editor has already chosen for is being REVISED, not re-sampled. Phase ①'s loop is
+    // Writer → Reader → Editor, and the Editor's valid critique sends back ONE corrected draft (the
+    // `wi_fix_*` job); re-expanding it into the Author's whole sampling set every round would make
+    // a revision cost N drafts and turn a single critique into a new search.
+    if (selectedPasses(store, unitRef) > 0) return 0;
 
     // Only a pass that is IN FLIGHT owes siblings. Once the drafts are gone — chosen, or never written —
     // the unit's next step is whatever its triggers say, not another generation of drafts; without this
     // clause a decided unit would re-open its own divergence set on every sweep and never drain.
-    if (competingRevisions(store, storyId, unitRef).length === 0) return 0;
+    if (competingRevisions(store, story.id, unitRef).length === 0) return 0;
 
     const prefix = `wi_write_${unitRef}_${divergenceGeneration(store, unitRef)}_a`;
 
@@ -169,6 +302,53 @@ function divergenceGap(store: Store, storyId: string, unitRef: string, attempts:
 
 /** The pass number the next draft of this unit belongs to (see `divergenceGap`). */
 const divergenceGeneration = (store: Store, unitRef: string): number => selectedPasses(store, unitRef) + 1;
+
+/**
+ * Phase ①'s sampling size: how many Writers expand one Seed.
+ *
+ * D-38a puts the count on the Author, and the Story row is where a per-book override lives so a
+ * built-in template never has to be edited in place (D-17). The published standard is
+ * {@link DEFAULT_SUMMARY_SAMPLING}, and it is the fallback the Summary pane's dial shows — so the
+ * loop must use that same number when the Story has no override. Reading a template's `attempts`
+ * here made the pane say "5 Writers" while an older persisted template ran 3.
+ */
+export function summarySamplingOf(story: Story): number {
+    const raw = story.summary_sampling;
+
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+
+    return DEFAULT_SUMMARY_SAMPLING;
+}
+
+/** Phase ①'s Reader count per Summary draft (the Author's setting, standard five). */
+function summaryReadersOf(story: Story): number {
+    const raw = story.summary_readers;
+
+    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_SUMMARY_READERS;
+}
+
+/**
+ * The claim keys of the Reader passes over one Summary draft.
+ *
+ * The key names the REVISION, not the unit: each Writer sample is read on its own, and a revised
+ * draft is a new revision whose review starts immediately rather than inheriting the old one's.
+ */
+function readerKeysFor(revisionId: string, count: number): string[] {
+    const keys: string[] = [];
+
+    for (let index = 1; index <= count; index += 1) keys.push(`wi_read_${revisionId}_a${index}`);
+
+    return keys;
+}
+
+/**
+ * Has every Reader pass over this draft CLOSED? A pass that has run once is recorded by its run
+ * row (the lease is the store, L-3); a live row is still reading, and the Editor must not choose
+ * a draft while somebody is still reviewing it (the Writer → Reader → Editor order the Author set).
+ */
+function readerReviewComplete(store: Store, revisionId: string, count: number): boolean {
+    return readerKeysFor(revisionId, count).every((key) => runsForItem(store, key).some((run) => !isLiveRun(run)));
+}
 
 /**
  * Does this unit need a Writer, and on which trigger?
@@ -308,7 +488,9 @@ function candidate(
     key: string,
     why: string,
     priority: number,
-    extra: Partial<WorkItem> = {}
+    extra: Partial<WorkItem> = {},
+    /** For a reader: which assigned angle this pass takes (so N passes are N different seats). */
+    rotation?: number
 ): WorkCandidate | undefined {
     if (isClaimed(store, key)) return undefined;
 
@@ -319,7 +501,7 @@ function candidate(
     // S-5: each template's own ceiling is checked at dispatch time; here we bind ONE template so the
     // Work Item's `templateRef` is deterministic. Reader roles rotate across the assigned reader
     // templates (D-30's four angles); every other kind takes the first assigned match.
-    const template = roleKind === 'reader' ? pool[dispatchCount(store, key) % pool.length] : pool[0];
+    const template = roleKind === 'reader' ? pool[(rotation ?? dispatchCount(store, key)) % pool.length] : pool[0];
 
     return {
         key,
@@ -377,11 +559,42 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     }
 
     // -- Editors first: the choice (L-20) and the verification (D-33, D-27) -----------------------
-    const writerAttempts = attemptsOf(templatesFor(store, story, 'writer')[0]);
+    const templateAttempts = attemptsOf(templatesFor(store, story, 'writer')[0]);
+    const writerAttempts = story.phase === 'summary' ? summarySamplingOf(story) : templateAttempts;
+    const summaryReaders = summaryReadersOf(story);
+    // Every unconfirmed finding is Editor work; only critical/major ones may HOLD the choice.
+    const unconfirmed = unconfirmedFindings(store, story.id);
+    const blockingUnconfirmed = unconfirmedBlockingFindings(store, story);
 
     for (const unit of units) {
-        if (needsEditor(store, story, unit.ref, divergenceGap(store, story.id, unit.ref, writerAttempts))) {
-            const generation = dispatchCount(store, `wi_select_${unit.ref}`) + 1;
+        // The Author's phase-① order is Writer → Reader → Editor. An Editor choice waits until
+        // every Reader pass over every competing sample has closed AND every critical/major
+        // suspicion those Readers filed has an Editor verdict: the choice is the last step, not
+        // the first look. Minor/taste notes are recorded, never show-stoppers (D-30, D-34).
+        if (story.phase === 'summary') {
+            const competing = competingRevisions(store, story.id, unit.ref);
+            const reviewed =
+                competing.length > 0 &&
+                competing.every((revision) => readerReviewComplete(store, revision.id, summaryReaders));
+
+            if (!reviewed || blockingUnconfirmed.length > 0) continue;
+        }
+
+        // An open merge request is the Editor's answer for this unit. Re-asking for a selection
+        // while the Writer has not composed the merged text is the exact loop the old surface got
+        // stuck in: every sweep bought another Editor run that requested the same merge.
+        const mergeQueued =
+            unit.ref !== '' &&
+            dispatchableTasks(store, story.id).some(
+                (task) =>
+                    task.kind === 'merge' &&
+                    (task.detail?.includes(unit.ref) === true || task.title.includes(unit.ref))
+            );
+
+        if (mergeQueued) continue;
+
+        if (needsEditor(store, story, unit.ref, divergenceGap(store, story, unit.ref, writerAttempts))) {
+            const generation = dispatchCountFor(store, 'wi_select_', unit.ref) + 1;
             const built = candidate(
                 store,
                 story,
@@ -396,8 +609,6 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
             if (built) out.push(built);
         }
     }
-
-    const unconfirmed = unconfirmedFindings(store, story.id);
 
     if (unconfirmed.length > 0) {
         const ids = unconfirmed.map((finding) => finding.id);
@@ -437,12 +648,102 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         if (built) out.push(built);
     }
 
+    // -- Phase ①: one Reader pass per sample, started the moment the sample exists ----------------
+    //
+    // The Author's order for the Summary is Writer → Reader → Editor. Each Writer attempt is a
+    // competing revision, and a revision becomes reviewable the moment it lands — the sweep does
+    // NOT wait for the other samples (the pipeline is per-draft, not per-stage). A revised draft
+    // is a NEW revision and therefore gets its own fresh readers: the review of draft 2 is not
+    // evidence about draft 3.
+    if (story.phase === 'summary') {
+        const summaryUnit = units.find((unit) => unit.kind === 'summary');
+        // A job generated before the first Writer lands has no Summary row to name (the unit ref
+        // is ''), but drafts always live on the row the tool created — `summary_1` — so the review
+        // pass resolves the record first instead of asking for revisions of the empty ref.
+        const summaryRef = storySummary(store, story.id)?.id ?? summaryUnit?.ref ?? '';
+
+        if (summaryUnit !== undefined && summaryRef.length > 0) {
+            const competing = competingRevisions(store, story.id, summaryRef);
+
+            if (competing.length > 0) {
+                const keys = competing.map((revision) => readerKeysFor(revision.id, summaryReaders));
+
+                for (const [revisionIndex, revision] of competing.entries()) {
+                    for (let pass = 1; pass <= summaryReaders; pass += 1) {
+                        const key = keys[revisionIndex]?.[pass - 1];
+
+                        if (key === undefined || runsForItem(store, key).length > 0) continue;
+
+                        const built = candidate(
+                            store,
+                            story,
+                            'check_unit',
+                            'reader',
+                            { kind: 'summary', ref: summaryRef },
+                            key,
+                            `Reader ${pass}/${summaryReaders} reads Summary draft ${revision.id} against the Seed (D-30, phase ①)`,
+                            2,
+                            {
+                                revisionRef: revision.id,
+                                note: `Reader pass ${pass} of ${summaryReaders} on draft ${revision.id}. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${revision.id} in related_refs so the dashboard files each finding under this Overview. Rate the draft with submitVerdict against ${revision.id}, and never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                            },
+                            // D-30's four angles: successive passes take different seats, and a fifth
+                            // pass starts the rotation again rather than repeating one angle blindly.
+                            revisionIndex + pass - 1
+                        );
+
+                        if (built) out.push(built);
+                    }
+                }
+            } else if (
+                draftedBefore(store, summaryRef) &&
+                // An installed selection already went through the revision readers; this fallback is
+                // only for a Summary that was written IN PLACE (a one-sample template or the loop
+                // rig's tool double). Reading the installed text again would re-open the phase forever.
+                !store.revisions.list().some((row) => row.story_id === story.id && row.unit_ref === summaryRef)
+            ) {
+                // A Summary written IN PLACE (no divergence: one sample, or a template with
+                // `attempts: 1`) is still reviewed by Readers before the Editor. The installed
+                // revision is the generation: an Author edit or a Writer fix re-arms the passes.
+                const summary = storySummary(store, story.id);
+                const revision = summary?.rev ?? 1;
+
+                for (let pass = 1; pass <= summaryReaders; pass += 1) {
+                    const key = `wi_read_${summaryRef}_r${revision}_a${pass}`;
+
+                    if (runsForItem(store, key).length > 0) continue;
+
+                    const built = candidate(
+                        store,
+                        story,
+                        'check_unit',
+                        'reader',
+                        { kind: 'summary', ref: summaryRef },
+                        key,
+                        `Reader ${pass}/${summaryReaders} reads the installed Summary against the Seed (D-30, phase ①)`,
+                        2,
+                        {
+                            note: `Reader pass ${pass} of ${summaryReaders} on the installed Summary ${summaryRef}. The Summary and the Seed are in the brief; use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe. Rate it with submitVerdict, and never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                        },
+                        pass - 1
+                    );
+
+                    if (built) out.push(built);
+                }
+            }
+        }
+    }
+
     // -- Checkers: every competing draft, then any unit whose newest draft is unjudged -------------
     for (const unit of units) {
+        // Phase ①'s review crew is the Readers above; a consistency checker here would be a
+        // third opinion between the Reader and the Editor, which is not the loop the Author set.
+        if (story.phase === 'summary') continue;
+
         // A unit mid-divergence is not worth judging yet: the Editor judges the SET of attempts together
         // (§6.2a's loop B), so a checker bought for draft 1 of 3 would be re-bought after every sibling
         // and would starve the drafts that are still owed (they rank below the checker's priority).
-        if (divergenceGap(store, story.id, unit.ref, writerAttempts) > 0) continue;
+        if (divergenceGap(store, story, unit.ref, writerAttempts) > 0) continue;
 
         if (!needsChecker(store, story, unit.ref)) continue;
 
@@ -533,19 +834,34 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     }
 
     for (const unit of units) {
+        // A unit with an explicit fix job already has its Writer: the `wi_fix_*` Work Item clears
+        // the approved findings/task, and the generic draft would be a second Writer racing it on
+        // the same artifact (T-4's compare-and-swap is not a scheduling mechanism).
+        if (fixJobs.some((job) => job.unit === unit.ref)) continue;
+
         if (unitIsBusy(store, story.id, unit.ref)) continue;
 
         // D-17d/D-38a: the divergence count is the AUTHOR's setting on the assigned Writer template,
         // never an engine constant. A fix pass gets ONE draft (the work is a correction, not an
         // exploration), and a first pass gets the template's `attempts`.
-        const owing = divergenceGap(store, story.id, unit.ref, writerAttempts);
+        const owing = divergenceGap(store, story, unit.ref, writerAttempts);
         const trigger = writeTrigger(store, story, unit.ref, unit.chapter, owing);
 
         if (trigger === undefined) continue;
 
-        const attempts = trigger.trigger === WRITE_TRIGGERS.task && unit.chapter !== undefined ? 1 : writerAttempts;
+        // D-17d/D-38a: an ordinary fix pass is a correction, not an exploration, so it gets ONE
+        // draft. Phase ① is the exception: every Summary round is a fresh sampling of
+        // `summary_sampling` complete drafts, including a round started by an Author request or
+        // an L-18 re-brief.
+        const attempts =
+            story.phase === 'summary' ? writerAttempts : trigger.trigger === WRITE_TRIGGERS.task ? 1 : writerAttempts;
         const prefix = `wi_write_${unit.ref}`;
-        const generation = divergenceGeneration(store, unit.ref);
+        const generation =
+            story.phase === 'summary'
+                ? competingRevisions(store, story.id, unit.ref).length > 0
+                    ? Math.max(1, summaryWriteGeneration(store, unit.ref))
+                    : summaryWriteGeneration(store, unit.ref) + 1
+                : divergenceGeneration(store, unit.ref);
 
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             const key = claimKey(prefix, generation, `a${attempt}`);
@@ -553,7 +869,23 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
             // Each sibling runs exactly once per pass: unlike every other job kind, "is it still needed?"
             // cannot be answered from the artifact (a blind draft changes nothing the next one can see,
             // which is the point of L-16), so the run row is the only honest record of the sibling.
-            if (runsForItem(store, key).length > 0) continue;
+            //
+            // PHASE ①'S EXCEPTION: a run that closed without filing a draft (model failure, empty
+            // turn) must not shrink the round. The attempt is retried under the same claim key; a
+            // live run or a revision it actually produced is the only thing that closes it.
+            const runs = runsForItem(store, key);
+            const produced =
+                story.phase === 'summary' &&
+                runs.length > 0 &&
+                store.revisions.list().some(
+                    (revision) =>
+                        revision.unit_ref === unit.ref &&
+                        revision.run_ref !== undefined &&
+                        runs.some((run) => run.id === revision.run_ref)
+                );
+            const claimed = story.phase === 'summary' ? runs.some(isLiveRun) || produced : runs.length > 0;
+
+            if (claimed) continue;
 
             const built = candidate(
                 store,
@@ -572,7 +904,14 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
                         attempts > 1
                             ? `Divergent draft ${attempt}/${attempts} of ${label(unit)}: no other draft is visible to you (L-16, P13).`
                             : `Draft ${label(unit)}.`,
-                    ...(trigger.tasks.length > 0 ? { taskRefs: trigger.tasks.map((task) => task.id) } : {})
+                    ...(trigger.tasks.length > 0 ? { taskRefs: trigger.tasks.map((task) => task.id) } : {}),
+                    ...(story.phase === 'summary'
+                        ? {
+                              findingRefs: summaryBlockingFindings(store, story, unit.ref).map(
+                                  (finding) => finding.id
+                              )
+                          }
+                        : {})
                 }
             );
 
@@ -668,12 +1007,21 @@ function fixWork(
     taskRefs: string[];
     findingRefs: string[];
 }[] {
-    const byUnit = new Map<string, { findings: string[]; tasks: string[]; kind: UnitKind }>();
-    const add = (unit: string, kind: UnitKind, findingId: string, taskId: string) => {
-        const held = byUnit.get(unit) ?? { findings: [] as string[], tasks: [] as string[], kind };
+    const byUnit = new Map<
+        string,
+        { findings: string[]; tasks: string[]; taskKinds: Set<string>; kind: UnitKind }
+    >();
+    const add = (unit: string, kind: UnitKind, findingId: string, taskId: string, taskKind?: string) => {
+        const held = byUnit.get(unit) ?? {
+            findings: [] as string[],
+            tasks: [] as string[],
+            taskKinds: new Set<string>(),
+            kind
+        };
 
         if (!held.findings.includes(findingId)) held.findings.push(findingId);
         if (!held.tasks.includes(taskId)) held.tasks.push(taskId);
+        if (taskKind !== undefined) held.taskKinds.add(taskKind);
         byUnit.set(unit, held);
     };
 
@@ -692,7 +1040,7 @@ function fixWork(
                 ? findingRefs(finding).filter((ref) => ref !== story.id && ref.length > 0)
                 : [finding.target_ref];
 
-        for (const unit of units) add(unit, unitKindOf(unit), finding.id, task?.id ?? '');
+        for (const unit of units) add(unit, unitKindOf(unit), finding.id, task?.id ?? '', 'fix');
     }
 
     // The queue's own merge requests (L-19: the Editor names the parts, the Writer composes).
@@ -704,7 +1052,7 @@ function fixWork(
 
         if (unit === '') continue;
 
-        add(unit, unitKindOf(unit), '', task.id);
+        add(unit, unitKindOf(unit), '', task.id, task.kind);
     }
 
     const jobs: {
@@ -720,22 +1068,41 @@ function fixWork(
     for (const [unit, held] of [...byUnit.entries()].sort()) {
         if (unit === '' || unit === story.id) continue;
 
+        const competing = competingRevisions(store, story.id, unit).length;
+        const hasMerge = held.taskKinds.has('merge');
+
         // A unit mid-decision is not ready for a fix pass: the Editor's choice comes first (L-20).
-        if (competingRevisions(store, story.id, unit).length > 0) continue;
+        // The one exception is a merge the Editor already asked for — that request IS the choice, and
+        // refusing to run it is what turned a valid merge brief into a select/skip loop. The merge
+        // Writer composes one text; the drafts stay in place until a later selection.
+        if (competing > 0 && !hasMerge) continue;
 
         const prefix = `wi_fix_${unit}`;
-        const generation = dispatchCount(store, prefix) + 1;
+        const isSummary = held.kind === 'summary';
+        // Every Summary round is `summary_sampling` complete drafts, not one patch. A merge is the
+        // one exception: the Editor named one text, so one Writer composes it.
+        const attempts = isSummary && !hasMerge ? summarySamplingOf(story) : 1;
+        const runs = dispatchCount(store, prefix);
+        // Count ROUNDS, not runs, so three attempts share one generation and the next round gets
+        // the next generation. At one attempt this is the old `dispatchCount + 1` exactly.
+        const generation = isSummary ? Math.floor(runs / attempts) + 1 : runs + 1;
+        const suffix = `${last(held.findings) ?? 'task'}_${last(held.tasks) ?? 'none'}`;
 
-        jobs.push({
-            key: claimKey(prefix, generation, `${last(held.findings) ?? 'task'}_${last(held.tasks) ?? 'none'}`),
-            unit,
-            kind: held.kind,
-            why: `${held.findings.length > 0 ? `fix ${held.findings.length} approved finding${held.findings.length === 1 ? '' : 's'}` : 'clear a queued task'} on ${unit} (D-34, D-11)`,
-            // D-35's dial put these here, so a fix a decision unblocked outranks a fresh draft.
-            priority: 2,
-            taskRefs: held.tasks.filter((id) => id.length > 0),
-            findingRefs: held.findings
-        });
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            jobs.push({
+                key:
+                    attempts === 1
+                        ? claimKey(prefix, generation, suffix)
+                        : `${claimKey(prefix, generation, suffix)}_a${attempt}`,
+                unit,
+                kind: held.kind,
+                why: `${held.findings.length > 0 ? `fix ${held.findings.length} approved finding${held.findings.length === 1 ? '' : 's'}` : hasMerge ? 'run the Editor\'s merge request' : 'clear a queued task'} on ${unit} (D-34, D-11)`,
+                // D-35's dial put these here, so a fix a decision unblocked outranks a fresh draft.
+                priority: 2,
+                taskRefs: held.tasks.filter((id) => id.length > 0),
+                findingRefs: held.findings
+            });
+        }
     }
 
     return jobs;
@@ -751,7 +1118,10 @@ function unitRefInTask(task: Task): string {
     const text = `${task.title} ${task.detail ?? ''}`;
 
     for (const ref of [task.finding_ref, ...(task.detail ? [task.detail] : []), ...text.split(/\s+/)]) {
-        if (typeof ref === 'string' && /^(chap|plot|summ)_[A-Za-z0-9_]+$/.test(ref)) return ref;
+        // The ids are minted from the collection singulars: `chapter_1`, `plotline_1`,
+        // `summary_1`. The old `chap|plot|summ` prefixes never matched a real ref, which is why
+        // a merge/rewrite task could sit open forever while the sweep kept asking the Editor.
+        if (typeof ref === 'string' && /^(chapter|plotline|summary)_[A-Za-z0-9_]+$/.test(ref)) return ref;
     }
 
     return '';

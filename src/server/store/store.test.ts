@@ -4,7 +4,7 @@
 //   P11/D-8/T-5 every mutation carries who made it and a `why` — and a write without one is refused
 //   D-22  a multi-record decision lands as ONE commit group (and not at all if it throws)
 //   L-3/D-12a the two files round-trip: the snapshot rehydrates the memory, the journal survives as history
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -519,6 +519,38 @@ describe('Store persistence — the two files (P1, L-3, D-12a)', () => {
 
             expect(again.stories.list().map((story) => story.id)).toEqual(['story_1', 'story_2']);
             expect(again.journal.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('loads a long-lived book whose journal exceeds the argument-passing ceiling (L-3)', async () => {
+        const root = await scratch();
+
+        try {
+            // Six figures of committed history is what a loop that has run for a day produces.
+            // Spreading that many events into `push(...)` overflows the call stack on any V8
+            // build, so the load has to append without a variadic call.
+            const events = Array.from({ length: 200_000 }, (_, index) => ({
+                seq: index + 1,
+                at: new Date(0).toISOString(),
+                collection: 'stories',
+                op: 'update',
+                id: 'story_1',
+                attribution: AUTHOR,
+                patch: {},
+                commit_label: 'long_lived'
+            }));
+
+            await writeFile(
+                path.join(root, 'store.json'),
+                JSON.stringify({ version: 1, counters: {}, records: {}, journal: events })
+            );
+
+            const store = await Store.load(root);
+
+            expect(store.journal).toHaveLength(events.length);
+            expect(store.journal[events.length - 1]?.seq).toBe(events.length);
         } finally {
             await rm(dir, { recursive: true, force: true });
         }

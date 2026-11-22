@@ -236,7 +236,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const row = store.runs.get('run_1')!;
         expect(typeof row.started_at).toBe('string');
         expect(typeof row.ended_at).toBe('string');
-        expect(row.rev).toBe(6); // create, working, two heartbeats (S-4a), reporting, teardown (S-3)
+        // create, working, a lease beat before each of the three model turns (S-4a), a beat after
+        // each of the two tool calls, reporting, teardown (S-3).
+        expect(row.rev).toBe(9);
 
         // S-2: the brief IS the run's memory — the first request is the assembled text plus the
         // kickoff and the whole catalogue (T-6a), and nothing else.
@@ -254,15 +256,18 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         );
         expect(requests[0].tools).toEqual(runtime.schemas());
 
-        // S-4a: the lease is `runs.updated_at`, refreshed once per tool call — here that is exactly
-        // two empty patches between `working` and `reporting`, and nothing else (E-0: no timeout,
-        // so the heartbeat is the only guard this layer writes).
+        // S-4a: the lease is `runs.updated_at`, refreshed while a provider request is in flight
+        // and after every tool call — here three request beats and two tool beats between
+        // `working` and `reporting`, and nothing else (E-0: no timeout).
         expect(stateSteps(store)).toEqual([
             'create:spawning', // D-18: the row exists before the brief is even assembled
             'update:working', // S-2: brief assembled and hashed
+            'update:', // request beat, turn 1
             'update:', // heartbeat after editChapter
+            'update:', // request beat, turn 2
             'update:', // heartbeat after requestAuthor
             'update:reporting', // §9's report step
+            'update:', // request beat, turn 3
             'update:torn_down' // S-3's unconditional close
         ]);
         // S-3's teardown is not a separate journal verb in this store (P3's vocabulary is
@@ -311,8 +316,14 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             tokens: 60,
             end_reason: END_COMPLETED
         });
-        // No report tool executed, so §9's `reporting` step never appears on the row.
-        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:torn_down']);
+        // No report tool executed, so §9's `reporting` step never appears on the row; the one
+        // empty patch is the lease beat while the single model request was in flight (S-4a).
+        expect(stateSteps(store)).toEqual([
+            'create:spawning',
+            'update:working',
+            'update:',
+            'update:torn_down'
+        ]);
     });
 
     it('moves the row to `reporting` while the report commit is still the next step (§9, U-7)', async () => {
@@ -350,9 +361,12 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         expect(stateSteps(store)).toEqual([
             'create:spawning',
             'update:working',
-            'update:',
+            'update:', // request beat, turn 1
+            'update:', // heartbeat after requestAuthor
             'update:reporting',
-            'update:',
+            'update:', // request beat, turn 2
+            'update:', // heartbeat after peekRow
+            'update:', // request beat, turn 3
             'update:torn_down'
         ]);
     });
@@ -439,13 +453,54 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         // D-11: stopping a run is a stop, not a rewind — the events that happened stay. The tool
         // call the interrupted turn asked for is not issued after the abort.
-        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:abandoned']);
+        // The empty patch is the lease beat while the interrupted request was in flight (S-4a).
+        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:', 'update:abandoned']);
         // S-3 has no exception for a stop: the row closed through the same teardown write, named on it.
         expect(lastRunEvent(store).attribution).toEqual({
             run_ref: 'run_1',
             why: 'teardown — killed — the Author pulled the cord (P8, U-7) (S-3)'
         });
         expect(store.chapters.get('chapter_1')).toMatchObject({ rev: 1 });
+    });
+
+    it('keeps the sweep’s lease sentence when it closes the row before the aborted run settles (S-4a, S-3)', async () => {
+        const { store, runtime, item } = rig();
+
+        let openGate!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            openGate = resolve;
+        });
+        const { client } = record(async (_request: ChatRequest, state) => {
+            if (state.callIndex === 0) await gate;
+
+            return { message: msg({ content: 'done' }) };
+        });
+
+        const executor = new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' });
+        const running = executor.execute(item);
+
+        await vi.waitFor(() => expect(client.callCount).toBe(1));
+
+        // The sweep kills the lapsed run and closes its row with S-4a's reason (loop/engine.ts).
+        executor.kill('run_1', 'lease');
+        store.runs.update(
+            'run_1',
+            {
+                state: 'abandoned',
+                ended_at: new Date().toISOString(),
+                end_reason: 'the lease lapsed after 120000ms of silence (S-4a, D-36)'
+            },
+            { run_ref: 'run_1', why: 'lease expiry returned the Work Item to the queue (S-4a)' }
+        );
+        openGate();
+
+        await running;
+
+        const row = store.runs.get('run_1')!;
+        // The executor's teardown must not relabel a sweep kill as "the Author pulled the cord".
+        expect(row.state).toBe('abandoned');
+        expect(row.end_reason).toBe('the lease lapsed after 120000ms of silence (S-4a, D-36)');
+        expect(row.tokens).toBe(0);
     });
 
     it('hands a rejected write straight back to the model with the current values, and lets it re-apply (T-4)', async () => {
@@ -577,8 +632,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             run_ref: 'run_1',
             why: 'teardown — failed — LLM provider fault: LlmError: the provider returned 503 (S-3)'
         });
-        // The row closed even though the loop threw before its first tool call.
-        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:failed']);
+        // The row closed even though the loop threw before its first tool call; the empty patch
+        // is the lease beat while the failing request was in flight (S-4a).
+        expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:', 'update:failed']);
     });
 
     // -------------------------------------------------------------------------

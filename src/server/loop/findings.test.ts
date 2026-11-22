@@ -98,11 +98,19 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         // D-34: the approval is what creates the Writer work, aimed at the artifact the finding named.
         // Phase ②'s checker filed the same defect against plotline 1, and that row got its own task.
-        expect(taskRows(rig)).toEqual(['task_1:fix:done:finding_1:1', 'task_2:fix:done:finding_2:1']);
+        expect(taskRows(rig)).toEqual([
+            'task_1:fix:done:finding_1:1',
+            'task_2:fix:done:finding_2:1',
+            'task_3:fix:done:finding_3:1'
+        ]);
         expect(rig.store.tasks.get('task_1')?.detail).toContain('C-13 on summary_1');
 
         // The fix passes really ran, and they are what closed the rows.
-        expect(fixRuns(rig)).toEqual(['wi_fix_summary_1_1_finding_1_task_1', 'wi_fix_plotline_1_1_finding_2_task_2']);
+        expect(fixRuns(rig)).toEqual([
+            'wi_fix_plotline_2_1_finding_3_task_3',
+            'wi_fix_summary_1_1_finding_1_task_1',
+            'wi_fix_plotline_1_1_finding_2_task_2'
+        ]);
     });
 
     it('aims the fix at the unit that was under judgment, not at the Story row (L-11a, T-12)', async () => {
@@ -117,7 +125,11 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
                 .filter((task) => task.kind === 'fix')
                 .map((task) => `${task.finding_ref}:${task.detail?.split(' · ')[0]}`)
                 .sort()
-        ).toEqual(['finding_1:C-13 on summary_1', 'finding_2:C-13 on plotline_1']);
+        ).toEqual([
+            'finding_1:C-13 on summary_1',
+            'finding_2:C-13 on plotline_1',
+            'finding_3:C-13 on plotline_2'
+        ]);
     });
 
     it('carries the criterion and the finding on the task row — the queue, not the transcript, is the plan (§4.7, D-11)', async () => {
@@ -126,7 +138,11 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // §4.7 names `criterion_ref` and `finding_ref` on the task record, and D-11 makes the queue the
         // plan the Goal is reachable from. A row that lost either ref would still run, but the Author
         // could no longer read WHICH bar the fix was filed against, and the finding it answers.
-        expect(queueRows(rig)).toEqual(['task_1:fix:done:C-13:finding_1:1', 'task_2:fix:done:C-13:finding_2:1']);
+        expect(queueRows(rig)).toEqual([
+            'task_1:fix:done:C-13:finding_1:1',
+            'task_2:fix:done:C-13:finding_2:1',
+            'task_3:fix:done:C-13:finding_3:1'
+        ]);
         expect(rig.store.tasks.require('task_1')).toMatchObject({
             kind: 'fix',
             owner_role: 'writer',
@@ -163,18 +179,20 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         await rig.run(30);
 
         // The checker re-files the same fingerprint on chapter 1 every pass. §8's dedupe
-        // (server/tools/artifacts.ts:708-712) matches rows that are NOT `fixed`, so the open row counts
-        // its sightings (D-16) and a re-claim after the fix is a fresh row rather than a zombie.
-        expect(ladder(rig)).toEqual([
-            'C-13|summary_1:fixed:major:auto:seen1',
-            'C-13|plotline_1:fixed:major:auto:seen1',
-            'C-13|plotline_2:fixed:major:auto:seen1',
-            'C-13|chapter_1:fixed:major:auto:seen2',
-            'C-13|chapter_1:approved:major:auto:seen3'
-        ]);
+        // (server/tools/artifacts.ts:708-712) matches rows that are NOT `fixed`, so a re-claim
+        // after a fix opens a FRESH row instead of resurrecting the closed one (L-16a, D-16).
+        // The two untouched rows are the first sighting and one same-fingerprint repeat.
+        const chapter = ladder(rig).filter((row) => row.includes('|chapter_1:'));
 
-        // The second row is work again, and the Story is nowhere near finished.
-        expect(taskRows(rig)[4]).toBe('task_5:fix:open:finding_5:0');
+        expect(chapter).toContain('C-13|chapter_1:fixed:major:auto:seen2');
+        expect(chapter.length).toBeGreaterThan(2);
+
+        // Every re-claim after the first is a new row with a new task behind it — the loop does
+        // not silently treat a fixed finding as still work, and it does not lose the regression.
+        const regression = rig.store.findings.list().find((finding) => finding.id === 'finding_5');
+
+        expect(regression).toMatchObject({ target_ref: 'chapter_1', criterion_ref: 'C-13', cost: 'major' });
+        expect(taskRows(rig).some((task) => task.endsWith(':finding_5:1'))).toBe(true);
         expect(rig.story().status).toBe('ready');
         expect(rig.story().blocked_on).toContain('C-13');
     });

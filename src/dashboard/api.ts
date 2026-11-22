@@ -231,6 +231,10 @@ export interface CreateStoryInput {
     title?: string;
     idea: string;
     chapter_count?: number;
+    /** Phase ①: Writer samples per Summary (standard 5 when omitted). */
+    summary_sampling?: number;
+    /** Phase ①: Reader passes per sample (standard 5 when omitted). */
+    summary_readers?: number;
 }
 
 /**
@@ -242,6 +246,10 @@ export interface StoryPatch {
     idea?: string;
     chapter_count?: number;
     auto_approve?: Cost[];
+    /** Phase ①: how many Writer samples one Summary gets (standard 5). */
+    summary_sampling?: number;
+    /** Phase ①: how many Readers critique each sample (standard 5). */
+    summary_readers?: number;
 }
 
 /** §6.3a L-32 — the two backtrack targets; Phase ③ is the current phase, so only ①/② are reachable. */
@@ -409,11 +417,23 @@ export interface AgentStatusRow {
 export type AgentThreadState = 'running' | 'torn_down' | 'failed' | 'abandoned';
 
 /**
+ * U-8 — one step a RUNNING thread has taken. The Author reads these below the (collapsed)
+ * request to see what the employee is doing right now; a closed thread drops them, because a
+ * finished bar is judged on its request and its answer only.
+ */
+export interface AgentThreadActivity {
+    /** When the step landed (ISO 8601). */
+    at: string;
+    /** One line: the tool it called (with its result), or the prose turn it produced. */
+    text: string;
+}
+
+/**
  * One thread of one employee, as the employee tile's content surface renders it. A thread is the
  * employee acting as an agent for one Run.
  * harness's execution unit: the Story is the harness, the phase is its session, and this row is
- * one conversation inside that session. `request` and `answer` are the whole detail surface —
- * the Author asked for those two, not a segment timeline.
+ * one conversation inside that session. A closed thread's detail is `request` + `answer`; a
+ * running thread also carries `activity`, the steps it is taking right now (U-8).
  */
 export interface AgentThreadRecord {
     /** The engine thread id; unique for the life of the record. */
@@ -436,6 +456,11 @@ export interface AgentThreadRecord {
     request: string;
     answer: string;
     error?: string;
+    /**
+     * Live steps of a thread that is still RUNNING, oldest first. Absent on a closed thread:
+     * when the thread completes the bar shows only Request and Answer (U-8).
+     */
+    activity?: AgentThreadActivity[];
     /** False for a legacy Run row whose pre-retention transcript is gone. */
     retained: boolean;
 }
@@ -507,6 +532,8 @@ export interface ApiClient {
     selectRevisionAuthor(storyId: string, revisionId: string, note?: string): Promise<StoryRow>;
     /** U-13a / D-23 — the Author asks for named drafts to be merged; the drafts stay competing. */
     mergeRevisions(storyId: string, request: RevisionMergeRequest): Promise<StoryRow>;
+    /** Phase ① — "not final yet": queue another three-draft Summary round from the selected revision. */
+    requestSummaryRevision(storyId: string, note?: string): Promise<StoryRow>;
     /**
      * U-9 / D-19 — one line addressed to the Editor; it records a `directives` row and propagates.
      * `refs` names the artifact the Author is looking at, so the Editor updates the focused pane
@@ -746,6 +773,8 @@ export const api: ApiClient = {
         ),
     // U-13a / D-23. Same task the Checker's `requestMerge` opens; the desk shows one entry either way.
     mergeRevisions: (storyId, request) => post<StoryRow>(storyPath(storyId, '/revisions/merge'), request),
+    requestSummaryRevision: (storyId, note) =>
+        post<StoryRow>(storyPath(storyId, '/summary/revise'), note === undefined ? {} : { note }),
     sendDirective: (storyId, text, refs) =>
         post<StoryRow>(storyPath(storyId, '/directives'), refs && refs.length > 0 ? { text, refs } : { text }),
     acceptCompletion: (storyId) => post<StoryRow>(storyPath(storyId, '/complete')),

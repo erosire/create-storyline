@@ -191,7 +191,7 @@ const SPEC_TOOL_CONTRACT: Record<
     },
     verifyFinding: {
         args: ['finding_id', 'verdict', 'cost', 'title', 'detail', 'evidence', 'why', 'expects'],
-        required: ['finding_id', 'verdict', 'cost', 'evidence', 'why'],
+        required: ['finding_id', 'verdict', 'why'],
         writes: 'findings',
         level: 'verify',
         allow: 'nynn'

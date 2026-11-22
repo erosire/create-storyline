@@ -1023,7 +1023,8 @@ export function seedFinding(
             cost: init.cost ?? 'major',
             fingerprint: init.fingerprint ?? 'C-4|chapter_1',
             state: init.state ?? 'unconfirmed',
-            seen_count: init.seen_count ?? 1
+            seen_count: init.seen_count ?? 1,
+            related_refs: init.related_refs
         },
         AUTHOR_ATTR
     );
@@ -1045,6 +1046,7 @@ export function seedTask(
             state: init.state ?? 'open',
             priority: init.priority ?? 1,
             criterion_ref: init.criterion_ref ?? 'C-4',
+            finding_ref: init.finding_ref,
             attempts: init.attempts ?? 0
         },
         AUTHOR_ATTR

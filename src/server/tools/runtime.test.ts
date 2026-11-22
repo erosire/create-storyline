@@ -158,6 +158,25 @@ describe('the W2 call pipeline', () => {
 
     // ── §12 W2's named refusals ─────────────────────────────────────────────
 
+    it('refuses a Reader finding with no detail, so the Editor gets the what-and-where line (D-30)', async () => {
+        const result = await call('reader', 'raiseFinding', {
+            target_ref: chapter.id,
+            criterion_ref: 'C-7',
+            title: 'the contract is not delivered',
+            evidence: 'the prose skips the climb',
+            cost: 'major',
+            why: 'the Reader angle found it'
+        });
+
+        expect(result).toMatchObject({
+            ok: false,
+            refused: 'D-30',
+            message: expect.stringContaining('detail')
+        });
+        // No row was written: the refusal is before the create, not a silent blank field.
+        expect(store.findings.list()).toEqual([]);
+    });
+
     it("refuses a Reader's prose write naming P10, and names the row it came from", async () => {
         const result = await call('reader', 'editChapter', {
             chapter_id: chapter.id,

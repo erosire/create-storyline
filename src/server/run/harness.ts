@@ -87,7 +87,7 @@ export function permissionLine(kind: RoleKind): string {
         case 'editor':
             return 'You are the Editor: you may select, merge and verify, and you may never write prose (L-19, T-3b). Your writes land through `selectRevision`, `requestMerge`, `rejectAll`, `verifyIdea` and `verifyFinding` only (D-33, D-22).';
         case 'reader':
-            return 'You are a Reader: your contribution is `proposeIdea`, `raiseFinding` and `submitVerdict` (D-26, T-9). Any write to a story artifact is refused naming P10 — propose, never edit.';
+            return 'You are a Reader: your output is `raiseFinding` and `submitVerdict`, plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
         default:
             return 'You are a checker: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b). Any write to a story artifact is refused naming P10: file the task and let the Writer write it.';
     }

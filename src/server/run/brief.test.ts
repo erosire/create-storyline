@@ -145,6 +145,50 @@ describe('brief — S-2 assembly', () => {
         expect(text).toContain('Judge the unit against the criteria above and report with `submitVerdict`');
     });
 
+    it('bounds a Reader review pass: review mode first, findings-first, no Ideas, and no proposal-style done line (D-30)', () => {
+        const { store, story } = seedStore();
+        const revision = seedRevision(store, story.id, 'summary_1', 'DRAFT ONE — the valley under water.', 'run_2', {
+            unit_kind: 'summary'
+        });
+
+        seedTemplate(store, {
+            name: 'reader-genre',
+            roles: [
+                {
+                    name: 'reader',
+                    kind: 'reader',
+                    web: true,
+                    prompt:
+                        'You are a Reader (D-30). You never write the book; proposeIdea is for jobs that ask for Ideas.'
+                }
+            ],
+            done_definition: 'every proposal is filed as an Idea with its sources'
+        });
+
+        const item = itemFor({
+            templateRef: 'reader-genre',
+            roleName: 'reader',
+            unit: { kind: 'summary', ref: 'summary_1' },
+            revisionRef: revision.id
+        });
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        // The binding mode is rendered before the angle prompt, so the wider Reader capability
+        // cannot be read as this pass's job.
+        const mode = text.indexOf('PASS MODE — REVIEW');
+        expect(mode).toBeGreaterThan(-1);
+        expect(mode).toBeLessThan(text.indexOf('You are a Reader (D-30).'));
+
+        // The template's proposal-style done-definition is replaced, not stacked, for this pass.
+        expect(text).not.toContain('Done means: every proposal is filed as an Idea with its sources');
+        expect(text).toContain('Done means: every critical and major issue you found is filed');
+        expect(text).toContain('do not propose Ideas in this pass');
+        expect(text).toContain('REVIEW PASS: report defects, do not propose Ideas');
+        // The sample and the Seed are in the brief, so the pass does not need to go looking.
+        expect(text).toContain('DRAFT ONE — the valley under water.');
+        expect(text).toContain('call `readSummary` only if the brief does not carry the sample');
+    });
+
     it('names the unit, the phase and the permission row so a fresh context knows what it may do (D-17a, T-1a)', () => {
         const { store } = seedStore();
         const item = itemFor();

@@ -17,9 +17,6 @@ import { DEFAULT_STORY_SELECTION, directiveFocus } from './story-nav';
 import type { StorySelection } from './story-nav';
 import type { HomeTab } from './HomeDesk';
 
-/** The book length a prompt-started Story begins with; the form exposes the same number. */
-const DEFAULT_CHAPTER_COUNT = 12;
-
 export interface DirectiveBarProps {
     /** The phrase or folder the Author is reading; omitted means the Summary, a Story's opening pane. */
     selection?: StorySelection;
@@ -56,7 +53,7 @@ export function DirectiveBar({ selection = DEFAULT_STORY_SELECTION, homeTab = 'r
         } else {
             // The prompt path is the same API the form uses: the Story is opened from the line,
             // then the line goes to its Editor as the first direction.
-            const row = await store.createStory({ idea: line, chapter_count: DEFAULT_CHAPTER_COUNT });
+            const row = await store.createStory({ idea: line });
             landed = row !== null && (await store.sendDirective(row.id, line)) !== null;
         }
 

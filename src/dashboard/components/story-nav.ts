@@ -10,7 +10,7 @@
 // four reading phrases — Summary, Characters, Plotlines, Chapters. The loop's `story.phase` still
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
-import type { Chapter, Plotline, Verdict } from '../../shared/types';
+import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
 import { buildRevisionUnits, isDecidedIdea } from './story-contract';
 import type { RevisionUnit, StoryViewData } from './story-contract';
 
@@ -89,7 +89,21 @@ export function summaryReadyForReview(view: StoryViewData): boolean {
             (field) => typeof field === 'string' && field.trim().length > 0
         );
 
-    return storyInSummaryPhase(view) && prose && view.goal.failing.length === 0;
+    if (!storyInSummaryPhase(view) || !prose || view.goal.failing.length > 0) return false;
+    if (summaryHasCompetingRevisions(view)) return false;
+
+    const selected = selectedSummaryRevision(view);
+
+    if (selected === undefined) return true;
+
+    return !view.findings.some(
+        (finding) =>
+            (finding.state === 'confirmed' || finding.state === 'approved') &&
+            (finding.cost === 'critical' || finding.cost === 'major') &&
+            ((finding.related_refs ?? []).length === 0
+                ? finding.target_ref === summary?.id
+                : (finding.related_refs ?? []).includes(selected.id))
+    );
 }
 
 function storyInSummaryPhase(view: StoryViewData): boolean {
@@ -151,6 +165,152 @@ function newestAdvancingVerdict(verdicts: Verdict[]): Verdict | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Phase ①'s flat revision history — Revision 1…N and the findings filed against each
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase ①'s Summary history is a FLAT list, not a sampling tree:
+ *
+ *     Summary
+ *     - Revision 1
+ *     - Revision 2
+ *     …
+ *     - Revision 6
+ *
+ * Every round writes three complete drafts (Revision 1, 2, 3), the Editor keeps one and marks the
+ * other two `discarded`, and the next round writes three more (Revision 4, 5, 6) from the kept
+ * text. The rows are never deleted; the rail is the Author's record of every version tried.
+ */
+export interface SummaryRevisionEntry {
+    revision: Revision;
+    /** The rail's 1-based label, in creation order. */
+    index: number;
+    /** Findings the Readers filed against THIS revision. */
+    findings: Finding[];
+    /** The Editor's verdicts that judged this revision or one of its findings. */
+    editorVerdicts: Verdict[];
+    /** The Editor's note if this revision won a selection. */
+    editorNote?: { note: string; at: string };
+}
+
+const SUMMARY_REVISION_PREFIX = 'revision:';
+
+/** The rail ref for one Summary revision. */
+export const summaryRevisionRef = (revisionId: string): string => `${SUMMARY_REVISION_PREFIX}${revisionId}`;
+
+/** Reads a rail ref back into the revision id. */
+export function parseSummaryRevisionRef(ref: string | undefined): string | undefined {
+    if (ref === undefined || !ref.startsWith(SUMMARY_REVISION_PREFIX)) return undefined;
+
+    const id = ref.slice(SUMMARY_REVISION_PREFIX.length);
+
+    return id.length > 0 ? id : undefined;
+}
+
+/** The rail's revision selection, resolved against the live rows. */
+export function summaryRevisionFocus(
+    view: StoryViewData,
+    selection: StorySelection
+): SummaryRevisionEntry | undefined {
+    if (selection.panel !== 'summary') return undefined;
+
+    const id = parseSummaryRevisionRef(selection.ref);
+
+    return id === undefined ? undefined : summaryRevisions(view).find((entry) => entry.revision.id === id);
+}
+
+/** Oldest first, with a stable id tie-break so a refetch never reshuffles the rail. */
+function byDraftAge(left: Revision, right: Revision): number {
+    return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
+}
+
+/** Every Summary revision in creation order, with the findings filed against it. */
+export function summaryRevisions(view: StoryViewData): SummaryRevisionEntry[] {
+    const summary = view.summary;
+
+    if (summary === null || summary === undefined) return [];
+
+    const verdicts = view.verdicts ?? [];
+    const runById = new Map<string, Run>(view.runs.map((run) => [run.id, run]));
+    const drafts = view.revisions
+        .filter((revision) => revision.unit_kind === 'summary' && revision.unit_ref === summary.id)
+        .sort(byDraftAge);
+
+    return drafts.map((revision, position) => {
+        const draftVerdicts = verdicts.filter((verdict) => verdict.target_ref === revision.id);
+        const findingIds = new Set<string>();
+
+        for (const verdict of draftVerdicts) {
+            for (const line of verdict.criteria_passed) {
+                if (line.finding_ref !== undefined) findingIds.add(line.finding_ref);
+            }
+        }
+
+        const findings = view.findings
+            .filter(
+                (finding) =>
+                    findingIds.has(finding.id) ||
+                    (finding.related_refs ?? []).includes(revision.id)
+            )
+            .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+
+        const editorVerdicts = verdicts.filter((verdict) => {
+            const run = verdict.run_ref === undefined ? undefined : runById.get(verdict.run_ref);
+            const judge = run?.role ?? '';
+
+            if (judge !== 'editor' && !/editor/i.test(verdict.template_ref ?? '')) return false;
+
+            if (verdict.target_ref === revision.id) return true;
+
+            return verdict.criteria_passed.some(
+                (line) => line.finding_ref !== undefined && findingIds.has(line.finding_ref)
+            );
+        });
+
+        return {
+            revision,
+            index: position + 1,
+            findings,
+            editorVerdicts,
+            ...((revision.selection_note ?? '').trim().length > 0
+                ? { editorNote: { note: (revision.selection_note ?? '').trim(), at: revision.updated_at } }
+                : {})
+        };
+    });
+}
+
+/** The revision the Summary row carries, for the "final Summary" decision. */
+export function selectedSummaryRevision(view: StoryViewData): Revision | undefined {
+    const summary = view.summary;
+
+    if (summary === null || summary === undefined) return undefined;
+
+    return view.revisions
+        .filter(
+            (revision) =>
+                revision.unit_kind === 'summary' &&
+                revision.unit_ref === summary.id &&
+                revision.state === 'selected'
+        )
+        .sort(byDraftAge)
+        .slice(-1)[0];
+}
+
+/** True while a Summary round is still competing and the Editor has not chosen. */
+export function summaryHasCompetingRevisions(view: StoryViewData): boolean {
+    const summary = view.summary;
+
+    if (summary === null || summary === undefined) return false;
+
+    return view.revisions.some(
+        (revision) =>
+            revision.unit_kind === 'summary' &&
+            revision.unit_ref === summary.id &&
+            revision.state === 'competing'
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The phrases' entries
 // ---------------------------------------------------------------------------
 
@@ -202,7 +362,10 @@ export function selectionTitle(view: StoryViewData, selection: StorySelection): 
 
 function phraseEntryTitle(view: StoryViewData, phrase: StoryPhraseKey, ref: string): string | undefined {
     if (phrase === 'summary') {
-        return ref === 'overview' ? 'Overview' : undefined;
+        const id = parseSummaryRevisionRef(ref);
+        const entry = id === undefined ? undefined : summaryRevisions(view).find((row) => row.revision.id === id);
+
+        return entry === undefined ? undefined : `Revision ${entry.index}`;
     }
     if (phrase === 'characters') {
         return view.cast.find((member) => member.id === ref)?.name;
@@ -222,7 +385,9 @@ export function selectionExists(view: StoryViewData, selection: StorySelection):
     }
 
     if (selection.panel === 'summary') {
-        return selection.ref === 'overview';
+        const id = parseSummaryRevisionRef(selection.ref);
+
+        return id !== undefined && summaryRevisions(view).some((entry) => entry.revision.id === id);
     }
     if (selection.panel === 'characters') {
         return view.cast.some((member) => member.id === selection.ref);
@@ -285,7 +450,12 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
     }
 
     const findings = view.findings.filter(
-        (finding) => finding.state === 'confirmed' && !(story.auto_approve ?? []).includes(finding.cost)
+        (finding) =>
+            finding.state === 'confirmed' &&
+            !(story.auto_approve ?? []).includes(finding.cost) &&
+            // Phase ①'s minor/taste notes are recorded, not approval work (the Summary bar is
+            // critical/major). Later phases keep the full dial.
+            !(story.phase === 'summary' && (finding.cost === 'minor' || finding.cost === 'taste'))
     );
     if (findings.length > 0) {
         add({

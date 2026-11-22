@@ -23,6 +23,7 @@ import {
     hasOpenFindings,
     isDivergenceMode,
     mustResolveRef,
+    pendingRevisions,
     plotlineRows,
     proposalWhy,
     replaceSection,
@@ -142,12 +143,22 @@ const editSummary: ToolDefinition = {
         // (editor.ts:274). Without a Summary row there is no unit to draft against, so the first write
         // of the phase still creates it.
         if (existing !== undefined && isDivergenceMode(ctx.store, ctx.story)) {
+            // A revision is a COMPLETE Summary, not a patch. The Writer may send only the fields it
+            // changed (a fix pass often does), so the draft inherits every unchanged field from the
+            // installed Summary. This is what makes `listRevisions` readable without the Editor
+            // having to guess whether a missing key means "delete" or "unchanged" — the ambiguity
+            // that once sent a valid draft into a merge/select loop.
+            const inherited: Record<string, string | number> = {};
+            for (const field of SUMMARY_FIELDS) {
+                const value = existing[field];
+                if (typeof value === 'string' && value.trim().length > 0) inherited[field] = value;
+            }
             const revision = await fileRevision(
                 ctx,
-                { unit_kind: 'summary', unit_ref: existing.id, body: { fields } },
+                { unit_kind: 'summary', unit_ref: existing.id, body: { fields: { ...inherited, ...fields } } },
                 why
             );
-            const drafts = competingRevisions(ctx.store, ctx.storyId, 'summary', existing.id);
+            const drafts = pendingRevisions(ctx.store, ctx.storyId, 'summary', existing.id);
 
             return ok(
                 {

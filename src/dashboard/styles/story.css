@@ -2254,20 +2254,299 @@
     text-transform: uppercase;
 }
 
-.sv-thread__text {
+/* U-8 — the request's own toggle. The bar opens the thread; this opens the brief inside it,
+   collapsed by default so the live output or the answer is what the Author sees first. */
+
+.sv-thread__block-toggle {
+    display: inline-flex;
+    gap: 0.35rem;
+    align-items: center;
+    align-self: flex-start;
+    padding: 0.1rem 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.sv-thread__block-toggle:hover .sv-thread__block-title,
+.sv-thread__block-toggle:focus-visible .sv-thread__block-title {
+    color: var(--text);
+}
+
+.sv-thread__block-toggle:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.sv-thread__block-caret {
+    color: var(--dim);
+    font-size: 0.62rem;
+}
+
+/* U-8 — what a RUNNING thread is doing right now: one line per step, oldest first. */
+
+.sv-thread__activity {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
     max-height: 22rem;
     margin: 0;
+    padding: 0.6rem 0.7rem;
     overflow: auto;
-    padding: 0.55rem 0.65rem;
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
     background: var(--surface);
+    list-style: none;
+}
+
+.sv-thread__activity-step {
+    display: flex;
+    gap: 0.55rem;
+    align-items: baseline;
+    color: var(--text);
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+
+.sv-thread__activity-elapsed {
+    flex: 0 0 3.6rem;
+    color: var(--dim);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.62rem;
+    white-space: nowrap;
+}
+
+.sv-thread__activity-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.sv-thread__activity-step--live .sv-thread__activity-text {
+    color: var(--accent);
+}
+
+.sv-thread__activity-empty {
+    margin: 0;
+    padding: 0.6rem 0.7rem;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: 0.76rem;
+}
+
+.sv-thread__text {
+    max-height: 22rem;
+    overflow: auto;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+/* Request and answer are Markdown. This is the harness UI's reading scale (`.markdown` in
+   packages/loadscript/harness/src/frontend/styles.css) tightened to this panel's type sizes
+   and mapped onto the workstation tokens: headings separate sections, list markers and
+   inline code carry the accent, and fenced code sits on its own surface. Scoped here so the
+   scale cannot leak into another pane. */
+
+.sv-markdown {
+    color: var(--text);
+    font-family:
+        'Inter',
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        Roboto,
+        sans-serif;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.sv-markdown > :first-child {
+    margin-top: 0;
+}
+
+.sv-markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.sv-markdown p,
+.sv-markdown ul,
+.sv-markdown ol,
+.sv-markdown blockquote,
+.sv-markdown pre,
+.sv-markdown table {
+    margin: 0 0 0.6rem;
+}
+
+.sv-markdown h1,
+.sv-markdown h2,
+.sv-markdown h3,
+.sv-markdown h4,
+.sv-markdown h5,
+.sv-markdown h6 {
+    margin: 1rem 0 0.35rem;
+    color: var(--text-strong);
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.sv-markdown > :first-child:is(h1, h2, h3, h4, h5, h6) {
+    margin-top: 0;
+}
+
+.sv-markdown h1 {
+    padding-bottom: 0.28rem;
+    border-bottom: 1px solid var(--line-strong);
+    font-size: 1rem;
+}
+
+.sv-markdown h2 {
+    padding-bottom: 0.22rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.9rem;
+}
+
+.sv-markdown h3 {
+    font-size: 0.84rem;
+}
+
+.sv-markdown h4,
+.sv-markdown h5,
+.sv-markdown h6 {
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+.sv-markdown ul,
+.sv-markdown ol {
+    padding-left: 1.15rem;
+}
+
+.sv-markdown li + li {
+    margin-top: 0.15rem;
+}
+
+.sv-markdown li::marker {
+    color: var(--accent);
+}
+
+.sv-markdown ul ul,
+.sv-markdown ol ol {
+    margin: 0.15rem 0 0;
+}
+
+.sv-markdown ul ul li::marker,
+.sv-markdown ol ol li::marker {
+    color: var(--muted);
+}
+
+.sv-markdown li > p {
+    margin: 0 0 0.2rem;
+}
+
+.sv-markdown li > p:last-child {
+    margin-bottom: 0;
+}
+
+.sv-markdown a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.sv-markdown strong {
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+.sv-markdown em {
+    color: var(--text-strong);
+}
+
+.sv-markdown del,
+.sv-markdown s {
+    color: var(--muted);
+}
+
+.sv-markdown blockquote {
+    margin-left: 0;
+    padding: 0.3rem 0.6rem;
+    border-left: 3px solid var(--accent-2);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--accent-2-soft);
+    color: var(--muted);
+}
+
+.sv-markdown blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+.sv-markdown hr {
+    height: 1px;
+    margin: 0.8rem 0;
+    border: 0;
+    background: var(--line-strong);
+}
+
+.sv-markdown :not(pre) > code {
+    padding: 0.05em 0.3em;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    background: var(--bg-elev);
+    color: var(--accent);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+.sv-markdown pre {
+    max-height: 18rem;
+    padding: 0.5rem 0.65rem;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+}
+
+.sv-markdown pre code {
+    padding: 0;
+    border: 0;
+    background: none;
     color: var(--text);
     font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
     font-size: 0.72rem;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
+    line-height: 1.55;
+}
+
+.sv-markdown table {
+    display: block;
+    max-width: 100%;
+    overflow: auto;
+    border-collapse: collapse;
+}
+
+.sv-markdown th,
+.sv-markdown td {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+}
+
+.sv-markdown th {
+    background: var(--surface-2);
+    color: var(--text-strong);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.sv-markdown tbody tr:nth-child(even) {
+    background: var(--bg-elev);
 }
 
 /* ------------------------------------------------------------------ phrase rail + focused panes */
@@ -2436,6 +2715,87 @@
 .sv-summary-draft-select:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Phase ①'s flat history and its "another round" veto. */
+.sv-summary-revisions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid var(--line);
+}
+
+.sv-summary-inherited {
+    color: var(--dim);
+    font-size: 0.62rem;
+    font-weight: 500;
+}
+
+.sv-summary-revise-button {
+    align-self: flex-start;
+    margin-top: 0.2rem;
+    padding: 0.3rem 0.62rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sv-summary-revise-button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--text-strong);
+}
+
+.sv-summary-revise-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* The rail's Overview / Findings / Revisions selection, rendered inside the Summary pane. */
+.sv-summary-focus-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid var(--line);
+}
+
+.sv-summary-focus-empty {
+    margin: 0;
+    color: var(--dim);
+    font-size: 0.72rem;
+}
+
+.sv-summary-focus-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-summary-focus-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    font-size: 0.74rem;
+}
+
+.sv-summary-focus-title {
+    color: var(--text);
+}
+
+.sv-summary-focus-meta {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.64rem;
 }
 
 /* ---- characters */
@@ -2780,6 +3140,64 @@
     color: var(--muted);
     font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
     font-size: 0.68rem;
+}
+
+/* ---- phase ① review dials (sampling size and reader passes) */
+
+.sv-summary-review-dials {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.7rem 1rem;
+    margin: 0.7rem 0;
+    padding: 0.7rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg);
+}
+
+.sv-summary-review-dials-hint {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.sv-summary-review-count {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    color: var(--muted);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-summary-review-count input {
+    width: 6rem;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.82rem;
+}
+
+.sv-summary-review-save {
+    padding: 0.4rem 0.7rem;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.sv-summary-review-save:disabled {
+    border-color: var(--line);
+    color: var(--dim);
+    cursor: not-allowed;
 }
 
 /* ---- seed */

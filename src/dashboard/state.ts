@@ -360,6 +360,9 @@ export function createDashboardStore(client: ApiClient = api) {
         stop: stopStory,
         resume: (storyId: string) => mutate(() => client.resume(storyId), storyId),
         clearPending: (storyId: string) => mutate(() => client.clearPending(storyId), storyId),
+        // Phase ①'s "not final yet": queue another three-draft round without touching history.
+        requestSummaryRevision: (storyId: string, note?: string) =>
+            mutate(() => client.requestSummaryRevision(storyId, note), storyId),
         /**
          * U-3's biggest button. The pinned route table has no global endpoint, so a global
          * Stop is the client issuing P8's cord for every Story that could still be working:

@@ -177,8 +177,23 @@ export function AgentsPanel({
                                     >
                                         Rank {agent.rank ?? 'A'}
                                     </span>
-                                    <span className={`sv-agent-tile__state sv-agent-tile__state--${agent.status}`}>
-                                        {agent.status}
+                                    <span
+                                        className={`sv-agent-tile__state sv-agent-tile__state--${agent.status}`}
+                                        title={
+                                            agent.status === 'running'
+                                                ? `${agent.working.length} thread${agent.working.length === 1 ? '' : 's'} running`
+                                                : 'idle — no thread right now'
+                                        }
+                                        aria-label={
+                                            agent.status === 'running'
+                                                ? `${agent.working.length} thread${agent.working.length === 1 ? '' : 's'} running`
+                                                : `${agent.title} is idle`
+                                        }
+                                    >
+                                        {/* The badge IS the count while the employee works: "RUNNING"
+                                            only says something is running, but the Author needs to know
+                                            how many threads that is. */}
+                                        {agent.status === 'running' ? agent.working.length : agent.status}
                                     </span>
                                 </span>
                             </button>

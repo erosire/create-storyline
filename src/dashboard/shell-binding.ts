@@ -129,6 +129,7 @@ export interface ShellActions {
      */
     approveChapterFindings(storyIdOrChapterId?: string, chapterIdOrWhy?: string, why?: string): Promise<unknown>;
     setAutoApprove(storyId?: string, costs?: Cost[]): Promise<unknown>;
+    setSummaryReview(storyId: string, sampling: number, readers: number): Promise<unknown>;
     assignTemplates(storyId?: string, templateIds?: string[]): Promise<unknown>;
     createTemplate(input: CreateTemplateInput | Partial<Template>): Promise<unknown>;
     patchTemplate(templateId: string, patch: Partial<Template>): Promise<unknown>;
@@ -159,6 +160,8 @@ export interface ShellActions {
      * the Story is the shell's scope (D-29's rule, same as every other local call).
      */
     sendDirective?(storyIdOrText?: string, text?: string, refs?: string[]): Promise<unknown>;
+    /** Phase ① — "not final yet": the Story is the shell's scope, the note optional. */
+    requestSummaryRevision?(storyId?: string, note?: string): Promise<unknown>;
 }
 
 /**
@@ -324,6 +327,10 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
                 : store.approveChapterFindings(storyId, first as string, second);
         },
         setAutoApprove: (id, costs) => store.setAutoApprove(scopeOf(id), costs ?? []),
+        // Phase ①'s two dials: the sample count and the Reader passes per sample. One write so the
+        // pane can never save a sampling value against a stale reader count.
+        setSummaryReview: (id, sampling, readers) =>
+            store.patchStory(scopeOf(id), { summary_sampling: sampling, summary_readers: readers }),
         assignTemplates: (id, templateIds) => store.assignTemplates(scopeOf(id), templateIds ?? []),
         createTemplate: (input) =>
             store.createTemplate(
@@ -376,6 +383,7 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
         sendDirective: (first, second, refs) =>
             second === undefined
                 ? store.sendDirective(storyId, first ?? '', refs)
-                : store.sendDirective(first ?? storyId, second, refs)
+                : store.sendDirective(first ?? storyId, second, refs),
+        requestSummaryRevision: (id, note) => store.requestSummaryRevision(scopeOf(id), note)
     };
 }

@@ -88,6 +88,10 @@ export interface RigOptions {
     story?: { title?: string; idea?: string; chapter_count?: number; auto_approve?: Cost[] };
     /** D-17d/D-38a: rewrite the assigned Writer templates' `attempts` before the first sweep. */
     attempts?: number;
+    /** Phase ① sampling size for this rig's Story (default 1: the rig is the clock, not the product). */
+    summarySampling?: number;
+    /** Phase ① Reader passes per sample for this rig's Story (default 1, same reason). */
+    summaryReaders?: number;
     /** The crew's scripted behaviour (above). */
     crew?: CrewBehaviour;
     /** Extra tool overrides, on top of the rig's two (a test that wants a refusing tool). */
@@ -265,7 +269,12 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
             title: options.story?.title,
             idea: options.story?.idea,
             chapter_count: options.story?.chapter_count ?? 1,
-            auto_approve: options.story?.auto_approve
+            auto_approve: options.story?.auto_approve,
+            // The loop rig exercises the pipeline, not the sample count: one Writer and one
+            // Reader keeps each sweep deterministic and cheap. The product's standards (5/5)
+            // are the Story defaults and are pinned against the real server.
+            summary_sampling: options.summarySampling ?? options.attempts ?? 1,
+            summary_readers: options.summaryReaders ?? 1
         });
 
         storyId = created.story_id;
@@ -466,6 +475,7 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                     target_ref: unit?.ref ?? item.storyId,
                     criterion_ref: spec.criterion ?? 'C-4',
                     title: spec.title,
+                    detail: `The probe round found ${spec.title} in ${unit?.ref ?? item.storyId}.`,
                     evidence: `the probe round saw it: ${spec.title}`,
                     cost: spec.cost
                 }
@@ -509,7 +519,12 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
 
         case 'check_unit':
         case 'whole_story_check': {
-            const ids = criteriaNamed(text);
+            // The brief's ROLE section names criteria in prose (a Reader prompt names the
+            // reader-visible ones), so filtering the WHOLE brief over-reports. A Reader review
+            // reports the criteria the PHASE briefing lists; a checker's existing whole-brief
+            // read is left alone (its fixtures depend on it).
+            const phaseBriefing = text.split('# PHASE AND GOAL CRITERIA')[1]?.split('\n# SEED')[0] ?? text;
+            const ids = criteriaNamed(item.roleName === 'reader' ? phaseBriefing : text);
             const report: ScriptCall[] = [];
             const lines = verdictLines(ids, crew.checkerFinds);
             // §4.9's recommendation enum is `advance | fix | stuck`. The rig used to answer `rework`,

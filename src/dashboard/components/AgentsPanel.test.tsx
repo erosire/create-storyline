@@ -25,23 +25,21 @@ const idle: AgentStatusRow[] = [
 ];
 
 describe('AgentsPanel — the global employee roster', () => {
-    it('renders four tiles and counts the running threads, without listing them on the rail', () => {
+    it('replaces the running badge with the number of threads the employee is running', () => {
         const working = idle.map((agent) =>
             agent.kind === 'writer'
                 ? {
                       ...agent,
                       status: 'running' as const,
-                      working: [
-                          {
-                              story_id: 'story_1',
-                              story_title: 'Hollow Sea',
-                              phase: 'chapters' as const,
-                              role_name: 'writer',
-                              work_item: 'run_1',
-                              thread_id: 'thread-1',
-                              started_at: 1
-                          }
-                      ]
+                      working: [1, 2, 3, 4].map((index) => ({
+                          story_id: 'story_1',
+                          story_title: 'Hollow Sea',
+                          phase: 'chapters' as const,
+                          role_name: 'writer',
+                          work_item: `run_${index}`,
+                          thread_id: `thread-${index}`,
+                          started_at: index
+                      }))
                   }
                 : agent
         );
@@ -50,20 +48,25 @@ describe('AgentsPanel — the global employee roster', () => {
 
         const panel = screen.getByTestId('agents-panel');
         expect(within(panel).getByText('Employee')).toBeTruthy();
-        expect(within(panel).getByText('1 thread running')).toBeTruthy();
+        expect(within(panel).getByText('4 threads running')).toBeTruthy();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
         expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual(['checker', 'editor', 'reader', 'writer']);
 
         const writer = panel.querySelector<HTMLElement>('[data-agent="writer"]')!;
         expect(writer.dataset.status).toBe('running');
-        expect(within(writer).getByText('running')).toBeTruthy();
-        // The rail names the agent; the thread's Story/phase/work item belong to the centre.
+        const writerState = writer.querySelector<HTMLElement>('.sv-agent-tile__state')!;
+        // The badge IS the count: no "RUNNING" word beside a separate list of numbers.
+        expect(writerState.textContent).toBe('4');
+        expect(writerState.getAttribute('title')).toBe('4 threads running');
+        expect(within(writer).queryByText('running')).toBeNull();
+        // The rail names the employee and counts its threads; Story/phase/work item stay in the centre.
         expect(within(writer).queryByText('Hollow Sea')).toBeNull();
         expect(within(writer).queryByText('run_1')).toBeNull();
 
         const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
         expect(editor.dataset.status).toBe('idle');
+        expect(editor.querySelector<HTMLElement>('.sv-agent-tile__state')?.textContent).toBe('idle');
         // The IDLE badge already says it; an idle tile carries no second sentence.
         expect(within(editor).queryByText(/no thread right now/)).toBeNull();
     });

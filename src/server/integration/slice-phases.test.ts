@@ -120,20 +120,33 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         expect(fixture.refusals).toEqual([]);
     });
 
-    it('step 1①: the Editor selects one expansion and the losers disappear (D-3b, D-22)', async () => {
+    it('step 1①: the Readers critique every draft, then the Editor selects one and the losers disappear (D-3b, D-22)', async () => {
+        // The Author's phase-① order adds a Reader pass between the Writers and the choice:
+        // the sweep that follows the drafts dispatches the one Reader each draft's brief names,
+        // and only the sweep after the Readers close may open the Editor's `select`.
+        await fixture.tick();
         await fixture.tick();
 
         expect(
             (await crewRows(fixture, storyId)).map((run) => `${run.work_item_ref}[${run.template_ref}]`).sort()
         ).toEqual([
+            'wi_read_revision_1_a1[reader-genre]',
+            'wi_read_revision_2_a1[reader-plausibility]',
+            'wi_read_revision_3_a1[reader-audience]',
             'wi_select_1_summary_1[editor-general]',
             'wi_write_summary_1_1_a1[writer-summary]',
             'wi_write_summary_1_1_a2[writer-summary]',
             'wi_write_summary_1_1_a3[writer-summary]'
         ]);
 
-        // Exactly one draft survives, and it is `selected`; its body is the Summary the next phase reads.
-        expect(revisionStates(fixture.store, storyId)).toEqual(['revision_1:summary_1/selected']);
+        // One Summary sample survives as `selected`; phase ① keeps the other samples as `discarded`
+        // so the rail's Overview 1…N tree (and their findings) stays readable. Chapter/plotline
+        // losers are still hard-deleted (D-22). The selected body is the Summary the next phase reads.
+        expect(revisionStates(fixture.store, storyId)).toEqual([
+            'revision_1:summary_1/selected',
+            'revision_2:summary_1/discarded',
+            'revision_3:summary_1/discarded'
+        ]);
 
         const summary = (await storyView(fixture, storyId)).summary;
 
@@ -164,8 +177,9 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
             completion_proposed: false
         });
 
-        // Nothing moved on its own: the stop opened no run, and the phase is untouched.
-        expect((await crewRows(fixture, storyId)).length).toBe(4);
+        // Nothing moved on its own: the stop opened no run, and the phase is untouched. The seven
+        // rows are the three Writer samples, their three Reader passes, and the Editor's choice.
+        expect((await crewRows(fixture, storyId)).length).toBe(7);
     });
 
     it("step 2: the lock is the Author's, and it is what opens phase ② (L-7, U-16)", async () => {
@@ -443,7 +457,9 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
             'C-15'
         ]);
 
-        await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 8);
+        // Phase ① now has Reader passes and an Editor choice in front of the sign-off, so the
+        // walk to the stop needs more sweeps than the Writer-to-Editor shortcut did.
+        await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 20);
 
         const row = await storyRow(fixture, storyId);
 

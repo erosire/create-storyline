@@ -212,6 +212,7 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
         // refreshed stories-row, which is the shape the real routes return.
         selectRevisionAuthor: vi.fn(async (storyId) => storyRow(storyId)),
         mergeRevisions: vi.fn(async (storyId) => storyRow(storyId)),
+        requestSummaryRevision: vi.fn(async (storyId) => storyRow(storyId)),
         sendDirective: vi.fn(async (storyId) => storyRow(storyId)),
         acceptCompletion: vi.fn(async (storyId) => storyRow(storyId, { status: 'completed' })),
         assignTemplates: vi.fn(async (storyId) => storyRow(storyId)),

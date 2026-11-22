@@ -64,6 +64,12 @@ export interface WorkItem {
     ideaRefs?: string[];
     /** D-19: the directive to propagate. */
     directiveRef?: string;
+    /**
+     * §4.15's competing draft this job reads. A Reader review judges ONE Summary sample, and
+     * D-21 keeps the other samples out of its brief; the Editor's `select` carries none because
+     * it is the one role that may see the whole set.
+     */
+    revisionRef?: string;
     /** Free-text line from the sweep (e.g. a re-brief after `rejectAll`, L-18). */
     note?: string;
 }

@@ -78,7 +78,7 @@ describe('DirectiveBar — one line of Author intent (U-9 / D-19)', () => {
 
         // The prompt is the Seed; the server names the Story, and the Editor receives the same
         // sentence as its first direction — no form required.
-        expect(client.createStory).toHaveBeenCalledWith({ idea: direction, chapter_count: 12 });
+        expect(client.createStory).toHaveBeenCalledWith({ idea: direction });
         expect(client.sendDirective).toHaveBeenCalledWith('story_new', direction, []);
 
         // The anti-chat check: a directive bar has no message list, no scroll region, and no
