@@ -1,13 +1,18 @@
-// §10.2 U-9 / D-19 — the DIRECTIVE BAR (W12).
+// §10.2 U-9 / D-19 — the DIRECTIVE BAR (W12): the Author's one channel to the EDITOR.
 //
-// ONE LINE, NOT A CONVERSATION (U-9): the bar writes a `directives` record whose whole job is
-// to PROPAGATE — tasks get opened, dependents get `needs_recheck`, and the crew reports what
-// it touched (D-19). There is no transcript here on purpose (§13: "not a chat client"): a
-// transcript invites the Author to chat, and a chat reply from a fresh-context harness with
-// no memory (P2) is theatre. What the Author gets back is the Story changing, not a message.
+// ONE LINE, NOT A CONVERSATION (U-9): the bar writes a `directives` record addressed to the
+// Editor. The Editor reviews the direction and sets the tasks the loop runs — the server reads the
+// queue and opens a fresh thread for each task, which is not a delegate (V-1/V-2: a rank and a
+// Work Item, not a nested conversation). There is no transcript here on purpose (§13: "not a chat
+// client"): a transcript invites the Author to chat, and a chat reply from a fresh-context thread
+// with no memory (P2) is theatre. What the Author gets back is the Story changing, not a message.
 //
 // The bar is Story-scoped because a directive is a record on one Story (T-3: a run is scoped
 // to exactly one Story), so on the home view it says so instead of pretending to broadcast.
+//
+// WHERE IT SITS: the bar is the last child of the content region, so it is the bottom of the
+// content rather than a window-wide footer. On a phone the stylesheet docks it to the viewport
+// with the harness composer's minimal shape — one field and a send control, no label or hint.
 
 import { useState } from 'react';
 import { useDashboard, useDashboardStore } from '../state';
@@ -63,14 +68,20 @@ export function DirectiveBar() {
                 type="submit"
                 className="button button--send"
                 data-testid="directive-send"
+                aria-label="Send the directive to the Editor"
                 disabled={!activeStoryId || text.trim().length === 0}
             >
-                Send
+                <span className="directive-bar__send-label">Send</span>
+                <span className="directive-bar__send-glyph" aria-hidden="true">
+                    ▶
+                </span>
             </button>
             <p className="directive-bar__hint">
                 {story
-                    ? `goes to ${story.title} as a directive: tasks, rechecks, and a report of what it touched (D-19)`
-                    : 'pick a Story first — a directive belongs to one book (T-3)'}
+                    ? story.status === 'stopped'
+                        ? `queued for ${story.title}'s Editor — it sets the tasks when you resume (D-19, P8)`
+                        : `goes to ${story.title}'s Editor — it turns your direction into the tasks the loop runs (D-19)`
+                    : 'pick a Story first — its Editor is the one you talk to (T-3)'}
             </p>
         </form>
     );

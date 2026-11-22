@@ -1,58 +1,41 @@
-// U-4 … U-17 — the Story view: the centre region for the selected Story, and the composition
-// root for everything else in this directory (W10, W11, W11b, W13).
+// U-4 … U-17 — the Story view: the centre region for the selected Story.
 //
-// WHY IT TAKES PROPS AND NOT A CONTEXT IMPORT (judgment call, reported): T8 is writing
-// `../state.ts` and `../api.ts` against the SAME pinned contract at the same time, so importing
-// `useStoryline` here would make this tree unresolvable until their file lands, and would make
-// every test in this directory depend on their provider. The view is therefore a pure function of
-// `{ view, actions }` — T8's `StorylineApp` renders `<StoryView view={view} actions={actions} />`
-// from its own state hook, and the tests here feed fixture views directly (hermetic, no api mock
-// needed anywhere). `actions` is `Partial`-shaped by construction (every method optional), so a
-// control whose endpoint has not landed renders disabled and names the gap rather than inventing
-// an endpoint.
+// THE CONTENT AREA SHOWS ONE THING. The rail's selection names a phrase (Summary, Characters,
+// Plotlines, Chapters) or a folder (Seed, Continuity, Goal, Ideas, Findings, Digest, Settings),
+// and this component renders exactly that pane. The old stacked view — Seed + strip + status +
+// dial + controls + Summary + tray + contracts + Goal + costs + Digest all at once — is gone on
+// purpose: the Author is reading one artifact, not scrolling a dashboard.
 //
-// §10.1's layout: this component owns the CENTRE region (seed → phase strip → the two big phase
-// buttons → Summary → Ideas → plotlines-and-chapters → revisions → Goal → completion → cost) and
-// includes the right-hand TEMPLATES rail so the regions stay in one readable tree. The shell may
-// lift `TemplatesPanel` out into its own region; it takes its own props and renders independently.
+// THE RAIL IS THE SHELL'S. `StorylineApp` owns the selection (it renders the rail and this view
+// from one state) and passes it down. A view whose selected entry disappeared — a cast member the
+// crew renamed, a selected draft whose sibling was deleted — falls back to the phrase's own pane,
+// so a stale click can never blank the screen.
 //
-// U-11 is the discipline that shapes the copy throughout: no spinner for its own sake, progress
-// reads as story — chapters drafted, a hole in act two, setups unpaid.
-// Imported here rather than from the app shell so the story view's styles always ship with it.
-// Every class is `sv-` prefixed: `styles/app.css` (T8) owns the shell, and the two files must not
-// collide.
+// WHAT REMAINS OUTSIDE THE PANES: the story's status line (U-1c) is one line of chrome above the
+// artifact, and the employee/template rail is the third column. Both are context, not content.
 import '../styles/story.css';
 import type { ReactNode } from 'react';
+import { CharactersPane } from './CharactersPane';
 import { CompletionPrompt } from './CompletionPrompt';
 import { GoalPanel } from './GoalPanel';
 import { IdeasTray } from './IdeasTray';
-import { PhaseStrip } from './PhaseStrip';
 import { PlotlineChapters } from './PlotlineChapters';
-import { RevisionsCompare } from './RevisionsCompare';
-import { SeedCard } from './SeedCard';
-// U-1a / L-23 — the stalled review surface and the four exits (see the file for why it is separate).
+import { PlotlinesPane } from './PlotlinesPane';
 import { StalledReview } from './story-stalled-review';
 import { SummaryPane } from './SummaryPane';
 import { TemplatesPanel } from './TemplatesPanel';
-import { CostDistributionPanel } from './story-cost-distribution';
-import { PhaseControls, backtrackTargets } from './story-phase-controls';
-import { FINDING_COSTS } from '../../shared/types';
+import { PhaseControls } from './story-phase-controls';
+import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
 import {
-    backtrackStatement,
-    buildRevisionUnits,
-    isLiveRun,
-    lockCheck,
-    phaseLocks,
-    runsStoppedByPause
-} from './story-contract';
+    DEFAULT_STORY_SELECTION,
+    recommendedRevisionId,
+    selectionExists,
+    summaryReadyForReview,
+    summaryRevisionUnit
+} from './story-nav';
+import type { StorySelection } from './story-nav';
+import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
-
-/**
- * D-29 / T-5: a selection is a recorded decision, and every write owes a `why`. The tray has no
- * note field, so the note is the fixed sentence naming the actor — the same one the shell binding
- * uses, so a selection reads the same whichever surface made it.
- */
-const SELECT_NOTE = 'selected by the Author';
 
 /** D-2a/L-34/L-37a: awaiting the Author is calm, stalled is urgent — and neither is an error. */
 function statusClass(status: string, pendingKind: string): string {
@@ -77,198 +60,176 @@ export interface StoryViewProps {
     actions?: StoryActions;
     /** Injected so run elapsed time is deterministic in tests (S-6 shows it, E-0 says it is never a limit). */
     now?: string;
-    /** L-25's clean-ledger line, when the caller has it (the pinned view carries no `ledger` collection). */
+    /** L-25's clean-ledger line, when the caller has it (the pinned view carries no `ledger` state string). */
     ledgerState?: string;
     /**
-     * The first block of the right rail, supplied by the shell. It carries the global agent
-     * catalogue — the roster every phrase of this story runs, with Rank A called out — above the
-     * template catalogue, which stays this component's own concern.
+     * The first block of the right rail, supplied by the shell. It carries the global employee
+     * roster — the standing identities every phase session of this story runs as agents, with
+     * Rank A called out — above the template catalogue.
      */
     railLead?: ReactNode;
+    /** The rail's selection; absent means the Summary, which is the phrase a Story opens on. */
+    selection?: StorySelection;
 }
 
-export function StoryView({ view, actions = {}, ledgerState, railLead }: StoryViewProps) {
-    const { story, goal } = view;
+export function StoryView({
+    view,
+    actions = {},
+    ledgerState,
+    railLead,
+    selection = DEFAULT_STORY_SELECTION
+}: StoryViewProps) {
+    const { story } = view;
+    const active: StorySelection = selectionExists(view, selection) ? selection : { panel: selection.panel };
 
     // D-37: the prose editor is live only from a paused Story — the same status Stop sets (P8).
     const paused = story.status === 'stopped';
     const liveRuns = view.runs.filter(isLiveRun).length;
     const killedRuns = runsStoppedByPause(view.runs);
-
-    // U-16's gate is computed once and shared by the Lock button and the Ideas tray's copy.
     const lock = lockCheck(view);
-    const targets = backtrackTargets(story);
 
-    // Chapter units render their drafts inline (under the prose they belong to); the summary and
-    // plotline units get the standalone comparison pane (U-13).
-    const units = buildRevisionUnits(view);
-    const chapterIds = new Set(view.chapters.map((chapter) => chapter.id));
-    const otherUnits = units.filter((unit) => !chapterIds.has(unit.unitRef));
+    const summaryUnit = summaryRevisionUnit(view);
+    const recommended = recommendedRevisionId(summaryUnit);
+    // U-13 / D-24 — the Author's pick among the Summary's competing overviews.
+    const onSelectRevision = actions.selectRevision
+        ? (unitRef: string, revisionId: string) => void actions.selectRevision?.(unitRef, revisionId)
+        : undefined;
 
     return (
         <div className="sv-story">
             <div className="sv-story-main">
-                {/* U-4: the Seed is pinned and never scrolls away — C-14 measures the book against it. */}
-                <SeedCard idea={story.idea} title={story.title} summary={view.summary} />
-
-                <PhaseStrip phase={story.phase} locked={phaseLocks(story)} />
-
                 <p className={`sv-story-status ${statusClass(story.status, story.pending_kind)}`}>
                     <span className="sv-story-status-badge">
                         {story.status === 'pending' ? `pending — ${story.pending_kind}` : story.status}
                     </span>
-                    {/* U-1c / L-22: the reason is the Author's whole review surface, so it is never truncated here. */}
                     {story.status_reason ? <span className="sv-story-reason">{story.status_reason}</span> : null}
-                    {story.consistency ? <span className="sv-story-levels">{story.consistency}</span> : null}
-                    <span className="sv-story-trend">trend: {story.trend}</span>
-                    {story.progress ? <span className="sv-story-progress">{story.progress}</span> : null}
                 </p>
 
-                {/* U-1a: a stalled Story is a question spread over five panes; this gathers it into one
-                    review surface — stuck criteria, oldest findings, chapters involved, what the crews
-                    tried across rounds, and L-23's four exits as buttons — and puts it under the status
-                    line, where the Author reads first. */}
-                {story.status === 'pending' && story.pending_kind === 'stalled' ? (
-                    <StalledReview view={view} actions={actions} />
+                {active.panel === 'seed' ? <SeedPane view={view} /> : null}
+
+                {active.panel === 'summary' ? (
+                    <>
+                        {story.status === 'pending' && story.pending_kind === 'stalled' ? (
+                            <StalledReview view={view} actions={actions} />
+                        ) : null}
+
+                        <SummaryPane
+                            story={story}
+                            summary={view.summary}
+                            unit={summaryUnit}
+                            recommendedRevisionId={recommended}
+                            onSelectRevision={onSelectRevision}
+                            readyForReview={summaryReadyForReview(view)}
+                            // U-4: the pane's own Backtrack, naming the deletions (L-32).
+                            backtrackNote={
+                                story.summary_locked ? backtrackStatement(story, 'summary', view) : undefined
+                            }
+                            onBacktrack={
+                                actions.backtrack ? (phase) => void actions.backtrack?.(story.id, phase) : undefined
+                            }
+                            // §8.6: one assistant run on ONE field of the Summary.
+                            onAskAssistant={
+                                actions.requestAssistant
+                                    ? (field) =>
+                                          void actions.requestAssistant?.(story.id, {
+                                              target: 'summary',
+                                              text: `Rewrite the ${field}.`
+                                          })
+                                    : undefined
+                            }
+                        />
+
+                        {story.phase === 'summary' ? <PhaseControls view={view} actions={actions} lock={lock} /> : null}
+                    </>
                 ) : null}
 
-                {/* D-35 / D-35b / U-10a: the dial sits beside the Story's own controls, and the Author
-                    must never be surprised later by work the machine started on their behalf. */}
-                <div className="sv-dial" aria-label="Auto-approve dial">
-                    <span className="sv-dial-title">
-                        auto-approve dial (D-35) — the same switch sets when the crew stops looking (D-35b)
-                    </span>
-                    <ul className="sv-dial-costs">
-                        {FINDING_COSTS.map((cost) => {
-                            const covered = story.auto_approve.includes(cost);
-                            // The next state is rebuilt from the canonical cost order (FINDING_COSTS), so a
-                            // toggle can never reorder the list or leave a duplicate behind — the dial is one
-                            // write of the whole set, which is also what sets the drain threshold (D-35b).
-                            const nextSet = FINDING_COSTS.filter((candidate) =>
-                                candidate === cost ? !covered : story.auto_approve.includes(candidate)
-                            );
+                {active.panel === 'characters' ? (
+                    <CharactersPane view={view} actions={actions} selectedRef={active.ref} />
+                ) : null}
 
-                            return (
-                                <li className={`sv-dial-cost${covered ? ' sv-dial-on' : ' sv-dial-off'}`} key={cost}>
-                                    <input
-                                        type="checkbox"
-                                        checked={covered}
-                                        disabled={!actions.setAutoApprove}
-                                        title={
-                                            actions.setAutoApprove
-                                                ? `${covered ? `Stop auto-approving ${cost}: the crew raises it and waits for you` : `Let ${cost} findings start work without asking (D-35). This also moves when the crew stops looking (D-35b).`}`
-                                                : 'The dial endpoint has not landed yet (D-35)'
-                                        }
-                                        aria-label={`${cost} auto-approve`}
-                                        onChange={() => void actions.setAutoApprove?.(story.id, nextSet)}
-                                    />
-                                    <span className="sv-dial-cost-name">{cost}</span>
-                                    <span className="sv-dial-cost-note">
-                                        {covered
-                                            ? 'starts work without asking · counts as work when draining'
-                                            : 'waits for you · the crew raises it and stops'}
-                                    </span>
-                                </li>
-                            );
-                        })}
-                    </ul>
-                </div>
+                {active.panel === 'plotlines' ? (
+                    <>
+                        <PlotlinesPane view={view} selectedRef={active.ref} />
+                        {story.phase === 'plotlines' || story.plotlines_locked ? (
+                            <PhaseControls
+                                view={view}
+                                actions={actions}
+                                lock={lock}
+                                showLock={story.phase === 'plotlines'}
+                            />
+                        ) : null}
+                    </>
+                ) : null}
 
-                {/* U-16: the two biggest buttons on the view, each stating what it costs. */}
-                <PhaseControls view={view} actions={actions} lock={lock} />
+                {active.panel === 'chapters' ? (
+                    <>
+                        <PlotlineChapters
+                            view={view}
+                            actions={actions}
+                            paused={paused}
+                            liveRuns={liveRuns}
+                            killedRuns={killedRuns}
+                            title="Chapters — Phrase 4"
+                            onlyChapterRef={active.ref}
+                        />
+                        {story.phase === 'chapters' && view.completion_preview && story.status !== 'completed' ? (
+                            <CompletionPrompt
+                                preview={view.completion_preview}
+                                story={story}
+                                ledgerState={ledgerState}
+                                onAccept={
+                                    actions.acceptCompletion
+                                        ? (storyId) => void actions.acceptCompletion?.(storyId)
+                                        : undefined
+                                }
+                            />
+                        ) : null}
+                        {story.phase === 'chapters' && !view.completion_preview ? (
+                            <PhaseControls view={view} actions={actions} lock={lock} />
+                        ) : null}
+                        {story.status === 'completed' ? (
+                            <PhaseControls view={view} actions={actions} lock={lock} showLock={false} />
+                        ) : null}
+                    </>
+                ) : null}
 
-                {view.completion_preview ? (
-                    // U-14: the discard count is stated BEFORE the Accept, never after.
-                    <CompletionPrompt
-                        preview={view.completion_preview}
-                        story={story}
-                        ledgerState={ledgerState}
-                        onAccept={
-                            actions.acceptCompletion ? (storyId) => void actions.acceptCompletion?.(storyId) : undefined
+                {active.panel === 'continuity' ? <ContinuityPane view={view} /> : null}
+                {active.panel === 'goal' ? (
+                    <GoalPanel
+                        goal={view.goal.goal}
+                        phase={story.phase}
+                        progress={view.goal.phase_progress}
+                        failing={view.goal.failing}
+                        chapterProgress={view.goal.chapter_progress}
+                        chapters={view.chapters}
+                        onPatchGoal={
+                            actions.patchGoal ? (patch) => void actions.patchGoal?.(story.id, patch) : undefined
+                        }
+                        onSetChapterBar={
+                            actions.setChapterBar
+                                ? (chapterId, override) => void actions.setChapterBar?.(story.id, chapterId, override)
+                                : undefined
                         }
                     />
                 ) : null}
-
-                <SummaryPane
-                    story={story}
-                    summary={view.summary}
-                    // U-4: the pane's own Backtrack, naming the deletions (L-32).
-                    backtrackNote={targets.length > 0 ? backtrackStatement(story, 'summary', view) : undefined}
-                    onBacktrack={actions.backtrack ? (phase) => void actions.backtrack?.(story.id, phase) : undefined}
-                    // §8.6: one assistant run on ONE field of the Summary. The pane names the field;
-                    // `target` is always 'summary' because this pane owns the Summary artifact.
-                    onAskAssistant={
-                        actions.requestAssistant
-                            ? (field) =>
-                                  void actions.requestAssistant?.(story.id, {
-                                      target: 'summary',
-                                      text: `Rewrite the ${field}.`
-                                  })
-                            : undefined
-                    }
-                />
-
-                {/* U-15: the tray is above everything the Author has to act on; the decided list below it. */}
-                <IdeasTray
-                    ideas={view.ideas}
-                    phase={story.phase}
-                    // D-29: a selection is a recorded decision, so the write carries the note that made it.
-                    onSelect={
-                        actions.selectIdea
-                            ? (ideaId) => void actions.selectIdea?.(story.id, ideaId, SELECT_NOTE)
-                            : undefined
-                    }
-                    onDiscard={
-                        actions.discardIdea ? (ideaId) => void actions.discardIdea?.(story.id, ideaId) : undefined
-                    }
-                    onDefer={actions.deferIdea ? (ideaId) => void actions.deferIdea?.(story.id, ideaId) : undefined}
-                />
-
-                <PlotlineChapters
-                    view={view}
-                    actions={actions}
-                    paused={paused}
-                    liveRuns={liveRuns}
-                    killedRuns={killedRuns}
-                />
-
-                {otherUnits.length > 0 ? (
-                    <RevisionsCompare
-                        units={otherUnits}
-                        onSelectRevision={actions.selectRevision}
-                        note="competing drafts of the Summary or a plotline — visible to the Editor and the Author, never to a Writer (D-21)"
+                {active.panel === 'ideas' ? (
+                    <IdeasTray
+                        ideas={view.ideas}
+                        phase={story.phase}
+                        onSelect={
+                            actions.selectIdea
+                                ? (ideaId) => void actions.selectIdea?.(story.id, ideaId, 'selected by the Author')
+                                : undefined
+                        }
+                        onDiscard={
+                            actions.discardIdea ? (ideaId) => void actions.discardIdea?.(story.id, ideaId) : undefined
+                        }
+                        onDefer={actions.deferIdea ? (ideaId) => void actions.deferIdea?.(story.id, ideaId) : undefined}
                     />
                 ) : null}
-
-                <GoalPanel
-                    goal={goal.goal}
-                    phase={story.phase}
-                    progress={goal.phase_progress}
-                    failing={goal.failing}
-                    chapterProgress={goal.chapter_progress}
-                    chapters={view.chapters}
-                    onPatchGoal={actions.patchGoal ? (patch) => void actions.patchGoal?.(story.id, patch) : undefined}
-                    onSetChapterBar={
-                        actions.setChapterBar
-                            ? (chapterId, override) => void actions.setChapterBar?.(story.id, chapterId, override)
-                            : undefined
-                    }
-                />
-
-                <CostDistributionPanel distribution={view.cost_distribution} />
-
-                {view.digest ? (
-                    // D-12a: the Digest is derived by the engine, and any past one is reconstructible —
-                    // the Author can see what a reviewer was actually told when it judged.
-                    <details className="sv-digest">
-                        <summary>
-                            Digest rev {view.digest.rev}{' '}
-                            {view.digest.stale ? '· stale — it blocks a review, never a fix (D-14)' : ''}{' '}
-                            (engine-derived, no agent wrote it · D-12a)
-                        </summary>
-                        <pre className="sv-digest-body">{view.digest.body}</pre>
-                    </details>
-                ) : null}
+                {active.panel === 'findings' ? <FindingsPane view={view} /> : null}
+                {active.panel === 'digest' ? <DigestPane view={view} /> : null}
+                {active.panel === 'settings' ? <SettingsPane view={view} actions={actions} /> : null}
             </div>
 
             <div className="sv-story-rail">

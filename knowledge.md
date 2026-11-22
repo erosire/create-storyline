@@ -19,7 +19,7 @@ into the next phase (L-29); a criterion the crew cannot judge is the Author's ca
 
 The requirement ids in code comments are the wiring between a line and the paragraph that
 demanded it: `L-` loop, `D-` design decision, `U-` UI, `S-` service/run, `T-` tool layer, `G-`
-Goal/criteria, `E-` engine, `P-` principle.
+Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, agent, thread, rank).
 
 ## The stack, bottom up
 
@@ -203,10 +203,10 @@ loop can even propose), `src/server/api/projections.ts` (what the Author is told
 that only ever sees its brief), and `documents/specifications.md` §15 for the walk all of it is
 built to survive.
 
-## The knowledge directory and the agent roster (2026-11-22)
+## The knowledge directory and the employee roster (2026-11-22)
 
-The dashboard's left rail carries the Story's knowledge directory and its right rail carries the
-global agent roster. Both are projections, and neither is a second source of truth:
+The dashboard's left rail carries the Story's phrase navigator and its right rail carries the
+global employee roster. Both are projections, and neither is a second source of truth:
 
 - **The directory** (`src/server/knowledge/story-knowledge.ts`) writes through the harness's
   cross-session knowledge engine (`createKnowledgeEngine` + `loadKnowledgeFileStore`) — the same
@@ -215,19 +215,36 @@ global agent roster. Both are projections, and neither is a second source of tru
   `<storeRoot>/harness/knowledge/`, outside every session, so a destroyed harness or a restart
   cannot take them away. The book is still the authority: every store commit re-derives the
   section articles, and an empty section keeps a placeholder paragraph so its folder stays
-  visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree.
-- **The agent roster** (`src/server/run/story-engine.ts`) is fixed and global: Writer, Editor,
-  Reader and Checker, all at Rank A (the harness's peers, so rank alone delegates to nobody).
-  `GET /agents` projects one row per kind with its model, its live threads, the Story title and
-  the phase each thread belongs to, and the newest torn-down runs with the `end_reason` they
-  ended on. The right-hand tile panel renders that projection; selecting a Story never changes
-  the roster, and a failed run stays visible after its thread ends instead of reading as `idle`. Each tile's model line is the same
-  resolution the executor uses (`src/server/run/agent-models.ts`): the Author's explicit choice
-  for that agent kind wins, then the template role's own model, then the process model. The tile
-  also lists the template roles that name a model, so clearing a choice cannot silently fall back
-  to something the Author did not expect. The choice is set by `PATCH /agents/:kind` and persisted
-  in the store snapshot's `settings` section — host configuration, deliberately outside §4's
-  journal. `GET /agents/models` proxies the provider's OpenAI-compatible catalog
+  visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree. **The rail no
+  longer renders this directory** (2026-11-22): it is a server projection for the `knowledge`
+  tool and a future reading surface, while the left rail is now the Story's phrase navigator
+  (`src/dashboard/components/StoryOutline.tsx`).
+- **The employee roster** (`src/server/run/story-engine.ts`) is fixed and global: Writer, Editor,
+  Reader and Checker, all at Rank A (the harness's peers, so rank alone delegates to nobody). The
+  Editor is the Author's one channel — a directive is addressed to it, and it turns the direction
+  into the tasks the loop runs. That is routing, not a rank and not an entry role: `entry` no longer
+  exists on the client contract or the roster projection, and the harness's own session route names
+  the Editor (`STORY_AGENT_ENTRY`).
+  VOCABULARY (specification V-1): these four are EMPLOYEES, not agents. An employee is the standing
+  identity (kind, rank, model, permission row); it becomes an AGENT only while a thread executes.
+  Only a Rank A employee may own a dispatched Work Item and act on a phase's requirements; a Rank B
+  employee may be added only as a delegation target inside a Rank A thread (V-2). `GET /agents`
+  projects one row per employee kind with its model and live status. The right-hand tile panel
+  renders that projection; selecting a Story never changes the roster. The thread DETAIL is not on
+  the rail: clicking a tile calls `GET /agents/:kind/threads`, which projects every thread that
+  employee ever ran (across every Story and phase session — the UI's "phrase", P1/P3/P4, oldest
+  first) and the dashboard replaces the centre with those bars. Each bar is one thread, labelled
+  P1/P3/P4 for the phase session it belongs to; opening it shows the request and the answer. The
+  retained log lives at `<storeRoot>/harness/threads.jsonl`
+  (`src/server/run/thread-log.ts`), so a harness disposal or a process restart does not prune the
+  history; legacy Run rows with no retained transcript are still listed from the book with
+  `retained: false`. Each tile's model line is the same resolution the executor uses
+  (`src/server/run/agent-models.ts`): the Author's explicit choice for that employee kind wins, then
+  the template role's own model, then the process model. The tile also lists the template roles
+  that name a model, so clearing a choice cannot silently fall back to something the Author did not
+  expect. The choice is set by `PATCH /agents/:kind` and persisted in the store snapshot's
+  `settings` section — host configuration, deliberately outside §4's journal. `GET /agents/models`
+  proxies the provider's OpenAI-compatible catalog
   (`{STORYLINE_PROVIDER_BASE_URL}/models`, default `http://localhost:8800/providers/private/v1/models`)
   and the tile's model editor is a dropdown over that catalog, so a name the harness cannot ask for
   cannot be selected.
@@ -241,5 +258,78 @@ global agent roster. Both are projections, and neither is a second source of tru
   `HarnessBootConfiguration`, no harness-server session store and no `variables.harness`: the
   service route forwards only `variables.root`, and the Storyline Hono app remains the one control
   plane.
-- The components are `src/dashboard/components/KnowledgeTree.tsx` and `AgentsPanel.tsx`; the
-  dashboard store keeps `knowledge: story_id -> tree` and `agents` beside the §4 rows.
+- The components are `src/dashboard/components/StoryOutline.tsx`, `StoryView.tsx`,
+  `AgentsPanel.tsx` and `AgentThreadsView.tsx`; the dashboard store keeps
+  `knowledge: story_id -> tree`, `agents`, `selectedAgent` and `agentThreads: kind -> thread[]`
+  beside the §4 rows.
+
+### The phrase rail and the focused content area (2026-11-22)
+
+The left rail is the Story's navigator, not its knowledge listing. `StoryOutline.tsx` renders
+the four reading phrases in order — **Phrase 1 Summary**, **Phrase 2 Characters**, **Phrase 3
+Plotlines**, **Phrase 4 Chapters** — each with the entries under it (the Summary's `Overview`;
+one child per cast member, plotline and chapter), then the **Seed** leaf and the supporting
+folders: **Continuity**, **Goal**, **Ideas**, **Findings**, **Digest** and **Settings**. The old
+knowledge header's subtitle, note count and "one article per folder" sentence are gone: the
+rail makes one decision (which pane is open), so it carries no commentary.
+
+`StoryView.tsx` renders exactly the selected phrase or folder. The stacked view (Seed + phase
+strip + status + dial + Summary + Ideas + plotlines/chapters + revisions + Goal + costs + Digest)
+was replaced; the status line is the one piece of chrome above the pane, and the right-hand rail
+still carries the employee roster and template catalogue. The pane switch:
+
+- **Summary** — `SummaryPane`. It marks the phrase with a tick when
+  `story-nav.ts:summaryReadyForReview` is true (the Summary is signed, or the Summary phase's
+  Goal passes with prose present). Competing Summary revisions (`unit_kind: 'summary'`) render as
+  overview candidates; the newest verdict filed **on a draft** with `hard_pass` and
+  `recommendation: 'advance'` marks that draft "Editor recommends", and every draft has its own
+  Select (`POST /stories/:id/revisions/:revisionId/select`, D-24). A unit-level verdict never
+  names a column, so it does not create a recommendation.
+- **Characters** — `CharactersPane`. It reads `view.cast` (the §4.5 sheet added to the Story view
+  beside `view.ledger`) and shows want / need / arc / voice / state now. It can ask the Editor to
+  start or update the cast through the directive route; **Characters is a supporting phrase, not
+  yet a `StoryPhase`**, so the loop does not dispatch a crew for it.
+- **Plotlines** — `PlotlinesPane`, the contracts only; **Chapters** — `PlotlineChapters` with
+  `onlyChapterRef`, the prose (and its contract) under one chapter or the whole grouped set.
+- The folders render `GoalPanel`, `IdeasTray`, the new `FindingsPane` / `ContinuityPane` /
+  `DigestPane` / `SettingsPane` (the D-35 dial and the cost distribution), and `SeedPane`.
+
+`GET /stories/:id` now also projects `cast` and `ledger` (both ordinary §4 collections) so the
+Characters and Continuity panes never re-derive a record client-side. `PHASE_LABELS` no longer
+carries circled numbers: the four-phrase rail owns the numbering, and the loop controls name the
+artifact they sign ("Lock phase Summary").
+
+## The Author's channel, and the directive flow (2026-11-22)
+
+The Author talks only to the **Editor**. A directive is one line of direction, recorded as a
+`directives` row and then reviewed by a real Editor thread:
+
+1. `POST /stories/:id/directives` calls `engine.processDirective` → `recordDirective`
+   (`src/server/loop/directives.ts`). That half is the server's: resolve the artifacts the sentence
+   names, widen them one hop through `chapter_deps`, mark `needs_recheck`, stop the runs writing
+   into a changed artifact, answer an open escalation, re-arm a `pending` Story to `ready`, and
+   re-open a `completed` one (L-27). The row stays `propagating` with `tasks_created: 0`.
+2. The next sweep sees it through `pendingDirectives` and `generateWork` opens one
+   `directive_work` Work Item at priority 0, assigned to the Editor (`work.ts`). The brief
+   (`run/brief.ts`) carries the directive text and the artifact refs the server resolved; the
+   Editor's job is `createTask` calls for the work, never a story artifact of its own.
+3. `settleJob` closes the directive when the review thread ends (`completeDirective`), counting the
+   task rows the run created via the journal's `run_ref`. If the review queued nothing — or the
+   thread failed — `createDirectiveFallbackTasks` queues the deterministic one-task-per-artifact
+   plan so the Author's direction is never dropped. A Story with no Editor assigned falls back the
+   same way in the route.
+
+This is the boundary the user drew between the Editor and a **delegate**: the Editor queues Work,
+and the server's sweep opens a fresh thread per Work Item (S-1). The Editor never fans out to
+Writers inside its own run.
+
+The UI follows that model:
+
+- The Story row in the left rail is a toggle: clicking the open Story closes it and returns the
+  Author to the queue, not only the centre's Dismiss.
+- `DirectiveBar` is the last child of the content region (`StorylineApp.tsx`), so it sits at the
+  bottom of the content, not as a window-wide footer. The hint names the Story's Editor. On screens
+  at or below 820px the stylesheet docks it to the viewport as a minimal composer — one field and a
+  send glyph, no label row or hint, with `safe-area-inset-bottom` respected.
+- `AgentsPanel` renders the roster only: rank, model, status, and one line saying the Editor is the
+  Author's channel. The old `entry` chip and the `AgentStatusRow.entry` field are gone.

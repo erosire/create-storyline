@@ -17,7 +17,7 @@
 // Two rules the scripted crew obeys because a real one must:
 //   - it re-acts to a refusal it was handed. `run/brief.ts:renderEtiquette` tells a model verbatim:
 //     "a rejected write comes back with the CURRENT record: re-apply your change against that, and
-//     send it again with the rev you were handed". The crew does exactly that, once per session —
+//     send it again with the rev you were handed". The crew does exactly that, once per run —
 //     the loop has no turn cap (E-0), so an uncapped re-send of a losing CAS race would spin.
 //   - it never invents a rule the catalogue does not have: one verdict line per criterion the brief
 //     actually briefed it on, split across the two scopes the criteria engine aggregates over
@@ -87,6 +87,10 @@ export interface CrewContext {
     unitTarget?: string;
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
+    /** D-19: the directive this review thread must turn into tasks. */
+    directiveRef?: string;
+    /** The artifacts the server already resolved from the directive's sentence. */
+    directiveTargets: string[];
     options: CrewOptions;
 }
 
@@ -243,6 +247,12 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         summaryId: summary?.id,
         unitTarget,
         criteria,
+        directiveRef: /Directive (directive_\d+) \[/.exec(brief)?.[1],
+        directiveTargets: (() => {
+            const line = /The server resolved the sentence to these artifacts: ([^\n]+)\./.exec(brief)?.[1];
+
+            return line === undefined ? [] : line.split(',').map((ref) => ref.trim());
+        })(),
         draftIds: [...brief.matchAll(/revision_id=(revision_\d+)/g)].map((match) => match[1]),
         findingIds: [...brief.matchAll(/^- (finding_\d+) \[/gm)].map((match) => match[1]),
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
@@ -446,6 +456,28 @@ const writerScript: CrewScript = (ctx) => {
  */
 const editorScript: CrewScript = (ctx) => {
     const { draftIds, findingIds, ideaIds } = readBrief(ctx.request.messages[0]?.content ?? '', ctx.store, ctx.options);
+
+    // D-19's directive review: the Author talks to the Editor, and the Editor turns the direction
+    // into the queue. The server resolved the affected artifacts, so the review names one task per
+    // artifact — exactly what a model reads out of the same brief.
+    if (ctx.directiveRef !== undefined) {
+        if (ctx.results.length > 0) return { content: `Queued the directive's work (${ctx.template}).` };
+
+        return ctx.directiveTargets.length === 0
+            ? { content: `No artifact resolved for ${ctx.directiveRef}; nothing to queue.` }
+            : {
+                  toolCalls: ctx.directiveTargets.map((ref) => ({
+                      name: 'createTask',
+                      args: {
+                          title: `propagate: ${ctx.directiveRef}`,
+                          detail: `${ctx.directiveRef} · ${ref}`,
+                          owner_role: 'writer',
+                          priority: 1,
+                          why: `the Editor turned the Author's directive onto ${ref} (D-19, D-11)`
+                      }
+                  }))
+              };
+    }
 
     // The second turn of a session exists only to answer what the tool layer said. Anything other
     // than a fixable refusal is reported and dropped — the loop has no turn cap (E-0), so a crew
@@ -753,6 +785,8 @@ export function createCrewClient(
             criteria: parsed.criteria,
             phase: parsed.phase,
             unitTarget: parsed.unitTarget,
+            directiveRef: parsed.directiveRef,
+            directiveTargets: parsed.directiveTargets,
             options
         };
 

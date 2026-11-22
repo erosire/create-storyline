@@ -298,7 +298,7 @@ type SendOutcome =
     | { kind: 'fatal'; error: LlmError };
 
 /**
- * Builds the one client the run executor uses (S-1: a fresh harness dials the provider per
+ * Builds the one client the run executor uses (S-1: a fresh thread dials the provider per
  * turn; the client itself is stateless and safe to share across concurrent runs, S-5).
  *
  * `fetchImpl` / `retryDelayMs` are test seams added on top of the pinned `LlmConfig` shape —

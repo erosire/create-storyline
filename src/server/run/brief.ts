@@ -440,7 +440,7 @@ function jobStatement(item: WorkItem): string {
         case 'whole_story_check':
             return 'Judge the whole Story at the levels named above and report with `submitVerdict`. The chapter list and the Digest are your reading; the full prose of every chapter is not (E-1).';
         case 'directive_work':
-            return 'Propagate the directive below: `createTask` for the work it implies, `raiseFinding` where it exposes a contradiction, and a report of what you touched (D-19).';
+            return 'You are the Editor, and the Author talks only to you: read the directive below, then set the work it implies with `createTask` (name the affected artifact ref in `detail`, pick the employee kind in `owner_role`, and give it a priority). The server checks the queue and opens a fresh thread for each task, so your product is the queue — not the prose (P10, L-19). `raiseFinding` where the directive exposes a contradiction, and a report of what you touched (D-19).';
         default:
             return 'The Author asked for this specific edit and you hold the Author write rights for this run only: never write a locked artifact, and the web tools are not yours in this run (§8.6).';
     }
@@ -505,12 +505,24 @@ function renderJob(store: Store, item: WorkItem, fieldClip: number): string {
     if (item.directiveRef) {
         const directive = store.directives.get(item.directiveRef);
 
-        // D-19: a directive is a decision the loop must PROPAGATE, so its text is the job.
+        // D-19: a directive is a decision the loop must PROPAGATE, so its text is the job. The
+        // server already resolved the artifacts the sentence names; that list is advisory context
+        // for the Editor's task plan, never a substitute for reading the book.
         blocks.push(
             directive === undefined
                 ? `Directive ${item.directiveRef}: (no such record)`
                 : `Directive ${item.directiveRef} [${directive.state}]: ${clip(directive.text, 1_000)}`
         );
+
+        if (directive !== undefined) {
+            const targets = directive.targets ?? [];
+
+            blocks.push(
+                targets.length > 0
+                    ? `The server resolved the sentence to these artifacts: ${targets.join(', ')}. Name the ones the work really changes in each task's \`detail\` so the sweep can route it (D-19, D-11).`
+                    : 'The server found no artifact this sentence names directly at this phase. Create the work that follows from the directive, or file the finding that says why it cannot be done (D-19).'
+            );
+        }
     }
 
     return blocks.join('\n\n');

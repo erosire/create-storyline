@@ -247,7 +247,7 @@ export function StalledReview({ view, actions }: StalledReviewProps) {
                     type="button"
                     className="sv-exit sv-exit-directive"
                     disabled={!actions.sendDirective || directive.trim() === ''}
-                    title="A directive is a record the crews read on their next brief, and issuing one re-arms the Story (D-9, L-23)."
+                    title="A directive goes to the Editor, whose review queues the tasks; issuing one re-arms the Story (D-19, L-23)."
                     onClick={() => void actions.sendDirective?.(story.id, directive)}
                 >
                     Issue the directive

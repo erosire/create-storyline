@@ -578,11 +578,12 @@ export interface Goal extends StoredRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * §4.12 `roles[]` — one role inside a harness (D-38).
+ * §4.12 `roles[]` — one role inside a crew definition (D-38).
  *
- * D-38: `agents: N` + `aggregate` make one role N fresh agents inside ONE run that return a
- * single answer — the panel lives inside the harness, so the Author's taste is applied once
- * per decision and no vote ever reaches the loop (D-34a survives).
+ * V-1: a role assigns an EMPLOYEE kind to a job; the thread that later executes it is the agent.
+ * D-38: `agents: N` + `aggregate` make one role N fresh agents of that employee kind inside ONE
+ * run that return a single answer — the panel lives inside the harness, so the Author's taste is
+ * applied once per decision and no vote ever reaches the loop (D-34a survives).
  * D-17a: `kind` selects the brief and the permission row, never the tool list.
  * T-6b: `web` is an instruction hint, not a right — every role may browse; what the flag
  * records is that this role's brief tells it to.
@@ -601,12 +602,12 @@ export interface TemplateRole {
 }
 
 /**
- * §4.12 — a harness template: a crew definition, not an agent (D-38).
+ * §4.12 — a harness template: a crew definition, not an employee and not an agent (D-38).
  *
  * D-17c: `selection_rules` is the Editor's brief in the Author's own words — the mechanism
  * by which P12 becomes executable.
  * D-17d: `attempts` is how many parallel revisions one unit spawns; with no cost constraint
- * it defaults ABOVE one, because divergence is the whole advantage of fresh harnesses (E-4).
+ * it defaults ABOVE one, because divergence is the whole advantage of fresh threads (E-4).
  * D-17e: `delegation` names the roles this template may delegate to INSIDE its own run —
  * never a Work Item, never a row of its own (S-7, T-2b).
  * D-17: built-ins are duplicated, never edited in place (`builtin` + `editable`).

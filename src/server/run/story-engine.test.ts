@@ -117,6 +117,20 @@ describe('StoryHarnessManager — one harness per Story', () => {
         ).toEqual(['chapters']);
         expect(manager.statuses().flatMap((row) => row.working)).toEqual([]);
 
+        // The retained surface keeps every thread with its request and answer, oldest first.
+        const threads = manager.threads('writer');
+
+        expect(threads).toHaveLength(2);
+        expect(threads.map((thread) => thread.run_id)).toEqual(['run_a', 'run_b']);
+        expect(threads.map((thread) => thread.story_title)).toEqual(['Hollow Sea', 'Salt Year']);
+        expect(threads[0]).toMatchObject({
+            phase: 'summary',
+            state: 'torn_down',
+            retained: true,
+            request: 'BRIEF A\n\n---\n\nwrite',
+            answer: 'done'
+        });
+
         manager.dispose();
     });
 
@@ -225,7 +239,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
-    it('answers every agent’s rank and entry flag, and keeps the newest closed runs on the tile (R15, S-3)', async () => {
+    it('answers every employee’s rank, and keeps the newest closed runs on the tile (R15, S-3)', async () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
         const runtime = new MockToolRuntime(store, story.id);
@@ -252,7 +266,13 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const rows = manager.statuses();
 
         expect(rows.every((row) => row.rank === 'A')).toBe(true);
-        expect(rows.filter((row) => row.entry).map((row) => row.kind)).toEqual(['writer']);
+        // V-1: an entry point is engine routing, not a roster role the dashboard draws.
+        expect(rows.map((row) => (row as { entry?: boolean }).entry)).toEqual([
+            undefined,
+            undefined,
+            undefined,
+            undefined
+        ]);
 
         const checker = rows.find((row) => row.kind === 'checker');
 
@@ -269,7 +289,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
-    it('adds all four defined agents to every Story harness, at Rank A with one entry point (R15)', () => {
+    it('adds all four defined employees to every Story harness, at Rank A, with the Editor routing the session (R15)', () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
         const runtime = new MockToolRuntime(store, story.id);
@@ -288,7 +308,9 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         expect(Object.keys(built?.agents ?? {}).sort()).toEqual(['checker', 'editor', 'reader', 'writer']);
         expect(built?.ranks).toEqual({ writer: 'A', editor: 'A', reader: 'A', checker: 'A' });
-        expect(built?.entry).toBe('writer');
+        // The harness needs a session route; the Author's channel is the Editor, so that route is
+        // the Editor's (V-1) — it is never shown as a roster role.
+        expect(built?.entry).toBe('editor');
 
         manager.dispose();
     });

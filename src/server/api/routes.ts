@@ -56,7 +56,8 @@ import type { LoopEngine } from '../loop/engine';
 import type { Cost, Criterion, Revision, Run, Story, StoryPhase, Template } from '../../shared/types';
 import type { GoalCriterionOp } from '../../dashboard/api';
 import type { StoryKnowledge } from '../knowledge';
-import { feedEvents, goalSurface, queueItems, storyRow, storyRows, storyView } from './projections';
+import type { StoryThreadLog } from '../run/thread-log';
+import { agentThreads, feedEvents, goalSurface, queueItems, storyRow, storyRows, storyView } from './projections';
 import type { FeedEvent, ProjectionDeps } from './projections';
 
 /** §8.6 — the Author-invoked harness. Seeded at boot by `./server` (D-17: built-in, duplicate-only). */
@@ -75,6 +76,8 @@ export interface StorylineRoutesDeps extends ProjectionDeps {
     executor: RunExecutor;
     /** The Story's durable knowledge projection (harness knowledge engine, outside every session). */
     knowledge: StoryKnowledge;
+    /** The retained thread log (request + answer for every thread that ever ran). */
+    threadLog: StoryThreadLog;
     /**
      * U-8 — the provider root the harness engine dials (`STORYLINE_PROVIDER_BASE_URL`). The roster's
      * model choices are read from this root's OpenAI-compatible catalog, `GET {base}/models`, because
@@ -179,7 +182,7 @@ interface AssistantBody {
     text?: unknown;
 }
 
-/** U-8 — one agent's model on the global roster. `null` clears the choice (template role → process default). */
+/** U-8 — one employee's model on the global roster. `null` clears the choice (template role → process default). */
 interface AgentModelBody {
     model?: unknown;
 }
@@ -476,6 +479,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             deps.knowledge.removeStory(story.id);
             await deps.knowledge.flush();
             await engine.deleteStory(story.id);
+            // P1: the retained thread log is harness state, so deleting the Story deletes its
+            // threads too — nothing outlives the book it belongs to.
+            deps.threadLog.removeStory(story.id);
         } catch (error) {
             return refusal(c, error);
         }
@@ -1169,7 +1175,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     // Directive bar, completion, templates, Goal (U-9, U-13, U-8, U-6)
     // -------------------------------------------------------------------------
 
-    /** U-9 / D-19 — one line of intent that becomes a `directives` record and propagates (not a chat). */
+    /**
+     * U-9 / D-19 — one line addressed to the Editor. It records a `directives` row and the server's
+     * propagation starts at once; the Editor's review thread queues the tasks on the next sweep.
+     * Not a chat.
+     */
     app.post('/stories/:id/directives', async (c) => {
         const story = storyOf(c.req.param('id'));
 
@@ -1378,12 +1388,38 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** U-8 — the template catalogue, as rows (§4.12 as-is). */
     /**
-     * U-8 — the GLOBAL Story-agent roster, in tile order: Writer, Editor, Reader, Checker. Each row
-     * carries every live engine thread that agent holds across every Story, with the Story title
-     * and phase session. No Story has to be selected, and no thread has to be running, for the
-     * Author to see the roster.
+     * U-8 — the GLOBAL employee roster, in catalogue order: Writer, Editor, Reader, Checker. Each
+     * row carries every live engine thread that employee is currently running as an agent, across
+     * every Story, with the Story title and phase session. No Story has to be selected, and no
+     * thread has to be running, for the Author to see the roster. The panel renders the tiles
+     * alphabetically; this projection order is the catalogue's, not a priority.
      */
     app.get('/agents', (c) => c.json(deps.executor.harness.statuses(), 200));
+
+    /**
+     * U-8 — the threads one employee ran, across every Story and every phrase session, oldest
+     * first. The employee tile opens this in the content area: each bar is one engine thread, its
+     * `request` and `answer` are the detail, and nothing is pruned from the retained log.
+     */
+    app.get('/agents/:kind/threads', (c) => {
+        const kind = param(c, 'kind');
+
+        if (!isAgentKind(kind)) {
+            return errorResponse(
+                c,
+                404,
+                `no agent named "${kind}" — the global roster is writer, editor, reader and checker (U-8).`
+            );
+        }
+
+        return c.json(
+            {
+                kind,
+                threads: agentThreads(store, kind, deps.executor.harness.threads(kind), deps.threadLog.list(kind))
+            },
+            200
+        );
+    });
 
     /**
      * U-8 — the model catalog the roster's dropdown offers. The harness engine dials one provider
@@ -1409,11 +1445,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     });
 
     /**
-     * U-8 — the Author sets which model one global agent asks for. The roster is not a §4 record:
+     * U-8 — the Author sets which model one global employee asks for. The roster is not a §4 record:
      * the choice is a host setting beside the book, and the response is the same projection
      * `GET /agents` answers, so the tile can show the new model in the frame the click lands.
      *
-     * `model: null` clears the choice, returning the agent to its template role model, else the
+     * `model: null` clears the choice, returning the employee to its template role model, else the
      * process model (T-6b); an empty or missing string is a 400 rather than a silent clear, because
      * a typo must not unset a running configuration. A template role that names its own model is
      * listed on the tile, so the Author knows what a clear would fall back to.

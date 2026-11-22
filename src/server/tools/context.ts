@@ -2,7 +2,7 @@
  * The runtime and the call pipeline (T-6, T-6a, T-1a, T-4, T-5, T-11).
  *
  * `createToolRuntime` builds the catalogue ONCE per process — T-6 registers the tools host-side
- * at session build so a fresh harness sees them on turn one with no discovery round trip — and
+ * at session build so a fresh thread sees them on turn one with no discovery round trip — and
  * `createContext` pairs one bound session with it. Everything the pipeline below does is the
  * order §8 demands:
  *

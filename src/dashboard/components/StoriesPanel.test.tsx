@@ -207,4 +207,18 @@ describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () =
         expect(store.getSnapshot().activeStoryId).toBe('story_2');
         expect(rowFor('story_2').dataset.active).toBe('true');
     });
+
+    it('clicking the open Story again closes it and returns to the desk (U-4 / U-10)', async () => {
+        const { store } = await renderShell(<StoriesPanel />, fixture());
+        const open = within(rowFor('story_2')).getByRole('button', { name: /Salt Cartography/ });
+
+        await click(open);
+        expect(store.getSnapshot().activeStoryId).toBe('story_2');
+
+        // The left rail is a toggle: the same click on the active row puts the Author back on
+        // the queue, so no Story can become un-closable from the list.
+        await click(open);
+        expect(store.getSnapshot().activeStoryId).toBeNull();
+        expect(rowFor('story_2').dataset.active).toBe('false');
+    });
 });

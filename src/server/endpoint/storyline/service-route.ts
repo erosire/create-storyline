@@ -32,7 +32,7 @@
 // loop engine and the open store, none of which may be re-created per request.
 //
 // STORYLINE OWNS ITS CONTROL SURFACE. The host forwards no harness catalogue: the engine
-// runs the Story's four agents inside this package's per-Story harnesses, and the server's
+// runs the Story's four employees inside this package's per-Story harnesses, and the server's
 // routes are the only control plane. `variables.root` is the one boot input besides the
 // documented environment switches.
 import path from 'node:path';

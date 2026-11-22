@@ -1,18 +1,22 @@
-// U-8 — the global agent roster's model choices.
+// U-8 — the global EMPLOYEE roster's model choices.
+//
+// VOCABULARY (V-1): the four entries — Writer, Editor, Reader, Checker — are EMPLOYEES. They are
+// standing roster identities, not agents; an employee becomes an agent only while a thread runs.
 //
 // WHY THIS IS A SETTING, NOT A TEMPLATE FIELD: a template is a crew definition (D-38) and its
-// roles may name their own model (T-6b), but the four agents themselves — Writer, Editor, Reader,
-// Checker — are global and shared by every Story. The Agents panel configures THAT identity, so
-// its model choice is one host-level fact rather than a value copied onto every template card.
+// roles may name their own model (T-6b), but the four employees themselves are global and shared
+// by every Story. The employee rail configures THAT identity, so its model choice is one host-level
+// fact rather than a value copied onto every template card.
 //
 // PRECEDENCE (T-6b, stated once here so both the executor and the panel agree):
-//   1. the Author's explicit choice for this agent kind on the global roster;
+//   1. the Author's explicit choice for this employee kind on the global roster;
 //   2. the run's template role model — the crew's own setting (T-6b);
 //   3. the process model (`STORYLINE_PROVIDER_MODEL` / `--model`'s resolved default).
-// Choosing a model in the Agents panel is therefore an override with visible effect; until then the
-// template card still governs its crew. The projection below carries both the agent's choice and
-// every template-role model, so a tile never claims a model a role is about to override.
-// The executor asks the same function at spawn time, so the tile and the dispatched run cannot drift.
+// Choosing a model in the employee rail is therefore an override with visible effect; until then
+// the template card still governs its crew. The projection below carries both the employee's choice
+// and every template-role model, so a tile never claims a model a role is about to override.
+// The executor asks the same function at spawn time, so the tile and the dispatched thread cannot
+// drift.
 //
 // WHY IT LIVES IN `store`: the choice has to survive a restart (L-3) and the store's atomic
 // snapshot is the one durable file the server already owns. Settings are NOT journaled — a model
@@ -23,10 +27,10 @@ import type { Store } from '../store';
 /** The key under the store snapshot's `settings` section. */
 export const AGENT_MODELS_SETTING = 'agent_models';
 
-/** Where an agent's model came from: the Author's roster choice, or the process default. */
+/** Where an employee's model came from: the Author's roster choice, or the process default. */
 export type AgentModelSource = 'agent' | 'default';
 
-/** The model a kind will use, and why — the two fields the agents projection carries. */
+/** The model an employee kind will use, and why — the two fields the employee projection carries. */
 export interface AgentModelChoice {
     model: string;
     source: AgentModelSource;
@@ -41,7 +45,7 @@ export interface AgentTemplateModel {
     model: string;
 }
 
-/** True for one of the four Storyline agent kinds, so a bad path parameter cannot reach the store. */
+/** True for one of the four Storyline employee kinds, so a bad path parameter cannot reach the store. */
 export const isAgentKind = (value: string): value is RoleKind => (ROLE_KINDS as readonly string[]).includes(value);
 
 /**
@@ -68,7 +72,7 @@ export function agentModelChoices(store: Store): Partial<Record<RoleKind, string
     return choices;
 }
 
-/** The roster's model for one agent kind, or the process model when the Author has not set one. */
+/** The roster's model for one employee kind, or the process model when the Author has not set one. */
 export function agentModelFor(store: Store, defaultModel: string, kind: RoleKind): AgentModelChoice {
     const model = agentModelChoices(store)[kind];
 
@@ -76,7 +80,7 @@ export function agentModelFor(store: Store, defaultModel: string, kind: RoleKind
 }
 
 /**
- * Every template role of one kind that names its own model, in catalogue order. The Agents tile
+ * Every template role of one kind that names its own model, in catalogue order. The employee tile
  * lists these so an Author who set nothing on the roster still knows which card governs the crew.
  */
 export function templateRoleModels(store: Store, kind: RoleKind): AgentTemplateModel[] {
@@ -98,8 +102,8 @@ export function templateRoleModels(store: Store, kind: RoleKind): AgentTemplateM
 }
 
 /**
- * The model a dispatched run should ask for (T-6b, with U-8's roster choice at the top of the
- * order): the agent's explicit choice, else the template role's own model, else the process model.
+ * The model a dispatched thread should ask for (T-6b, with U-8's roster choice at the top of the
+ * order): the employee's explicit choice, else the template role's own model, else the process model.
  */
 export function runModelFor(store: Store, defaultModel: string, kind: RoleKind, roleModel?: string): string {
     const choice = agentModelFor(store, defaultModel, kind);
@@ -108,8 +112,8 @@ export function runModelFor(store: Store, defaultModel: string, kind: RoleKind, 
 }
 
 /**
- * Records the Author's model for one agent kind. `null` (or a blank string) clears the choice,
- * returning the agent to its template role's model, else the process default; the store's
+ * Records the Author's model for one employee kind. `null` (or a blank string) clears the choice,
+ * returning the employee to its template role's model, else the process default; the store's
  * snapshot then writes the absence.
  */
 export function setAgentModel(store: Store, kind: RoleKind, model: string | null): void {

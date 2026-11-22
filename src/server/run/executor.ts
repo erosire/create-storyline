@@ -1,5 +1,11 @@
 // W5's spawner half: `RunExecutor` — one Work Item in, one closed run row out.
 //
+// VOCABULARY (V-1). The Work Item names a template role, which names an EMPLOYEE kind (Writer,
+// Editor, Reader, Checker). The executor opens one THREAD on that employee's engine profile; the
+// employee is an agent only for that thread's life. A panel's N agents (D-38) and a delegate's
+// sub-context (D-17e) are additional agents inside the same thread, never additional employees,
+// and neither opens a Work Item.
+//
 // WHAT THIS FILE OWNS (§9): the run row's whole life (S-1: spawn → work → report → teardown),
 // the unconditional teardown (S-3), the no-op accounting (S-4), the lease heartbeat (S-4a), the
 // Author's cord (P8 / U-7 kill), the delegated sub-context (D-17e / T-2b / S-7) and the panel
@@ -7,12 +13,12 @@
 // and reads `updated_at`), the tools (T3), the loop's status machine (W4), and the brief's
 // content (./brief, S-2).
 //
-// WHY THE RUN ROW EXISTS FROM BEFORE THE FIRST TOKEN (D-18): the crew panel is a list of run
+// WHY THE RUN ROW EXISTS FROM BEFORE THE FIRST TOKEN (D-18): the crew panel is a list of thread
 // rows, and the Author's Stop has to have something to point at. So the row is created in
 // `spawning` first, moves to `working` when the brief is in hand, to `reporting` when the first
 // report tool lands (§9's report step), and to its end state exactly once — in `finally`, which
 // is the mechanical form of S-3's "teardown is unconditional, including on failure, timeout and
-// Author stop. No orphan sessions."
+// Author stop. No orphan threads."
 //
 // WHY THERE IS NO TIMEOUT AND NO CAP HERE (E-0, S-4a): the only guard is the lease, and the
 // lease is `runs.updated_at`, refreshed after every tool call by {@link heartbeat}. A four-hour
@@ -36,6 +42,7 @@ import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
 import { runEngineAgent, StoryHarnessManager } from './story-engine';
 import { resolveAggregation } from './types';
+import type { StoryThreadLog } from './thread-log';
 import {
     type RunExecutorDeps,
     type RunResult,
@@ -75,6 +82,21 @@ interface RunScope {
 /** §4.13's `end_reason` for a natural end — the row records WHY it ended (S-3). */
 const END_COMPLETED = 'completed — the model returned no tool call and the run reported';
 
+/**
+ * The one-line request a thread bar shows. The sweep's note is the most specific thing the
+ * Author wrote; otherwise the job kind and the unit it names are the honest summary. The full
+ * brief (the actual request) is retained separately by the Story harness.
+ */
+const requestTitleOf = (item: WorkItem): string => {
+    const note = (item.note ?? '').trim();
+
+    if (note.length > 0) return note;
+
+    const unit = item.unit === undefined ? '' : ` ${item.unit.kind} ${item.unit.ref}`;
+
+    return `${item.kind}${unit}`;
+};
+
 export class RunExecutor {
     private readonly store: Store;
     private readonly runtime: ToolRuntime;
@@ -87,6 +109,8 @@ export class RunExecutor {
      */
     private harnessInstance: StoryHarnessManager | undefined;
     private readonly injectedHarness: StoryHarnessManager | undefined;
+    /** Every thread's request + answer, retained beyond the process (see thread-log.ts). */
+    private readonly threadLog: StoryThreadLog | undefined;
 
     /** Live runs this instance owns, so `kill(runId)` has something to abort (P8, U-7). */
     private readonly controllers = new Map<string, AbortController>();
@@ -99,6 +123,7 @@ export class RunExecutor {
         this.chat = deps.chat;
         this.defaultModel = deps.defaultModel;
         this.injectedHarness = deps.harness;
+        this.threadLog = deps.threadLog;
     }
 
     /** The manager over the CURRENT store/runtime/chat pair (late-bound for the test rig). */
@@ -110,7 +135,8 @@ export class RunExecutor {
                 store: this.store,
                 runtime: this.runtime,
                 chat: this.chat,
-                defaultModel: this.defaultModel
+                defaultModel: this.defaultModel,
+                ...(this.threadLog === undefined ? {} : { threadLog: this.threadLog })
             });
         }
 
@@ -253,7 +279,7 @@ export class RunExecutor {
                 item,
                 harness,
                 // T-6b's precedence, in one place (`runModelFor`): the Author's explicit choice
-                // on the Agents panel (U-8) wins; otherwise the template role's own model; then
+                // on the employee roster (U-8) wins; otherwise the template role's own model; then
                 // the process default.
                 model: runModelFor(this.store, this.defaultModel, harness.kind, harness.role?.model),
                 controller,
@@ -327,6 +353,8 @@ export class RunExecutor {
                     },
                     {
                         label: runId,
+                        runId,
+                        requestTitle: requestTitleOf(item),
                         system: briefing.text,
                         kickoff: kickoffLine(REPORT_TOOLS),
                         model: scope.model,
@@ -545,6 +573,8 @@ export class RunExecutor {
             { chat: this.chat, runtime: this.runtime, runAgent: this.runAgent, heartbeat: () => this.heartbeat(scope) },
             {
                 label: `${scope.runId}#${role}`,
+                runId: scope.runId,
+                requestTitle: task,
                 system: inner ? inner.prompt : genericReasonerPrompt(role, task),
                 kickoff: task,
                 // A named role's own model when it exists; otherwise the run's model (T-6b: the

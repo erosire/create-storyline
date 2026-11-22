@@ -20,6 +20,11 @@ describe('DirectiveBar — one line of Author intent (U-9 / D-19)', () => {
 
         expect(client.sendDirective).toHaveBeenCalledTimes(1);
         expect(client.sendDirective).toHaveBeenCalledWith('story_3', 'kill the mentor in ch4');
+        // The Author's channel is the Editor: the hint names who receives the direction and what
+        // they do with it, so the bar is not read as a broadcast to the Story.
+        expect(document.querySelector<HTMLElement>('.directive-bar__hint')?.textContent).toContain(
+            "Second Death's Editor"
+        );
         // One line in, one line gone: no transcript is kept (U-9, §13 "not a chat client").
         expect((screen.getByTestId('directive-input') as HTMLInputElement).value).toBe('');
     });

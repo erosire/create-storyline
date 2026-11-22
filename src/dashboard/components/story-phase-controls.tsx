@@ -100,45 +100,52 @@ export interface PhaseControlsProps {
     actions: StoryActions;
     /** Optional so the gate is derived once by StoryView and passed down; recomputed if absent. */
     lock?: LockCheck;
+    /**
+     * When a pane is looking at an earlier phrase, the lock does not belong there: only the
+     * backtrack that reopens it does. The phrase the Story is currently in keeps the full pair.
+     */
+    showLock?: boolean;
 }
 
-export function PhaseControls({ view, actions, lock }: PhaseControlsProps) {
+export function PhaseControls({ view, actions, lock, showLock = true }: PhaseControlsProps) {
     const gate = lock ?? lockCheck(view);
     const { story } = view;
     const targets = backtrackTargets(story);
 
     return (
         <div className="sv-phase-controls">
-            <div className="sv-lock-block">
-                <ConfirmButton
-                    className="sv-lock-button"
-                    label={`Lock phase ${PHASE_LABELS[gate.phase]}`}
-                    confirmText={gate.statement}
-                    // U-16: enabled only when the Goal passes AND the tray is empty.
-                    disabled={!gate.canLock}
-                    disabledReason={`Not yet: ${gate.reasons.join(' · ')}`}
-                    // Phase ③'s sign-off is completion (L-25a), and the completion endpoint is the
-                    // one that discards the leftovers with a count on them (L-25b).
-                    onConfirm={
-                        gate.phase === 'chapters' && actions.acceptCompletion
-                            ? () => void actions.acceptCompletion?.(story.id)
-                            : actions.lockPhase
-                              ? // §6.3a: the route locks the CURRENT phase, so the phase is not an argument —
-                                // `gate.phase` IS `story.phase` here (lockCheck reads it from the record).
-                                () => void actions.lockPhase?.(story.id)
-                              : undefined
-                    }
-                />
-                {/* One line stating what becomes read-only, clickable or not (U-16). */}
-                <p className="sv-lock-statement">{gate.statement}</p>
-                {!gate.canLock ? (
-                    <ul className="sv-lock-reasons">
-                        {gate.reasons.map((reason) => (
-                            <li key={reason}>{reason}</li>
-                        ))}
-                    </ul>
-                ) : null}
-            </div>
+            {showLock ? (
+                <div className="sv-lock-block">
+                    <ConfirmButton
+                        className="sv-lock-button"
+                        label={`Lock phase ${PHASE_LABELS[gate.phase]}`}
+                        confirmText={gate.statement}
+                        // U-16: enabled only when the Goal passes AND the tray is empty.
+                        disabled={!gate.canLock}
+                        disabledReason={`Not yet: ${gate.reasons.join(' · ')}`}
+                        // Phase ③'s sign-off is completion (L-25a), and the completion endpoint is the
+                        // one that discards the leftovers with a count on them (L-25b).
+                        onConfirm={
+                            gate.phase === 'chapters' && actions.acceptCompletion
+                                ? () => void actions.acceptCompletion?.(story.id)
+                                : actions.lockPhase
+                                  ? // §6.3a: the route locks the CURRENT phase, so the phase is not an argument —
+                                    // `gate.phase` IS `story.phase` here (lockCheck reads it from the record).
+                                    () => void actions.lockPhase?.(story.id)
+                                  : undefined
+                        }
+                    />
+                    {/* One line stating what becomes read-only, clickable or not (U-16). */}
+                    <p className="sv-lock-statement">{gate.statement}</p>
+                    {!gate.canLock ? (
+                        <ul className="sv-lock-reasons">
+                            {gate.reasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                            ))}
+                        </ul>
+                    ) : null}
+                </div>
+            ) : null}
 
             <div className="sv-backtrack-block">
                 {targets.length === 0 ? (

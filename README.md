@@ -61,8 +61,8 @@ that drives it, from one origin.
   origin at `/v1/storyline`.
 - **The contract** is `documents/specifications.md`. Every behaviour note in the code cites the
   id it serves (`L-` loop, `D-` design decision, `U-` UI, `S-` service, `T-` tool, `G-` goal,
-  `E-` engine, `P-` principle), so a reader can go from a line of code to the paragraph that
-  demanded it, and back.
+  `E-` engine, `P-` principle, `V-` vocabulary), so a reader can go from a line of code to the
+  paragraph that demanded it, and back.
 
 ### Running it
 
@@ -100,41 +100,55 @@ The crew needs a model. Exactly three variables say where it is, and nothing els
 harness is configuration — the roles, the tools, the criteria and the caps are Template cards the
 Author edits in the running product:
 
-| Variable                      | Meaning                                                                       |
-| ----------------------------- | ----------------------------------------------------------------------------- |
+| Variable                      | Meaning                                                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `STORYLINE_PROVIDER_BASE_URL` | OpenAI-compatible root — `chat/completions` for runs, `models` for the roster dropdown; defaults to `http://localhost:8800/providers/private/v1` |
-| `STORYLINE_PROVIDER_MODEL`    | the model every crew run asks for unless its agent or template role names one |
-| `STORYLINE_PROVIDER_API_KEY`  | its key; empty means the provider is unauthenticated                          |
+| `STORYLINE_PROVIDER_MODEL`    | the model every crew run asks for unless its agent or template role names one                                                                    |
+| `STORYLINE_PROVIDER_API_KEY`  | its key; empty means the provider is unauthenticated                                                                                             |
 
 Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBAL_MAX_CONCURRENT`
 (a hard cap on simultaneous runs), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes;
 `0` means the Author drives it by hand), `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease
 is stealable).
 
-### Agents, harnesses, sessions and threads
+### Employees, agents, harnesses, sessions and threads
+
+Storyline's roster members are **employees** — Writer, Editor, Reader, Checker — not agents. An
+employee is the standing identity (kind, rank, model, permission row); it becomes an **agent** only
+while a **thread** is executing. Only a Rank A employee may own a dispatched Work Item and act on a
+phase's requirements; a Rank B employee may be added only as a delegation target inside a Rank A
+thread (specification V-1/V-2). The rest of this section follows that vocabulary.
+
+The **Editor** is the Author's one channel. The directive bar writes a `directives` record addressed
+to the Editor; a `directive_work` review thread reads the direction and calls `createTask` for the
+work it implies. The sweep then reads that queue and opens a fresh thread per task — the Editor
+queues Work Items, while delegation (D-17e) stays inside one run. "Entry" is not a roster concept and
+is never projected to the dashboard; the harness's internal session route names the Editor.
 
 Storyline uses `@underload/harness` as an **engine only**. It does not boot the harness
 server, mount a `HarnessRuntime` or accept a `HarnessBootConfiguration`; this package's Hono
 server (`src/server/api/server.ts`) is the only server and owns every Story decision.
 
 - **One harness per Story.** `src/server/run/story-engine.ts` builds an engine `harness()` for a
-  Story the first time it dispatches work. The four agents are the same roster in every Story —
+  Story the first time it dispatches work. The four employees are the same roster in every Story —
   **Writer, Editor, Reader, Checker** — but each Story's harness has its own tool registry,
   transcripts and threads, so no state crosses between books.
 - **A phase is a session.** The engine has no session object, so Storyline owns that level: the
-  Story's `summary` / `plotlines` / `chapters` phase is a session record holding the threads
-  that phase caused.
+  Story's `summary` / `plotlines` / `chapters` phase is a session record (the UI calls it a
+  "phrase", P1/P2/P3) holding the threads that phase caused.
 - **A Run is a thread.** Each dispatched Work Item (and each panel agent or delegated
   sub-context) opens a host thread in its Story's harness with the assembled brief as the system
-  turn. The engine executes the model/tool loop; Storyline keeps its §8 tools, permission rows,
-  run rows, tally, panel aggregation and delegation rules.
+  turn. The employee named by the template role is the agent for that thread's lifetime. The
+  engine executes the model/tool loop; Storyline keeps its §8 tools, permission rows, run rows,
+  tally, panel aggregation and delegation rules.
 
 `GET /v1/storyline/agents` is the global status projection the right-hand tile panel renders:
-one row per agent kind, its model, its live threads, and the Story + phase each thread belongs to.
-Selecting a Story changes the centre; the agent tiles stay global. The tile shows the model the
-agent asks for, and `PATCH /v1/storyline/agents/:kind` with `{ model }` sets it (or `{ model: null }`
-clears it back to the template role's model, else `STORYLINE_PROVIDER_MODEL`). The tile also lists
-any template role that names its own `model` (T-6b), so a crew-specific model is never invisible.
+one row per employee kind, its model, and its live threads grouped by the Story + phase session
+they belong to. Selecting a Story changes the centre; the employee tiles stay global. The tile
+shows the model the employee asks for, and `PATCH /v1/storyline/agents/:kind` with `{ model }` sets
+it (or `{ model: null }` clears it back to the template role's model, else
+`STORYLINE_PROVIDER_MODEL`). The tile also lists any template role that names its own `model`
+(T-6b), so a crew-specific model is never invisible.
 `GET /v1/storyline/agents/models` proxies the provider's OpenAI-compatible catalog
 (`{STORYLINE_PROVIDER_BASE_URL}/models`), and the tile's model editor is a dropdown over those ids —
 never free text, because a model the provider does not serve cannot run.

@@ -1,4 +1,4 @@
-// The two dashboard reads: the Story knowledge directory and the global agent roster.
+// The two dashboard reads: the Story knowledge directory and the global employee roster.
 import { describe, expect, it } from 'vitest';
 import { buildStorylineRuntime } from './server';
 import { seedChapter, seedGoal, seedStory } from '../run/mock';

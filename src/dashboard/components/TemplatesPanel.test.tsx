@@ -34,7 +34,7 @@ describe('TemplatesPanel — the Author\u2019s crews (U-8, D-17, D-38)', () => {
 
         expect(card('t-chapters').className).toContain('sv-template');
         expect(within(card('t-chapters')).getByText('Chapter crew')).toBeTruthy();
-        expect(within(card('t-chapters')).getByText('serves: ③ Chapters')).toBeTruthy();
+        expect(within(card('t-chapters')).getByText('serves: Chapters')).toBeTruthy();
         expect(
             within(card('t-chapters')).getByText(
                 'done when: every criterion the plotline names is answerable from the prose'

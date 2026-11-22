@@ -1,8 +1,9 @@
-// `GET /agents` and `PATCH /agents/:kind` — the global Story-agent roster the right panel renders,
+// `GET /agents` and `PATCH /agents/:kind` — the global employee roster the right panel renders,
 // including the model each agent asks for (U-8, T-6b).
 import { describe, expect, it } from 'vitest';
 import { buildStorylineRuntime } from './server';
 import { Store } from '../store/store';
+import { StoryThreadLog } from '../run/thread-log';
 
 const ENV = {
     STORYLINE_PROVIDER_BASE_URL: 'http://127.0.0.1:1/v1',
@@ -16,7 +17,6 @@ const idleRows = (model: string) => [
         title: 'Writer',
         status: 'idle',
         rank: 'A',
-        entry: true,
         model,
         model_source: 'default',
         template_models: [],
@@ -28,7 +28,6 @@ const idleRows = (model: string) => [
         title: 'Editor',
         status: 'idle',
         rank: 'A',
-        entry: false,
         model,
         model_source: 'default',
         template_models: [],
@@ -40,7 +39,6 @@ const idleRows = (model: string) => [
         title: 'Reader',
         status: 'idle',
         rank: 'A',
-        entry: false,
         model,
         model_source: 'default',
         template_models: [],
@@ -52,7 +50,6 @@ const idleRows = (model: string) => [
         title: 'Checker',
         status: 'idle',
         rank: 'A',
-        entry: false,
         model,
         model_source: 'default',
         template_models: [],
@@ -62,7 +59,7 @@ const idleRows = (model: string) => [
 ];
 
 describe('GET /agents', () => {
-    it('answers the four global agents, and the model each one asks for, before any Story dispatches work', async () => {
+    it('answers the four global employees, and the model each one asks for, before any Story dispatches work', async () => {
         const runtime = buildStorylineRuntime({
             store: Store.empty(),
             engineConfig: { autoSweep: false },
@@ -120,6 +117,101 @@ describe('GET /agents', () => {
             no_op: true
         });
         expect(String(checker?.recent[0]?.end_reason)).toContain('Field required');
+    });
+});
+
+describe('GET /agents/:kind/threads', () => {
+    it('answers an empty retained history before a thread closes', async () => {
+        const runtime = buildStorylineRuntime({
+            store: Store.empty(),
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: ENV
+        });
+
+        const response = await runtime.app.request('http://localhost/v1/storyline/agents/writer/threads');
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ kind: 'writer', threads: [] });
+    });
+
+    it('lists the retained threads oldest first, with request and answer (U-8)', async () => {
+        const store = Store.empty();
+        const threadLog = StoryThreadLog.memory();
+
+        threadLog.append({
+            thread_id: 'thread-new',
+            run_id: 'run_2',
+            story_id: 'story_1',
+            story_title: 'Old title',
+            phase: 'chapters',
+            role: 'writer',
+            role_name: 'writer',
+            title: 'write chapter_2',
+            state: 'torn_down',
+            started_at: '2026-11-22T10:00:10.000Z',
+            ended_at: '2026-11-22T10:00:14.000Z',
+            tokens: 42,
+            request: 'Write chapter two.',
+            answer: 'Chapter two is written.',
+            retained: true
+        });
+        threadLog.append({
+            thread_id: 'thread-old',
+            run_id: 'run_1',
+            story_id: 'story_1',
+            story_title: 'Old title',
+            phase: 'summary',
+            role: 'writer',
+            role_name: 'writer',
+            title: 'write summary',
+            state: 'failed',
+            started_at: '2026-11-22T10:00:00.000Z',
+            ended_at: '2026-11-22T10:00:01.000Z',
+            tokens: 3,
+            request: 'Write the Summary.',
+            answer: '',
+            error: 'failed — provider fault',
+            retained: true
+        });
+
+        const runtime = buildStorylineRuntime({
+            store,
+            threadLog,
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: ENV
+        });
+
+        const response = await runtime.app.request('http://localhost/v1/storyline/agents/writer/threads');
+        const body = (await response.json()) as { kind: string; threads: Array<Record<string, unknown>> };
+
+        expect(response.status).toBe(200);
+        expect(body.kind).toBe('writer');
+        expect(body.threads.map((thread) => thread.thread_id)).toEqual(['thread-old', 'thread-new']);
+        expect(body.threads[0]).toMatchObject({
+            phase: 'summary',
+            request: 'Write the Summary.',
+            answer: '',
+            error: 'failed — provider fault',
+            retained: true
+        });
+    });
+
+    it('refuses an unknown kind rather than inventing a thread list (U-8)', async () => {
+        const runtime = buildStorylineRuntime({
+            store: Store.empty(),
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: ENV
+        });
+
+        const response = await runtime.app.request('http://localhost/v1/storyline/agents/explorer/threads');
+
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({
+            error: 'no agent named "explorer" — the global roster is writer, editor, reader and checker (U-8).'
+        });
     });
 });
 
@@ -250,7 +342,7 @@ describe('PATCH /agents/:kind', () => {
         });
     });
 
-    it('refuses an unknown agent kind rather than inventing a fifth tile (U-8)', async () => {
+    it('refuses an unknown employee kind rather than inventing a fifth tile (U-8)', async () => {
         const runtime = buildStorylineRuntime({
             store: Store.empty(),
             engineConfig: { autoSweep: false },

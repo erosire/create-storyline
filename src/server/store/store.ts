@@ -478,7 +478,7 @@ export class Store {
     private readonly listeners = new Set<CommitListener>();
 
     /**
-     * Host settings that are not §4 records (today the global agent roster's models, U-8). They are
+     * Host settings that are not §4 records (today the global employee roster's models, U-8). They are
      * persisted in `store.json` but never journaled: a model choice is a host configuration, not a
      * story fact, so it must not feed the Digest derivation (D-12a). The map is kept separate from
      * the collections so no §4 path can see or enumerate it as an artifact.

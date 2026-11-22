@@ -36,7 +36,7 @@ describe('IdeasTray — the decision queue (U-15, D-27, D-32, D-36)', () => {
 
         // D-36: the count in the heading is the phase's tray count, and it is the lock gate.
         expect((screen.getByRole('heading', { level: 3 }) as HTMLElement).textContent).toBe(
-            'Ideas — ③ Chapters tray · 3 open'
+            'Ideas — Chapters tray · 3 open'
         );
         expect(
             screen.getByText(

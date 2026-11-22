@@ -302,17 +302,20 @@ describe('D-37 / D-37a / L-17a — Pause & edit, then hand the book back', () =>
 });
 
 describe('D-19 / L-24 — one line of intent becomes a record with impact the loop worked out', () => {
-    it('creates the propagate task, marks the targets, and closes the directive with its impact', async () => {
+    it("records the directive for the Editor, then the Editor's review queues the propagate task", async () => {
         const rig = await atChapters();
         const chapter = rig.store.chapters.list().sort((left, right) => left.order - right.order)[0];
 
         const result = await rig.engine.processDirective(rig.storyId, 'cut the 1911 survey map entirely', [chapter.id]);
 
+        // The Author's sentence is recorded and the server does its own half at once (the recheck,
+        // the stop, the report). The TASKS are the Editor's: the row says so by staying propagating
+        // with a zero count, not by pretending a review already happened (D-19, V-1).
         expect(result).toEqual({
             directive_id: 'directive_1',
             impact: {
                 runs_stopped: 0,
-                tasks_created: 1,
+                tasks_created: 0,
                 tasks_superseded: 0,
                 needs_recheck: [chapter.id],
                 ledger_touched: [],
@@ -321,16 +324,37 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
             }
         });
 
-        const directive = rig.store.directives.get('directive_1');
+        let directive = rig.store.directives.get('directive_1');
 
         expect({ state: directive?.state, impact: directive?.impact }).toEqual({
-            // The directive is answered by the task it created, and it names the artifact it touched.
-            state: 'done',
+            state: 'propagating',
             impact: [chapter.id]
+        });
+        expect(rig.store.tasks.list()).toEqual([]);
+
+        // The next sweep opens the Editor's review thread. It reads the directive and the artifacts
+        // the server resolved, and its createTask calls are what the queue gets.
+        await rig.step();
+
+        directive = rig.store.directives.get('directive_1');
+
+        expect({ state: directive?.state, tasks: directive?.report?.tasks_created }).toEqual({
+            state: 'done',
+            tasks: 1
         });
         expect(rig.store.tasks.list().map((task) => `${task.kind}:${task.state}:${task.title.slice(0, 30)}`)).toEqual([
             'fix:open:propagate: cut the 1911 survey'
         ]);
+
+        // The queue the Editor wrote is what the server checks: the next sweep opens the Writer's
+        // thread for the task — a Work Item, not a delegate nested inside the Editor's review.
+        await rig.step();
+
+        expect(
+            rig.store.runs
+                .list()
+                .some((run) => run.role === 'writer' && (run.work_item_ref ?? '').startsWith(`wi_write_${chapter.id}`))
+        ).toBe(true);
     });
 
     it("leaves §4.7's `finding_ref` empty — a directive is not a finding (D-19, §4.7)", async () => {
@@ -338,6 +362,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
         const chapter = rig.store.chapters.list().sort((left, right) => left.order - right.order)[0];
 
         await rig.engine.processDirective(rig.storyId, 'cut the 1911 survey map entirely', [chapter.id]);
+        await rig.step();
 
         const task = rig.store.tasks.list().sort((left, right) => left.id.localeCompare(right.id))[0];
 
@@ -358,15 +383,20 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
             priority: 1,
             finding_ref: '',
             criterion_ref: '',
-            detail: `directive_1 · ${chapter.id} · ${chapter.id}`
+            detail: `directive_1 · ${chapter.id}`
         });
 
-        // The journal says what created the work, since the finding-approval sentence would lie (P11).
-        expect(
-            rig.store.journal
-                .filter((event) => event.op === 'create' && event.id === task.id)
-                .map((event) => event.attribution.why)
-        ).toEqual([`directive_1 propagated the Author's directive onto ${chapter.id} (D-19, D-11)`]);
+        // The journal says what created the work — a run, not an Author write. The run is the
+        // directive review this directive's sweep opened (P11).
+        const created = rig.store.journal.find((event) => event.op === 'create' && event.id === task.id);
+
+        expect(created?.attribution.author).not.toBe(true);
+        expect(created?.attribution.why).toBe(
+            `the Editor queued the Author's directive onto ${chapter.id} (D-19, D-11)`
+        );
+        expect(rig.store.runs.get(String(created?.attribution.run_ref))?.work_item_ref).toBe(
+            'wi_directive_directive_1'
+        );
     });
 });
 

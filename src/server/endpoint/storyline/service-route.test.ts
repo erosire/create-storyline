@@ -32,7 +32,7 @@ describe('the Storyline service route', () => {
         else process.env.STORYLINE_STORE_ROOT = previousStoreRoot;
     });
 
-    it('serves the Storyline agent roster from the mounted app', async () => {
+    it('serves the Storyline employee roster from the mounted app', async () => {
         const result = await call();
 
         expect(result.raw.status).toBe(200);

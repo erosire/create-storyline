@@ -1800,10 +1800,42 @@
     border: 1px solid var(--line-strong);
     border-radius: var(--radius-sm);
     background: var(--surface-2);
+    cursor: pointer;
 }
 
 .sv-agent-tile[data-status='running'] {
     border-color: var(--accent);
+}
+
+.sv-agent-tile[data-selected='true'] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+/*
+ * The tile's head is the content-area switch. It is a real button so the model dropdown below
+ * stays an independent control; the browser's default button chrome is removed here.
+ */
+.sv-agent-tile__open {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sv-agent-tile__open:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.sv-agent-tile__open:hover .sv-agent-tile__name {
+    color: var(--accent);
 }
 
 .sv-agent-tile__head {
@@ -1819,8 +1851,7 @@
     font-weight: 700;
 }
 
-.sv-agent-tile__rank,
-.sv-agent-tile__entry {
+.sv-agent-tile__rank {
     padding: 0.05rem 0.35rem;
     border: 1px solid var(--line-strong);
     border-radius: 999px;
@@ -1831,9 +1862,13 @@
     text-transform: uppercase;
 }
 
-.sv-agent-tile__entry {
-    border-color: var(--accent);
-    color: var(--accent);
+/* The Author's channel is the Editor (V-1): it is a sentence about routing, never a second
+   role label on the tile. */
+.sv-agents-note {
+    margin: 0.6rem 0 0;
+    color: var(--muted);
+    font-size: 0.68rem;
+    line-height: 1.45;
 }
 
 .sv-agent-tile__model {
@@ -1847,7 +1882,7 @@
     font-size: 0.7rem;
 }
 
-.sv-agent-tile__model label {
+.sv-agent-tile__model-label {
     flex: 0 0 auto;
     color: var(--muted);
     font-size: 0.7rem;
@@ -1905,7 +1940,8 @@
 }
 
 .sv-agent-tile__model-select:disabled {
-    cursor: not-allowed;
+    /* With no catalogue to choose from there is no dropdown: the spot falls back to the tile. */
+    pointer-events: none;
 }
 
 .sv-agent-tile__template-models {
@@ -2024,4 +2060,775 @@
 .sv-agent-thread__phase,
 .sv-agent-thread__work {
     color: var(--muted);
+}
+
+/* ------------------------------------------------------- the agent thread surface (U-8) */
+
+.sv-threads {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.sv-threads__story {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.sv-threads__story-title {
+    margin: 0;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--line-strong);
+    color: var(--text-strong);
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.sv-threads__phase {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.sv-threads__phase-title {
+    display: flex;
+    gap: 0.45rem;
+    align-items: baseline;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-threads__phase-code {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.8rem;
+    padding: 0.08rem 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--text-strong);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.66rem;
+}
+
+.sv-threads__phase-count {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.66rem;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.sv-thread-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-thread {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.sv-thread[data-state='running'] {
+    border-color: var(--accent);
+    border-left-color: var(--accent);
+}
+
+.sv-thread[data-state='failed'] {
+    border-color: var(--urgent);
+    border-left-color: var(--urgent);
+}
+
+.sv-thread[data-state='abandoned'] {
+    border-left-color: var(--urgent);
+}
+
+.sv-thread[data-state='torn_down'] {
+    border-left-color: var(--finished);
+}
+
+.sv-thread__bar {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: baseline;
+    padding: 0.55rem 0.65rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sv-thread__bar:hover,
+.sv-thread__bar:focus-visible {
+    background: var(--surface);
+}
+
+.sv-thread__bar:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.sv-thread__code {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    padding: 0.06rem 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--text-strong);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.62rem;
+    font-weight: 700;
+}
+
+.sv-thread__title {
+    flex: 1 1 18rem;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sv-thread__role,
+.sv-thread__duration,
+.sv-thread__tokens {
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    white-space: nowrap;
+}
+
+.sv-thread__state {
+    padding: 0.06rem 0.4rem;
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-thread__state--running {
+    background: var(--accent);
+    color: var(--surface);
+}
+
+.sv-thread__state--failed,
+.sv-thread__state--abandoned {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-thread__actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 0.65rem 0.45rem;
+}
+
+.sv-thread__kill {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--urgent);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--urgent);
+    font-size: 0.66rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sv-thread__kill:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sv-thread__detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0 0.65rem 0.7rem;
+}
+
+.sv-thread__block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sv-thread__block-title {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.sv-thread__text {
+    max-height: 22rem;
+    margin: 0;
+    overflow: auto;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------------------ phrase rail + focused panes */
+
+/* The four phrases and six folders replaced the eight-folder knowledge listing; the panes below
+   are the content half of that change. Nothing here paints a card inside a card: a pane is the
+   page, a row is a record. */
+
+.sv-summary-ready {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    padding: 0.16rem 0.45rem;
+    border: 1px solid var(--calm);
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.sv-summary-current-title {
+    margin: 0.15rem 0 -0.1rem;
+    color: var(--dim);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.sv-summary-review {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.8rem 0 0.2rem;
+    border-top: 1px solid var(--line);
+}
+
+.sv-summary-review-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.sv-summary-review-title {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: 0.86rem;
+}
+
+.sv-summary-review-hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+
+.sv-summary-drafts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 0.6rem;
+}
+
+.sv-summary-draft {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.sv-summary-draft--recommended {
+    border-color: var(--calm);
+    box-shadow: inset 3px 0 0 var(--calm);
+}
+
+.sv-summary-draft-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+}
+
+.sv-summary-draft-label {
+    color: var(--text-strong);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.sv-summary-draft-pick {
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-size: 0.63rem;
+    font-weight: 700;
+}
+
+.sv-summary-draft-meta {
+    margin-left: auto;
+    color: var(--dim);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.62rem;
+}
+
+.sv-summary-draft-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    margin: 0;
+}
+
+.sv-summary-draft-field {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: 0.45rem;
+    align-items: baseline;
+}
+
+.sv-summary-draft-field dt {
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 600;
+}
+
+.sv-summary-draft-field dd {
+    margin: 0;
+    color: var(--text);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.sv-summary-draft-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-style: italic;
+}
+
+.sv-summary-draft-select {
+    align-self: flex-start;
+    margin-top: 0.1rem;
+    padding: 0.3rem 0.62rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sv-summary-draft-select:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--surface);
+}
+
+.sv-summary-draft-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ---- characters */
+
+.char-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 1rem 0.2rem;
+}
+
+.char-empty-title {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: 0.95rem;
+}
+
+.char-empty-hint {
+    max-width: 34rem;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.55;
+}
+
+.char-start,
+.char-update {
+    padding: 0.34rem 0.7rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.char-start:hover:not(:disabled),
+.char-update:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--surface);
+}
+
+.char-start:disabled,
+.char-update:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.char-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.char-card {
+    padding: 0.75rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.char-card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.45rem;
+}
+
+.char-card-name {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: 0.9rem;
+}
+
+.char-card-gender {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.64rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.char-card-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.4rem 1rem;
+    margin: 0;
+}
+
+.char-card-field dt {
+    color: var(--muted);
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.char-card-field dd {
+    margin: 0.08rem 0 0;
+    color: var(--text);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.char-card-field--state {
+    grid-column: 1 / -1;
+    padding-top: 0.3rem;
+    border-top: 1px dashed var(--line);
+}
+
+.char-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    padding-top: 0.5rem;
+}
+
+.char-actions-hint {
+    color: var(--dim);
+    font-size: 0.69rem;
+}
+
+/* ---- plotlines */
+
+.plot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.plot-card {
+    padding: 0.75rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.plot-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.plot-card-order {
+    color: var(--accent);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.plot-card-title {
+    margin: 0;
+    color: var(--text-strong);
+    font-size: 0.88rem;
+}
+
+.plot-card-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-left: auto;
+}
+
+.plot-card-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 0.4rem 1rem;
+    margin: 0;
+}
+
+.plot-card-field dt {
+    color: var(--muted);
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.plot-card-field dd {
+    margin: 0.08rem 0 0;
+    color: var(--text);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+/* ---- continuity */
+
+.cont-list,
+.find-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.cont-row {
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.cont-row--conflict {
+    border-left-color: var(--urgent);
+}
+
+.cont-row--open,
+.cont-row--stale {
+    border-left-color: var(--calm);
+}
+
+.cont-row-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.45rem;
+}
+
+.cont-kind {
+    color: var(--accent);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.cont-subject {
+    color: var(--text-strong);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.cont-status,
+.cont-chapter {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.63rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.cont-status--conflict {
+    color: var(--urgent);
+}
+
+.cont-detail {
+    margin: 0.3rem 0 0;
+    color: var(--text);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+
+/* ---- findings */
+
+.find-row {
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.find-row--critical {
+    border-left-color: var(--urgent);
+}
+
+.find-row--major {
+    border-left-color: var(--accent);
+}
+
+.find-row--minor,
+.find-row--taste,
+.find-row--closed {
+    border-left-color: var(--line-strong);
+}
+
+.find-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.45rem;
+}
+
+.find-title {
+    color: var(--text-strong);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.find-state,
+.find-seen {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.63rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.find-meta,
+.find-detail,
+.find-evidence {
+    margin: 0.28rem 0 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.find-evidence {
+    color: var(--dim);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.66rem;
+}
+
+.find-closed {
+    margin-top: 0.7rem;
+}
+
+.find-closed > summary {
+    color: var(--muted);
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+/* ---- digest */
+
+.sv-digest-meta {
+    margin: 0 0 0.5rem;
+    color: var(--muted);
+    font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.68rem;
+}
+
+/* ---- seed */
+
+.sv-seed-pane {
+    border-left: 3px solid var(--accent);
+}
+
+/* The settings pane owns the page; the dial and cost block are sections inside it, not cards. */
+.sv-settings .sv-dial {
+    margin-top: 0.65rem;
+}
+
+.sv-settings .sv-cost {
+    margin-top: 0.8rem;
+    padding: 0.65rem 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
 }

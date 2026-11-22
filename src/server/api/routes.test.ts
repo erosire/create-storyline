@@ -273,6 +273,8 @@ describe('§10.2 U-1 — the Stories panel', () => {
             'summary',
             'plotlines',
             'chapters',
+            'cast',
+            'ledger',
             'goal',
             'ideas',
             'revisions',

@@ -41,6 +41,7 @@ import {
     storyFindings,
     storyPlotlines,
     storySummary,
+    templatesFor,
     undecidedIdeas,
     wholePassClosed,
     wontfixTasks
@@ -59,7 +60,7 @@ import {
 } from './status';
 import { generateWork } from './work';
 import { carriedDelta, levelPairs, measureRound, recordRound, renderPairs } from './trend';
-import { applyDirective, pendingDirectives } from './directives';
+import { completeDirective, createDirectiveFallbackTasks, pendingDirectives, recordDirective } from './directives';
 import {
     applySectionEdit,
     createFixTask,
@@ -98,7 +99,7 @@ import {
 } from './types';
 import { BUILT_IN_TEMPLATES, DEFAULT_ASSIGNMENT, validateAssignment } from '../templates';
 import { defaultGoal } from '../../shared/criteria';
-import type { Chapter, Cost, Finding, Story, StoryPhase } from '../../shared/types';
+import type { Chapter, Cost, Finding, Story, StoryPhase, Task } from '../../shared/types';
 import type { RunResult, WorkItem } from '../run/types';
 import type { Store } from '../store';
 
@@ -430,18 +431,41 @@ export class LoopEngine implements EngineApi {
         // Author action at all (L-35, §15 step 3).
         story = await this.evaluateChapters(story);
 
-        // D-19: a directive the loop never finished propagating (a crash between the create and the
-        // report) is completed before anything else is decided, so the queue it owns is visible.
+        // D-19: a directive the Editor did not finish reviewing before a crash. A propagating
+        // directive with NO review thread is normal — the sweep dispatches it below — so only a
+        // directive whose review run has CLOSED is recovered here, from the tasks that run queued
+        // (or the deterministic fallback when it queued none).
         const directives = pendingDirectives(store, story.id);
+        const interrupted = directives.filter((directive) =>
+            store.runs
+                .list()
+                .some(
+                    (run) =>
+                        run.work_item_ref === `wi_directive_${directive.id}` &&
+                        run.state !== 'spawning' &&
+                        run.state !== 'working' &&
+                        run.state !== 'reporting'
+                )
+        );
 
-        if (directives.length > 0) {
+        if (interrupted.length > 0) {
             await store.commit('loop_directive_recovery', () => {
-                for (const directive of directives) {
-                    store.directives.update(
+                for (const directive of interrupted) {
+                    const runIds = store.runs
+                        .list()
+                        .filter((run) => run.work_item_ref === `wi_directive_${directive.id}`)
+                        .map((run) => run.id);
+                    const tasks = this.tasksQueuedBy(runIds);
+                    const tasksCreated =
+                        tasks.length > 0
+                            ? tasks.length
+                            : createDirectiveFallbackTasks(store, requireStory(store, story.id), directive);
+
+                    completeDirective(
+                        store,
                         directive.id,
-                        { state: 'done' },
-                        { run_ref: null, why: `the loop finished propagating ${directive.id} (D-19)` },
-                        [{ id: directive.id, rev: directive.rev }]
+                        { tasks_created: tasksCreated },
+                        `the loop recovered ${directive.id} after its Editor review closed (D-19)`
                     );
                 }
             });
@@ -920,6 +944,58 @@ export class LoopEngine implements EngineApi {
                 );
             }
         });
+
+        if (item.kind === 'directive_work') await this.settleDirectiveReview(item, result);
+    }
+
+    /**
+     * D-19's closing half, after the Editor's review thread: the directive is `done` once its tasks
+     * exist. The Editor's own `createTask` calls are found through the journal's `run_ref` (the row
+     * carries no second identity), so this reads exactly the work that thread queued.
+     *
+     * If the review queued nothing — or the thread failed before it could — the deterministic
+     * fallback keeps the directive's promise: one fix task per artifact the directive resolved to.
+     * The Author's direction is never silently dropped because a model had a bad turn.
+     */
+    private async settleDirectiveReview(item: WorkItem, result: RunResult): Promise<void> {
+        if (item.directiveRef === undefined) return;
+
+        const directive = this.store.directives.get(item.directiveRef);
+
+        if (directive === undefined) return;
+
+        const queued = this.tasksQueuedBy([result.runId]);
+        const tasksCreated =
+            queued.length > 0
+                ? queued.length
+                : createDirectiveFallbackTasks(this.store, requireStory(this.store, directive.story_id), directive);
+
+        completeDirective(
+            this.store,
+            directive.id,
+            { tasks_created: tasksCreated },
+            result.ended === 'completed'
+                ? `the Editor queued ${tasksCreated} task${tasksCreated === 1 ? '' : 's'} for ${directive.id} (D-19)`
+                : `the Editor review of ${directive.id} ended ${result.ended}; ${tasksCreated} task${tasksCreated === 1 ? '' : 's'} queued instead (D-19)`
+        );
+    }
+
+    /** The task rows one or more runs created, read from the journal's attribution (P11). */
+    private tasksQueuedBy(runIds: string[]): Task[] {
+        const runs = new Set(runIds);
+        const ids = new Set(
+            this.store.journal
+                .filter(
+                    (event) =>
+                        event.collection === 'tasks' &&
+                        event.op === 'create' &&
+                        typeof event.attribution.run_ref === 'string' &&
+                        runs.has(event.attribution.run_ref)
+                )
+                .map((event) => event.id)
+        );
+
+        return this.store.tasks.list().filter((task) => ids.has(task.id));
     }
 
     /**
@@ -1846,27 +1922,52 @@ export class LoopEngine implements EngineApi {
         let applied: { directive_id: string; impact: DirectiveReport; targets: string[] } | undefined;
 
         await this.store.commit('process_directive', () => {
-            applied = applyDirective(this.store, requireStory(this.store, storyId), {
+            applied = recordDirective(this.store, requireStory(this.store, storyId), {
                 text,
                 refs,
                 at: new Date().toISOString(),
                 killRun: (runId) => this.executor.kill(runId)
             });
 
-            if (applied.impact.completed_reopened) {
+            // L-27: a directive returns the Story to `ready`. A completed book is re-opened; a
+            // pending one (a sign-off, a tray, a drain) stops waiting on the Author's other decision
+            // because the Author just made one. A stopped Story keeps its cord: P8 has no exception
+            // for a directive, and the Editor's review waits for the resume.
+            if (applied.impact.completed_reopened || story.status === 'pending') {
                 const fresh = requireStory(this.store, storyId);
+                const reopened = applied.impact.completed_reopened;
 
-                // L-27: a directive returns a completed Story to `ready`.
                 this.store.stories.update(
                     fresh.id,
                     {
                         status: 'ready',
                         pending_kind: 'none',
-                        status_reason: `a directive re-opened the finished book (L-27): ${text.slice(0, 80)}`,
+                        status_reason: reopened
+                            ? `a directive re-opened the finished book (L-27): ${text.slice(0, 80)}`
+                            : `a directive re-armed the Story for the Editor's review: ${text.slice(0, 80)}`,
                         blocked_on: ''
                     },
-                    authorAttr('the Author kept writing the book, so the loop polices it again (L-27)'),
+                    authorAttr(
+                        reopened
+                            ? 'the Author kept writing the book, so the loop polices it again (L-27)'
+                            : 'the Author issued a directive; the Editor reviews it before the sweep re-pends (L-27)'
+                    ),
                     [{ id: fresh.id, rev: fresh.rev }]
+                );
+            }
+
+            // A roster with no Editor assigned has no one to review the directive. Do not strand it
+            // as a propagating row forever: the loop queues the deterministic fallback and closes it.
+            if (templatesFor(this.store, requireStory(this.store, storyId), 'editor').length === 0) {
+                const fresh = requireStory(this.store, storyId);
+                const directive = this.store.directives.require(applied.directive_id);
+                const tasksCreated = createDirectiveFallbackTasks(this.store, fresh, directive);
+
+                completeDirective(
+                    this.store,
+                    directive.id,
+                    { tasks_created: tasksCreated },
+                    `no Editor is assigned; the loop queued ${directive.id}'s work itself (D-19)`
                 );
             }
         });

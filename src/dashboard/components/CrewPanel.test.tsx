@@ -1,10 +1,10 @@
-// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the phrases panel.
+// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the live-thread panel.
 //
-// The right region lists PHRASES: a run is one session against the story's Goal, so a row exists
-// from spawn to teardown (D-18) and carries what it is doing, what it costs in wall-clock (S-6,
-// informational only per E-0), whether its internal panel disagreed (D-38), and the cord for that
-// one phrase (U-7). A delegated sub-context is a nested thread, with no row and no kill button of
-// its own (S-7).
+// The right region lists THREADS: a run is one thread inside the phase's session (the UI's
+// "phrase"), not the session itself, so a row exists from spawn to teardown (D-18) and carries
+// what it is doing, what it costs in wall-clock (S-6, informational only per E-0), whether its
+// internal panel disagreed (D-38), and the cord for that one thread (U-7). A delegated
+// sub-context is a nested thread, with no row and no kill button of its own (S-7).
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CrewPanel } from './CrewPanel';

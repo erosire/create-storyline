@@ -26,6 +26,7 @@ import {
     verdictsFor
 } from '../loop/records';
 import type {
+    AgentThreadRecord,
     CompletionPreview,
     CostDistribution,
     FailingCriterion,
@@ -38,8 +39,9 @@ import type {
 import type { CriteriaEngine, LevelReport, LevelStatus } from '../criteria/engine';
 import type { DigestBuilder } from '../digest/digest';
 import type { CommitEvent, Store } from '../store';
-import type { Cost, Finding, Idea, Story, Task } from '../../shared/types';
+import type { Cost, Finding, Idea, Run, Story, StoryPhase, Task } from '../../shared/types';
 import type { StreamKind } from '../../dashboard/api';
+import type { StoryThreadRecord } from '../run/thread-log';
 
 /** Everything a projection needs: the book, and the two read-only engines that interpret it. */
 export interface ProjectionDeps {
@@ -307,6 +309,10 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
         summary,
         plotlines: storyPlotlines(store, story.id),
         chapters: storyChapters(store, story.id),
+        // §4.5/§4.6 — the two supporting sheets. Both are ordinary §4 collections; the Characters
+        // and Continuity folders read them as records rather than as prose.
+        cast: store.cast.list().filter((member) => member.story_id === story.id),
+        ledger: store.ledger.list().filter((entry) => entry.story_id === story.id),
         goal: goalSurface(deps, story),
         ideas: storyIdeas(store, story.id),
         revisions: store.revisions.list().filter((revision) => revision.story_id === story.id),
@@ -338,6 +344,105 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
  */
 function levelHistoryOf(story: Story): LevelHistoryEntry[] {
     return (story as LoopStory).level_history ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// U-8 — the employee's retained threads (the content the tile opens)
+// ---------------------------------------------------------------------------
+
+/** §4.13's run states -> the four states a thread bar reads. */
+const THREAD_STATE_OF_RUN: Record<Run['state'], AgentThreadRecord['state']> = {
+    spawning: 'running',
+    working: 'running',
+    reporting: 'running',
+    torn_down: 'torn_down',
+    failed: 'failed',
+    abandoned: 'abandoned'
+};
+
+/**
+ * Which phase session (the UI's "phrase") a legacy Run row belonged to. The row does not carry the
+ * phase (§4.13), so the work item's own name is the only exact hint left; the Story's CURRENT phase
+ * is the honest fallback for a pre-retention row whose job name says nothing.
+ */
+function legacyPhase(store: Store, run: Run): StoryPhase {
+    const hint = `${run.work_item_ref ?? ''} ${run.template_ref ?? ''}`.toLowerCase();
+
+    if (hint.includes('summary')) return 'summary';
+    if (hint.includes('plotline')) return 'plotlines';
+    if (hint.includes('chapter') || hint.includes('prose')) return 'chapters';
+
+    return (store.stories.get(run.story_id) as Story | undefined)?.phase ?? 'chapters';
+}
+
+/**
+ * U-8 — every thread one employee kind ran, oldest first.
+ *
+ * THREE SOURCES, ONE LIST (deliberately):
+ *   - live + this-process history (`harness`) carries every engine thread, including panel
+ *     agents and delegated sub-contexts that never get a Run row of their own;
+ *   - the retained log (`recorded`) carries the same records across a restart;
+ *   - the journaled Run rows are the legacy safety net — the pre-retention threads that were on
+ *     the old crew/threads panel before this surface existed. They have no request/answer text, so
+ *     `retained` is false and the UI renders the row metadata the record still owns.
+ */
+export function agentThreads(
+    store: Store,
+    kind: Run['role'],
+    harness: StoryThreadRecord[],
+    recorded: StoryThreadRecord[]
+): AgentThreadRecord[] {
+    const byThread = new Map<string, AgentThreadRecord>();
+
+    for (const record of [...recorded, ...harness]) {
+        if (record.role !== kind) continue;
+
+        const story = store.stories.get(record.story_id) as Story | undefined;
+
+        byThread.set(record.thread_id, {
+            ...record,
+            story_title: story?.title ?? record.story_title
+        });
+    }
+
+    // A run row is the parent of the live/retained threads its label names (`run_7`,
+    // `run_7#agent_2`); it must not appear a second time as a legacy bar.
+    const coveredRuns = new Set([...byThread.values()].map((record) => record.run_id.split('#')[0]));
+
+    for (const run of store.runs.list()) {
+        if (run.role !== kind || coveredRuns.has(run.id)) continue;
+
+        const story = store.stories.get(run.story_id) as Story | undefined;
+        const state = THREAD_STATE_OF_RUN[run.state];
+
+        byThread.set(`run_row:${run.id}`, {
+            thread_id: `run_row:${run.id}`,
+            run_id: run.id,
+            story_id: run.story_id,
+            story_title: story?.title ?? run.story_id,
+            phase: legacyPhase(store, run),
+            role: run.role,
+            role_name: run.role,
+            title: run.work_item_ref ?? run.id,
+            state,
+            started_at: run.started_at,
+            ...(run.ended_at === undefined || run.ended_at === null ? {} : { ended_at: run.ended_at }),
+            tokens: run.tokens,
+            request: [
+                `Work item: ${run.work_item_ref ?? '—'}`,
+                `Template: ${run.template_ref ?? '—'}`,
+                `Brief hash: ${run.brief_hash ?? '—'}`
+            ].join('\n'),
+            answer: run.end_reason ?? (state === 'torn_down' ? 'completed' : ''),
+            ...(run.end_reason === undefined ? {} : { error: run.end_reason }),
+            retained: false
+        });
+    }
+
+    return [...byThread.values()].sort(
+        (left, right) =>
+            left.started_at.localeCompare(right.started_at) || left.thread_id.localeCompare(right.thread_id)
+    );
 }
 
 // ---------------------------------------------------------------------------

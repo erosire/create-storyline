@@ -23,6 +23,7 @@
 // source of truth for something the proxy already decides.
 
 import type {
+    CastMember,
     Cost,
     Criterion,
     Chapter,
@@ -30,6 +31,7 @@ import type {
     Finding,
     Goal,
     Idea,
+    LedgerEntry,
     Proposal,
     Revision,
     Run,
@@ -131,6 +133,17 @@ export interface StoryView {
     summary: Summary | null;
     plotlines: Plotline[];
     chapters: Chapter[];
+    /**
+     * §4.5 — the cast sheet. The Characters phrase reads it as the story's people and the state
+     * they carry; the records themselves are Writer-owned (§7), so this is a projection, never a
+     * second copy the dashboard may edit directly.
+     */
+    cast: CastMember[];
+    /**
+     * §4.6 — the continuity facts. The Continuity folder renders the ledger as it stands; the
+     * mechanical checks C-5/C-6 stay on the server (G-3).
+     */
+    ledger: LedgerEntry[];
     goal: GoalSurface;
     ideas: Idea[];
     revisions: Revision[];
@@ -323,13 +336,13 @@ export interface AgentRecentRun {
     tokens: number;
 }
 
-/** One tenant of the global agent roster, with every Story thread it is currently working. */
+/** One employee on the global roster, with every Story thread it is currently working. */
 export interface AgentStatusRow {
     /** `writer` | `editor` | `reader` | `checker` — the Storyline role, shared by every Story. */
     kind: string;
     title: string;
     status: 'idle' | 'running';
-    /** The harness rank every configured agent holds; `A` is a peer, not a lead (R15). */
+    /** The harness rank this employee holds; `A` is a peer, not a lead (R15, V-2). */
     rank?:
         | 'A'
         | 'B'
@@ -357,10 +370,8 @@ export interface AgentStatusRow {
         | 'X'
         | 'Y'
         | 'Z';
-    /** True for the session's ENTRY agent — routing, never authority (R15). */
-    entry?: boolean;
     /**
-     * U-8 / T-6b — the roster's model for this agent, or the process model when the Author has
+     * U-8 / T-6b — the roster's model for this employee, or the process model when the Author has
      * set none. Optional on the client contract so an older/fake projection still renders: the
      * tile says "not reported" rather than inventing a model.
      */
@@ -381,8 +392,49 @@ export interface AgentStatusRow {
         thread_id: string;
         started_at: number;
     }>;
-    /** The newest closed runs of this kind, newest first — the tile's "why did it end" (S-3). */
+    /** The newest closed threads of this kind, newest first — the tile's "why did it end" (S-3). */
     recent?: AgentRecentRun[];
+}
+
+/** The four states a retained thread bar can read. */
+export type AgentThreadState = 'running' | 'torn_down' | 'failed' | 'abandoned';
+
+/**
+ * One thread of one employee, as the employee tile's content surface renders it. A thread is the
+ * employee acting as an agent for one Run.
+ * harness's execution unit: the Story is the harness, the phase is its session, and this row is
+ * one conversation inside that session. `request` and `answer` are the whole detail surface —
+ * the Author asked for those two, not a segment timeline.
+ */
+export interface AgentThreadRecord {
+    /** The engine thread id; unique for the life of the record. */
+    thread_id: string;
+    /** The Storyline Run row this thread belongs to (a panel's N threads share one id). */
+    run_id: string;
+    story_id: string;
+    story_title: string;
+    /** The phrase (session) the thread ran in — P1 Summary, P3 Plotlines, P4 Chapters. */
+    phase: 'summary' | 'plotlines' | 'chapters';
+    role: string;
+    /** The role name on the bar (`writer`, `editor#agent_2`, a delegated role). */
+    role_name: string;
+    /** What the thread was asked to do, in one line. */
+    title: string;
+    state: AgentThreadState;
+    started_at: string;
+    ended_at?: string;
+    tokens: number;
+    request: string;
+    answer: string;
+    error?: string;
+    /** False for a legacy Run row whose pre-retention transcript is gone. */
+    retained: boolean;
+}
+
+/** `GET /agents/:kind/threads` — every retained thread of one employee, oldest first. */
+export interface AgentThreadList {
+    kind: string;
+    threads: AgentThreadRecord[];
 }
 
 /** The full method set T9 imports — one entry per route in the pinned table. */
@@ -397,13 +449,20 @@ export interface ApiClient {
     getStory(storyId: string): Promise<StoryView>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
-    /** The global Story-agent roster: Writer/Editor/Reader/Checker, their models and live threads. */
+    /** The global employee roster: Writer/Editor/Reader/Checker, their models and live threads. */
     listAgents(): Promise<AgentStatusRow[]>;
     /** U-8 — the provider's model catalog, the roster dropdown's only choices. */
     listAgentModels(): Promise<AgentModelCatalog>;
     /**
-     * U-8 — set (or clear, with `null`) one agent's model on the global roster. Answers the whole
-     * refreshed projection, because every tile's model line is server-owned.
+     * U-8 — every thread one employee ran, across every Story and every phrase session, oldest
+     * first.
+     * This is what clicking the employee tile opens in the content area; `request` and `answer`
+     * are the detail of each bar.
+     */
+    listAgentThreads(kind: string): Promise<AgentThreadList>;
+    /**
+     * U-8 — set (or clear, with `null`) one employee's model on the global roster. Answers the
+     * whole refreshed projection, because every tile's model line is server-owned.
      */
     setAgentModel(kind: string, model: string | null): Promise<AgentStatusRow[]>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
@@ -439,7 +498,7 @@ export interface ApiClient {
     selectRevisionAuthor(storyId: string, revisionId: string, note?: string): Promise<StoryRow>;
     /** U-13a / D-23 — the Author asks for named drafts to be merged; the drafts stay competing. */
     mergeRevisions(storyId: string, request: RevisionMergeRequest): Promise<StoryRow>;
-    /** U-9 / D-19 — one line of intent that becomes a `directives` record and propagates. */
+    /** U-9 / D-19 — one line addressed to the Editor; it records a `directives` row and propagates. */
     sendDirective(storyId: string, text: string): Promise<StoryRow>;
     /** L-26 — the Author's acceptance is what closes the leftovers (L-25b). */
     acceptCompletion(storyId: string): Promise<StoryRow>;
@@ -632,6 +691,7 @@ export const api: ApiClient = {
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),
     listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
+    listAgentThreads: (kind) => request<AgentThreadList>(`/agents/${encodeURIComponent(kind)}/threads`),
     setAgentModel: (kind, model) => patch<AgentStatusRow[]>(`/agents/${encodeURIComponent(kind)}`, { model }),
     patchStory: (storyId, body) => patch<StoryRow>(storyPath(storyId), body),
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),

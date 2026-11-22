@@ -37,6 +37,7 @@ import {
     type AssistantRequest,
     type RevisionMergeRequest,
     type AgentStatusRow,
+    type AgentThreadRecord,
     type StoryKnowledgeTree
 } from './api';
 import type { Cost, Run, Template } from '../shared/types';
@@ -57,10 +58,17 @@ export interface DashboardSnapshot {
     runs: Run[];
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
-    /** The global Story-agent roster and every Story thread each one is working right now. */
+    /** The global employee roster and every Story thread each employee is working right now. */
     agents: AgentStatusRow[];
     /**
-     * U-8 — the provider's model catalog (`GET /agents/models`). The agent tiles offer exactly
+     * U-8 — the employee whose retained threads the content area is showing, or null for the Story
+     * (or the Author's queue). Selecting a tile IS this value; the detail lives in the centre.
+     */
+    selectedAgent: string | null;
+    /** `employee kind -> every retained thread, oldest first` (the tile-opened content surface). */
+    agentThreads: Record<string, AgentThreadRecord[]>;
+    /**
+     * U-8 — the provider's model catalog (`GET /agents/models`). The employee tiles offer exactly
      * these ids; an empty list means the catalog has not answered yet, never that typing is allowed.
      */
     agentModels: string[];
@@ -81,6 +89,8 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     runs: [],
     templates: [],
     agents: [],
+    selectedAgent: null,
+    agentThreads: {},
     agentModels: [],
     queueStoryFilter: null,
     error: null,
@@ -148,6 +158,17 @@ export function createDashboardStore(client: ApiClient = api) {
 
     const refreshAgents = (): Promise<void> => refresh('agents', async () => ({ agents: await client.listAgents() }));
 
+    /**
+     * U-8 — the selected tile's retained threads. One read per employee kind, invalidated by the
+     * `runs` event and by every mutation, because a thread closes on the run's own schedule.
+     */
+    const refreshAgentThreads = (kind: string): Promise<void> =>
+        refresh(`agentThreads:${kind}`, async () => {
+            const list = await client.listAgentThreads(kind);
+
+            return { agentThreads: { ...snapshot.agentThreads, [kind]: list.threads } };
+        });
+
     /** U-8 — the provider's catalog. Read once per page; a provider restart is a later reload's job. */
     const refreshAgentModels = (): Promise<void> =>
         refresh('agentModels', async () => ({ agentModels: (await client.listAgentModels()).models }));
@@ -186,6 +207,9 @@ export function createDashboardStore(client: ApiClient = api) {
             const refetch: Array<Promise<void>> = [refreshStories(), refreshQueue(), refreshRuns(), refreshAgents()];
             if (touchedStoryId) {
                 refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId));
+            }
+            if (snapshot.selectedAgent) {
+                refetch.push(refreshAgentThreads(snapshot.selectedAgent));
             }
             await Promise.all(refetch);
             // Cleared only after the refetch, so a refusal from the refresh still surfaces.
@@ -244,6 +268,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 if (kind === 'runs') {
                     void refreshRuns();
                     void refreshAgents();
+                    if (snapshot.selectedAgent) void refreshAgentThreads(snapshot.selectedAgent);
                     return;
                 }
                 if (storyId) {
@@ -264,7 +289,8 @@ export function createDashboardStore(client: ApiClient = api) {
         // ---- navigation --------------------------------------------------------------
         /** Selecting a Story always re-reads it: a cached view would render a stale lock (P1). */
         openStory(storyId: string): Promise<StoryRow | null> {
-            commit({ activeStoryId: storyId, loading: true });
+            // Opening a Story is the explicit way back from an employee's thread surface.
+            commit({ activeStoryId: storyId, selectedAgent: null, loading: true });
             return mutate(async () => {
                 await Promise.all([refreshStory(storyId), refreshKnowledge(storyId), refreshRuns(), refreshStories()]);
                 return snapshot.stories.find((row) => row.id === storyId) ?? null;
@@ -272,8 +298,17 @@ export function createDashboardStore(client: ApiClient = api) {
         },
         /** Back to the Author's queue — the home screen (U-10). */
         closeStory(): void {
-            commit({ activeStoryId: null, queueStoryFilter: null });
+            commit({ activeStoryId: null, selectedAgent: null, queueStoryFilter: null });
             void refreshRuns();
+        },
+        /**
+         * U-8 — the tile's one verb: the content area becomes that employee's thread surface. A
+         * null closes the surface and returns the centre to whatever was underneath it.
+         */
+        selectAgent(kind: string | null): Promise<void> {
+            commit({ selectedAgent: kind });
+
+            return kind === null ? Promise.resolve() : refreshAgentThreads(kind);
         },
         setQueueFilter(storyId: string | null): void {
             commit({ queueStoryFilter: storyId });
@@ -287,7 +322,8 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshTemplates(),
                 refreshAgents(),
                 refreshAgentModels(),
-                refreshRuns()
+                refreshRuns(),
+                ...(snapshot.selectedAgent ? [refreshAgentThreads(snapshot.selectedAgent)] : [])
             ]).then(() => undefined);
         },
 
@@ -297,7 +333,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 const row = await client.createStory(input);
                 // The new Story is immediately THE STORY: the Author just wrote a Seed and the
                 // next thing they do is work phase ① (U-12: usable with zero harnesses).
-                commit({ activeStoryId: row.id });
+                commit({ activeStoryId: row.id, selectedAgent: null });
                 await Promise.all([refreshStory(row.id), refreshKnowledge(row.id), refreshStories()]);
                 return row;
             });
@@ -391,7 +427,7 @@ export function createDashboardStore(client: ApiClient = api) {
 
         // ---- crew + templates (U-7 / U-8) ---------------------------------------------
         /**
-         * U-8 — one agent's model on the global roster. `mutate` already refreshes `agents`, so a
+         * U-8 — one employee's model on the global roster. `mutate` already refreshes `agents`, so a
          * tile can never keep showing the model it had before the Author's click.
          */
         setAgentModel: (kind: string, model: string | null) => mutate(() => client.setAgentModel(kind, model)),

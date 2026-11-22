@@ -233,8 +233,18 @@ export function StoriesPanel() {
                                 type="button"
                                 className="story-row__open"
                                 data-testid="story-row-open"
-                                onClick={() => void store.openStory(row.id)}
+                                // U-4: the left rail is a toggle, not a one-way door — clicking the
+                                // Story already open puts the Author back on the queue.
+                                onClick={() => {
+                                    if (active) {
+                                        store.closeStory();
+                                        return;
+                                    }
+
+                                    void store.openStory(row.id);
+                                }}
                                 aria-current={active ? 'true' : undefined}
+                                title={active ? `close ${row.title}` : `open ${row.title}`}
                             >
                                 <span className="story-row__title">{row.title}</span>
 

@@ -18,9 +18,10 @@ import { RevisionsCompare } from './RevisionsCompare';
 import { ProseEditor } from './ProseEditor';
 import {
     ACTIVITY_LABELS,
+    ACTIVITY_ORDER,
     buildRevisionUnits,
+    classifyChapter,
     competingRevisionsFor,
-    groupChapters,
     undoTargetFor
 } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
@@ -45,15 +46,34 @@ export interface PlotlineChaptersProps {
     liveRuns: number;
     /** The runs the pause already stopped (U-17's banner). */
     killedRuns: number;
+    /** The phrase's own heading, when the shell renders this pane for Chapters. */
+    title?: string;
+    /** The rail's selected chapter; absent means every chapter, grouped as before. */
+    onlyChapterRef?: string;
 }
 
-export function PlotlineChapters({ view, actions, paused, liveRuns, killedRuns }: PlotlineChaptersProps) {
+export function PlotlineChapters({
+    view,
+    actions,
+    paused,
+    liveRuns,
+    killedRuns,
+    title = 'Plotlines and chapters — the contract beside the prose (U-4)',
+    onlyChapterRef
+}: PlotlineChaptersProps) {
     const units = buildRevisionUnits(view);
+    const shownChapters = onlyChapterRef
+        ? view.chapters.filter((chapter) => chapter.id === onlyChapterRef)
+        : view.chapters;
+    const groups = ACTIVITY_ORDER.map((group) => ({
+        group,
+        chapters: shownChapters.filter((chapter) => classifyChapter(chapter, view) === group)
+    }));
 
     return (
         <section className="sv-pane sv-chapters" aria-label="Plotlines and chapters">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Plotlines and chapters — the contract beside the prose (U-4)</h3>
+                <h3 className="sv-pane-title">{title}</h3>
                 {/* L-8: the wall of motion is the point, so the grouping is what the Author reads. */}
                 <span className="sv-pane-badge">
                     all chapters are in flight together, so the view groups them by what the crews are doing (L-8,
@@ -61,11 +81,13 @@ export function PlotlineChapters({ view, actions, paused, liveRuns, killedRuns }
                 </span>
             </header>
 
-            {view.chapters.length === 0 ? (
-                <p className="sv-chapters-none">No chapters yet — phase ② has not produced a contract to expand.</p>
+            {shownChapters.length === 0 ? (
+                <p className="sv-chapters-none">
+                    No chapters yet — the plotline contracts have not been expanded into prose.
+                </p>
             ) : null}
 
-            {groupChapters(view).map(({ group, chapters }) =>
+            {groups.map(({ group, chapters }) =>
                 chapters.length === 0 ? null : (
                     // Decision 0/5: the group heading is the sentence, so the Author reads state, not counts.
                     <section

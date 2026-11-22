@@ -1,7 +1,7 @@
 // The agentic loop — the one turn engine this build has, shared by the dispatched run, the
 // D-38 panel's agents, and the D-17e delegate's sub-context.
 //
-// WHY ONE LOOP FOR ALL THREE: S-1 says a run is one session for one job, D-17e says a
+// WHY ONE LOOP FOR ALL THREE: S-1 says a run is one thread for one job, D-17e says a
 // delegated sub-context is the same thing minus the Work Item, and D-38 says a panel is N of
 // them inside one run. Any separate implementation of "call the model, run its tools, feed the
 // results back" would drift on the parts that matter most: how a tool result is serialised,
@@ -68,6 +68,10 @@ export interface LoopDeps {
 export interface LoopSpec {
     /** Whose loop this is, for diagnostics in a thrown error (`run_7`, `run_7#agent_2`). */
     label: string;
+    /** The Run row this thread belongs to (a panel agent's own label is not the parent's id). */
+    runId?: string;
+    /** One line naming what this thread was asked to do (the thread bar's title). */
+    requestTitle?: string;
     /** The assembled brief (S-2) — the run's whole memory, sent as the system turn. */
     system: string;
     /** The ask (S-2's job, restated as an instruction). */

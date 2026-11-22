@@ -92,30 +92,50 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         expect(await storyRow(fixture, storyId)).toMatchObject({ status: 'pending', pending_kind: 'phase_signoff' });
     });
 
-    it("a directive reaches the Story as the Author's sentence, and the loop reads it (L-11)", async () => {
+    it('a directive reaches the Editor, whose review closes it with the tasks it queued (L-11, D-19)', async () => {
         const directive = await fixture.api<Record<string, unknown>>('POST', `/stories/${storyId}/directives`, {
             text: 'The keeper never learns her own name. Keep it that way.'
         });
 
         expect(directive.status).toBe(200);
         // The verb routes answer with the Story row they acted on, not the Directive row: the Author's
-        // desk is the Story, and the sentence is read back from the ledger.
-        expect({ id: directive.body.id, phase: directive.body.phase }).toEqual({ id: 'story_1', phase: 'summary' });
+        // desk is the Story, and the sentence is read back from the ledger. A pending sign-off is
+        // re-armed by the Author's decision (L-27).
+        expect({ id: directive.body.id, phase: directive.body.phase, status: directive.body.status }).toEqual({
+            id: 'story_1',
+            phase: 'summary',
+            status: 'ready'
+        });
 
         expect(fixture.store.directives.require('directive_1')).toMatchObject({
             story_id: 'story_1',
             text: 'The keeper never learns her own name. Keep it that way.',
-            // The route propagates on the spot: by the time the POST answers, the loop has decided which
-            // units the sentence touches and the Directive is `done`, with that impact on its row.
-            state: 'done'
+            // The server records the direction; the Editor's review is the next sweep's thread, so
+            // the row is still propagating when the POST answers (V-1: Author → Editor → tasks).
+            state: 'propagating'
         });
 
-        // Propagated with nothing to touch: at phase ① there are no plotlines or chapters for a sentence
-        // about the ending to land on, so the impact list is the honest empty one (L-11).
+        // The Editor reviews it. At phase ① the sentence names no plotline or chapter, so the honest
+        // task plan is empty and the directive closes `done` with a zero task count (L-11).
+        await fixture.tick();
+
         const propagated = fixture.store.directives.require('directive_1');
 
-        expect(Array.isArray(propagated.impact)).toBe(true);
         expect(propagated.impact).toEqual([]);
+        expect({ state: propagated.state, tasks: propagated.report?.tasks_created }).toEqual({
+            state: 'done',
+            tasks: 0
+        });
+
+        // The review is a real Editor thread, not a server shortcut: one run, the editor role, and
+        // the directive as its job (V-1: the Author's only channel is the Editor).
+        const review = fixture.store.runs.list().filter((run) => run.work_item_ref === 'wi_directive_directive_1');
+
+        expect(review).toHaveLength(1);
+        expect({ role: review[0]?.role, template: review[0]?.template_ref }).toEqual({
+            role: 'editor',
+            template: 'editor-general'
+        });
     });
 
     it('the assistant run is a run the Author can see, answering one question at a time', async () => {
@@ -130,17 +150,16 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         // The Author's question is a run row the moment it is asked (D-18: the row exists before the
         // first token). It is the plumbing kind the assistant reads with, and its work item is the
         // Author's own ask, not one of the loop's jobs.
-        expect({ kind: first.body.kind, role: first.body.role, work_item_ref: first.body.work_item_ref }).toEqual({
-            kind: 'assistant',
-            role: 'writer',
-            work_item_ref: 'assistant_story_1_5'
-        });
+        expect({ kind: first.body.kind, role: first.body.role }).toEqual({ kind: 'assistant', role: 'writer' });
+        // The claim key is scoped to this Story; its counter is the book's run count, so it moves
+        // whenever the loop has opened a thread before it (the directive review does exactly that).
+        expect(String(first.body.work_item_ref)).toMatch(/^assistant_story_1_\d+$/);
         expect((await fixture.api<Array<Record<string, unknown>>>('GET', '/runs')).body.length).toBe(before + 1);
 
         // The run answers by reading, and it writes nothing: the assistant's tools are all reads (§8.5).
         await fixture.tick();
 
-        const run = fixture.store.runs.require('run_5');
+        const run = fixture.store.runs.require(String(first.body.id));
 
         expect({ kind: run.kind, delegated: run.delegated, end_reason: run.end_reason }).toEqual({
             kind: 'assistant',

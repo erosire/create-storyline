@@ -42,7 +42,7 @@ export interface WorkUnitRef {
 }
 
 /**
- * One job, one fresh harness (S-1: "one Work Item = one Run = one fresh session. A run is
+ * One job, one fresh thread (S-1: "one Work Item = one Run = one fresh thread. A thread is
  * never handed a second job"). The claim/lease lives with the sweep (L-2, W5); this is the
  * payload it hands over, and it is deliberately ref-only (tasks, findings, Ideas, directives
  * are read from the store, so the brief is assembled from ONE source — S-2, P1).
@@ -153,7 +153,7 @@ export type RunToolSession = {
     runId?: string;
     /** The run attribution a write carries (P11). For a sub-context this is the PARENT's id. */
     runRef?: string;
-    /** `'sess_' + runId` (S-1: one session per run, never reused). */
+    /** `'sess_' + runId` — the tool-runtime context id for this Run's thread; one per run, never reused. */
     sessionRef?: string;
     templateRef?: string;
     /**
@@ -223,6 +223,8 @@ export interface RunExecutorDeps {
      * path observe the same threads.
      */
     harness?: import('./story-engine').StoryHarnessManager;
+    /** The retained thread history, written when each thread closes (request + answer). */
+    threadLog?: import('./thread-log').StoryThreadLog;
 }
 
 /** How many journal entries the "what changed since the last pass" section carries (S-2). */

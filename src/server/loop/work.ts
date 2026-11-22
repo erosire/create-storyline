@@ -42,6 +42,7 @@ import {
     verdictsTargeting,
     wholeStoryVerdicts
 } from './records';
+import { pendingDirectives } from './directives';
 import { dialKeyOf, drainPreconditions, probeIsLive } from './status';
 import type { WorkCandidate } from './types';
 import type { RoleKind, StoryPhase, Story, Task, Template, UnitKind, Chapter } from '../../shared/types';
@@ -353,6 +354,27 @@ function roleNameOf(template: Template, kind: RoleKind): string {
 export function generateWork(store: Store, story: Story, ctx: { at: string; phase: StoryPhase }): WorkCandidate[] {
     const out: WorkCandidate[] = [];
     const units = phaseUnits(store, story);
+
+    // -- The Author's directive, before everything else -------------------------------------------
+    // The Author's one channel is the Editor (V-1): a propagating directive is a job for the Editor,
+    // whose review turns it into queued tasks. THIS is the boundary that is not a delegate — the
+    // Editor queues Work for the loop, and the loop opens a fresh thread per task (S-1), rather than
+    // the Editor fanning out to Writers inside its own run.
+    for (const directive of pendingDirectives(store, story.id)) {
+        const built = candidate(
+            store,
+            story,
+            'directive_work',
+            'editor',
+            undefined,
+            `wi_directive_${directive.id}`,
+            `read the Author's directive ${directive.id} and set the tasks it implies (D-19)`,
+            0,
+            { directiveRef: directive.id }
+        );
+
+        if (built) out.push(built);
+    }
 
     // -- Editors first: the choice (L-20) and the verification (D-33, D-27) -----------------------
     const writerAttempts = attemptsOf(templatesFor(store, story, 'writer')[0]);

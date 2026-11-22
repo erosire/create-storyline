@@ -198,6 +198,12 @@ export type LoopChapter = Chapter & LoopChapterAdditions;
 /** D-19's impact report, beside §4.14's `impact` ref list. */
 export interface LoopDirectiveAdditions {
     report?: DirectiveReport;
+    /**
+     * The artifacts the directive resolved to before the Editor turned it into tasks (chapters,
+     * plotlines, a Summary, widened by `chapter_deps`). Unlike `impact` it never carries ledger
+     * entries, so the task planner and the fallback can read exactly the editable units.
+     */
+    targets?: string[];
 }
 
 export type LoopDirective = Directive & LoopDirectiveAdditions;
@@ -383,7 +389,7 @@ export type GoalPatch = Partial<
 export interface CreateStoryInput {
     /** §4.1 `title`, Author-set. Defaults to the Seed's first line. */
     title?: string;
-    /** §4.1 `idea` — the Seed. Author truth, read-only for every agent forever (P5). */
+    /** §4.1 `idea` — the Seed. Author truth, read-only for every employee — and therefore every agent — forever (P5). */
     idea?: string;
     /** §4.2 `chapter_count`, Author-declared (D-3b). Defaults to 1 so C-0 has a fact to count. */
     chapter_count?: number;

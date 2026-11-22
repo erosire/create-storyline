@@ -24,10 +24,12 @@
  */
 import { criterionById } from '../../shared/criteria';
 import type {
+    CastMember,
     Chapter,
     Criterion,
     Finding,
     Idea,
+    LedgerEntry,
     Plotline,
     Proposal,
     Revision,
@@ -240,6 +242,74 @@ export function fixtureChapters(): Chapter[] {
             author_locked: false,
             round: 2,
             last_score: '1/5 criteria passed'
+        }
+    ];
+}
+
+/** §4.5 — the cast sheet the Characters phrase renders (D-9: `state_now` is a tracked fact). */
+export function fixtureCast(): CastMember[] {
+    return [
+        {
+            id: 'cast_member_1',
+            rev: 3,
+            created_at: ago(420),
+            updated_at: ago(90),
+            story_id: 's1',
+            name: 'Hale',
+            want: 'Get inside the sealed stack and read what her successor left.',
+            need: 'Admit that she wrote the index herself.',
+            arc: 'From archivist to trespasser to author of the record.',
+            voice: 'Clipped, technical, cites everything; goes quiet when frightened.',
+            state_now: 'Holds the refusal citation; no longer trusts the badge system.',
+            traits: 'Patient · exact · allergic to euphemism',
+            gender: 'woman'
+        },
+        {
+            id: 'cast_member_2',
+            rev: 2,
+            created_at: ago(400),
+            updated_at: ago(30),
+            story_id: 's1',
+            name: 'The Curator',
+            want: 'Keep the cathedral sealed and the water out.',
+            need: 'Be read by someone who remembers the flood.',
+            arc: 'From gatekeeper to the first voice inside the index.',
+            voice: 'Warm, procedural, never angry.',
+            state_now: 'Answers before Hale touches the index.',
+            traits: 'Unhurried · institutional',
+            gender: 'unknown'
+        }
+    ];
+}
+
+/** §4.6 — the continuity facts the Continuity folder renders (C-5/C-6 are server checks). */
+export function fixtureLedger(): LedgerEntry[] {
+    return [
+        {
+            id: 'ledger_1',
+            rev: 2,
+            created_at: ago(410),
+            updated_at: ago(90),
+            story_id: 's1',
+            kind: 'setup',
+            subject: 'the sealed stack',
+            detail: 'The closed stack behind the reading room must be entered before chapter 3.',
+            chapter_ref: 'c1',
+            status: 'open',
+            fingerprint: 'fp-ledger-stack'
+        },
+        {
+            id: 'ledger_2',
+            rev: 1,
+            created_at: ago(200),
+            updated_at: ago(30),
+            story_id: 's1',
+            kind: 'fact',
+            subject: 'her own voice in the index',
+            detail: 'The index speaks in Hale’s voice before the reader hears her speak aloud.',
+            chapter_ref: 'c2',
+            status: 'conflict',
+            fingerprint: 'fp-ledger-voice'
         }
     ];
 }
@@ -794,6 +864,8 @@ export function fixtureView(options: { completion?: CompletionPreview | null } =
         summary: fixtureSummary(),
         plotlines: fixturePlotlines(),
         chapters: fixtureChapters(),
+        cast: fixtureCast(),
+        ledger: fixtureLedger(),
         goal: fixtureGoal(),
         ideas: fixtureIdeas(),
         revisions: fixtureRevisions(),

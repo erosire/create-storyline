@@ -1,14 +1,16 @@
-// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the phrases panel.
+// U-7 / D-18 / S-3 / S-6 / S-7 / U-8d — the live-thread (crew) panel.
 //
-// A RUN IS A PHRASE. Each dispatch spins up its own session — a phrase — against the story's
-// Goal, using the global agents the right-hand catalogue configures. D-18 makes `runs` the data
-// source precisely so a row exists from spawn to teardown, and the Author can watch a phrase and
-// pull the cord on that one phrase (U-7's kill button).
+// VOCABULARY (V-1): a row here is a THREAD, not a "phrase" and not an employee. A dispatched Run
+// opens one thread inside the Story phase's session (the UI's "phrase": P1/P3/P4), under the
+// employee kind the template role names; the employee is the standing identity, and it is an agent
+// only for the life of that thread. D-18 makes `runs` the data source precisely so a row exists
+// from spawn to teardown, and the Author can watch a thread and pull the cord on that one thread
+// (U-7's kill button).
 //
-// S-7 is the nesting rule: a delegated sub-context (D-17e) is a THREAD a phrase spins to do a
+// S-7 is the nesting rule: a delegated sub-context (D-17e) is a THREAD the parent run spun to do a
 // task, not a Work Item, so it gets no row of its own — the Author's unit of attention and of
-// control is the dispatched phrase. It is drawn nested under its parent, and the parent stays
-// the only row with a kill button.
+// control is the dispatched thread. It is drawn nested under its parent, and the parent stays the
+// only row with a kill button.
 //
 // U-8d is the disagreement marker: when a role's N agents disagreed, the dissent is supposed to
 // be named in the `selection_note`, and the Author needs to know which authoritative answers were
@@ -145,9 +147,7 @@ export function CrewPanel({ runs, templates, now, onKillRun }: CrewPanelProps) {
                 <span className="sv-pane-badge">{live.length} running</span>
             </header>
 
-            {live.length === 0 ? (
-                <p className="sv-crew-idle">No phrase is running on this story right now.</p>
-            ) : null}
+            {live.length === 0 ? <p className="sv-crew-idle">No phrase is running on this story right now.</p> : null}
             <ul className="sv-runs">{live.map(renderRun)}</ul>
 
             {closed.length > 0 ? (

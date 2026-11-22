@@ -623,6 +623,27 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                 }
             }));
 
+        // The Author's channel is the Editor: its review turns the directive into queue entries.
+        // The rig's directive names the artifact refs the server resolved, so one task per target is
+        // exactly the plan a model would write from the same brief (D-19).
+        case 'directive_work': {
+            const directive = item.directiveRef ? store.directives.get(item.directiveRef) : undefined;
+            const targets = directive?.targets ?? [];
+
+            return targets
+                .filter((ref) => ref !== item.storyId)
+                .map((ref) => ({
+                    name: 'createTask',
+                    args: {
+                        title: `propagate: ${directive?.text.slice(0, 120) ?? 'the directive'}`,
+                        detail: `${item.directiveRef} · ${ref}`,
+                        owner_role: 'writer',
+                        priority: 1,
+                        why: `the Editor queued the Author's directive onto ${ref} (D-19, D-11)`
+                    }
+                }));
+        }
+
         default:
             return [];
     }

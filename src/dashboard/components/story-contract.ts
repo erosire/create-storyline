@@ -198,11 +198,15 @@ export interface StoryActions {
 /** §4.1 — the three phases, in order. There is no fourth (`completed` is a status, L-25a). */
 export const PHASE_ORDER: StoryPhase[] = ['summary', 'plotlines', 'chapters'];
 
-/** Decision item 8 — the UI vocabulary is Seed, Summary, plotline, chapter; the numbers are the strip. */
+/**
+ * Decision item 8 — the UI vocabulary is Seed, Summary, plotline, chapter. The phrase numbers are
+ * the left rail's reading order (Phrase 1 … 4); the loop's own controls name the artifact they
+ * sign rather than repeating a number the four-phrase rail already carries.
+ */
 export const PHASE_LABELS: Record<StoryPhase, string> = {
-    summary: '① Summary',
-    plotlines: '② Plotlines',
-    chapters: '③ Chapters'
+    summary: 'Summary',
+    plotlines: 'Plotlines',
+    chapters: 'Chapters'
 };
 
 /** Which lock signed which phase. Phase ③'s lock IS `completed` (L-25a), hence the status test. */

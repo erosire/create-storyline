@@ -17,6 +17,7 @@
 import { resolveServerConfig } from './config';
 import { Store } from './store/store';
 import { StoryKnowledge } from './knowledge';
+import { StoryThreadLog } from './run/thread-log';
 import { buildStorylineRuntime, startStorylineServer } from './api/server';
 import type { StorylineServerConfig } from './config';
 import type { StorylineRuntime, StorylineRuntimeOptions, StorylineServerHandle } from './api/server';
@@ -57,8 +58,9 @@ export async function createStorylineApp(options: CreateStorylineAppOptions = {}
         options.storeRoot === undefined ? resolveServerConfig({ env: options.env }).storeRoot : options.storeRoot;
     const store = options.store ?? (await openStore(storeRoot));
     const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
+    const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
 
-    return buildStorylineRuntime({ ...options, store, knowledge });
+    return buildStorylineRuntime({ ...options, store, knowledge, threadLog });
 }
 
 // ---------------------------------------------------------------------------
@@ -86,11 +88,13 @@ export async function bootStorylineServer(options: BootStorylineOptions = {}): P
     const storeRoot = options.storeRoot === undefined ? resolved.storeRoot : options.storeRoot;
     const store = options.store ?? (await openStore(storeRoot));
     const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
+    const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
 
     return startStorylineServer({
         ...options,
         store,
         knowledge,
+        threadLog,
         port: options.port ?? resolved.port,
         host: options.host ?? resolved.host,
         // An explicit `null` means "API only" and must not fall through to the `dist/` probe.

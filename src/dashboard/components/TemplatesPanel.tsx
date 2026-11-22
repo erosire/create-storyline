@@ -1,21 +1,25 @@
-// U-8 / U-8a / U-8b / U-8c / U-8d / D-17 / D-38 — the template panel: the harness catalogue.
+// U-8 / U-8a / U-8b / U-8c / U-8d / D-17 / D-38 — the template panel: the crew definitions.
+//
+// VOCABULARY (V-1): a template is a crew definition, not an employee and not an agent. Each role
+// names the employee kind that takes the job; the thread that later executes it is the agent. This
+// panel edits definitions only — it never shows a running thread (the crew panel does that).
 //
 // P12 is the reason this panel exists: a template is not a generic expert, it is THIS Author's
 // judgment externalised, so every dial that shapes the crew has to be reachable from the UI.
-//   - U-8a: the Writer must be visually distinct from the crew that only judges (U-8a, D-17b).
+//   - U-8a: a Writer role must be visually distinct from the roles that only judge (U-8a, D-17b).
 //   - U-8b: an Editor's `selection_rules` is editable IN PLACE, because that text IS the Author's
 //     automated taste (D-17c) — editing it and watching the next `selection_note` change is the
 //     product's core tuning loop.
 //   - U-8c: `attempts` is on the card because it is the dial that turns divergence on and off (D-17d).
-//   - U-8d: each role row states `agents: N` and its `aggregate` mode, since "this Editor is three
-//     agents that argue and return one answer" (D-38) is otherwise invisible.
+//   - U-8d: each role row states `agents: N` and its `aggregate` mode, since "this Editor is N
+//     agents of that employee kind, arguing and returning one answer" (D-38) is otherwise invisible.
 //
 // D-17 closes the set of verbs: create from scratch, duplicate, then edit roles/prompts, agents
 // and aggregate, selection_rules, attempts, and done-definition. Built-ins are duplicated, NEVER
 // edited in place — so their edit controls are disabled and Duplicate is the only mutation.
 //
-// D-17b/D-38a: write permission comes from a template ASSIGNED to the Story as a Writer, and the
-// count is the Author's call, so "Assign as Writer" is repeatable and assigning a second Writer is
+// D-17b/D-38a: write permission comes from a Writer ROLE in a template assigned to the Story, and
+// the count is the Author's call, so "Assign as Writer" is repeatable and a second Writer role is
 // two voices, not a configuration error (the loop reports their divergence as a `taste` finding).
 import { useState } from 'react';
 import { blankTemplatePayload, hasEditorRole, isPanelRole } from './story-contract';

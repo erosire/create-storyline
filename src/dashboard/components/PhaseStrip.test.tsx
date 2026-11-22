@@ -18,22 +18,18 @@ describe('PhaseStrip — where the Story stands (U-12a)', () => {
         const items = container.querySelectorAll('.sv-phase-item');
 
         // Order is load-bearing: the strip is the pipeline, not a set of tabs.
-        expect(Array.from(items).map((item) => item.textContent)).toEqual([
-            '① Summary🔒',
-            '② Plotlines🔒',
-            '③ Chapters'
-        ]);
+        expect(Array.from(items).map((item) => item.textContent)).toEqual(['Summary🔒', 'Plotlines🔒', 'Chapters']);
 
         const current = items[2];
         expect(current.getAttribute('aria-current')).toBe('step');
         expect(current.className).toContain('sv-phase-current');
         // A signed phase is locked in both the class and the accessible name (L-34: never colour alone).
         expect(items[0].className).toContain('sv-phase-locked');
-        expect(items[0].getAttribute('title')).toBe('① Summary is signed — the only way in is a backtrack (L-31)');
-        expect(items[0].querySelector('.sv-phase-lock')!.getAttribute('aria-label')).toBe('① Summary locked');
+        expect(items[0].getAttribute('title')).toBe('Summary is signed — the only way in is a backtrack (L-31)');
+        expect(items[0].querySelector('.sv-phase-lock')!.getAttribute('aria-label')).toBe('Summary locked');
         // The unsigned phase says nothing about locks, and has no icon.
         expect(items[2].querySelector('.sv-phase-lock')).toBeNull();
-        expect(items[2].getAttribute('title')).toBe('③ Chapters');
+        expect(items[2].getAttribute('title')).toBe('Chapters');
     });
 
     it('jumps between panes when the caller can jump, and is a pure readout when it cannot', () => {

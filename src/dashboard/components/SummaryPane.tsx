@@ -14,8 +14,8 @@
 // locked pane"), and offers the same Ask-assistant affordance for the one thing the Author
 // cannot do themselves.
 import { ConfirmButton } from './story-phase-controls';
-import type { BacktrackTarget } from './story-contract';
-import type { Story, Summary } from '../../shared/types';
+import type { BacktrackTarget, RevisionUnit } from './story-contract';
+import type { Revision, Story, Summary } from '../../shared/types';
 
 /** §4.2's prose fields, in the order the Writer fills them. `chapter_count` is excluded: D-3b makes it Author truth, never prose. */
 const SUMMARY_FIELDS: Array<{ key: keyof Summary; label: string }> = [
@@ -40,15 +40,142 @@ export interface SummaryPaneProps {
     backtrackNote?: string;
     /** §8.6: an assistant run on ONE field. Absent until the API grows it — then the button is disabled and says so. */
     onAskAssistant?: (field: string) => void;
+    /** U-13 / D-24 — the competing overviews, already grouped by unit. */
+    unit?: RevisionUnit;
+    /** The draft whose newest verdict recommends `advance`, if any (see `recommendedRevisionId`). */
+    recommendedRevisionId?: string;
+    /** U-13 / D-24 — the Author's pick among the overviews. */
+    onSelectRevision?: (unitRef: string, revisionId: string) => void;
+    /** U-4 — the Summary's goal has passed (or it is signed): the phase is ready for review. */
+    readyForReview?: boolean;
 }
 
-export function SummaryPane({ story, summary, onBacktrack, backtrackNote, onAskAssistant }: SummaryPaneProps) {
+/** One Summary draft as the Author reads it: its own prose fields, never the whole book. */
+function overviewFields(revision: Revision): Array<{ key: keyof Summary; label: string; value: string }> {
+    const body = revision.body;
+
+    return SUMMARY_FIELDS.map(({ key, label }) => {
+        const source =
+            body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+        const value = source[key];
+
+        return {
+            key,
+            label,
+            value: typeof value === 'string' && value.trim().length > 0 ? value : 'not written yet'
+        };
+    });
+}
+
+function OverviewCandidates({
+    unit,
+    recommendedRevisionId,
+    onSelectRevision
+}: {
+    unit: RevisionUnit;
+    recommendedRevisionId?: string;
+    onSelectRevision?: (unitRef: string, revisionId: string) => void;
+}) {
+    const recommended = unit.revisions.find((revision) => revision.id === recommendedRevisionId);
+
+    return (
+        <section className="sv-summary-review" aria-label="Overview candidates">
+            <header className="sv-summary-review-head">
+                <h4 className="sv-summary-review-title">Overview — the drafts the crew wrote</h4>
+                <p className="sv-summary-review-hint">
+                    {unit.revisions.length === 1
+                        ? 'One overview is waiting for the Author.'
+                        : `${unit.revisions.length} overviews are waiting. Take the one the latest verdict advances, or choose another.`}
+                    {recommended ? '' : ' No verdict has recommended one yet.'}
+                </p>
+            </header>
+
+            <div className="sv-summary-drafts">
+                {unit.revisions.map((revision, index) => {
+                    const isRecommended = revision.id === recommendedRevisionId;
+
+                    return (
+                        <article
+                            className={`sv-summary-draft${isRecommended ? ' sv-summary-draft--recommended' : ''}`}
+                            key={revision.id}
+                            data-recommended={isRecommended ? 'true' : 'false'}
+                        >
+                            <header className="sv-summary-draft-head">
+                                <span className="sv-summary-draft-label">Overview {index + 1}</span>
+                                {isRecommended ? (
+                                    <span className="sv-summary-draft-pick">Editor recommends</span>
+                                ) : null}
+                                {revision.template_ref ? (
+                                    <span className="sv-summary-draft-meta">{revision.template_ref}</span>
+                                ) : null}
+                            </header>
+
+                            <dl className="sv-summary-draft-fields">
+                                {overviewFields(revision).map(({ key, label, value }) => (
+                                    <div className="sv-summary-draft-field" key={key}>
+                                        <dt>{label}</dt>
+                                        <dd>{value}</dd>
+                                    </div>
+                                ))}
+                            </dl>
+
+                            {revision.selection_note ? (
+                                <p className="sv-summary-draft-note">{revision.selection_note}</p>
+                            ) : null}
+
+                            <button
+                                type="button"
+                                className="sv-summary-draft-select"
+                                disabled={!onSelectRevision}
+                                title={
+                                    onSelectRevision
+                                        ? 'Install this overview as the Summary. The other drafts are deleted in the same commit (D-22).'
+                                        : 'The selection route has not landed yet.'
+                                }
+                                onClick={() => onSelectRevision?.(unit.unitRef, revision.id)}
+                            >
+                                {isRecommended ? 'Take the recommended overview' : 'Choose this overview'}
+                            </button>
+                        </article>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
+export function SummaryPane({
+    story,
+    summary,
+    onBacktrack,
+    backtrackNote,
+    onAskAssistant,
+    unit,
+    recommendedRevisionId,
+    onSelectRevision,
+    readyForReview
+}: SummaryPaneProps) {
     const locked = story.summary_locked;
 
     return (
         <section className={`sv-pane sv-summary${locked ? ' sv-pane-locked' : ''}`} aria-label="Summary">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Summary — phase ①&apos;s artifact</h3>
+                <h3 className="sv-pane-title">Summary — Phrase 1</h3>
+                {readyForReview ? (
+                    <span className="sv-summary-ready" title="ready for review">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                            <path
+                                d="M3.2 8.4 6.4 11.6 12.8 5.2"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
+                        ready for review
+                    </span>
+                ) : null}
                 {/* L-7a mirrors the flag onto the record; the pane reads the Story's flag (L-7). */}
                 <span className="sv-pane-badge">
                     {locked
@@ -56,6 +183,14 @@ export function SummaryPane({ story, summary, onBacktrack, backtrackNote, onAskA
                         : 'unlocked — the Writer may still expand it (D-3)'}
                 </span>
             </header>
+
+            {unit && unit.revisions.length > 0 ? (
+                <OverviewCandidates
+                    unit={unit}
+                    recommendedRevisionId={recommendedRevisionId}
+                    onSelectRevision={onSelectRevision}
+                />
+            ) : null}
 
             {!locked ? (
                 <p className="sv-summary-note">
@@ -71,6 +206,8 @@ export function SummaryPane({ story, summary, onBacktrack, backtrackNote, onAskA
                     move is a Backtrack (D-3, L-30, L-31).
                 </p>
             )}
+
+            <h4 className="sv-summary-current-title">The Summary on record</h4>
 
             <dl className="sv-summary-fields">
                 <div className="sv-summary-field">

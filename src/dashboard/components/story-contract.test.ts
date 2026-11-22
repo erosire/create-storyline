@@ -44,12 +44,12 @@ describe('story-contract — phases, locks and backtrack (U-16, L-31, L-32)', ()
         const view = fixtureView();
 
         expect(backtrackStatement(view.story, 'summary', view)).toBe(
-            'Backtrack to ① Summary deletes 4 chapters with their 4 revisions, 2 plotlines, and the derived Digest. ' +
+            'Backtrack to Summary deletes 4 chapters with their 4 revisions, 2 plotlines, and the derived Digest. ' +
                 'Verdicts and findings survive as provenance; the Ideas do not — the lock already deleted them (D-25, D-36, L-31). ' +
                 'Story "Neon Cathedral" starts again from its Seed.'
         );
         expect(backtrackStatement(view.story, 'plotlines', view)).toBe(
-            'Backtrack to ② Plotlines deletes 4 chapters with their 4 revisions and unlocks every plotline. ' +
+            'Backtrack to Plotlines deletes 4 chapters with their 4 revisions and unlocks every plotline. ' +
                 'Verdicts and selection notes survive (D-25, L-31). The locked Summary stays locked.'
         );
     });

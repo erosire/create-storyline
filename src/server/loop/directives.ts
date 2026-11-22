@@ -1,4 +1,4 @@
-// Directives: the Author's one line of direction, propagated mechanically (D-19, L-24, L-27, W12).
+// Directives: the Author's one line of direction to the Editor (D-19, L-24, L-27, W12, V-1).
 //
 // §4.14 says the loop "determined" the impact, so the resolution below is a lookup rather than an
 // inference — every clause names a record the Author can point at:
@@ -15,11 +15,12 @@
 //     say "which chapters a change must propagate to").
 //
 // What the loop does with the result is the same propagation any other change to the book gets
-// (L-11a): tasks for the work, `needs_recheck` for the dependents, and a report of what it touched. It
-// does NOT re-litigate the Author's decision: the directive's own tasks outrank everything in the queue
-// (priority 1), and the runs that were busy on a now-changed artifact are stopped, because a Writer
-// mid-pass on chapter 4 after the Author said the mentor dies there is writing a scene that no longer
-// exists.
+// (L-11a): `needs_recheck` for the dependents, and a report of what it touched. The TASKS are the
+// Editor's — a `directive_work` thread reviews the sentence and calls `createTask`; the sweep then
+// dispatches each task as its own fresh thread (S-1, not delegation). The directive's own tasks
+// outrank everything in the queue (priority 1), and the runs that were busy on a now-changed artifact
+// are stopped, because a Writer mid-pass on chapter 4 after the Author said the mentor dies there is
+// writing a scene that no longer exists.
 import { authorAttr, loopAttr, storyChapters, storyPlotlines } from './records';
 import { createFixTask, dependents, markNeedsRecheck, phaseRank } from './invalidation';
 import { TASK_KINDS, type DirectiveReport, type LoopDirective } from './types';
@@ -138,7 +139,16 @@ export function findOpenEscalation(store: Store, story: Story): Task | undefined
 }
 
 /**
- * Applies one directive: creates the row, the tasks, and the propagation, and reports what it touched.
+ * Records one directive and does the propagation the SERVER owns: resolve the artifacts, mark the
+ * dependents, stop the runs that are writing into the changed artifacts, answer the escalation, and
+ * report what it touched. It deliberately creates no tasks.
+ *
+ * THE EDITOR OWNS THE TASKS (the user's model, V-1): the Author's channel is the Editor, so a
+ * `directive_work` job is queued and the Editor reviews the direction and calls `createTask` for the
+ * work it implies. The server then reads the queue and opens a thread for each task (the sweep), which
+ * is not a delegate: no nested conversation, one Work Item per thread. If no Editor review produces
+ * any task (no Editor assigned, a failed thread), `createDirectiveFallbackTasks` keeps D-19's promise
+ * that a directive still becomes work.
  *
  * `killRun` is handed in by the engine rather than called here, because stopping a run belongs to the
  * executor (it owns the abort controller); the directive layer decides WHICH runs must stop and reports
@@ -149,7 +159,7 @@ export function findOpenEscalation(store: Store, story: Story): Task | undefined
  * writing by hand stays policed forever". That re-opening is recorded in the report so the row can say
  * it happened.
  */
-export function applyDirective(
+export function recordDirective(
     store: Store,
     story: Story,
     input: { text: string; refs?: string[]; at: string; killRun?: (runId: string) => void }
@@ -165,33 +175,15 @@ export function applyDirective(
             text: input.text,
             // §4.14's `impact` is the ref list; the richer report rides on the loop's addition below.
             impact: [...targets, ...resolved.ledger],
-            state: 'propagating'
+            // The Editor's task plan is what finishes this row; it stays `propagating` until then.
+            state: 'propagating',
+            targets
         },
-        authorAttr(`the Author issued a directive (D-19): ${input.text.slice(0, 120)}`)
+        authorAttr(`the Author issued a directive to the Editor (D-19): ${input.text.slice(0, 120)}`)
     );
 
-    // 1. The work it implies — one task per affected unit, priority 1, naming the directive so the
-    //    queue can always say which instruction a task came from (D-11: the queue holds the plan).
-    //
-    // No `findingId` here on purpose: §4.7's `finding_ref` names a row in `findings`, and a Directive is
-    // not a finding (D-19). The directive id rides in `detail`, which is where the sweep reads refs from
-    // (work.ts:unitRefInTask), so the provenance survives without a bogus foreign ref.
-    let tasksCreated = 0;
-
-    for (const ref of targets) {
-        if (ref === story.id) continue;
-
-        createFixTask(store, story, {
-            unitRef: ref,
-            title: `propagate: ${input.text.slice(0, 120)}`,
-            detail: `${directive.id} · ${ref}`,
-            priority: 1,
-            why: `${directive.id} propagated the Author's directive onto ${ref} (D-19, D-11)`
-        });
-        tasksCreated += 1;
-    }
-
-    // 2. The propagation both directions in time (L-11a), in the same commit as the tasks (L-11).
+    // 1. The propagation both directions in time (L-11a): the directive is the decision, so the
+    //    dependents are re-judged whether or not the Editor's review has landed yet.
     const rechecks = markNeedsRecheck(
         store,
         story,
@@ -199,7 +191,7 @@ export function applyDirective(
         `${directive.id}: the Author changed the book, dependents are re-judged (L-11a, D-19)`
     );
 
-    // 3. The runs that were busy on those artifacts (P8's mechanism, L-24's "the crew needed a
+    // 2. The runs that were busy on those artifacts (P8's mechanism, L-24's "the crew needed a
     //    decision" now that they have one).
     let stopped = 0;
 
@@ -215,7 +207,7 @@ export function applyDirective(
         }
     }
 
-    // 4. The escalation this answers (P7). `done` is the honest state: the question was answered.
+    // 3. The escalation this answers (P7). `done` is the honest state: the question was answered.
     if (escalation !== undefined) {
         store.tasks.update(
             escalation.id,
@@ -227,7 +219,9 @@ export function applyDirective(
 
     const impact: DirectiveReport = {
         runs_stopped: stopped,
-        tasks_created: tasksCreated,
+        // The Editor's thread is the task author; this count lands when its review closes
+        // (`completeDirective`), so the row never claims work that has not been queued yet.
+        tasks_created: 0,
         tasks_superseded: escalation === undefined ? 0 : 1,
         needs_recheck: rechecks,
         ledger_touched: resolved.ledger,
@@ -237,17 +231,75 @@ export function applyDirective(
 
     store.directives.update(
         directive.id,
-        // The loop determined the impact, so the row is finished once the propagation landed (D-19's
-        // "a report of what changed" is the `impact` field plus the report the addition below carries).
-        { state: 'done', report: impact },
-        authorAttr(`directive propagated: ${targets.length} artifacts, ${tasksCreated} tasks (D-19)`),
+        { report: impact },
+        authorAttr(`directive ${directive.id} is waiting for the Editor's task review (D-19)`),
         [{ id: directive.id, rev: directive.rev }]
     );
 
     return { directive_id: directive.id, impact, targets };
 }
 
-/** Any directive the loop has not finished propagating (a crash between the create and the report). */
+/**
+ * The fallback D-19 promise, used only when an Editor review produced no tasks (or could not run):
+ * one fix task per affected artifact, priority 1, naming the directive so the sweep and the Writer's
+ * brief can read the provenance from `detail` (D-11).
+ *
+ * No `findingId` on purpose: §4.7's `finding_ref` names a row in `findings`, and a Directive is not a
+ * finding (D-19). The same reason holds when the Editor writes its own tasks through `createTask`.
+ */
+export function createDirectiveFallbackTasks(store: Store, story: Story, directive: LoopDirective): number {
+    const refs = directive.targets ?? directive.impact.filter((ref) => !ref.startsWith('ledg'));
+    let tasksCreated = 0;
+
+    for (const ref of refs) {
+        if (ref === story.id) continue;
+
+        createFixTask(store, story, {
+            unitRef: ref,
+            title: `propagate: ${directive.text.slice(0, 120)}`,
+            detail: `${directive.id} · ${ref}`,
+            priority: 1,
+            why: `${directive.id} had no Editor task plan; the loop queued the fallback work itself (D-19, D-11)`
+        });
+        tasksCreated += 1;
+    }
+
+    return tasksCreated;
+}
+
+/** The zero report, so an old or interrupted row can still be completed without inventing counts. */
+const EMPTY_REPORT: DirectiveReport = {
+    runs_stopped: 0,
+    tasks_created: 0,
+    tasks_superseded: 0,
+    needs_recheck: [],
+    ledger_touched: [],
+    answered_task_id: null,
+    completed_reopened: false
+};
+
+/**
+ * Closes a propagating directive once the Editor's review has landed. The tasks are the Editor's;
+ * this only records how many its thread queued and marks the row done (D-19's report).
+ */
+export function completeDirective(
+    store: Store,
+    directiveId: string,
+    patch: Partial<DirectiveReport>,
+    why: string
+): void {
+    const directive = store.directives.require(directiveId);
+    const report: DirectiveReport = { ...EMPTY_REPORT, ...(directive.report ?? {}), ...patch };
+
+    store.directives.update(directive.id, { state: 'done', report }, loopAttr(why), [
+        { id: directive.id, rev: directive.rev }
+    ]);
+}
+
+/**
+ * Every directive still waiting for the Editor's review (or for a crash recovery to close it). The
+ * sweep turns each one into a `directive_work` job; a done or rejected row is history.
+ */
 export function pendingDirectives(store: Store, storyId: string): LoopDirective[] {
     return store.directives
         .list()

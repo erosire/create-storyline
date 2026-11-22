@@ -1,5 +1,9 @@
 // D-38 — the panel: one template ROLE that is N fresh agents answering ONCE, inside one run.
 //
+// VOCABULARY (V-1): the N are agents of the role's one EMPLOYEE kind; they are not N employees,
+// none gets a Work Item, and none reports to the loop. The employee is the standing identity; the
+// panel is several executions of it inside one thread.
+//
 // WHY IT LIVES INSIDE THE RUN (D-38, D-34a, S-1): the loop must still receive exactly one
 // report, one `selection_note`, one verdict set and one permission-bearing answer. If the panel
 // were three runs, the loop would hold three votes and the Author's taste would be applied
@@ -370,6 +374,8 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
             { chat: deps.chat, runtime: agentRuntime, runAgent: deps.runAgent, heartbeat: spec.heartbeat },
             {
                 label,
+                runId: spec.runId,
+                requestTitle: spec.jobSummary,
                 // The same brief, plus the one fact an agent needs about its own writes (D-38).
                 system: `${spec.brief}\n${panelPreamble(index, spec.count, spec.aggregate)}`,
                 kickoff: spec.kickoff,

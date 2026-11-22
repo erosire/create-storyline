@@ -1,5 +1,5 @@
-// The global agent tiles: the same four agents for every Story, with the live thread, the rank
-// they all hold, the model each one asks for, and the last torn-down run named on the tile.
+// The global employee tiles: the same four employees for every Story, with the rank they all hold,
+// the model each one asks for, and the content-area switch that opens that employee's threads.
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { AgentsPanel } from './AgentsPanel';
@@ -10,7 +10,6 @@ const agent = (kind: string, title: string): AgentStatusRow => ({
     title,
     status: 'idle',
     rank: 'A',
-    entry: kind === 'writer',
     model: 'local/basalt',
     model_source: 'default',
     template_models: [],
@@ -25,8 +24,8 @@ const idle: AgentStatusRow[] = [
     agent('checker', 'Checker')
 ];
 
-describe('AgentsPanel — the global roster', () => {
-    it('renders four tiles and says which story and phase a running agent holds', () => {
+describe('AgentsPanel — the global employee roster', () => {
+    it('renders four tiles and counts the running threads, without listing them on the rail', () => {
         const working = idle.map((agent) =>
             agent.kind === 'writer'
                 ? {
@@ -50,18 +49,18 @@ describe('AgentsPanel — the global roster', () => {
         render(<AgentsPanel agents={working} />);
 
         const panel = screen.getByTestId('agents-panel');
-        expect(within(panel).getByText('Agents — global (U-8)')).toBeTruthy();
+        expect(within(panel).getByText('Employees — global (U-8)')).toBeTruthy();
         expect(within(panel).getByText('1 thread running')).toBeTruthy();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
-        expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual(['writer', 'editor', 'reader', 'checker']);
+        expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual(['checker', 'editor', 'reader', 'writer']);
 
         const writer = panel.querySelector<HTMLElement>('[data-agent="writer"]')!;
         expect(writer.dataset.status).toBe('running');
-        expect(within(writer).getByText('Hollow Sea')).toBeTruthy();
-        expect(within(writer).getByText('③ Chapters')).toBeTruthy();
-        expect(within(writer).getByText('run_1')).toBeTruthy();
         expect(within(writer).getByText('running')).toBeTruthy();
+        // The rail names the agent; the thread's Story/phase/work item belong to the centre.
+        expect(within(writer).queryByText('Hollow Sea')).toBeNull();
+        expect(within(writer).queryByText('run_1')).toBeNull();
 
         const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
         expect(editor.dataset.status).toBe('idle');
@@ -69,19 +68,61 @@ describe('AgentsPanel — the global roster', () => {
         expect(within(editor).queryByText(/no thread right now/)).toBeNull();
     });
 
-    it('states the rank every agent holds and which agent is the entry point (R15)', () => {
-        const ranks: AgentStatusRow[] = idle.map((row) =>
-            row.kind === 'writer' ? { ...row, entry: true } : { ...row, entry: false }
+    it('opens that agent’s threads from anywhere on the tile except the model dropdown (U-8)', () => {
+        const onSelectAgent = vi.fn();
+
+        render(
+            <AgentsPanel
+                agents={idle}
+                models={['local/basalt', 'deepseek-r1']}
+                onSetModel={vi.fn()}
+                onSelectAgent={onSelectAgent}
+                selectedAgent="editor"
+            />
         );
 
-        render(<AgentsPanel agents={ranks} />);
+        const writer = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="writer"]')!;
+        const editor = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="editor"]')!;
+
+        fireEvent.click(within(writer).getByRole('button', { name: /open Writer threads/ }));
+        expect(onSelectAgent).toHaveBeenCalledTimes(1);
+        expect(onSelectAgent).toHaveBeenCalledWith('writer');
+
+        // The whole tile is the switch, not just its head: a click on the card itself works too.
+        fireEvent.click(writer);
+        expect(onSelectAgent).toHaveBeenCalledTimes(2);
+        expect(onSelectAgent).toHaveBeenLastCalledWith('writer');
+
+        // The model line's label and blank space belong to the tile…
+        fireEvent.click(within(writer).getByText('Model:'));
+        expect(onSelectAgent).toHaveBeenCalledTimes(3);
+        fireEvent.click(writer.querySelector<HTMLElement>('.sv-agent-tile__model')!);
+        expect(onSelectAgent).toHaveBeenCalledTimes(4);
+
+        // …but the dropdown itself is its own control: opening it never opens the employee.
+        fireEvent.click(within(writer).getByLabelText(/model for Writer/));
+        expect(onSelectAgent).toHaveBeenCalledTimes(4);
+
+        expect(writer.dataset.selected).toBe('false');
+        expect(editor.dataset.selected).toBe('true');
+        expect(
+            within(editor)
+                .getByRole('button', { name: /open Editor threads/ })
+                .getAttribute('aria-pressed')
+        ).toBe('true');
+    });
+
+    it('states the rank every employee holds, and invents no Entry role (R15)', () => {
+        render(<AgentsPanel agents={idle} />);
 
         const panel = screen.getByTestId('agents-panel');
         expect(within(panel).getAllByText('Rank A')).toHaveLength(4);
-        expect(within(panel).getAllByText('entry')).toHaveLength(1);
+        // The Author's channel is the Editor, but "Entry" is not a concept the roster draws.
+        expect(within(panel).queryByText(/entry/i)).toBeNull();
 
-        const writer = panel.querySelector<HTMLElement>('[data-agent="writer"]')!;
-        expect(within(writer).getByText('entry')).toBeTruthy();
+        const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
+        expect(within(editor).getByText('Editor')).toBeTruthy();
+        expect(within(panel).getByText(/the Editor is your channel/)).toBeTruthy();
     });
 
     it('states the model on the tile as plain text backed by the catalogue dropdown (U-8, T-6b)', () => {
@@ -170,7 +211,7 @@ describe('AgentsPanel — the global roster', () => {
         expect(onSetModel).toHaveBeenCalledWith('reader', null);
     });
 
-    it('keeps a torn-down run visible with the reason it ended (S-3)', () => {
+    it('does not duplicate the retained thread history on the rail (it belongs to the content area)', () => {
         const failed = idle.map((row) =>
             row.kind === 'checker'
                 ? {
@@ -198,14 +239,13 @@ describe('AgentsPanel — the global roster', () => {
 
         const checker = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="checker"]')!;
 
-        expect(within(checker).getAllByText('failed').length).toBeGreaterThan(0);
-        expect(
-            within(checker).getAllByText(/Invalid value for `\[0\]\.function`: Field required/).length
-        ).toBeGreaterThan(0);
-        expect(within(checker).getAllByText('wi_check_chapters_1').length).toBeGreaterThan(0);
+        expect(within(checker).queryByText(/Invalid value/)).toBeNull();
+        expect(within(checker).queryByText('wi_check_chapters_1')).toBeNull();
+        // The tile still says the agent is idle (the failed thread is history, not a live one).
+        expect(within(checker).getByText('idle')).toBeTruthy();
     });
 
-    it('renders the four agent kinds even before the first roster read answers', () => {
+    it('renders the four employee kinds even before the first roster read answers', () => {
         render(<AgentsPanel agents={[]} loading />);
 
         expect(document.querySelectorAll('.sv-agent-tile')).toHaveLength(4);

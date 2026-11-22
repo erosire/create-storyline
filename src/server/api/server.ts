@@ -30,6 +30,7 @@ import { RunExecutor } from '../run/executor';
 import { LoopEngine } from '../loop/engine';
 import { StoryKnowledge } from '../knowledge';
 import { Store } from '../store/store';
+import { StoryThreadLog } from '../run/thread-log';
 import { ASSISTANT_ROLE, ASSISTANT_TEMPLATE, createStorylineRoutes } from './routes';
 import type { ChatClient } from '../llm/client';
 import type { ToolRuntime } from '../run/types';
@@ -132,6 +133,8 @@ export interface StorylineRuntimeOptions {
      * loads a durable one beside `store.json` so a destroyed harness cannot take it away.
      */
     knowledge?: StoryKnowledge;
+    /** Retained thread history. Defaults to memory; the CLI opens the durable log beside the book. */
+    threadLog?: StoryThreadLog;
     /** The model transport. Defaults to the OpenAI-compatible client from the provider env triple. */
     chat?: ChatClient;
     /** The §8 tool catalogue. Defaults to `createToolRuntime(store)`. */
@@ -156,6 +159,7 @@ export interface StorylineRuntime {
     app: Hono;
     store: Store;
     knowledge: StoryKnowledge;
+    threadLog: StoryThreadLog;
     criteria: CriteriaEngine;
     digest: DigestBuilder;
     executor: RunExecutorType;
@@ -194,6 +198,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
     const env = options.env ?? process.env;
     const store = options.store ?? Store.empty();
     const knowledge = options.knowledge ?? StoryKnowledge.memory(store);
+    const threadLog = options.threadLog ?? StoryThreadLog.memory();
     const criteria = new CriteriaEngine();
     const digest = new DigestBuilder();
 
@@ -208,7 +213,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
     const runtime =
         options.runtime ??
         createToolRuntime(store, options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl });
-    const executor = options.executor ?? new RunExecutor({ store, runtime, chat, defaultModel });
+    const executor = options.executor ?? new RunExecutor({ store, runtime, chat, defaultModel, threadLog });
 
     // A started loop sweeps on a timer (L-1); the default here is ON because a server with no sweep is a
     // dashboard that never moves. Tests inject `autoSweep: false` and become the clock.
@@ -231,6 +236,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
             criteria,
             digest,
             knowledge,
+            threadLog,
             // U-8 — the roster's dropdown reads the SAME provider root the transport dials.
             providerBaseUrl: baseUrl,
             ...(apiKey === undefined ? {} : { providerApiKey: apiKey }),
@@ -239,7 +245,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
         })
     );
 
-    return { app, store, knowledge, criteria, digest, executor, engine, defaultModel };
+    return { app, store, knowledge, threadLog, criteria, digest, executor, engine, defaultModel };
 }
 
 // ---------------------------------------------------------------------------

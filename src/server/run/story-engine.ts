@@ -1,22 +1,28 @@
 // The Story runtime built on the @underload/harness ENGINE only.
 //
+// VOCABULARY (V-1). The four profiles this file configures are EMPLOYEES — the standing roster
+// entries Writer, Editor, Reader and Checker. An employee is not an agent; it becomes one only
+// while a thread is executing. `engine.agents[kind]` is the employee's engine profile, and every
+// Run opens one THREAD under it. A template role chooses which employee kind takes a job; the
+// template itself is neither an employee nor an agent (D-38).
+//
 // WHY THIS FILE EXISTS. A Story is a book, a Phase is a session against that book, and a Run is
 // one thread inside the phase's session. The harness package owns the part that is the same for
 // every host — the agent loop, the tool-call protocol, transcript commitment, retries and thread
 // lifecycle — while Storyline owns everything that is specific to the Author: the book, the
 // loop, the permission rows, the criteria and the phases. So Storyline builds ONE harness per
-// Story with the same four agent profiles every story uses (writer, editor, reader, checker),
-// and each dispatched Run opens a thread inside that story's harness.
+// Story with the same four employees every story uses (writer, editor, reader, checker), and
+// each dispatched Run opens a thread inside that story's harness.
 //
 // ISOLATION. Two stories never share a Harness instance, a tool registry, a transcript or a
-// thread roster. The AGENT DEFINITIONS are shared values (the same kind, prompt and model), but
-// their runtime state lives in the story's own harness, which is exactly the "same agent across
-// multiple harnesses, no cross contamination" rule.
+// thread roster. The EMPLOYEE DEFINITIONS are shared values (the same kind, prompt and model),
+// but their runtime state lives in the story's own harness, which is exactly the "same employee
+// across multiple harnesses, no cross contamination" rule.
 //
 // SESSIONS. The harness engine itself is the execution loop; it has no session object. Storyline
-// supplies that level: one Session record per Story phase, opened on first use and owning the
-// threads its Runs create. A phase therefore groups its threads without any engine state crossing
-// between stories.
+// supplies that level: one Session record per Story phase (the UI's "phrase": P1/P3/P4), opened on
+// first use and owning the threads its Runs create. A phase therefore groups its threads without
+// any engine state crossing between stories; a thread is never reused.
 //
 // ENGINE ONLY. This module imports `@underload/harness` (agent/harness/tool and their types). It
 // never imports `@underload/harness/server`, never starts a listener, and never uses the harness
@@ -40,18 +46,29 @@ import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
 import type { RoleKind, Run, Story, StoryPhase } from '../../shared/types';
 import type { Store } from '../store';
+import { StoryThreadLog, type StoryThreadRecord, type StoryThreadState } from './thread-log';
 
 // ---------------------------------------------------------------------------
-// The agent roster: the same four brains in every Story's harness
+// The employee roster: the same four standing identities in every Story's harness
 // ---------------------------------------------------------------------------
 
+/**
+ * The four EMPLOYEE kinds (V-1). The constant keeps its historical `AGENT` spelling because the
+ * engine profile key is the kind; what it enumerates is the roster of employees, not running
+ * agents. An employee becomes an agent only for the thread a Run opens under it.
+ */
 const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker'];
 
 /**
- * Every configured agent holds the same rank (the harness's authority model, R15). Rank A for
+ * Every configured employee holds the same rank (the harness's authority model, R15). Rank A for
  * all four makes them peers: none is another's subordinate, and the ENGINE registers no
- * `delegate` door for a single-rank roster. The lead of a session is therefore its ENTRY point,
- * not a higher-ranked agent.
+ * `delegate` door for a single-rank roster. The harness still needs a routing name for an
+ * unfocused session, and that name is the Editor — the Author's one channel — not a higher-ranked
+ * employee (V-1).
+ *
+ * V-2: only a Rank A employee may own a dispatched Work Item and take action on a phase's
+ * requirements. A Rank B employee may be added, but only as a delegation target inside a Rank A
+ * thread; it never receives a Work Item and never reports to the loop independently.
  */
 export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
     writer: 'A',
@@ -60,8 +77,13 @@ export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
     checker: 'A'
 };
 
-/** The agent that routes an unfocused session — the entry point, never an authority claim (R15). */
-export const STORY_AGENT_ENTRY: RoleKind = 'writer';
+/**
+ * The employee that routes an unfocused session. VOCABULARY (V-1): "entry" is not a roster role
+ * and never reaches the dashboard — the harness needs a routing name, and the Author's one channel
+ * is the Editor, so the Editor is that name (the directive handoff). It is routing, never an
+ * authority claim (R15).
+ */
+export const STORY_AGENT_ENTRY: RoleKind = 'editor';
 
 /** The single-property unwrap the harness applies before `execute` (tool()'s contract). */
 const singlePropertyKey = (schema: Record<string, unknown> | undefined): string | undefined => {
@@ -100,7 +122,7 @@ const wireArguments = (raw: string): string => {
 
 /** One live Run's identity and the Storyline context its tool calls execute against. */
 interface EngineRun {
-    /** The engine agent key this run's brain and thread were built under. */
+    /** The employee key whose engine profile this run's thread was built under. */
     agentKey: string;
     /** The engine thread id, once `createThread` has minted it. */
     threadId: string;
@@ -109,10 +131,24 @@ interface EngineRun {
     roleKind: RoleKind;
     roleName: string;
     label: string;
+    /** The Storyline Run row this thread belongs to (a panel agent's label is not the parent's id). */
+    runId: string;
     /** The tool runtime the engine calls execute through (a panel agent's is the intercepting one). */
     runtime: ToolRuntime;
     /** The Storyline context (story binding, role row, attribution). */
     context: RunToolContext;
+    /** What the thread was asked to do, in one line (the thread bar's title). */
+    title: string;
+    /** The full brief this thread was given. */
+    request: string;
+    /** The kickoff turn, kept beside the brief for the request/answer surface. */
+    kickoff: string;
+    /** The final answer; empty while the thread runs. */
+    answer: string;
+    /** The thread's retained state. */
+    state: StoryThreadState;
+    /** Why the thread failed, when it did. */
+    error?: string;
     tally: RunTally;
     heartbeat?: () => void;
     onReport?: (name: string) => void;
@@ -140,7 +176,7 @@ export interface StorySession {
     runs: Map<string, EngineRun>;
 }
 
-/** One closed run row, kept on a tile so a failed thread does not vanish into `idle` (S-3, U-8). */
+/** One closed thread row, kept on an employee tile so a failed thread does not vanish into `idle` (S-3, U-8). */
 export interface StoryAgentRecentRun {
     run_id: string;
     story_id: string;
@@ -154,28 +190,26 @@ export interface StoryAgentRecentRun {
     tokens: number;
 }
 
-/** The public status row a dashboard renders for one agent tile. */
+/** The public status row a dashboard renders for one EMPLOYEE tile (V-1). */
 export interface StoryAgentStatus {
     kind: RoleKind;
     title: string;
+    /** `running` means the employee has at least one live thread; `idle` means it has none. */
     status: 'idle' | 'running';
-    /** The harness rank every configured agent holds; `A` is a peer, not a lead (R15). */
+    /** The harness rank this employee holds; `A` is a peer, not a lead (R15, V-2). */
     rank: AgentRank;
-    /** True for the session's ENTRY agent — routing, never authority (R15). */
-    entry: boolean;
     /**
-     * U-8 / T-6b — the model this agent asks for when its template role names none. The Agents
-     * panel shows it beside the status so the Author never has to guess what a tile is running.
-     */
-    model: string;
+     * U-8 / T-6b — the model this employee asks for when its template role names none. The
+     * employee rail shows it beside the status so the Author never has to guess what a tile runs.
+     */ model: string;
     /** `agent` when the Author set it on the global roster, `default` for the process model. */
     model_source: AgentModelSource;
     /**
-     * Template roles that name their own model for this kind (T-6b). They override the process
-     * default until the Author sets a roster choice, so the tile has to name them to stay honest.
+     * Template roles that name their own model for this employee kind (T-6b). They override the
+     * process default until the Author sets a roster choice, so the tile has to name them.
      */
     template_models: AgentTemplateModel[];
-    /** Live threads across every Story, oldest first. */
+    /** Live threads across every Story, oldest first — the executions this employee is running. */
     working: Array<{
         story_id: string;
         story_title: string;
@@ -196,7 +230,7 @@ export interface StoryAgentStatus {
 /** How many closed runs a tile keeps for "why did it end" (bounded, newest first). */
 const RECENT_RUNS = 3;
 
-/** The newest closed runs of ONE kind, read from the journaled rows (never from local guesses). */
+/** The newest closed threads of ONE employee kind, read from the journaled rows (never local guesses). */
 function recentRuns(store: Store, kind: RoleKind, storyId?: string): StoryAgentRecentRun[] {
     return store.runs
         .list()
@@ -239,7 +273,7 @@ export const STORY_AGENT_CATALOGUE: readonly StoryAgentCatalogueEntry[] = [
         kind: 'writer',
         title: 'Writer',
         description:
-            'The only agent that writes the book: the Summary in phase ①, plotlines in ②, chapters and prose in ③. Refused on locked artifacts.'
+            'The only employee that writes the book: the Summary in phase ①, plotlines in ②, chapters and prose in ③. Refused on locked artifacts.'
     },
     {
         kind: 'editor',
@@ -258,7 +292,7 @@ export const STORY_AGENT_CATALOGUE: readonly StoryAgentCatalogueEntry[] = [
     }
 ];
 
-/** A title for one kind, re-used by the route projection and the tests. */
+/** A title for one employee kind, re-used by the route projection and the tests. */
 export const storyAgentTitle = (kind: string): string =>
     STORY_AGENT_CATALOGUE.find((entry) => entry.kind === kind)?.title ?? kind;
 
@@ -274,6 +308,8 @@ export interface StoryHarnessOptions {
     defaultModel: string;
     /** Test seam; defaults to the engine's `harness`. */
     createHarness?: typeof harness;
+    /** Durable thread history (request + answer); defaults to an in-memory log. */
+    threadLog?: StoryThreadLog;
 }
 
 export class StoryHarness {
@@ -288,6 +324,10 @@ export class StoryHarness {
     private readonly declaredSchemas: Map<string, ToolSchema>;
     private readonly sessions = new Map<StoryPhase, StorySession>();
     private readonly runs = new Map<string, EngineRun>();
+    /** Every thread this Story ever ran, including the ones `prune` drops from the live maps. */
+    private readonly history = new Map<string, EngineRun>();
+    /** Request + answer, retained beyond the process (see thread-log.ts). */
+    private readonly threadLog: StoryThreadLog;
     /** Brief system line -> run, so the transport can attribute a request to its thread. */
     private readonly byBrief = new Map<string, EngineRun>();
 
@@ -299,6 +339,7 @@ export class StoryHarness {
         this.chat = options.chat;
         this.runtime = options.runtime;
         this.defaultModel = options.defaultModel;
+        this.threadLog = options.threadLog ?? StoryThreadLog.memory();
 
         const create = options.createHarness ?? harness;
         const agents: Record<string, Agent> = {};
@@ -309,10 +350,12 @@ export class StoryHarness {
             ranks[kind] = STORY_AGENT_RANKS[kind];
         }
 
-        // Every configured agent is Rank A: one rank across the roster means the ENGINE registers
-        // no `delegate` door of its own (R15), and the lead of a session is its entry point rather
-        // than a higher-ranked agent. Storyline's §8 `delegate` remains the template's explicit
-        // D-17e door, not an authority relation between these peers.
+        // Every configured employee is Rank A: one rank across the roster means the ENGINE
+        // registers no `delegate` door of its own (R15), and the session's routing name is the
+        // Editor (the Author's channel) rather than a higher-ranked employee. Storyline's §8
+        // `delegate` remains the template's explicit D-17e door, not an authority relation between
+        // these peers. V-2 allows a Rank B employee only as a delegation target, never as a Work
+        // Item owner.
         this.catalogue = this.toolCatalogue();
         this.declaredSchemas = new Map(this.runtime.schemas().map((schema) => [schema.function.name, schema]));
         this.engine = create({
@@ -647,7 +690,7 @@ export class StoryHarness {
     }
 
     /**
-     * Runs one agent turn in a fresh thread of the Story's harness. The caller supplies the
+     * Runs one employee turn in a fresh thread of the Story's harness. The caller supplies the
      * Storyline context, runtime and tally; this method owns only the engine part.
      */
     async run(spec: EngineRunSpec): Promise<LoopOutcome> {
@@ -658,10 +701,11 @@ export class StoryHarness {
         const agentKey = spec.roleKind;
         const session = this.session(spec.phase);
 
-        // The FOUR brains are the story's fixed roster (writer/editor/reader/checker), created
-        // with the harness and shared by every Story that uses the same kinds. A Run opens a
-        // THREAD on its kind's brain rather than minting a new one: agent identity is stable
-        // across stories, while the transcript and the tool context stay thread-local.
+        // The FOUR employee kinds are the story's fixed roster (writer/editor/reader/checker),
+        // created with the harness and shared by every Story that uses the same kinds. A Run opens
+        // a THREAD on its kind's engine profile rather than minting a new profile: the employee is
+        // the stable identity, while the agent exists only for this thread's lifetime and the
+        // transcript and tool context stay thread-local (V-1).
         this.engine.agents[agentKey].model(spec.model);
 
         const thread = this.engine.createThread(agentKey, {
@@ -679,6 +723,8 @@ export class StoryHarness {
             briefKey = `${spec.system}\n\nRun identity: ${thread.id} (${duplicate})`;
         }
 
+        const title = spec.requestTitle?.trim() || spec.label;
+
         const run: EngineRun = {
             agentKey,
             threadId: thread.id,
@@ -687,6 +733,12 @@ export class StoryHarness {
             roleKind: spec.roleKind,
             roleName: spec.roleName,
             label: spec.label,
+            runId: spec.runId ?? spec.label,
+            title,
+            request: spec.system,
+            kickoff: spec.kickoff,
+            answer: '',
+            state: 'running',
             runtime: spec.runtime,
             context: spec.context,
             tally: spec.tally,
@@ -706,6 +758,9 @@ export class StoryHarness {
         };
 
         this.runs.set(thread.id, run);
+        // The retained history is deliberately not the live `runs` map: `prune` evicts the engine
+        // records the cap cannot hold, while the Author's revision surface keeps every thread.
+        this.history.set(thread.id, run);
         session.runs.set(thread.id, run);
         this.byBrief.set(briefKey, run);
 
@@ -719,8 +774,17 @@ export class StoryHarness {
                 ...(spec.signal === undefined ? {} : { signal: spec.signal })
             });
 
+            run.answer = answer.content;
+            run.state = 'torn_down';
+
             return { text: answer.content, turns: run.turns };
         } catch (error) {
+            const aborted =
+                spec.signal?.aborted === true || (error as { name?: string } | undefined)?.name === 'AbortError';
+
+            run.state = aborted ? 'abandoned' : 'failed';
+            run.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
             throw run.lastError ?? error;
         } finally {
             run.endedAt = Date.now();
@@ -730,7 +794,43 @@ export class StoryHarness {
             // indicator and the book's own audit, so old terminal threads are dropped before the
             // cap can refuse the next dispatch.
             if (this.runs.size > 128) this.prune();
+
+            // The retained record is written after every path, including a failure: the Author
+            // reads "why did this thread end" on the same bar the request is on.
+            this.threadLog.append(this.recordOf(run));
         }
+    }
+
+    /** One `EngineRun` as the retained bar record, with the Story title read from the book now. */
+    private recordOf(run: EngineRun): StoryThreadRecord {
+        const story = this.store.stories.get(run.storyId) as Story | undefined;
+        const request = run.kickoff.length === 0 ? run.request : `${run.request}\n\n---\n\n${run.kickoff}`;
+
+        return {
+            thread_id: run.threadId,
+            run_id: run.runId,
+            story_id: run.storyId,
+            story_title: story?.title ?? run.storyId,
+            phase: run.phase,
+            role: run.roleKind,
+            role_name: run.roleName,
+            title: run.title,
+            state: run.state,
+            started_at: new Date(run.startedAt).toISOString(),
+            ...(run.endedAt === undefined ? {} : { ended_at: new Date(run.endedAt).toISOString() }),
+            tokens: run.tally.tokens,
+            request,
+            answer: run.answer,
+            ...(run.error === undefined ? {} : { error: run.error }),
+            retained: true
+        };
+    }
+
+    /** Every thread this Story ever ran, oldest first (the employee thread surface, R15/U-8). */
+    threads(): StoryThreadRecord[] {
+        return [...this.history.values()]
+            .sort((left, right) => left.startedAt - right.startedAt || left.threadId.localeCompare(right.threadId))
+            .map((run) => this.recordOf(run));
     }
 
     /** True while any thread in this Story's harness is running. */
@@ -738,7 +838,7 @@ export class StoryHarness {
         return [...this.runs.values()].some((run) => run.endedAt === undefined);
     }
 
-    /** The status projection for this Story's live threads. */
+    /** The status projection for this Story's employees and their live threads. */
     statuses(): StoryAgentStatus[] {
         const story = this.store.stories.get(this.storyId) as Story | undefined;
         const title = story?.title ?? this.storyId;
@@ -764,7 +864,6 @@ export class StoryHarness {
                 title: entry.title,
                 status: working.length > 0 ? 'running' : 'idle',
                 rank: STORY_AGENT_RANKS[entry.kind],
-                entry: entry.kind === STORY_AGENT_ENTRY,
                 model: choice.model,
                 model_source: choice.source,
                 template_models: templateRoleModels(this.store, entry.kind),
@@ -814,6 +913,10 @@ export interface EngineRunSpec {
     storyId: string;
     phase: StoryPhase;
     label: string;
+    /** The Run row this thread belongs to; defaults to `label` for a top-level run. */
+    runId?: string;
+    /** One line naming what this thread was asked to do (the thread bar's title). */
+    requestTitle?: string;
     roleName: string;
     roleKind: RoleKind;
     model: string;
@@ -854,18 +957,32 @@ export class StoryHarnessManager {
         return story;
     }
 
-    /** Run one agent thread for a Story's current phase (or the phase named on the spec). */
+    /** Run one employee thread for a Story's current phase (or the phase named on the spec). */
     run(spec: EngineRunSpec): Promise<LoopOutcome> {
         return this.forStory(spec.storyId).run(spec);
     }
 
-    /** The global agent status projection across every Story harness this process owns. */
+    /**
+     * Every thread one employee kind ever ran, across every Story harness this process owns,
+     * oldest first. This is the content the employee tile opens — not a per-story live list.
+     */
+    threads(kind?: RoleKind): StoryThreadRecord[] {
+        return [...this.harnesses.values()]
+            .flatMap((story) => story.threads())
+            .filter((record) => kind === undefined || record.role === kind)
+            .sort(
+                (left, right) =>
+                    left.started_at.localeCompare(right.started_at) || left.thread_id.localeCompare(right.thread_id)
+            );
+    }
+
+    /** The global employee status projection across every Story harness this process owns. */
     statuses(): StoryAgentStatus[] {
         const byKind = new Map<RoleKind, StoryAgentStatus>();
 
         for (const entry of STORY_AGENT_CATALOGUE) {
             // The model is a roster fact, not a per-Story thread fact, so a workspace with no
-            // harness yet still answers what each agent would run (U-8).
+            // harness yet still answers what each employee would run (U-8).
             const choice = agentModelFor(this.store, this.options.defaultModel, entry.kind);
 
             byKind.set(entry.kind, {
@@ -873,7 +990,6 @@ export class StoryHarnessManager {
                 title: entry.title,
                 status: 'idle',
                 rank: STORY_AGENT_RANKS[entry.kind],
-                entry: entry.kind === STORY_AGENT_ENTRY,
                 model: choice.model,
                 model_source: choice.source,
                 template_models: templateRoleModels(this.store, entry.kind),
@@ -948,6 +1064,8 @@ export async function runEngineAgent(
         storyId,
         phase,
         label: spec.label,
+        ...(spec.runId === undefined ? {} : { runId: spec.runId }),
+        ...(spec.requestTitle === undefined ? {} : { requestTitle: spec.requestTitle }),
         roleName: spec.roleName ?? 'writer',
         roleKind: (spec.roleKind ?? 'writer') as RoleKind,
         model: spec.model,

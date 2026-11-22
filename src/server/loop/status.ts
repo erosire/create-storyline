@@ -33,6 +33,7 @@ import {
     unconfirmedFindings,
     unitsWithCompetingRevisions
 } from './records';
+import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
 import type { CompletionProposal, LoopStory, ProbeState } from './types';
 import type { GoalStatus, LevelReport } from '../criteria/engine';
@@ -341,6 +342,21 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
             blocked_on: 'an earlier lock',
             dispatch: false,
             why: 'phase_precondition'
+        };
+    }
+
+    // D-19: a directive is the Author talking to the Editor, so the review is DISPATCHABLE work, not
+    // a wait. It must outrank a sign-off, a tray or a drain — the Author just made a decision, and
+    // making them clear another hold first would lose the direction. The Editor's run is the next
+    // thread the sweep opens; once its tasks exist, the ordinary status logic takes over.
+    if (pendingDirectives(store, story.id).length > 0) {
+        return {
+            status: 'ready',
+            pending_kind: 'none',
+            status_reason: "the Editor is reviewing the Author's directive and setting its tasks (D-19)",
+            blocked_on: '',
+            dispatch: true,
+            why: 'directive_review'
         };
     }
 

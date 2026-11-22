@@ -91,6 +91,8 @@ export function storyView(row: StoryRow): StoryView {
         summary: null,
         plotlines: [],
         chapters: [],
+        cast: [],
+        ledger: [],
         goal: { goal, phase_progress: row.levels.summary, failing: [], chapter_progress: {} },
         ideas: [],
         revisions: [],
@@ -127,7 +129,6 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 title: 'Writer',
                 status: 'idle' as const,
                 rank: 'A' as const,
-                entry: true,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
@@ -139,7 +140,6 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 title: 'Editor',
                 status: 'idle' as const,
                 rank: 'A' as const,
-                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
@@ -151,7 +151,6 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 title: 'Reader',
                 status: 'idle' as const,
                 rank: 'A' as const,
-                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
@@ -163,7 +162,6 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 title: 'Checker',
                 status: 'idle' as const,
                 rank: 'A' as const,
-                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
@@ -176,6 +174,8 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
             base_url: 'http://localhost:8800/providers/private/v1',
             models: ['local/basalt']
         })),
+        // U-8 — the tile-opened thread surface: empty until a test names the threads it wants.
+        listAgentThreads: vi.fn(async (kind: string) => ({ kind, threads: [] })),
         // U-8 — the model write answers the refreshed roster, exactly like the route.
         setAgentModel: vi.fn(async (kind: string, model: string | null) => [
             {
@@ -183,7 +183,6 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 title: kind,
                 status: 'idle' as const,
                 rank: 'A' as const,
-                entry: kind === 'writer',
                 model: model ?? 'local/basalt',
                 model_source: model === null ? ('default' as const) : ('agent' as const),
                 template_models: [],
