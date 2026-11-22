@@ -23,6 +23,7 @@
 import { useDashboard, useDashboardStore } from '../state';
 import type { StoryRow } from '../api';
 import type { PendingKind, StoryPhase, StoryStatus, Trend } from '../../shared/types';
+import { ConfirmButton } from './story-phase-controls';
 
 /** U-12a: the strip is ①②③ and readable from across the room — glyph plus a short name. */
 const PHASE_MARKS: Array<{ phase: StoryPhase; glyph: string; label: string }> = [
@@ -200,10 +201,6 @@ export function StoriesPanel() {
     return (
         <div className="panel panel--stories" data-testid="stories-panel">
             <h2 className="panel__title">Stories</h2>
-            <p className="panel__hint">
-                phase-first, then status: the ones only you can move are on top (U-1). every story runs its own
-                harness — open one and its knowledge appears below.
-            </p>
 
             {ordered.length === 0 ? <p className="panel__empty">no stories · write a Seed below</p> : null}
 
@@ -360,6 +357,14 @@ export function StoriesPanel() {
                                         Clear
                                     </button>
                                 ) : null}
+                                {/* §10 / P1: deleting the Story deletes its harness — every record,
+                                    the knowledge directory, its sessions and its threads. */}
+                                <ConfirmButton
+                                    className="button button--delete"
+                                    label="Delete"
+                                    confirmText={`Delete "${row.title}" and everything it owns — every record, its knowledge, sessions and threads? This cannot be undone.`}
+                                    onConfirm={() => void store.deleteStory(row.id)}
+                                />
                             </span>
                         </li>
                     );

@@ -460,6 +460,29 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         });
     });
 
+    /**
+     * §10 / P1 — delete a Story and everything its harness owns. Stop first (P8: no phrase may keep
+     * writing a book that is about to disappear), then the knowledge directory (a projection outside
+     * §4), then the Story and every story-scoped record in one commit; `engine.deleteStory` finally
+     * disposes the harness, which tears down its sessions and threads.
+     */
+    app.delete('/stories/:id', async (c) => {
+        const story = storyOf(c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        try {
+            await engine.pauseStory(story.id);
+            deps.knowledge.removeStory(story.id);
+            await deps.knowledge.flush();
+            await engine.deleteStory(story.id);
+        } catch (error) {
+            return refusal(c, error);
+        }
+
+        return c.json({ deleted: story.id }, 200);
+    });
+
     /** D-37 / U-17 — Pause & edit: the only thing that opens the prose pane. */
     app.post('/stories/:id/stop', (c) => {
         const story = storyOf(c.req.param('id'));

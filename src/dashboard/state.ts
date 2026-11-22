@@ -302,6 +302,25 @@ export function createDashboardStore(client: ApiClient = api) {
                 return row;
             });
         },
+        /** §10 / P1 — the hard delete: close the Story's view and drop its cached projections. */
+        deleteStory(storyId: string): Promise<{ deleted: string } | null> {
+            return mutate(async () => {
+                const result = await client.deleteStory(storyId);
+                const storyViews = { ...snapshot.storyViews };
+                const knowledge = { ...snapshot.knowledge };
+
+                delete storyViews[storyId];
+                delete knowledge[storyId];
+
+                commit({
+                    ...(snapshot.activeStoryId === storyId ? { activeStoryId: null } : {}),
+                    storyViews,
+                    knowledge
+                });
+
+                return result;
+            });
+        },
         stop: stopStory,
         resume: (storyId: string) => mutate(() => client.resume(storyId), storyId),
         clearPending: (storyId: string) => mutate(() => client.clearPending(storyId), storyId),

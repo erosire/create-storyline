@@ -21,7 +21,13 @@
 // A section with no records still gets a placeholder so the folder is visible before its
 // artifacts exist (an empty Summary is information, not a missing folder).
 import path from 'node:path';
-import { createKnowledgeEngine, loadKnowledgeFileStore, type KnowledgeArticle, type KnowledgeEngine, type KnowledgeStore } from '@underload/harness';
+import {
+    createKnowledgeEngine,
+    loadKnowledgeFileStore,
+    type KnowledgeArticle,
+    type KnowledgeEngine,
+    type KnowledgeStore
+} from '@underload/harness';
 import { chapterContent } from '../../shared/chapter';
 import type {
     CastMember,
@@ -480,6 +486,27 @@ export class StoryKnowledge {
                 );
             }
         }
+    }
+
+    /**
+     * Delete every article this Story owns: its eight projected folders (tagged `story:<id>`) and
+     * any article its own harness created (owner `storyline:<id>`). Deleting the Story deletes the
+     * harness, so its knowledge goes with it — nothing is left for a later read to re-materialise.
+     * Returns how many articles were removed; the caller flushes to make the deletion durable.
+     */
+    removeStory(storyId: string): number {
+        if (this.closed) return 0;
+
+        const owner = `storyline:${storyId}`;
+        const articles = this.engine
+            .snapshot()
+            .articles.filter((article) => article.tags.includes(storyTag(storyId)) || article.harness === owner);
+
+        for (const article of articles) {
+            this.engine.execute({ verb: 'remove', id: article.id });
+        }
+
+        return articles.length;
     }
 
     /** The browser's read. Always re-derives first, so a commit that raced this request is included. */

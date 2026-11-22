@@ -24,13 +24,13 @@
 import { agent, harness, tool } from '@underload/harness';
 import type {
     Agent,
+    AgentRank,
     Harness,
     HarnessAssistantMessage,
     HarnessMessage,
     HarnessStream,
     HarnessStreamEvent,
     HarnessStreamRequest,
-    HarnessToolCall,
     ToolContext
 } from '@underload/harness';
 import type { ChatClient, ChatMessage, ToolCall, ToolSchema } from '../llm';
@@ -38,7 +38,7 @@ import type { LoopOutcome, LoopSpec, RunTally } from './loop';
 import { agentModelFor, templateRoleModels, type AgentModelSource, type AgentTemplateModel } from './agent-models';
 import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
-import type { RoleKind, Story, StoryPhase } from '../../shared/types';
+import type { RoleKind, Run, Story, StoryPhase } from '../../shared/types';
 import type { Store } from '../store';
 
 // ---------------------------------------------------------------------------
@@ -46,6 +46,22 @@ import type { Store } from '../store';
 // ---------------------------------------------------------------------------
 
 const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker'];
+
+/**
+ * Every configured agent holds the same rank (the harness's authority model, R15). Rank A for
+ * all four makes them peers: none is another's subordinate, and the ENGINE registers no
+ * `delegate` door for a single-rank roster. The lead of a session is therefore its ENTRY point,
+ * not a higher-ranked agent.
+ */
+export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
+    writer: 'A',
+    editor: 'A',
+    reader: 'A',
+    checker: 'A'
+};
+
+/** The agent that routes an unfocused session — the entry point, never an authority claim (R15). */
+export const STORY_AGENT_ENTRY: RoleKind = 'writer';
 
 /** The single-property unwrap the harness applies before `execute` (tool()'s contract). */
 const singlePropertyKey = (schema: Record<string, unknown> | undefined): string | undefined => {
@@ -58,6 +74,28 @@ const singlePropertyKey = (schema: Record<string, unknown> | undefined): string 
     const keys = Object.keys(properties as Record<string, unknown>);
 
     return keys.length === 1 ? keys[0] : undefined;
+};
+
+/**
+ * The OpenAI wire shape of one assistant tool call. The engine's `HarnessToolCall` is flat
+ * (`{id, name, arguments}`); a strict provider requires the nested `function` wrapper, and its
+ * absence is a 400 on every turn after the first tool call.
+ */
+interface WireToolCall {
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+}
+
+/** The engine's transport sends `{}` for arguments that are not a plain JSON object; same rule here. */
+const wireArguments = (raw: string): string => {
+    try {
+        const parsed: unknown = JSON.parse(raw);
+
+        return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? raw : '{}';
+    } catch {
+        return '{}';
+    }
 };
 
 /** One live Run's identity and the Storyline context its tool calls execute against. */
@@ -102,11 +140,29 @@ export interface StorySession {
     runs: Map<string, EngineRun>;
 }
 
+/** One closed run row, kept on a tile so a failed thread does not vanish into `idle` (S-3, U-8). */
+export interface StoryAgentRecentRun {
+    run_id: string;
+    story_id: string;
+    story_title: string;
+    work_item: string;
+    state: Run['state'];
+    started_at: string;
+    ended_at?: string;
+    end_reason?: string;
+    no_op: boolean;
+    tokens: number;
+}
+
 /** The public status row a dashboard renders for one agent tile. */
 export interface StoryAgentStatus {
     kind: RoleKind;
     title: string;
     status: 'idle' | 'running';
+    /** The harness rank every configured agent holds; `A` is a peer, not a lead (R15). */
+    rank: AgentRank;
+    /** True for the session's ENTRY agent — routing, never authority (R15). */
+    entry: boolean;
     /**
      * U-8 / T-6b — the model this agent asks for when its template role names none. The Agents
      * panel shows it beside the status so the Author never has to guess what a tile is running.
@@ -129,6 +185,47 @@ export interface StoryAgentStatus {
         thread_id: string;
         started_at: number;
     }>;
+    /**
+     * The newest closed runs of this kind, newest first. A run row exists from spawn to teardown
+     * (D-18), and its `end_reason` is the only place a provider fault or a bad brief is written
+     * (S-3) — without this list the tile reads `idle` while the same fault repeats every sweep.
+     */
+    recent: StoryAgentRecentRun[];
+}
+
+/** How many closed runs a tile keeps for "why did it end" (bounded, newest first). */
+const RECENT_RUNS = 3;
+
+/** The newest closed runs of ONE kind, read from the journaled rows (never from local guesses). */
+function recentRuns(store: Store, kind: RoleKind, storyId?: string): StoryAgentRecentRun[] {
+    return store.runs
+        .list()
+        .filter(
+            (run) =>
+                run.role === kind &&
+                (storyId === undefined || run.story_id === storyId) &&
+                // Only a torn-down row: a live run is already on `working`, and "last run — working"
+                // would read like a second, finished thread.
+                (run.state === 'torn_down' || run.state === 'failed' || run.state === 'abandoned')
+        )
+        .sort((left, right) => {
+            const started = right.started_at.localeCompare(left.started_at);
+
+            return started !== 0 ? started : right.id.localeCompare(left.id);
+        })
+        .slice(0, RECENT_RUNS)
+        .map((run) => ({
+            run_id: run.id,
+            story_id: run.story_id,
+            story_title: (store.stories.get(run.story_id) as Story | undefined)?.title ?? run.story_id,
+            work_item: run.work_item_ref ?? '',
+            state: run.state,
+            started_at: run.started_at,
+            ...(run.ended_at === undefined || run.ended_at === null ? {} : { ended_at: run.ended_at }),
+            ...(run.end_reason === undefined ? {} : { end_reason: run.end_reason }),
+            no_op: run.no_op === true,
+            tokens: run.tokens
+        }));
 }
 
 export interface StoryAgentCatalogueEntry {
@@ -205,22 +302,22 @@ export class StoryHarness {
 
         const create = options.createHarness ?? harness;
         const agents: Record<string, Agent> = {};
-        const ranks: Record<string, 'A'> = {};
+        const ranks: Record<string, AgentRank> = {};
 
         for (const kind of STORY_AGENT_KINDS) {
             agents[kind] = agent({ model: this.defaultModel, stream: this.streamFor(kind), retry: false });
-            ranks[kind] = 'A';
+            ranks[kind] = STORY_AGENT_RANKS[kind];
         }
 
-        // Every configured agent is Rank A so the ENGINE's own delegation rules never add a
-        // peer this Story's template did not declare. The baseline row may still be installed;
-        // `installDelegate` below makes the registry hold Storyline's §8 definition, which is the
-        // only delegation door the Author's templates control (D-17e).
+        // Every configured agent is Rank A: one rank across the roster means the ENGINE registers
+        // no `delegate` door of its own (R15), and the lead of a session is its entry point rather
+        // than a higher-ranked agent. Storyline's §8 `delegate` remains the template's explicit
+        // D-17e door, not an authority relation between these peers.
         this.catalogue = this.toolCatalogue();
         this.declaredSchemas = new Map(this.runtime.schemas().map((schema) => [schema.function.name, schema]));
         this.engine = create({
             agents,
-            entry: 'writer',
+            entry: STORY_AGENT_ENTRY,
             ranks,
             presets: false,
             builtinPlugins: [],
@@ -383,15 +480,23 @@ export class StoryHarness {
 
                 if (message.role === 'assistant') {
                     // `ChatMessage` deliberately does not declare `tool_calls`, but the wire
-                    // transcript the provider answers DOES carry them. The executor's mock reads
-                    // the same field through this exact cast, so one shape serves both.
+                    // transcript the provider answers DOES carry them. The provider checks the
+                    // OpenAI shape — every call is `{id, type: 'function', function: {name,
+                    // arguments}}` — while the engine keeps the flat `{id, name, arguments}`
+                    // form, so the projection is the one place the two vocabularies meet.
+                    // Sending the engine's flat form is what made a second turn a 400 with
+                    // "Invalid value for [0].function: Field required" on a strict provider.
                     const projected = {
                         role: 'assistant' as const,
                         content: message.content
-                    } as ChatMessage & { tool_calls?: HarnessToolCall[] };
+                    } as ChatMessage & { tool_calls?: WireToolCall[] };
 
                     if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
-                        projected.tool_calls = message.toolCalls;
+                        projected.tool_calls = message.toolCalls.map((call) => ({
+                            id: call.id,
+                            type: 'function' as const,
+                            function: { name: call.name, arguments: wireArguments(call.arguments) }
+                        }));
                     }
 
                     return projected;
@@ -658,10 +763,13 @@ export class StoryHarness {
                 kind: entry.kind,
                 title: entry.title,
                 status: working.length > 0 ? 'running' : 'idle',
+                rank: STORY_AGENT_RANKS[entry.kind],
+                entry: entry.kind === STORY_AGENT_ENTRY,
                 model: choice.model,
                 model_source: choice.source,
                 template_models: templateRoleModels(this.store, entry.kind),
-                working
+                working,
+                recent: recentRuns(this.store, entry.kind, this.storyId)
             };
         });
     }
@@ -764,10 +872,15 @@ export class StoryHarnessManager {
                 kind: entry.kind,
                 title: entry.title,
                 status: 'idle',
+                rank: STORY_AGENT_RANKS[entry.kind],
+                entry: entry.kind === STORY_AGENT_ENTRY,
                 model: choice.model,
                 model_source: choice.source,
                 template_models: templateRoleModels(this.store, entry.kind),
-                working: []
+                working: [],
+                // Read from the journaled rows, not from a harness: after a restart there is no
+                // harness to ask, and the failed run is exactly the thread the Author needs (S-3).
+                recent: recentRuns(this.store, entry.kind)
             });
         }
 

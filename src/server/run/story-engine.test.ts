@@ -1,8 +1,9 @@
 // The Story runtime on the harness engine: one harness per Story, one session per phase, one
 // thread per Run, and a status projection that spans stories.
 import { describe, expect, it } from 'vitest';
-import { MockChatClient, calls, msg } from '../llm/mock';
-import type { ChatResponse } from '../llm/client';
+import { harness } from '@underload/harness';
+import { MockChatClient, calls, makeRecorder, msg } from '../llm/mock';
+import type { ChatMessage, ChatResponse } from '../llm/client';
 import { Store } from '../store';
 import { MockToolRuntime, seedChapter, seedDigest, seedGoal, seedPlotline, seedStory, seedTemplate } from './mock';
 import { createTally } from './loop';
@@ -92,13 +93,28 @@ describe('StoryHarnessManager — one harness per Story', () => {
         await Promise.all([running, runningB]);
 
         expect(manager.statuses().find((row) => row.kind === 'writer')?.status).toBe('idle');
-        expect(manager.forStory(first.id).sessionsForStatus().map((session) => session.phase)).toEqual(['summary']);
+        expect(
+            manager
+                .forStory(first.id)
+                .sessionsForStatus()
+                .map((session) => session.phase)
+        ).toEqual(['summary']);
         expect(manager.forStory(first.id).sessionsForStatus()[0]?.runs.size).toBe(1);
 
         // The two Stories kept separate harnesses and separate sessions throughout.
         expect(manager.has(second.id)).toBe(true);
-        expect(manager.forStory(first.id).sessionsForStatus().map((session) => session.phase)).toEqual(['summary']);
-        expect(manager.forStory(second.id).sessionsForStatus().map((session) => session.phase)).toEqual(['chapters']);
+        expect(
+            manager
+                .forStory(first.id)
+                .sessionsForStatus()
+                .map((session) => session.phase)
+        ).toEqual(['summary']);
+        expect(
+            manager
+                .forStory(second.id)
+                .sessionsForStatus()
+                .map((session) => session.phase)
+        ).toEqual(['chapters']);
         expect(manager.statuses().flatMap((row) => row.working)).toEqual([]);
 
         manager.dispose();
@@ -160,6 +176,123 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
+    it('projects the engine’s flat tool call into the OpenAI wire shape a strict provider requires (T-6, S-4)', async () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const { client, requests } = makeRecorder((_request, state) =>
+            state.callIndex === 0
+                ? {
+                      message: msg({
+                          toolCalls: calls([{ name: 'readGoals', args: {} }])
+                      })
+                  }
+                : { message: msg({ content: 'reported' }) }
+        );
+        const manager = new StoryHarnessManager({ store, runtime, chat: client, defaultModel: 'mock' });
+
+        await manager.run({
+            storyId: story.id,
+            phase: 'chapters',
+            label: 'run_1',
+            roleName: 'checker',
+            roleKind: 'checker',
+            model: 'mock',
+            system: 'BRIEF',
+            kickoff: 'check',
+            context: contextFor(store, runtime, story.id),
+            runtime,
+            tally: createTally()
+        });
+
+        expect(requests).toHaveLength(2);
+
+        // The provider's OpenAI schema nests name/arguments under `function`; the engine keeps
+        // them flat. A second turn with the flat form is a 400 on a strict provider ("Invalid
+        // value for `[0].function`: Field required"), which is the Checker's repeating fault.
+        const assistant = requests[1]?.messages.find((message) => message.role === 'assistant') as
+            | (ChatMessage & { tool_calls?: unknown[] })
+            | undefined;
+
+        expect(assistant?.tool_calls).toEqual([
+            {
+                id: 'call_1~1_0',
+                type: 'function',
+                function: { name: 'readGoals', arguments: '{}' }
+            }
+        ]);
+
+        manager.dispose();
+    });
+
+    it('answers every agent’s rank and entry flag, and keeps the newest closed runs on the tile (R15, S-3)', async () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const chat = new MockChatClient(async () => ({ message: { content: 'done' } }));
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        store.runs.create(
+            {
+                story_id: story.id,
+                work_item_ref: 'wi_check_chapters_1',
+                role: 'checker',
+                state: 'failed',
+                started_at: '2026-11-22T10:00:00.000Z',
+                ended_at: '2026-11-22T10:00:01.000Z',
+                tokens: 0,
+                kind: 'work',
+                no_op: true,
+                end_reason: 'failed — LLM provider fault: Invalid value for `[0].function`: Field required',
+                delegated: []
+            },
+            { run_ref: null, author: true, why: 'seed a failed run for the roster projection' }
+        );
+
+        const rows = manager.statuses();
+
+        expect(rows.every((row) => row.rank === 'A')).toBe(true);
+        expect(rows.filter((row) => row.entry).map((row) => row.kind)).toEqual(['writer']);
+
+        const checker = rows.find((row) => row.kind === 'checker');
+
+        expect(checker?.recent).toHaveLength(1);
+        expect(checker?.recent[0]).toMatchObject({
+            run_id: 'run_1',
+            story_title: 'Hollow Sea',
+            work_item: 'wi_check_chapters_1',
+            state: 'failed',
+            no_op: true
+        });
+        expect(checker?.recent[0]?.end_reason).toContain('Invalid value for `[0].function`');
+
+        manager.dispose();
+    });
+
+    it('adds all four defined agents to every Story harness, at Rank A with one entry point (R15)', () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const chat = new MockChatClient(async () => ({ message: { content: 'done' } }));
+        let built: Parameters<typeof harness>[0] | undefined;
+        const createHarness = ((configuration: Parameters<typeof harness>[0]) => {
+            built = configuration;
+
+            return harness(configuration);
+        }) as typeof harness;
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock', createHarness });
+
+        // Building a harness is what a Story's first dispatch does; no run is needed to prove the
+        // roster is defined once and added whole.
+        manager.forStory(story.id);
+
+        expect(Object.keys(built?.agents ?? {}).sort()).toEqual(['checker', 'editor', 'reader', 'writer']);
+        expect(built?.ranks).toEqual({ writer: 'A', editor: 'A', reader: 'A', checker: 'A' });
+        expect(built?.entry).toBe('writer');
+
+        manager.dispose();
+    });
+
     it('opens a separate session for each phase of the same story', async () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
@@ -183,10 +316,12 @@ describe('StoryHarnessManager — one harness per Story', () => {
             });
         }
 
-        expect(manager.forStory(story.id).sessionsForStatus().map((session) => session.phase)).toEqual([
-            'summary',
-            'plotlines'
-        ]);
+        expect(
+            manager
+                .forStory(story.id)
+                .sessionsForStatus()
+                .map((session) => session.phase)
+        ).toEqual(['summary', 'plotlines']);
 
         manager.dispose();
     });

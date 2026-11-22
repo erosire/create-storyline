@@ -309,12 +309,56 @@ export interface AgentModelCatalog {
     models: string[];
 }
 
+/** One closed run row, kept on a tile so a failed thread does not vanish into `idle` (S-3, U-8). */
+export interface AgentRecentRun {
+    run_id: string;
+    story_id: string;
+    story_title: string;
+    work_item: string;
+    state: 'spawning' | 'working' | 'reporting' | 'torn_down' | 'failed' | 'abandoned';
+    started_at: string;
+    ended_at?: string;
+    end_reason?: string;
+    no_op: boolean;
+    tokens: number;
+}
+
 /** One tenant of the global agent roster, with every Story thread it is currently working. */
 export interface AgentStatusRow {
     /** `writer` | `editor` | `reader` | `checker` — the Storyline role, shared by every Story. */
     kind: string;
     title: string;
     status: 'idle' | 'running';
+    /** The harness rank every configured agent holds; `A` is a peer, not a lead (R15). */
+    rank?:
+        | 'A'
+        | 'B'
+        | 'C'
+        | 'D'
+        | 'E'
+        | 'F'
+        | 'G'
+        | 'H'
+        | 'I'
+        | 'J'
+        | 'K'
+        | 'L'
+        | 'M'
+        | 'N'
+        | 'O'
+        | 'P'
+        | 'Q'
+        | 'R'
+        | 'S'
+        | 'T'
+        | 'U'
+        | 'V'
+        | 'W'
+        | 'X'
+        | 'Y'
+        | 'Z';
+    /** True for the session's ENTRY agent — routing, never authority (R15). */
+    entry?: boolean;
     /**
      * U-8 / T-6b — the roster's model for this agent, or the process model when the Author has
      * set none. Optional on the client contract so an older/fake projection still renders: the
@@ -337,12 +381,19 @@ export interface AgentStatusRow {
         thread_id: string;
         started_at: number;
     }>;
+    /** The newest closed runs of this kind, newest first — the tile's "why did it end" (S-3). */
+    recent?: AgentRecentRun[];
 }
 
 /** The full method set T9 imports — one entry per route in the pinned table. */
 export interface ApiClient {
     listStories(): Promise<StoryRow[]>;
     createStory(input: CreateStoryInput): Promise<StoryRow>;
+    /**
+     * §10 / P1 — hard-delete a Story and everything it owns: every §4 record, the knowledge
+     * directory, and the Story's harness (its sessions and threads). Answers the id it removed.
+     */
+    deleteStory(storyId: string): Promise<{ deleted: string }>;
     getStory(storyId: string): Promise<StoryView>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
@@ -479,6 +530,11 @@ function patch<T>(path: string, body: unknown): Promise<T> {
     return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
+/** `DELETE` — the Author's hard delete; the server answers the id it removed. */
+function del<T>(path: string): Promise<T> {
+    return request<T>(path, { method: 'DELETE' });
+}
+
 /** Story-scoped prefix — kept as a function so no path is assembled twice. */
 const storyPath = (storyId: string, suffix = ''): string => `/stories/${encodeURIComponent(storyId)}${suffix}`;
 
@@ -571,6 +627,7 @@ function subscribeEvents(onEvent: (kind: StreamKind, storyId?: string) => void):
 export const api: ApiClient = {
     listStories: () => request<StoryRow[]>('/stories'),
     createStory: (input) => post<StoryRow>('/stories', input),
+    deleteStory: (storyId) => del<{ deleted: string }>(storyPath(storyId)),
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),

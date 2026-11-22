@@ -15,37 +15,49 @@ const idleRows = (model: string) => [
         kind: 'writer',
         title: 'Writer',
         status: 'idle',
+        rank: 'A',
+        entry: true,
         model,
         model_source: 'default',
         template_models: [],
-        working: []
+        working: [],
+        recent: []
     },
     {
         kind: 'editor',
         title: 'Editor',
         status: 'idle',
+        rank: 'A',
+        entry: false,
         model,
         model_source: 'default',
         template_models: [],
-        working: []
+        working: [],
+        recent: []
     },
     {
         kind: 'reader',
         title: 'Reader',
         status: 'idle',
+        rank: 'A',
+        entry: false,
         model,
         model_source: 'default',
         template_models: [],
-        working: []
+        working: [],
+        recent: []
     },
     {
         kind: 'checker',
         title: 'Checker',
         status: 'idle',
+        rank: 'A',
+        entry: false,
         model,
         model_source: 'default',
         template_models: [],
-        working: []
+        working: [],
+        recent: []
     }
 ];
 
@@ -62,6 +74,52 @@ describe('GET /agents', () => {
 
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual(idleRows('scripted'));
+    });
+
+    it('keeps a torn-down run and its reason visible on the idle agent’s tile (S-3)', async () => {
+        const store = Store.empty();
+
+        store.runs.create(
+            {
+                story_id: 'story_1',
+                work_item_ref: 'wi_check_chapters_1',
+                role: 'checker',
+                state: 'failed',
+                started_at: '2026-11-22T10:00:00.000Z',
+                ended_at: '2026-11-22T10:00:01.000Z',
+                tokens: 0,
+                kind: 'work',
+                no_op: true,
+                end_reason: 'failed — LLM provider fault: Invalid value for `[0].function`: Field required',
+                delegated: []
+            },
+            { run_ref: null, author: true, why: 'seed the failed run the roster must keep visible' }
+        );
+
+        const runtime = buildStorylineRuntime({
+            store,
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: ENV
+        });
+
+        const response = await runtime.app.request('http://localhost/v1/storyline/agents');
+        const rows = (await response.json()) as Array<{
+            kind: string;
+            status: string;
+            recent: Array<Record<string, unknown>>;
+        }>;
+        const checker = rows.find((row) => row.kind === 'checker');
+
+        expect(checker?.status).toBe('idle');
+        expect(checker?.recent).toHaveLength(1);
+        expect(checker?.recent[0]).toMatchObject({
+            run_id: 'run_1',
+            work_item: 'wi_check_chapters_1',
+            state: 'failed',
+            no_op: true
+        });
+        expect(String(checker?.recent[0]?.end_reason)).toContain('Field required');
     });
 });
 

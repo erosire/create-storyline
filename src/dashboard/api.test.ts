@@ -41,6 +41,21 @@ describe('api — the pinned REST surface', () => {
         expect(lastFetch()).toEqual({ url: `${API_ROOT}/agents/models`, method: 'GET' });
     });
 
+    it('deletes a Story with DELETE and answers the id the server removed (P1)', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => ({ deleted: 'story_1' })
+            }))
+        );
+
+        expect(await api.deleteStory('story_1')).toEqual({ deleted: 'story_1' });
+        expect(lastFetch()).toEqual({ url: `${API_ROOT}/stories/story_1`, method: 'DELETE' });
+    });
+
     it("refuses a locked phase with the server's own sentence, not a generic failure (L-7a / L-13)", async () => {
         vi.stubGlobal(
             'fetch',

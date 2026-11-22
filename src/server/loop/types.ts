@@ -449,6 +449,12 @@ export interface EngineApi {
     pauseStory(storyId: string): Promise<void>;
 
     /**
+     * §10 / P1 — hard-delete a Story and every record it owns, then dispose its harness. The
+     * Story's knowledge articles live outside §4, so the route deletes them beside this call.
+     */
+    deleteStory(storyId: string): Promise<void>;
+
+    /**
      * D-2a/D-37b: the Author's clear. Un-pauses a `pending` or `stopped` Story and re-derives from the
      * records — a resume after a prose edit re-derives the Digest and propagates `needs_recheck`
      * (D-37a), and nothing about the edit is treated as a defect (D-37b).

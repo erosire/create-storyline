@@ -1783,13 +1783,6 @@
 
 /* --------------------------------------------------------------- the global agents (U-8) */
 
-.sv-agents-note {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.72rem;
-    line-height: 1.45;
-}
-
 .sv-agent-tiles {
     display: flex;
     flex-direction: column;
@@ -1817,52 +1810,102 @@
     display: flex;
     width: 100%;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
+    gap: 0.45rem;
     margin: 0;
     padding: 0;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.sv-agent-tile__head:hover .sv-agent-tile__name,
-.sv-agent-tile__head:focus-visible .sv-agent-tile__name {
-    color: var(--accent);
-}
-
-.sv-agent-tile__head:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: 2px;
 }
 
 .sv-agent-tile__name {
     font-weight: 700;
 }
 
+.sv-agent-tile__rank,
+.sv-agent-tile__entry {
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-agent-tile__entry {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 .sv-agent-tile__model {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: baseline;
-    gap: 0.35rem;
+    gap: 0.3rem;
+    min-width: 0;
     margin: 0;
     color: var(--muted);
     font-size: 0.7rem;
 }
 
-.sv-agent-tile__model code {
-    color: var(--text-strong);
+.sv-agent-tile__model label {
+    flex: 0 0 auto;
+    color: var(--muted);
     font-size: 0.7rem;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
 }
 
-.sv-agent-tile__model-source {
-    color: var(--dim);
-    font-size: 0.64rem;
-    letter-spacing: 0.02em;
+/*
+ * The model reads as plain text; the select is invisible on top of it, so a click opens the
+ * platform's own dropdown over exactly the text the Author is reading.
+ */
+.sv-agent-tile__model-picker {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: baseline;
+}
+
+.sv-agent-tile__model-text {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-strong);
+    font-size: 0.7rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sv-agent-tile__model-picker:hover .sv-agent-tile__model-text {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+}
+
+.sv-agent-tile__model-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+}
+
+.sv-agent-tile__model-select:focus-visible {
+    outline: none;
+}
+
+.sv-agent-tile__model-picker:focus-within {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.sv-agent-tile__model-select:disabled {
+    cursor: not-allowed;
 }
 
 .sv-agent-tile__template-models {
@@ -1872,75 +1915,70 @@
     line-height: 1.4;
 }
 
-.sv-agent-tile--open {
-    border-color: var(--accent);
-}
-
-.sv-agent-tile__config {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    padding-top: 0.45rem;
-    border-top: 1px dashed var(--line-strong);
-}
-
-.sv-agent-tile__config label {
+.sv-agent-tile__recent {
+    margin-top: 0.15rem;
     color: var(--muted);
     font-size: 0.66rem;
+}
+
+.sv-agent-tile__recent summary {
+    cursor: pointer;
     line-height: 1.4;
 }
 
-.sv-agent-tile__model-select {
-    width: 100%;
-    padding: 0.3rem 0.45rem;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    font-size: 0.72rem;
-    cursor: pointer;
+.sv-agent-tile__recent ul {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    list-style: none;
 }
 
-.sv-agent-tile__model-select:focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: 1px;
-}
-
-.sv-agent-tile__model-select:disabled {
-    color: var(--dim);
-    cursor: not-allowed;
-}
-
-.sv-agent-tile__config-actions {
+.sv-agent-recent {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: 0.3rem;
+    align-items: baseline;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--line-strong);
+    line-height: 1.35;
 }
 
-.sv-agent-tile__config-actions button {
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    font-size: 0.66rem;
+.sv-agent-recent__state {
+    padding: 0.02rem 0.3rem;
+    border-radius: 999px;
+    background: var(--calm-bg);
+    color: var(--calm);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.sv-agent-recent__state--failed,
+.sv-agent-recent__state--abandoned {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-agent-recent__story {
     font-weight: 600;
-    cursor: pointer;
 }
 
-.sv-agent-tile__config-actions button:hover:not(:disabled) {
-    border-color: var(--accent);
-    color: var(--accent);
+.sv-agent-recent__work,
+.sv-agent-recent__reason {
+    color: var(--muted);
 }
 
-.sv-agent-tile__config-actions button:disabled {
+.sv-agent-recent__reason {
+    flex-basis: 100%;
     color: var(--dim);
-    cursor: not-allowed;
+    overflow-wrap: anywhere;
 }
 
 .sv-agent-tile__state {
+    margin-left: auto;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
     font-size: 0.64rem;
@@ -1956,7 +1994,6 @@
     color: var(--surface);
 }
 
-.sv-agent-tile__idle,
 .sv-agents-empty {
     margin: 0;
     color: var(--muted);

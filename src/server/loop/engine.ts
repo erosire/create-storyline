@@ -1125,6 +1125,50 @@ export class LoopEngine implements EngineApi {
     }
 
     /**
+     * §10 / P1 — delete a Story and everything it owns. The Author's cord first (a phrase must not
+     * outlive the book it was writing), then ONE commit removes every story-scoped §4 row and the
+     * Story itself; finally the Story's harness is disposed, which tears down its sessions and
+     * threads. Knowledge is a projection outside §4, so the route deletes it alongside this call.
+     */
+    async deleteStory(storyId: string): Promise<void> {
+        const story = requireStory(this.store, storyId);
+
+        // The in-flight phrases stop first: a run that outlives its Story would teardown into rows
+        // this method is about to delete, and S-3's unconditional close would then be a lost update.
+        for (const run of liveRuns(this.store, storyId)) this.executor.kill(run.id);
+
+        await this.settle();
+
+        await this.store.commit('delete_story', () => {
+            const attribution = authorAttr(
+                `the Author deleted ${story.id}; the book, every artifact it owned, and every run go with it (P1, §10)`
+            );
+
+            // Every §4 collection that can name a story. `templates` stays: it is the global
+            // catalogue, not this book's property, and a duplicate remains the Author's to reuse.
+            this.store.summaries.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.plotlines.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.chapters.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.cast.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.ledger.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.tasks.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.digests.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.verdicts.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.findings.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.goals.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.runs.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.directives.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.revisions.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.ideas.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.proposals.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.stories.delete(story.id, attribution);
+        });
+
+        this.lastClosedRuns.delete(story.id);
+        this.executor.harness.forget(story.id);
+    }
+
+    /**
      * D-2a/D-37b: the Author's clear. Nothing about a paused Story is special on resume — the crew picks
      * the book up where it stands, which is the same thing that happens after any other pause.
      *

@@ -233,10 +233,10 @@ describe('StoryView — completion, cost, and the derived Digest (U-14, decision
         expect(digest.textContent).toContain('engine-derived, no agent wrote it · D-12a');
     });
 
-    it('carries the PHRASES and TEMPLATES rail on the same surface (U-7, U-8)', () => {
+    it('carries the TEMPLATES rail on the same surface (U-8)', () => {
         renderView();
 
-        expect(screen.getByRole('complementary', { name: 'Phrases' })).toBeTruthy();
+        expect(screen.queryByRole('complementary', { name: 'Phrases' })).toBeNull();
         expect(screen.getByRole('complementary', { name: 'Templates' })).toBeTruthy();
         expect(screen.getByRole('region', { name: 'Goal' })).toBeTruthy();
         expect(screen.getByRole('region', { name: 'Ideas tray' })).toBeTruthy();

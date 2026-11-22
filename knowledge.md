@@ -72,6 +72,8 @@ dispatched: drained" }`. Ideas land while a phase is still working, which is why
 
 `POST /stories` (Seed + `chapter_count` → Story + empty Summary + Goal), `GET /stories`,
 `GET /stories/:id`, `PATCH /stories/:id` (title/idea/chapter_count/`auto_approve`),
+`DELETE /stories/:id` (P1: stop, delete the knowledge directory, every story-scoped §4 row and the
+Story, then dispose its harness — sessions and threads go with it),
 `POST /stories/:id/stop|resume|clear-pending|lock`, `POST /stories/:id/backtrack {phase}`,
 `PATCH /stories/:id/goal {criteria:[{op:add|remove|setHard}], threshold_soft}`,
 `POST /stories/:id/directives {text}`, `POST /stories/:id/assistant {target,text}`,
@@ -215,9 +217,11 @@ global agent roster. Both are projections, and neither is a second source of tru
   section articles, and an empty section keeps a placeholder paragraph so its folder stays
   visible. `GET /stories/:id/knowledge` syncs, flushes, and answers the whole tree.
 - **The agent roster** (`src/server/run/story-engine.ts`) is fixed and global: Writer, Editor,
-  Reader and Checker. `GET /agents` projects one row per kind with its model, its live threads,
-  the Story title and the phase each thread belongs to. The right-hand tile panel renders that
-  projection; selecting a Story never changes the roster. Each tile's model line is the same
+  Reader and Checker, all at Rank A (the harness's peers, so rank alone delegates to nobody).
+  `GET /agents` projects one row per kind with its model, its live threads, the Story title and
+  the phase each thread belongs to, and the newest torn-down runs with the `end_reason` they
+  ended on. The right-hand tile panel renders that projection; selecting a Story never changes
+  the roster, and a failed run stays visible after its thread ends instead of reading as `idle`. Each tile's model line is the same
   resolution the executor uses (`src/server/run/agent-models.ts`): the Author's explicit choice
   for that agent kind wins, then the template role's own model, then the process model. The tile
   also lists the template roles that name a model, so clearing a choice cannot silently fall back

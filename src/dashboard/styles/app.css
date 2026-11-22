@@ -1041,16 +1041,57 @@
 }
 
 .button--stop,
-.button--discard {
+.button--discard,
+.button--delete {
     border-color: var(--urgent);
     color: var(--urgent);
 }
 
 .button--stop:hover:not(:disabled),
-.button--discard:hover:not(:disabled) {
+.button--discard:hover:not(:disabled),
+.button--delete:hover:not(:disabled) {
     background: var(--urgent-bg);
     border-color: var(--urgent);
     color: var(--urgent);
+}
+
+.button--delete-confirm {
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border: 1px dashed var(--urgent);
+    border-radius: var(--radius-sm);
+    background: var(--urgent-bg);
+}
+
+.button--delete-confirm .sv-confirm-text {
+    flex: 1 1 100%;
+    color: var(--urgent);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.button--delete-confirm .sv-confirm-yes,
+.button--delete-confirm .sv-confirm-no {
+    padding: 2px 8px;
+    border: 1px solid var(--urgent);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--urgent);
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.button--delete-confirm .sv-confirm-yes:hover,
+.button--delete-confirm .sv-confirm-no:hover {
+    background: var(--urgent);
+    color: var(--surface);
 }
 
 .button--resume,

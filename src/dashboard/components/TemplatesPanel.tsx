@@ -66,7 +66,6 @@ export function TemplatesPanel({ templates, story, onCreate, onPatch, onAssign }
         <aside className="sv-pane sv-templates" aria-label="Templates">
             <header className="sv-pane-head">
                 <h3 className="sv-pane-title">Templates — the harness catalogue (U-8)</h3>
-                <span className="sv-pane-badge">the Author&apos;s own judgment, automated (P12)</span>
             </header>
 
             {/* U-8: New is the from-scratch verb D-17 requires alongside Duplicate. */}

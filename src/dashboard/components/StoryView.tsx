@@ -13,9 +13,8 @@
 //
 // §10.1's layout: this component owns the CENTRE region (seed → phase strip → the two big phase
 // buttons → Summary → Ideas → plotlines-and-chapters → revisions → Goal → completion → cost) and
-// includes the right-hand CREW/TEMPLATES rail so the regions stay in one readable tree. T8 may
-// lift `CrewPanel` / `TemplatesPanel` out into their own region; they take their own props and
-// render independently.
+// includes the right-hand TEMPLATES rail so the regions stay in one readable tree. The shell may
+// lift `TemplatesPanel` out into its own region; it takes its own props and renders independently.
 //
 // U-11 is the discipline that shapes the copy throughout: no spinner for its own sake, progress
 // reads as story — chapters drafted, a hole in act two, setups unpaid.
@@ -25,7 +24,6 @@
 import '../styles/story.css';
 import type { ReactNode } from 'react';
 import { CompletionPrompt } from './CompletionPrompt';
-import { CrewPanel } from './CrewPanel';
 import { GoalPanel } from './GoalPanel';
 import { IdeasTray } from './IdeasTray';
 import { PhaseStrip } from './PhaseStrip';
@@ -84,18 +82,12 @@ export interface StoryViewProps {
     /**
      * The first block of the right rail, supplied by the shell. It carries the global agent
      * catalogue — the roster every phrase of this story runs, with Rank A called out — above the
-     * live phrases and the template catalogue, which stay this component's own concern.
+     * template catalogue, which stays this component's own concern.
      */
     railLead?: ReactNode;
 }
 
-export function StoryView({
-    view,
-    actions = {},
-    now = new Date().toISOString(),
-    ledgerState,
-    railLead
-}: StoryViewProps) {
+export function StoryView({ view, actions = {}, ledgerState, railLead }: StoryViewProps) {
     const { story, goal } = view;
 
     // D-37: the prose editor is live only from a paused Story — the same status Stop sets (P8).
@@ -281,7 +273,6 @@ export function StoryView({
 
             <div className="sv-story-rail">
                 {railLead}
-                <CrewPanel runs={view.runs} templates={view.templates} now={now} onKillRun={actions.killRun} />
                 <TemplatesPanel
                     templates={view.templates}
                     story={story}

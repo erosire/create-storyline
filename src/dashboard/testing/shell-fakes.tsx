@@ -113,6 +113,7 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     const base: ApiClient = {
         listStories: vi.fn(async () => [] as StoryRow[]),
         createStory: vi.fn(async (input) => storyRow('story_new', { title: input.title })),
+        deleteStory: vi.fn(async (storyId: string) => ({ deleted: storyId })),
         getStory: vi.fn(async (storyId) => storyView(storyRow(storyId))),
         getStoryKnowledge: vi.fn(async (storyId) => ({
             story_id: storyId,
@@ -125,37 +126,49 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 kind: 'writer',
                 title: 'Writer',
                 status: 'idle' as const,
+                rank: 'A' as const,
+                entry: true,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
-                working: []
+                working: [],
+                recent: []
             },
             {
                 kind: 'editor',
                 title: 'Editor',
                 status: 'idle' as const,
+                rank: 'A' as const,
+                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
-                working: []
+                working: [],
+                recent: []
             },
             {
                 kind: 'reader',
                 title: 'Reader',
                 status: 'idle' as const,
+                rank: 'A' as const,
+                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
-                working: []
+                working: [],
+                recent: []
             },
             {
                 kind: 'checker',
                 title: 'Checker',
                 status: 'idle' as const,
+                rank: 'A' as const,
+                entry: false,
                 model: 'local/basalt',
                 model_source: 'default' as const,
                 template_models: [],
-                working: []
+                working: [],
+                recent: []
             }
         ]),
         // U-8 — the provider catalog the roster dropdown offers.
@@ -169,10 +182,13 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 kind,
                 title: kind,
                 status: 'idle' as const,
+                rank: 'A' as const,
+                entry: kind === 'writer',
                 model: model ?? 'local/basalt',
                 model_source: model === null ? ('default' as const) : ('agent' as const),
                 template_models: [],
-                working: []
+                working: [],
+                recent: []
             }
         ]),
         patchStory: vi.fn(async (storyId) => storyRow(storyId)),

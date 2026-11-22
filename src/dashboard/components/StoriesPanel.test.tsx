@@ -142,7 +142,12 @@ describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () =
             .getAllByRole('button')
             .map((button) => button.textContent);
         expect(moves).toEqual(['Work the leftovers', 'Complete']);
-        expect(row.querySelectorAll('[data-slot="controls"] button')).toHaveLength(0);
+        // A drained row gets no Stop/Resume/Clear — only the always-available Delete (P1).
+        expect(
+            Array.from(row.querySelectorAll<HTMLButtonElement>('[data-slot="controls"] button')).map(
+                (button) => button.textContent
+            )
+        ).toEqual(['Delete']);
 
         // The word "drained" is an internal name and must never reach the screen.
         expect(row.textContent).not.toMatch(/drained/i);
@@ -180,6 +185,18 @@ describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c / U-12a)', () =
         await click(within(rowFor('story_3')).getByRole('button', { name: 'Stop' }));
         expect(client.stop).toHaveBeenCalledTimes(1);
         expect(client.stop).toHaveBeenCalledWith('story_3');
+    });
+
+    it('deletes a Story and everything it owns only after the confirming click (P1)', async () => {
+        const { client } = await renderShell(<StoriesPanel />, fixture());
+        const row = rowFor('story_5');
+
+        await click(within(row).getByRole('button', { name: 'Delete' }));
+        expect(client.deleteStory).not.toHaveBeenCalled();
+        expect(within(row).getByText(/Delete "Ash Lantern" and everything it owns/)).toBeTruthy();
+
+        await click(within(row).getByRole('button', { name: 'Confirm' }));
+        expect(client.deleteStory).toHaveBeenCalledWith('story_5');
     });
 
     it('selecting a row opens the Story (U-4)', async () => {

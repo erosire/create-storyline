@@ -164,11 +164,21 @@ function lastToolCalls(request: ChatRequest): Array<{ name: string; arguments: s
     for (let index = request.messages.length - 1; index >= 0; index -= 1) {
         const message = request.messages[index] as unknown as {
             role: string;
-            tool_calls?: Array<{ name: string; arguments: string }>;
+            tool_calls?: Array<{
+                name?: string;
+                arguments?: string;
+                function?: { name?: string; arguments?: string };
+            }>;
         };
         if (message.role !== 'assistant') continue;
 
-        return message.tool_calls ?? [];
+        // The assistant wire shape nests name/arguments under `function` (the OpenAI schema the
+        // provider receives); a fixture double may also see the engine's flat form in a unit
+        // test, so both readings name the same call.
+        return (message.tool_calls ?? []).map((call) => ({
+            name: call.name ?? call.function?.name ?? '',
+            arguments: call.arguments ?? call.function?.arguments ?? ''
+        }));
     }
 
     return [];
