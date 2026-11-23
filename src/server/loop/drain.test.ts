@@ -302,23 +302,30 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
         // Six drafts, six draft-targeted verdicts. Before the rig's draft-id regex was fixed, `rev_\w+`
         // never matched a stored `revision_N`, so per-draft verdicts silently never landed and every
         // checker report was filed against the unit alone (which is what starved U-13).
+        //
+        // The `revision_N` targets are the six chapter drafts AND phase ①'s selected Summary revision:
+        // the deep-review Reader rates the draft it read, which is the same per-draft rule (§6.2a).
         const rows = rig.store.verdicts.list().filter((verdict) => verdict.story_id === rig.storyId);
 
         expect(draftVerdictRows(rows)).toEqual([
-            'revision_1:verdict_7:revision:1:true:advance',
-            'revision_2:verdict_10:revision:1:true:advance',
-            'revision_3:verdict_13:revision:1:true:advance',
-            'revision_4:verdict_16:revision:1:true:advance',
-            'revision_5:verdict_19:revision:1:true:advance',
-            'revision_6:verdict_22:revision:1:true:advance'
+            'revision_1:verdict_1:revision:1:true:advance',
+            'revision_4:verdict_8:revision:1:true:advance',
+            'revision_5:verdict_11:revision:1:true:advance',
+            'revision_6:verdict_14:revision:1:true:advance',
+            'revision_7:verdict_17:revision:1:true:advance',
+            'revision_8:verdict_20:revision:1:true:advance',
+            'revision_9:verdict_23:revision:1:true:advance'
         ]);
 
         // D-22: the selection deletes the losing drafts hard; the verdicts that judged them stay, because
-        // the Author can still ask why this draft won (P11).
-        expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected',
-            'revision_4:selected'
-        ]);
+        // the Author can still ask why this draft won (P11). Chapter rows only here (see above); the
+        // Summary's winner is a `selected` revision of its own unit kind, one per Story.
+        expect(
+            rig.store.revisions
+                .list()
+                .filter((revision) => revision.unit_kind === 'chapter')
+                .map((revision) => `${revision.id}:${revision.state}`)
+        ).toEqual(['revision_4:selected', 'revision_7:selected']);
 
         // U-13: `GET /stories/:id` is the pinned wire (W9) and the dashboard is forbidden from
         // recomputing anything, so the §4.9 rows themselves have to ride with it — in the store's
@@ -333,7 +340,8 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
         expect(new Set(view.verdicts?.map((verdict) => verdict.story_id))).toEqual(new Set([rig.storyId]));
 
         // The selected drafts each carry their own verdict — the fact the pane renders as the draft's
-        // judgement rather than the unit's.
+        // judgement rather than the unit's. The Summary's winner is the third one (phase ①'s
+        // deep-review Reader), and the chapter drafts are the two §6.2a picks.
         expect(
             rig.store.revisions.list().map(
                 (revision) =>
@@ -342,6 +350,6 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
                         .map((v) => v.id)
                         .join('+')}`
             )
-        ).toEqual(['revision_1:verdict_7', 'revision_4:verdict_16']);
+        ).toEqual(['revision_1:verdict_1', 'revision_4:verdict_8', 'revision_7:verdict_17']);
     });
 });

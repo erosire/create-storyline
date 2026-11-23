@@ -125,7 +125,7 @@ function seedStory(store: Store) {
 }
 
 describe('StoryKnowledge — the durable directory', () => {
-    it('projects the book into the eight folders without recomputing anything client-side', () => {
+    it('projects the book into the nine folders without recomputing anything client-side', () => {
         const store = Store.empty();
         const story = seedStory(store);
         const knowledge = StoryKnowledge.memory(store);
@@ -134,6 +134,7 @@ describe('StoryKnowledge — the durable directory', () => {
 
         expect(tree).not.toBeNull();
         expect(tree?.sections.map((section) => section.key)).toEqual([
+            'research',
             'summary',
             'plotlines',
             'chapters',
@@ -166,6 +167,17 @@ describe('StoryKnowledge — the durable directory', () => {
         const ideas = tree?.sections.find((section) => section.key === 'ideas');
         expect(ideas?.entries[0]?.tags).toContain('placeholder');
         expect(ideas?.entries[0]?.body).toContain('Ideas tray is empty');
+
+        // §10 / §3.2 — the research folder states its absence on a Story nobody has researched.
+        const research = tree?.sections.find((section) => section.key === 'research');
+        expect(research?.entries).toEqual([
+            {
+                key: 'research:empty',
+                title: 'Research',
+                body: 'No research yet — the Researcher gathers the facts, places and sources the book depends on in phase ①.',
+                tags: ['story:story_1', 'section:research', 'entry:research:empty', 'placeholder']
+            }
+        ]);
     });
 
     it('survives a closed knowledge handle: a second store reads the same articles from disk', async () => {
@@ -190,7 +202,8 @@ describe('StoryKnowledge — the durable directory', () => {
             const reopened = await StoryKnowledge.open(Store.empty(), root);
             const articles = reopened.knowledgeEngine.snapshot().articles;
 
-            expect(articles.length).toBeGreaterThanOrEqual(8);
+            // Nine articles: the eight §4 surfaces plus phase ①'s research mirror.
+            expect(articles).toHaveLength(9);
             expect(articles.some((article) => article.title === 'Hollow Sea — Summary')).toBe(true);
             expect(articles.some((article) => article.title === 'Hollow Sea — Chapters')).toBe(true);
 
@@ -198,5 +211,175 @@ describe('StoryKnowledge — the durable directory', () => {
         } finally {
             await rm(root, { recursive: true, force: true });
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// §10 / §3.2 — the research mirror (phase ①'s Researcher artifact)
+// ---------------------------------------------------------------------------
+
+/** One `knowledge` row in the shape the Researcher's `writeKnowledge` tool lands (§3.2). */
+function seedKnowledge(
+    store: Store,
+    storyId: string,
+    entry: {
+        importance: 'critical' | 'high' | 'normal' | 'low';
+        kind: 'fact' | 'world_rule' | 'tech' | 'period' | 'place' | 'person' | 'other';
+        topic: string;
+        claim: string;
+        detail?: string;
+        source?: string;
+    }
+) {
+    return store.knowledge.create(
+        {
+            story_id: storyId,
+            kind: entry.kind,
+            topic: entry.topic,
+            claim: entry.claim,
+            ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+            importance: entry.importance,
+            // T-10: a source backs ONE named claim — so the fixture cites the entry's own claim.
+            sources:
+                entry.source === undefined
+                    ? []
+                    : [{ url_or_title: entry.source, claim: entry.claim, accessed_at: '2026-11-22T09:00:00.000Z' }],
+            fingerprint: `fp-${entry.topic.replace(/\s+/g, '-')}`,
+            seen_count: 1,
+            author: 'researcher'
+        },
+        attribution
+    );
+}
+
+describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () => {
+    it('mirrors the knowledge rows as one paragraph per entry, importance-sorted, with detail and source', () => {
+        const store = Store.empty();
+        const story = seedStory(store);
+
+        // Deliberately unsorted: the section sorts by importance (critical → high → normal → low),
+        // then by id — never by insertion order.
+        seedKnowledge(store, story.id, {
+            importance: 'normal',
+            kind: 'place',
+            topic: 'the tide road',
+            claim: 'The tide road floods at dusk.',
+            source: 'Tide Survey'
+        });
+        seedKnowledge(store, story.id, {
+            importance: 'critical',
+            kind: 'world_rule',
+            topic: 'the lamp remembers',
+            claim: 'The lamp keeps every keeper name.',
+            detail: 'The log outlives the keeper.',
+            source: 'Keeper Codex'
+        });
+        seedKnowledge(store, story.id, {
+            importance: 'high',
+            kind: 'fact',
+            topic: 'the harbour bell',
+            claim: 'The bell rings a name before a drowning.'
+        });
+        seedKnowledge(store, story.id, {
+            importance: 'high',
+            kind: 'tech',
+            topic: 'chart ink',
+            claim: 'Chart ink fades in salt water.',
+            detail: 'Ships carry a waxed copy.',
+            source: 'Chandlery Note'
+        });
+
+        const research = StoryKnowledge.memory(store)
+            .tree(story.id)
+            ?.sections.find((section) => section.key === 'research');
+
+        expect(research?.title).toBe('Research');
+        expect(research?.entries).toEqual([
+            {
+                key: 'knowledge:knowledge_entry_2',
+                title: '[critical · world_rule] the lamp remembers',
+                body: 'The lamp keeps every keeper name. — The log outlives the keeper. (source: Keeper Codex)',
+                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_2']
+            },
+            {
+                // No detail and no source: the entry is ONE line, not a paragraph padded with blanks.
+                key: 'knowledge:knowledge_entry_3',
+                title: '[high · fact] the harbour bell',
+                body: 'The bell rings a name before a drowning.',
+                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_3']
+            },
+            {
+                key: 'knowledge:knowledge_entry_4',
+                title: '[high · tech] chart ink',
+                body: 'Chart ink fades in salt water. — Ships carry a waxed copy. (source: Chandlery Note)',
+                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_4']
+            },
+            {
+                key: 'knowledge:knowledge_entry_1',
+                title: '[normal · place] the tide road',
+                body: 'The tide road floods at dusk. (source: Tide Survey)',
+                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_1']
+            }
+        ]);
+    });
+
+    it('caps the section at thirty entries with a trailing count, like every other folder', () => {
+        const store = Store.empty();
+        const story = seedStory(store);
+
+        for (let index = 1; index <= 32; index += 1) {
+            seedKnowledge(store, story.id, {
+                importance: 'low',
+                kind: 'fact',
+                topic: `fact ${index}`,
+                claim: `Claim ${index} is load-bearing.`
+            });
+        }
+
+        const research = StoryKnowledge.memory(store)
+            .tree(story.id)
+            ?.sections.find((section) => section.key === 'research');
+
+        expect(research?.entries).toHaveLength(30);
+        // The tie-break is the id's own STRING order (`id.localeCompare`), which is what makes the
+        // article byte-stable: `..._10` sorts before `..._2`. Spelled out, not re-sorted here, so the
+        // test pins the order the sync writes instead of reproducing its comparator.
+        expect(research?.entries.slice(0, 29).map((entry) => entry.key)).toEqual([
+            'knowledge:knowledge_entry_1',
+            'knowledge:knowledge_entry_10',
+            'knowledge:knowledge_entry_11',
+            'knowledge:knowledge_entry_12',
+            'knowledge:knowledge_entry_13',
+            'knowledge:knowledge_entry_14',
+            'knowledge:knowledge_entry_15',
+            'knowledge:knowledge_entry_16',
+            'knowledge:knowledge_entry_17',
+            'knowledge:knowledge_entry_18',
+            'knowledge:knowledge_entry_19',
+            'knowledge:knowledge_entry_2',
+            'knowledge:knowledge_entry_20',
+            'knowledge:knowledge_entry_21',
+            'knowledge:knowledge_entry_22',
+            'knowledge:knowledge_entry_23',
+            'knowledge:knowledge_entry_24',
+            'knowledge:knowledge_entry_25',
+            'knowledge:knowledge_entry_26',
+            'knowledge:knowledge_entry_27',
+            'knowledge:knowledge_entry_28',
+            'knowledge:knowledge_entry_29',
+            'knowledge:knowledge_entry_3',
+            'knowledge:knowledge_entry_30',
+            'knowledge:knowledge_entry_31',
+            'knowledge:knowledge_entry_32',
+            'knowledge:knowledge_entry_4',
+            'knowledge:knowledge_entry_5',
+            'knowledge:knowledge_entry_6'
+        ]);
+        expect(research?.entries[29]).toEqual({
+            key: 'research:overflow',
+            title: 'More…',
+            body: '3 more entries are in the book; the knowledge article caps one section at 30 paragraphs.',
+            tags: ['story:story_1', 'section:research', 'entry:research:overflow']
+        });
     });
 });

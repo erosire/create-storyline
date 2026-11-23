@@ -19,6 +19,11 @@
 // E-0 / S-6: `usage` is passed through verbatim and is INFORMATIONAL ONLY. Nothing here
 // gates on it, and nothing may read it as a limit — no budget, cap, timeout, or round
 // limit lives in this layer. There is deliberately no request timeout.
+//
+// §4.2 structured output ALSO lives here: `responseFormat` asks for native `json_schema`,
+// `payloadOf` serialises it, and `complete` owns the one-step `json_object` downgrade when a
+// provider rejects the field. Parsing/validation lives in `./structured`; this transport
+// never inspects or repairs the content it returns.
 
 // ---------------------------------------------------------------------------
 // The pinned transport surface (consumers code against exactly this)
@@ -51,17 +56,39 @@ export type ChatMessage = {
     name?: string;
 };
 
+/**
+ * Native structured output (§4.2): the schema the model must answer with.
+ *
+ * `schema` is a plain JSON Schema object, not a TypeBox schema — this package does not
+ * depend on TypeBox. `strict` defaults to true; the provider is asked to enforce it.
+ */
+export interface ResponseFormat {
+    name: string;
+    /** A plain JSON Schema object (strict: additionalProperties false at the top level). */
+    schema: Record<string, unknown>;
+    /** Defaults to `true`; sent as `json_schema.strict` on the wire. */
+    strict?: boolean;
+}
+
 export interface ChatRequest {
     model: string;
     messages: ChatMessage[];
     tools?: ToolSchema[];
     signal?: AbortSignal;
+    /** Sampling knob (§4.2, §5): no cap here — E-0 puts no limit on generation. */
+    temperature?: number;
+    /** Sampling knob for reproducible samples; providers that ignore it are still valid. */
+    seed?: number;
+    /** Native structured output; omitted means a plain prose/tool-call turn. */
+    responseFormat?: ResponseFormat;
 }
 
 /** Token counts, recorded for information only (S-6) — never a limit (E-0). */
 export interface ChatUsage {
     input: number;
     output: number;
+    /** Provider cache hit tokens, when reported. Informational only (E-0). */
+    cached_input: number;
 }
 
 export interface ChatResponse {
@@ -174,15 +201,44 @@ const asCount = (value: unknown): number =>
  */
 const completionsUrl = (baseUrl: string): string => `${baseUrl.replace(/\/+$/, '')}/${COMPLETIONS_PATH}`;
 
+/** `json_schema` is preferred; `json_object` is the one-shot capability fallback (§4.2). */
+type ResponseFormatMode = 'json_schema' | 'json_object';
+
 /**
- * The request body: `{model, messages, tools?}`. `tools` is the standard array and is
- * OMITTED when absent or empty — some relays reject `tools: []` outright, and an empty list
- * means "no tool surface" either way.
+ * The request body: `{model, messages, tools?, temperature?, seed?, response_format?}`.
+ *
+ * `tools` is the standard array and is OMITTED when absent or empty — some relays reject
+ * `tools: []` outright, and an empty list means "no tool surface" either way. Sampling
+ * knobs are omitted when undefined so a relay's own default applies (and so a request
+ * without them serialises byte-identically to the pre-structured-output shape).
+ *
+ * `responseFormatMode` exists only for capability negotiation: `json_object` is the
+ * fallback sent when a provider rejects the schema field. Everything else in the body is
+ * identical between the two, which is what makes the fallback a genuine "same request,
+ * cheaper format" retry.
  */
-const payloadOf = (request: ChatRequest): string => {
+const payloadOf = (request: ChatRequest, responseFormatMode: ResponseFormatMode = 'json_schema'): string => {
     const body: JsonObject = { model: request.model, messages: request.messages };
 
     if (request.tools && request.tools.length > 0) body.tools = request.tools;
+
+    if (request.temperature !== undefined) body.temperature = request.temperature;
+    if (request.seed !== undefined) body.seed = request.seed;
+
+    if (request.responseFormat) {
+        const { name, schema } = request.responseFormat;
+
+        // `strict` defaults to true: every schema this package ships is closed
+        // (`additionalProperties: false`), so unenforced strictness would let the model
+        // return extra keys that `validateStructured` then has to repair away.
+        body.response_format =
+            responseFormatMode === 'json_object'
+                ? { type: 'json_object' }
+                : {
+                      type: 'json_schema',
+                      json_schema: { name, strict: request.responseFormat.strict ?? true, schema }
+                  };
+    }
 
     return JSON.stringify(body);
 };
@@ -237,13 +293,31 @@ const messageOf = (choice: JsonObject): AssistantMessage => {
     return message;
 };
 
-/** `usage` passthrough — the key appears only when the provider sent one (S-6, E-0). */
+/** A usable count, or `null` when the provider did not report one (distinct from a real 0). */
+const countOf = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+
+/**
+ * `usage` passthrough — the key appears only when the provider sent one (S-6, E-0).
+ *
+ * Cache accounting (§4.2, §5) accepts both shapes seen in the wild: a flat
+ * `usage.cached_tokens`, and OpenAI's `usage.prompt_tokens_details.cached_tokens`. The
+ * flat field wins when both are present; neither means 0 reported cache hits. The number
+ * is informational only — nothing may gate on it (E-0).
+ */
 const usageOf = (root: JsonObject): ChatUsage | null => {
     const usage = asObject(root.usage);
 
     if (usage === null) return null;
 
-    return { input: asCount(usage.prompt_tokens), output: asCount(usage.completion_tokens) };
+    const details = asObject(usage.prompt_tokens_details);
+    const cached = countOf(usage.cached_tokens) ?? (details === null ? null : countOf(details.cached_tokens)) ?? 0;
+
+    return {
+        input: asCount(usage.prompt_tokens),
+        output: asCount(usage.completion_tokens),
+        cached_input: cached
+    };
 };
 
 const clip = (text: string): string => (text.length <= MAX_ERROR_BODY ? text : `${text.slice(0, MAX_ERROR_BODY)}…`);
@@ -261,6 +335,15 @@ const transportError = (error: unknown, url: string): LlmError =>
 
 /** 429 (rate limit) and 5xx (provider fault) are the only statuses worth a second attempt. */
 const isTransientStatus = (status: number): boolean => status === 429 || status >= 500;
+
+/**
+ * Capability negotiation signal (§4.2): a 4xx that NAMES the structured-output field is a
+ * provider saying "I do not understand `response_format`/`json_schema`", not a bad brief.
+ * The body is the clipped provider body, so only the prefix that survived clipping is
+ * searched. 429 never reaches here — it is classified as transient and retried as-is.
+ */
+const rejectsResponseFormat = (error: LlmError): boolean =>
+    error.status >= 400 && error.status < 500 && /response_format|json_schema/i.test(error.body);
 
 /**
  * Backoff between the two attempts. It rejects the moment the signal aborts: an Author Stop
@@ -390,14 +473,19 @@ export const createOpenAICompatClient = (config: LlmConfig): ChatClient => {
             // teardown (S-3), and a stale request must not reach the provider at all.
             if (signal?.aborted) throw abortReason(signal);
 
-            const payload = payloadOf(request);
+            // Preferred payload plus, when structured output was requested, the one-shot
+            // `json_object` fallback. `currentPayload` changes at most once (§4.2).
+            const fallbackPayload =
+                request.responseFormat === undefined ? undefined : payloadOf(request, 'json_object');
+            let currentPayload = payloadOf(request);
+            let negotiated = false;
             let lastError: LlmError | undefined;
 
             for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
                 let outcome: SendOutcome;
 
                 try {
-                    outcome = await sendOnce(payload, signal);
+                    outcome = await sendOnce(currentPayload, signal);
                 } catch (error) {
                     if (isAbortError(error)) throw error;
 
@@ -411,7 +499,25 @@ export const createOpenAICompatClient = (config: LlmConfig): ChatClient => {
                 }
 
                 if (outcome.kind === 'ok') return outcome.response;
-                if (outcome.kind === 'fatal') throw outcome.error;
+
+                if (outcome.kind === 'fatal') {
+                    // One downgrade only, and it consumes the remaining attempt: MAX_ATTEMPTS
+                    // counts HTTP calls, so a negotiation retry can never stack on top of a
+                    // transient retry. No backoff either — a 4xx is deterministic, so the 1s
+                    // transient wait would only delay the run.
+                    if (!negotiated && fallbackPayload !== undefined && rejectsResponseFormat(outcome.error)) {
+                        negotiated = true;
+                        currentPayload = fallbackPayload;
+                        lastError = outcome.error;
+
+                        if (attempt === MAX_ATTEMPTS) break;
+                        continue;
+                    }
+
+                    // Everything else fatal throws exactly as before — including a second 4xx
+                    // after the downgrade (the brief: fail the run, never accept free prose).
+                    throw outcome.error;
+                }
 
                 lastError = outcome.error;
 

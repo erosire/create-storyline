@@ -119,7 +119,7 @@ is stealable).
 
 ### Employees, agents, harnesses, sessions and threads
 
-Storyline's roster members are **employees** — Writer, Editor, Reader, Checker — not agents. An
+Storyline's roster members are **employees** — Writer, Editor, Researcher, Reader, Checker — not agents. An
 employee is the standing identity (kind, rank, model, permission row); it becomes an **agent** only
 while a **thread** is executing. Only a Rank A employee may own a dispatched Work Item and act on a
 phase's requirements; a Rank B employee may be added only as a delegation target inside a Rank A
@@ -136,8 +136,8 @@ server, mount a `HarnessRuntime` or accept a `HarnessBootConfiguration`; this pa
 server (`src/server/api/server.ts`) is the only server and owns every Story decision.
 
 - **One harness per Story.** `src/server/run/story-engine.ts` builds an engine `harness()` for a
-  Story the first time it dispatches work. The four employees are the same roster in every Story —
-  **Writer, Editor, Reader, Checker** — but each Story's harness has its own tool registry,
+  Story the first time it dispatches work. The five employees are the same roster in every Story —
+  **Writer, Editor, Researcher, Reader, Checker** — but each Story's harness has its own tool registry,
   transcripts and threads, so no state crosses between books.
 - **A phase is a session.** The engine has no session object, so Storyline owns that level: the
   Story's `summary` / `plotlines` / `chapters` phase is a session record (the UI calls it a
@@ -170,10 +170,11 @@ test — it is scripted from what its brief actually says:
 
 - `src/server/llm/mock.ts` is a `ChatClient` whose answers come from a handler. The integration
   harness (`src/server/integration/harness.ts`) reads each run's BRIEF — the same bytes a real
-  model would read — and answers as the template the brief names: a Writer calls `editSummary` /
-  `createPlotline` / `editChapter`, a Checker calls `submitVerdict` with the criteria the brief
-  briefed it on, a Reader calls `proposeIdea`. A refusal the tool layer gives is recorded with its
-  rule id, so a test asserts the rule the crew hit.
+  model would read — and answers as the template the brief names: a Writer calls `createPlotline` /
+  `editChapter` (a phase-① sampler answers with a structured `SummarySample` and no tool call), a
+  Checker calls `submitVerdict` with the criteria the brief briefed it on, a Reader files findings
+  (a phase-① screening Reader answers with a structured `IssueList`). A refusal the tool layer gives
+  is recorded with its rule id, so a test asserts the rule the crew hit.
 - `src/server/integration/*.test.ts` boots the real server on port 0 and drives it with `fetch`:
   `slice-phases` (Seed → Summary → Plotlines, the Ideas tray and the lock gates), `slice-chapters`
   (chapters, the finding → repair ladder, the drain that proposes completion), `slice-ops`

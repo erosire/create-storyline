@@ -25,6 +25,7 @@ import {
     competingRevisions,
     confirmedOpenFingerprints,
     dispatchableTasks,
+    isFullyScreened,
     isLiveRun,
     lapsedRuns,
     last,
@@ -32,11 +33,21 @@ import {
     liveRunsForTemplate,
     loopChapter,
     loopStory,
+    loopAttr,
+    openFixTasks,
     pendingProposals,
     openTasks,
     requireStory,
     roleNameOf,
+    roundRevisions,
     runsForItem,
+    sampleAttempts,
+    samplingCapOf,
+    samplingRoundOf,
+    samplingSizeOf,
+    samplingWaveOf,
+    screensFor,
+    screeningSizeOf,
     storyChapters,
     storyFindings,
     storyPlotlines,
@@ -58,7 +69,14 @@ import {
     startProbe,
     type StoryDecision
 } from './status';
-import { generateWork } from './work';
+import {
+    generateWork,
+    openSamplingFailureTask,
+    openScreeningExhaustionTask,
+    SAMPLING_FAILURE_PREFIX,
+    samplingExhausted
+} from './work';
+import { selectSample, type ScoredSample } from './sample-select';
 import { carriedDelta, levelPairs, measureRound, recordRound, renderPairs } from './trend';
 import { completeDirective, createDirectiveFallbackTasks, pendingDirectives, recordDirective } from './directives';
 import {
@@ -100,7 +118,18 @@ import {
 import { BUILT_IN_TEMPLATES, DEFAULT_ASSIGNMENT, validateAssignment } from '../templates';
 import { defaultGoal } from '../../shared/criteria';
 import { missingSummaryBlocksOf } from '../../shared/summary';
-import type { Chapter, Cost, Finding, Story, StoryPhase, Task } from '../../shared/types';
+import type {
+    Chapter,
+    Cost,
+    Finding,
+    SampledIssue,
+    SampleReview,
+    Story,
+    StoryPhase,
+    Summary,
+    Task
+} from '../../shared/types';
+import type { IssueList } from '../../shared/schemas';
 import type { RunResult, WorkItem } from '../run/types';
 import type { Store } from '../store';
 
@@ -369,16 +398,12 @@ export class LoopEngine implements EngineApi {
 
             for (const finding of storyFindings(store, story.id)) {
                 if (finding.state !== 'confirmed') continue;
-                // Phase ①'s loop is Writer → Reader → Editor, and the Editor's confirmation IS the
-                // authorisation to revise (the Reader's suspicion has been marked valid). Only the
-                // round's blocking costs travel back: minor/taste notes are recorded, not turned into
-                // another round. Later phases keep the Author's dial.
+                // Phase ①'s bar is the deep review: the Editor's verification of a tool-using
+                // Reader's finding IS the acceptance that arms the next sampling round, and only the
+                // blocking costs travel back — a minor/taste note is recorded, never a Writer round
+                // (D-30, D-34). Later phases keep the Author's dial unchanged.
                 const summaryRevision = story.phase === 'summary';
                 if (summaryRevision && finding.cost !== 'critical' && finding.cost !== 'major') continue;
-                // Phase ①'s order is Editor verify → Reader confirm → Writer fix. The Editor's
-                // approval (or this dial) is not enough on its own: a confirmed finding waits for
-                // its own Reader thread before it can become work (D-33, phase ①'s second look).
-                if (summaryRevision && finding.reader_confirmed !== true) continue;
                 // The Author's dial still wins, even in phase ①: a narrowed dial parks a major
                 // finding for the Author's approval instead of silently authorising it.
                 if (!story.auto_approve.includes(finding.cost)) continue;
@@ -499,6 +524,31 @@ export class LoopEngine implements EngineApi {
         // The normal path is `settleJob` closing the run; this is the same gate for a draft written
         // after its run closed (a context-compaction continuation) or recovered after a restart.
         await this.reconcileDrafts(story.id);
+
+        // §6.5's selection is also a SWEEP question, not only a settlement one: a process that died
+        // between the last screening answer and the selection left a finished round with no winner,
+        // and the rows are the whole state a restarted engine has (L-3).
+        await this.trySelectSample(story.id);
+
+        // T12/E: the failure escalation promises a recovery, and this is it. The Author clears the
+        // row (clear-pending → `wontfix`, or an answered directive → `done`); the recorded wave in
+        // its detail is the guard that makes the bump happen ONCE per cleared escalation, so a
+        // sweep loop cannot climb the wave every interval. The bump lands BEFORE the exhaustion
+        // check below, because a fresh wave is exactly what makes that check false and re-arms
+        // generation with `wi_sample_<summary>_<round>_w<wave>_1`.
+        await this.rearmSamplingWave(story.id);
+
+        story = requireStory(store, story.id);
+
+        // §6.4 step 3's one unrecoverable failure: a sampling round that spent its retry allowance
+        // with no draft at all is a provider problem, and only the Author can change it. The row is
+        // opened here (the sweep owns writes — `generateWork` is a pure read) and reused by title on
+        // every later sweep, so the queue shows ONE question rather than a new one per interval.
+        if (samplingExhausted(store, story)) {
+            await store.commit('loop_sampling_escalation', () => {
+                openSamplingFailureTask(store, requireStory(store, story.id));
+            });
+        }
 
         // L-1 steps 1 and 6: the levels, the trend, and the round. The measurement runs before the
         // decision because L-37a's precedence requires the stall to be computable, and the stall needs
@@ -836,14 +886,18 @@ export class LoopEngine implements EngineApi {
 
             // L-5: two loops must not EDIT the same artifact at once. Any live job already naming
             // this unit holds it, so the second one waits for the lease rather than racing the
-            // compare-and-swap. A Reader pass is the exception the Author's phase-① pipeline needs:
-            // it only reads its draft and writes findings/verdicts (never the artifact), and its
-            // claim key names the REVISION, so it can start on a finished sample while the other
-            // Writers are still writing theirs (the pipeline is per-draft, not per-stage).
+            // compare-and-swap. Phase ①'s three non-editing kinds are the exception:
+            //   * a `check_unit` reader pass only reads its draft and writes findings/verdicts;
+            //   * a `sample_unit` run writes NOTHING (the engine persists its answer, §2 decision 2);
+            //   * a `screen_samples` run writes nothing either (its review row is the engine's).
+            // Every one of them names the same Summary unit, so without this exception a wider
+            // capacity would serialize the whole sampling round behind its first sample.
             const unitRef = entry.candidate.item.unit?.ref;
             const readerPass = entry.candidate.item.kind === 'check_unit' && entry.candidate.item.roleName === 'reader';
+            const structuredPass =
+                entry.candidate.item.kind === 'sample_unit' || entry.candidate.item.kind === 'screen_samples';
 
-            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !readerPass) {
+            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !readerPass && !structuredPass) {
                 const busy = liveRuns(store, entry.story.id).some((run) => (run.work_item_ref ?? '').includes(unitRef));
 
                 if (busy) continue;
@@ -950,6 +1004,16 @@ export class LoopEngine implements EngineApi {
         const store = this.store;
         const closed = result.ended === 'completed';
         const isFixPass = item.kind === 'write_unit' && (item.findingRefs ?? []).length > 0;
+        // §6.4 steps 3-4: a no-tool run's product is its VALIDATED structured answer, and the engine
+        // is what persists it (§2 decision 2 — the named exception D-12a makes for the Digest; the
+        // Writer authored it, no tool wrote it). A failed run persists nothing, which is exactly
+        // what re-arms the generation counter in work.ts (the attempt, not the revision, is spent).
+        const persistedSample =
+            item.kind === 'sample_unit' && closed && result.structured !== undefined ? result.structured : undefined;
+        const persistedScreens =
+            item.kind === 'screen_samples' && closed && result.structured !== undefined
+                ? (result.structured as IssueList)
+                : undefined;
 
         await store.commit('loop_job_result', () => {
             for (const ref of item.taskRefs ?? []) {
@@ -992,9 +1056,10 @@ export class LoopEngine implements EngineApi {
 
             // §4.15, the draft gate: a revision exists as `pending` while its Writer is working on
             // it. The run is closed now, so the draft is either complete enough to review
-            // (`drafted`) or the next sweep hands it back to its Writer with the missing blocks
-            // named (`loop/work.ts:summaryCompletionJobs`). Only `drafted` rows reach Readers,
-            // Checkers and the Editor — a reviewer never reads a half-written Summary again.
+            // (`drafted`) or it stays `pending` for `reconcileDrafts`/a later Writer pass. PHASE ①'s
+            // `write_unit` no longer exists (its samples are persisted `drafted` by the branch
+            // below), so this gate serves phases ②/③ only. Only `drafted` rows reach Readers,
+            // Checkers and the Editor — a reviewer never reads a half-written artifact.
             if (item.kind === 'write_unit') {
                 // The run's own draft (`run_ref`) or the draft its unit names: a completion run
                 // extends an older `pending` row, so it keeps that row's original `run_ref` while
@@ -1022,9 +1087,351 @@ export class LoopEngine implements EngineApi {
                     );
                 }
             }
+
+            // §6.4 step 3: the sample becomes a `drafted` revision in the SAME commit that closes the
+            // run, so a restart sees either both or neither (P1). `round`/`origin` are what the
+            // selector and the compiled prompt read: round 1 is the First Revision's round.
+            if (persistedSample !== undefined && item.unit !== undefined) {
+                const round = item.round ?? 1;
+
+                store.revisions.create(
+                    {
+                        story_id: item.storyId,
+                        unit_kind: 'summary',
+                        unit_ref: item.unit.ref,
+                        // A Summary revision's body is a field set (§4.15 leaves `body` open, and
+                        // `renderSummaryBody` reads `{fields}` — the one shape the compiler and the
+                        // selector both understand).
+                        body: { fields: persistedSample },
+                        run_ref: result.runId,
+                        template_ref: item.templateRef,
+                        ...(result.promptHash === undefined ? {} : { prompt_hash: result.promptHash }),
+                        state: 'drafted',
+                        round,
+                        origin: round === 1 ? 'sampled' : 'refined',
+                        verdict_refs: []
+                    },
+                    loopAttr(
+                        `run ${result.runId} answered sampling round ${round} (sample ${item.sampleIndex ?? 1}) with a schema-valid SummarySample; the engine persisted it as a draft (§2 decision 2, §6.4 step 3)`
+                    )
+                );
+            }
+
+            // §6.4 step 4: one screening answer becomes one `sample_reviews` row. These are NOT
+            // findings (they never enter D-33/D-34 and cannot block a Writer): they rank the round's
+            // samples and seed the deep review's brief.
+            if (persistedScreens !== undefined && item.revisionRef !== undefined) {
+                store.sampleReviews.create(
+                    {
+                        story_id: item.storyId,
+                        revision_ref: item.revisionRef,
+                        reader: item.roleName,
+                        issues: persistedScreens.issues ?? [],
+                        valid: true
+                    },
+                    loopAttr(
+                        `run ${result.runId} answered with a schema-valid IssueList for ${item.revisionRef}; the engine persisted it as a screening review (§2 decision 2, §6.4 step 4)`
+                    )
+                );
+            }
         });
 
         if (item.kind === 'directive_work') await this.settleDirectiveReview(item, result);
+
+        // §6.5/§6.6: a sample or a screen landing may be the last thing the in-flight round owed.
+        // The check runs AFTER the settle commit, so the selector reads the row this run produced.
+        if (item.kind === 'sample_unit' || item.kind === 'screen_samples') await this.trySelectSample(item.storyId);
+    }
+
+    /**
+     * §6.5/§6.6 — the deterministic sample selection, committed as ONE record write per row.
+     *
+     * WHEN IT RUNS: after every `sample_unit`/`screen_samples` settlement, and once per sweep (so a
+     * restart that died between the last screen and the selection still finishes the round — L-3's
+     * "the rows are the state"). Every clause below is a store question:
+     *
+     *   * the in-flight round `R = (sampling_round ?? 0) + 1` has at least one revision;
+     *   * no revision of R is already `selected` (a selection is idempotent, never repeated);
+     *   * at least one DRAFTED revision exists (zero => total sampling failure, which the generation
+     *     escalation covers; selecting nothing is not selecting the best of nothing);
+     *   * the round is COMPLETE or its sampling is spent (T12/D): `roundRevisions(R).length >=
+     *     samplingSizeOf` OR the round's SAMPLE attempts (current wave) reached `samplingCapOf`.
+     *     Without the second half, one failed sample bought a selection over the survivors while
+     *     the round still owed samples the sweep had not dispatched yet;
+     *   * every drafted revision is SCREENED (T12/C): its review set is full, OR its screening
+     *     attempts reached `screeningCapOf` — the degrade path that keeps a broken screening provider
+     *     from dead-stalling the Story;
+     *   * no live `wi_sample_*`/`wi_screen_*` run remains — a round still growing must not be
+     *     truncated under a draft nobody screened.
+     *
+     * WHAT THE COMMIT DOES, in §6.6's order: when any drafted revision was screened only PARTIALLY,
+     * open ONE Author escalation saying so (T12/C — the selection proceeds, and the Author is told; a
+     * silent degrade would hide a provider fault), install the winner's six prose fields on the
+     * Summary (NEVER `chapter_count` — Author truth, D-3b), mark the winner `selected` with its issue
+     * counts, append the `sampling_history` line (the P11 audit, written before the deletes),
+     * hard-delete every other revision of the round and every review pointing at one (P13/D-22's
+     * truncation as the request asks), consume the open `fix` tasks the round's prompt carried, and
+     * advance `sampling_round`.
+     */
+    private async trySelectSample(storyId: string): Promise<void> {
+        const store = this.store;
+        const story = requireStory(store, storyId);
+
+        if (story.phase !== 'summary') return;
+
+        const summary = storySummary(store, story.id);
+
+        if (summary === undefined) return;
+
+        const round = (story.sampling_round ?? 0) + 1;
+        const revisions = roundRevisions(store, story.id, round);
+
+        if (revisions.length === 0) return;
+        if (revisions.some((revision) => revision.state === 'selected')) return;
+
+        const drafted = revisions.filter((revision) => revision.state === 'drafted');
+
+        if (drafted.length === 0) return;
+
+        // T12/D: the round may not select while it still OWES samples. `samplingSizeOf` is what the
+        // Author asked for; the attempt cap is the only honest way to give up on the rest. The
+        // attempt count is the CURRENT WAVE's, exactly as generation counts it (T12/E).
+        const size = samplingSizeOf(story);
+        const attempts = sampleAttempts(store, summary.id, round, samplingWaveOf(story));
+
+        if (revisions.length < size && attempts < samplingCapOf(story)) return;
+
+        const readers = screeningSizeOf(story);
+        const reviewsOf = new Map<string, SampleReview[]>();
+
+        for (const revision of drafted) reviewsOf.set(revision.id, screensFor(store, revision.id));
+
+        // T12/C: a draft is screened when it carries its full review set OR its screening attempts are
+        // exhausted (`records.ts:isFullyScreened`). The second clause is the degrade path: the round
+        // still selects, on the reviews it has, instead of waiting forever on a provider that will
+        // not answer the schema — and the commit below reports the partial set to the Author.
+        if (drafted.some((revision) => !isFullyScreened(store, story, revision.id))) return;
+
+        // A round still growing must not be truncated under a draft nobody screened (§6.4 step 4).
+        if (liveRuns(store, story.id).some((run) => PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? ''))) return;
+
+        // The drafts whose review set is short of `readers` but whose attempts are spent — named in
+        // the escalation the commit opens, so the Author can see WHICH samples went in partially
+        // screened (the ids still exist at that point; the truncation below deletes the losers).
+        const partiallyScreened = drafted
+            .filter((revision) => (reviewsOf.get(revision.id) ?? []).length < readers)
+            .map((revision) => revision.id);
+
+        // §6.5's counts: every issue of every review of this revision, split by severity. The
+        // `valid` flag is per REVIEW, so a sample is `valid` only when each of its passes was.
+        const scored: ScoredSample[] = drafted.map((revision) => {
+            const reviews = reviewsOf.get(revision.id) ?? [];
+            const issues = reviews.reduce<SampledIssue[]>(
+                (all, review) => all.concat(review.issues),
+                [] as SampledIssue[]
+            );
+
+            return {
+                revision,
+                critical: issues.filter((issue) => issue.severity === 'critical').length,
+                high: issues.filter((issue) => issue.severity === 'high').length,
+                total: issues.length
+            };
+        });
+
+        const winner = selectSample(scored);
+
+        if (winner === undefined) return;
+
+        await store.commit('loop_sample_selection', () => {
+            // Re-read everything the commit rewrites: the settle commit that led here may have moved
+            // rows, and T-4's compare-and-set is what makes the writes an honest transaction.
+            const fresh = requireStory(store, story.id);
+            const freshSummary = storySummary(store, fresh.id);
+            const current = store.revisions.get(winner.revision.id);
+
+            if (freshSummary === undefined) return;
+            if (current === undefined || current.state !== 'drafted') return;
+
+            // T12/C: the round went in on a partially screened set. ONE escalation row for the
+            // Author (reused by round+prefix, so a re-run cannot stack a second), stating what
+            // happened and that the selection proceeded — the Story keeps moving, and the provider
+            // fault is still reported rather than hidden.
+            if (partiallyScreened.length > 0) openScreeningExhaustionTask(store, fresh, round, partiallyScreened);
+
+            const at = new Date().toISOString();
+            const fields = summaryFieldsOf(current.body);
+            const patch: Partial<Summary> = {};
+
+            // §4.2's six prose blocks, and NOTHING else: `chapter_count` is the Author's declaration
+            // (D-3b) and a sample never carries it (the schema omits it on purpose).
+            for (const key of SUMMARY_PROSE_KEYS) {
+                const value = fields[key];
+
+                if (typeof value === 'string' && value.trim().length > 0) patch[key] = value;
+            }
+
+            if (Object.keys(patch).length > 0) {
+                store.summaries.update(
+                    freshSummary.id,
+                    patch,
+                    loopAttr(
+                        `sampling round ${round} installed ${current.id}'s fields on ${freshSummary.id} (the deterministically least-issue sample, §6.5)`
+                    ),
+                    [{ id: freshSummary.id, rev: freshSummary.rev }]
+                );
+            }
+
+            store.revisions.update(
+                current.id,
+                { state: 'selected', issue_counts: { critical: winner.critical, high: winner.high } },
+                loopAttr(
+                    `sampling round ${round}'s winner: ${winner.critical} critical, ${winner.high} high, ${winner.total} total (§6.5: fewest critical → fewest high → fewest total → earliest)`
+                ),
+                [{ id: current.id, rev: current.rev }]
+            );
+
+            // §6.6's audit line, built BEFORE the losers are deleted so it can name them.
+            const history = [
+                ...(fresh.sampling_history ?? []),
+                {
+                    round,
+                    at,
+                    samples: scored.map((sample) => {
+                        const reviews = reviewsOf.get(sample.revision.id) ?? [];
+
+                        return {
+                            revision_id: sample.revision.id,
+                            critical: sample.critical,
+                            high: sample.high,
+                            valid: reviews.length > 0 && reviews.every((review) => review.valid)
+                        };
+                    }),
+                    selected: current.id
+                }
+            ];
+
+            // Truncation is HARD (P13/D-22 as the request asks): the losers and their reviews are
+            // deleted, and the history line above is the only surviving record of what competed.
+            for (const loser of revisions) {
+                if (loser.id === current.id) continue;
+
+                for (const review of screensFor(store, loser.id)) {
+                    store.sampleReviews.delete(
+                        review.id,
+                        loopAttr(`sampling round ${round} truncated ${loser.id}; its screening review goes with it (§6.6)`)
+                    );
+                }
+
+                store.revisions.delete(
+                    loser.id,
+                    loopAttr(`sampling round ${round} selected ${current.id}; the losing sample is truncated, not kept (§6.6, P13)`)
+                );
+            }
+
+            // §6.8: the round's prompt CARRIED these fix tasks, so the resample is their answer.
+            // They are `done`, not `wontfix` — the work happened, as a new round. The FINDING closes
+            // with its task (the rule `settleJob` applies to a classic fix pass): leaving it
+            // `approved` would hold `summaryBlockingFindings` — and therefore the phase sign-off —
+            // forever. A resample that did NOT fix the defect re-files the same fingerprint on the
+            // new draft, which L-16a reads as a regression rather than trusting this write.
+            for (const task of openFixTasks(store, fresh.id)) {
+                store.tasks.update(
+                    task.id,
+                    { state: 'done' },
+                    loopAttr(`consumed by sampling round ${round}'s prompt — resampled, not hand-fixed (§6.8, D-34)`),
+                    [{ id: task.id, rev: task.rev }]
+                );
+
+                const findingRef = task.finding_ref;
+                const finding = findingRef === undefined ? undefined : store.findings.get(findingRef);
+
+                if (finding === undefined) continue;
+                if (finding.state !== 'confirmed' && finding.state !== 'approved') continue;
+
+                store.findings.update(
+                    finding.id,
+                    { state: 'fixed' },
+                    loopAttr(
+                        `sampling round ${round} resampled in answer to ${finding.id}; the task it named is done (D-34, §6.8). A re-raised fingerprint reads as a regression (L-16a)`
+                    ),
+                    [{ id: finding.id, rev: finding.rev }]
+                );
+            }
+
+            store.stories.update(
+                fresh.id,
+                { sampling_round: round, sampling_history: history },
+                loopAttr(
+                    `sampling round ${round} selected ${current.id} (${winner.critical} critical, ${winner.high} high) and advanced sampling_round (§6.5, §6.6)`
+                ),
+                [{ id: fresh.id, rev: fresh.rev }]
+            );
+        });
+    }
+
+    /**
+     * T12/E — the sampling-failure escalation's promised recovery: a fresh sampling WAVE.
+     *
+     * The row `openSamplingFailureTask` writes says "clear this row … and the sweep re-arms a fresh
+     * wave of samples", and this is the sweep half of that sentence. The attempt counter is the count
+     * of run rows under a claim prefix (`records.ts:sampleAttempts`), and nothing can un-run them, so
+     * the only way to reset it honestly is a NEW GENERATION in the key — `stories.sampling_wave`.
+     *
+     * The guards, and why each one is load-bearing:
+     *   * the escalation row must exist and must no longer be `open` — the Author cleared it
+     *     (`clearPending` → `wontfix`, L-36/U-1b) or answered it (`done`);
+     *   * the wave recorded in its `detail` must equal the Story's current wave — that is the
+     *     once-per-cleared-escalation guard: after the bump the recorded wave is stale, so a later
+     *     sweep cannot climb the wave again on the same row;
+     *   * sampling must still be EXHAUSTED — if the Author widened `summary_sampling` instead, the
+     *     cap moved and generation already re-arms under the same wave; bumping then would silently
+     *     discard a round of retries.
+     */
+    private async rearmSamplingWave(storyId: string): Promise<void> {
+        const store = this.store;
+        const story = requireStory(store, storyId);
+
+        if (story.phase !== 'summary') return;
+
+        // The NEWEST sampling-failure row, closed or not: one escalation per exhausted round, and a
+        // later wave raises its own row (its detail names the new wave).
+        const escalation = last(
+            store.tasks
+                .list()
+                .filter(
+                    (task) =>
+                        task.story_id === story.id &&
+                        task.kind === 'escalation' &&
+                        task.title.startsWith(SAMPLING_FAILURE_PREFIX)
+                )
+                .sort(
+                    (left, right) =>
+                        left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id)
+                )
+        );
+
+        if (escalation === undefined || escalation.state === 'open') return;
+
+        const recorded = /wave:\s*(\d+)/.exec(escalation.detail ?? '');
+
+        if (recorded === null) return;
+        if (Number(recorded[1]) !== samplingWaveOf(story)) return;
+        if (!samplingExhausted(store, story)) return;
+
+        await store.commit('loop_sampling_wave', () => {
+            const fresh = requireStory(store, story.id);
+            const wave = samplingWaveOf(fresh) + 1;
+
+            store.stories.update(
+                fresh.id,
+                { sampling_wave: wave },
+                loopAttr(
+                    `the Author cleared ${escalation.id}; sampling round ${samplingRoundOf(fresh)} re-arms as wave ${wave} (§6.4 step 3, T12/E)`
+                ),
+                [{ id: fresh.id, rev: fresh.rev }]
+            );
+        });
     }
 
     /**
@@ -1061,9 +1468,11 @@ export class LoopEngine implements EngineApi {
 
     /**
      * §4.15's reconciliation: a draft is reviewable when no Writer is on it and it is complete.
-     * A Summary short of a block stays `pending` (the sweep's completion job finishes it); every
-     * other unit's draft becomes `drafted` once its run is no longer live, which is the same rule
-     * `settleJob` applies when the run closes normally.
+     * A Summary short of a block stays `pending` — nothing finishes it now: the classic completion
+     * job (`wi_complete_*`) was removed and phase ①'s samples are persisted whole by the engine, so
+     * a partial Summary draft is simply never reviewable. Every other unit's draft becomes `drafted`
+     * once its run is no longer live, which is the same rule `settleJob` applies when the run closes
+     * normally.
      */
     private async reconcileDrafts(storyId: string): Promise<void> {
         const pending = this.store.revisions
@@ -1333,9 +1742,11 @@ export class LoopEngine implements EngineApi {
 
     /**
      * §10 / P1 — delete a Story and everything it owns. The Author's cord first (a phrase must not
-     * outlive the book it was writing), then ONE commit removes every story-scoped §4 row and the
+     * outlive the book it was writing), then ONE commit removes every story-scoped §4 row, the three
+     * phase-① research collections (`seed_briefs`, `knowledge`, `sample_reviews` — T12/A) and the
      * Story itself; finally the Story's harness is disposed, which tears down its sessions and
-     * threads. Knowledge is a projection outside §4, so the route deletes it alongside this call.
+     * threads. The knowledge FILES are a projection outside §4, so the route deletes that directory
+     * alongside this call; the `knowledge` COLLECTION is a store row and goes in this commit.
      */
     async deleteStory(storyId: string): Promise<void> {
         const story = requireStory(this.store, storyId);
@@ -1353,7 +1764,15 @@ export class LoopEngine implements EngineApi {
 
             // Every §4 collection that can name a story. `templates` stays: it is the global
             // catalogue, not this book's property, and a duplicate remains the Author's to reuse.
+            //
+            // T12/A: the three phase-① research collections are story-scoped exactly like §4's, so
+            // they go in the SAME deletion commit (P1). Leaving them behind orphaned a deleted
+            // Story's brief, its sourced facts and its screening reviews — rows whose `story_id`
+            // names a Story the store no longer holds.
             this.store.summaries.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.seedBriefs.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.knowledge.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.sampleReviews.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.plotlines.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.chapters.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.cast.deleteWhere((row) => row.story_id === story.id, attribution);
@@ -1569,6 +1988,14 @@ export class LoopEngine implements EngineApi {
             if (phase === 'summary') {
                 patch.summary_locked = false;
                 patch.plotlines_locked = false;
+                // §6.6: `scrapPhasesAfter(…, 'summary')` deletes every revision, so the round counter
+                // and its audit restart with the artifact. Without this the reopened phase would
+                // sample "round N+1" against a base revision that no longer exists (§6.8's prompt).
+                // The sampling WAVE restarts with them (T12/E): it is a retry generation of a round
+                // that no longer exists, and wave 0 is the key shape a fresh round samples under.
+                patch.sampling_round = 0;
+                patch.sampling_history = [];
+                patch.sampling_wave = 0;
 
                 const summary = storySummary(this.store, storyId);
 
@@ -1749,7 +2176,14 @@ export class LoopEngine implements EngineApi {
                     flat_streak: 0,
                     level_history: [],
                     probe: undefined,
-                    completion: undefined
+                    completion: undefined,
+                    // §6.6's counters describe samples `scrapPhasesAfter` just deleted: the new Seed
+                    // starts at round 1 (origin `sampled`), and the audit lines named revisions that
+                    // no longer exist — keeping them would claim a history the store cannot show.
+                    // The retry WAVE goes with them (T12/E): a new Seed starts at wave 0.
+                    sampling_round: 0,
+                    sampling_history: [],
+                    sampling_wave: 0
                 },
                 authorAttr('the Author rewrote the Seed; the Story starts again from scratch (D-25a, P5)'),
                 [{ id: fresh.id, rev: fresh.rev }]
@@ -2501,6 +2935,34 @@ function normaliseProposalPatch(field: string, patch: unknown): Record<string, u
 /** Is this claim key already claimed, in this process or in the store? (L-2's two halves.) */
 function isClaimedHere(store: Store, key: string): boolean {
     return store.runs.list().some((run) => isLiveRun(run) && run.work_item_ref === key);
+}
+
+/**
+ * Phase ①'s two pipeline run families (§6.4 steps 3-4). A live one means the round is still being
+ * written or screened, so the selection commit must wait — truncating under a run that has not
+ * yet answered would delete a sample nobody judged.
+ */
+const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
+
+/**
+ * §4.2's prose blocks a sample installs. `chapter_count` is deliberately absent: it is AUTHOR truth
+ * (D-3b), declared once, and the `SummarySample` schema omits it so a Writer cannot even propose one.
+ */
+const SUMMARY_PROSE_KEYS = ['premise', 'promise', 'theme', 'tone', 'ending', 'world_rules'] as const;
+
+/**
+ * The `{fields: {...}}` of a Summary revision's body, read defensively (§4.15 leaves `body` open by
+ * unit kind; `run/phase1-prompt.renderSummaryBody` reads the same shape). An unknown body is an
+ * empty field set — the selection still installs nothing rather than guessing prose.
+ */
+function summaryFieldsOf(body: unknown): Record<string, unknown> {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) return {};
+
+    const fields = (body as Record<string, unknown>).fields;
+
+    if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) return {};
+
+    return fields as Record<string, unknown>;
 }
 
 /** Closed runs for one Story — the round counter's input (L-15: the level history is per ROUND). */

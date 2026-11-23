@@ -167,6 +167,19 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 template_models: [],
                 working: [],
                 recent: []
+            },
+            // The fifth roster row (documents/phase-1-research-pipeline.md §3.1): `GET /agents`
+            // answers five employees, so the panel tests must cover five tiles, not four.
+            {
+                kind: 'researcher',
+                title: 'Researcher',
+                status: 'idle' as const,
+                rank: 'A' as const,
+                model: 'local/basalt',
+                model_source: 'default' as const,
+                template_models: [],
+                working: [],
+                recent: []
             }
         ]),
         // U-8 — the provider catalog the roster dropdown offers.

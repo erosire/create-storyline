@@ -1,4 +1,4 @@
-// The global employee tiles: the same four employees for every Story, with the rank they all hold,
+// The global employee tiles: the same five employees for every Story, with the rank they all hold,
 // the model each one asks for, and the content-area switch that opens that employee's threads.
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -21,7 +21,9 @@ const idle: AgentStatusRow[] = [
     agent('writer', 'Writer'),
     agent('editor', 'Editor'),
     agent('reader', 'Reader'),
-    agent('checker', 'Checker')
+    agent('checker', 'Checker'),
+    // Phase ①'s Researcher is the fifth employee (§3.1): Rank A, writes only `knowledge`.
+    agent('researcher', 'Researcher')
 ];
 
 describe('AgentsPanel — the global employee roster', () => {
@@ -52,7 +54,14 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(within(panel).queryByText(/threads? running/i)).toBeNull();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
-        expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual(['checker', 'editor', 'reader', 'writer']);
+        // Alphabetical by title, five rows: the Researcher sorts between Reader and Writer.
+        expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual([
+            'checker',
+            'editor',
+            'reader',
+            'researcher',
+            'writer'
+        ]);
 
         const writer = panel.querySelector<HTMLElement>('[data-agent="writer"]')!;
         expect(writer.dataset.status).toBe('running');
@@ -120,12 +129,15 @@ describe('AgentsPanel — the global employee roster', () => {
         render(<AgentsPanel agents={idle} />);
 
         const panel = screen.getByTestId('agents-panel');
-        expect(within(panel).getAllByText('Rank A')).toHaveLength(4);
+        expect(within(panel).getAllByText('Rank A')).toHaveLength(5);
         // The Author's channel is the Editor, but "Entry" is not a concept the roster draws.
         expect(within(panel).queryByText(/entry/i)).toBeNull();
 
         const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
         expect(within(editor).getByText('Editor')).toBeTruthy();
+        // The Researcher is a Rank A peer with its own tile — not a sub-role of the Reader.
+        const researcher = panel.querySelector<HTMLElement>('[data-agent="researcher"]')!;
+        expect(within(researcher).getByText('Researcher')).toBeTruthy();
         expect(within(panel).queryByText(/the Editor is your channel/)).toBeNull();
     });
 
@@ -249,10 +261,18 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(within(checker).getByText('idle')).toBeTruthy();
     });
 
-    it('renders the four employee kinds even before the first roster read answers', () => {
+    it('renders the five employee kinds even before the first roster read answers', () => {
         render(<AgentsPanel agents={[]} loading />);
 
-        expect(document.querySelectorAll('.sv-agent-tile')).toHaveLength(4);
+        // The placeholders are the rail's whole promise: all five kinds appear before `GET /agents`
+        // answers, so a slow read cannot make the Researcher (or anyone) look absent.
+        expect(Array.from(document.querySelectorAll<HTMLElement>('.sv-agent-tile')).map((tile) => tile.dataset.agent)).toEqual([
+            'checker',
+            'editor',
+            'reader',
+            'researcher',
+            'writer'
+        ]);
         expect(screen.getByText('reading the agent roster…')).toBeTruthy();
     });
 });

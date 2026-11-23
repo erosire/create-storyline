@@ -83,7 +83,10 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         // D-35: the dial is ['critical','major'], so a major defect is already authorised work. The
         // attribution is `auto`, never `author` (D-41c keeps the two decisions distinguishable).
-        const row = rig.store.findings.list().find((finding) => finding.target_ref === 'summary_1');
+        // Phase ① files nothing here: the deep-review Reader is a Reader, not the checker whose
+        // `checkerFinds` fixture this is (rig/mock.ts), so the two plotline rows are the whole ladder
+        // this walk reaches.
+        const row = rig.store.findings.list().find((finding) => finding.target_ref === 'plotline_1');
 
         expect(row).toMatchObject({
             id: 'finding_1',
@@ -97,19 +100,14 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         expect(row?.fingerprint).not.toBe('');
 
         // D-34: the approval is what creates the Writer work, aimed at the artifact the finding named.
-        // Phase ②'s checker filed the same defect against plotline 1, and that row got its own task.
-        expect(taskRows(rig)).toEqual([
-            'task_1:fix:done:finding_1:1',
-            'task_2:fix:done:finding_2:1',
-            'task_3:fix:done:finding_3:1'
-        ]);
-        expect(rig.store.tasks.get('task_1')?.detail).toContain('C-13 on summary_1');
+        // Phase ②'s checker filed the same defect against each plotline, and each row got its own task.
+        expect(taskRows(rig)).toEqual(['task_1:fix:done:finding_1:1', 'task_2:fix:done:finding_2:1']);
+        expect(rig.store.tasks.get('task_1')?.detail).toContain('C-13 on plotline_1');
 
         // The fix passes really ran, and they are what closed the rows.
         expect(fixRuns(rig)).toEqual([
-            'wi_fix_plotline_2_1_finding_3_task_3',
-            'wi_fix_summary_1_1_finding_1_task_1',
-            'wi_fix_plotline_1_1_finding_2_task_2'
+            'wi_fix_plotline_2_1_finding_2_task_2',
+            'wi_fix_plotline_1_1_finding_1_task_1'
         ]);
     });
 
@@ -125,11 +123,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
                 .filter((task) => task.kind === 'fix')
                 .map((task) => `${task.finding_ref}:${task.detail?.split(' · ')[0]}`)
                 .sort()
-        ).toEqual([
-            'finding_1:C-13 on summary_1',
-            'finding_2:C-13 on plotline_1',
-            'finding_3:C-13 on plotline_2'
-        ]);
+        ).toEqual(['finding_1:C-13 on plotline_1', 'finding_2:C-13 on plotline_2']);
     });
 
     it('carries the criterion and the finding on the task row — the queue, not the transcript, is the plan (§4.7, D-11)', async () => {
@@ -140,8 +134,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // could no longer read WHICH bar the fix was filed against, and the finding it answers.
         expect(queueRows(rig)).toEqual([
             'task_1:fix:done:C-13:finding_1:1',
-            'task_2:fix:done:C-13:finding_2:1',
-            'task_3:fix:done:C-13:finding_3:1'
+            'task_2:fix:done:C-13:finding_2:1'
         ]);
         expect(rig.store.tasks.require('task_1')).toMatchObject({
             kind: 'fix',
@@ -149,7 +142,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
             criterion_ref: 'C-13',
             finding_ref: 'finding_1',
             title: 'fix major: the map contradicts the 1911 survey',
-            detail: 'C-13 on summary_1 · summary_1'
+            detail: 'C-13 on plotline_1 · plotline_1'
         });
     });
 
@@ -189,10 +182,34 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         // Every re-claim after the first is a new row with a new task behind it — the loop does
         // not silently treat a fixed finding as still work, and it does not lose the regression.
-        const regression = rig.store.findings.list().find((finding) => finding.id === 'finding_5');
+        // The walk spends 30 sweeps here, so the exact rows are pinned: the first fixed sighting
+        // (seen twice), six fixed re-claims, and the newest re-raise still open.
+        expect(chapter).toEqual([
+            'C-13|chapter_1:fixed:major:auto:seen2',
+            'C-13|chapter_1:fixed:major:auto:seen1',
+            'C-13|chapter_1:fixed:major:auto:seen1',
+            'C-13|chapter_1:fixed:major:auto:seen1',
+            'C-13|chapter_1:fixed:major:auto:seen1',
+            'C-13|chapter_1:fixed:major:auto:seen1',
+            'C-13|chapter_1:confirmed:major:none:seen1'
+        ]);
+
+        const regression = rig.store.findings.list().find((finding) => finding.id === 'finding_9');
 
         expect(regression).toMatchObject({ target_ref: 'chapter_1', criterion_ref: 'C-13', cost: 'major' });
-        expect(taskRows(rig).some((task) => task.endsWith(':finding_5:1'))).toBe(true);
+
+        // The re-raise is a row of its own with its own task behind it: finding_9 has not been
+        // approved yet (the 30-sweep window closes first), and every earlier re-claim ran a fix.
+        expect(taskRows(rig)).toEqual([
+            'task_1:fix:done:finding_1:1',
+            'task_2:fix:done:finding_2:1',
+            'task_3:fix:done:finding_3:1',
+            'task_4:fix:done:finding_4:1',
+            'task_5:fix:done:finding_5:1',
+            'task_6:fix:done:finding_6:1',
+            'task_7:fix:done:finding_7:1',
+            'task_8:fix:done:finding_8:1'
+        ]);
         expect(rig.story().status).toBe('ready');
         expect(rig.story().blocked_on).toContain('C-13');
     });
@@ -216,7 +233,6 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
         const story = rig.story();
 
         expect(ladder(rig)).toEqual([
-            'C-13|summary_1:confirmed:major:none:seen1',
             'C-13|plotline_1:confirmed:major:none:seen1',
             'C-13|plotline_2:confirmed:major:none:seen1',
             'C-13|chapter_1:confirmed:major:none:seen2',
@@ -229,10 +245,10 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
         expect({ status: story.status, kind: story.pending_kind, blocked: story.blocked_on }).toEqual({
             status: 'pending',
             kind: 'drained',
-            blocked: '6 findings awaiting you'
+            blocked: '5 findings awaiting you'
         });
         expect(story.status_reason).toContain('no critical left to work on (D-35b)');
-        expect(story.status_reason).toContain('6 findings awaiting you');
+        expect(story.status_reason).toContain('5 findings awaiting you');
         // Completion is NOT proposed: the phase Goal is 5/6 because C-13 still fails.
         expect(story.status_reason).toContain('completion not proposed');
         expect(story.completion).toBeUndefined();
@@ -251,9 +267,9 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
         // `open` — D-34's "approval starts Writer work" is about the queue, and the crew does the pass.
         await rig.run(40);
 
-        expect(ladder(rig).slice(0, 1)).toEqual(['C-13|summary_1:fixed:major:author:seen1']);
+        expect(ladder(rig).slice(0, 1)).toEqual(['C-13|plotline_1:fixed:major:author:seen1']);
         expect(taskRows(rig)).toEqual(['task_1:fix:done:finding_1:1']);
-        expect(fixRuns(rig)).toEqual(['wi_fix_summary_1_1_finding_1_task_1']);
+        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_1_1_finding_1_task_1']);
 
         // The rest of the tray is still a prompt, one less than before, and the Story is drained again:
         // the fix closed, and an approval that drains again is the loop re-deriving from the records.
@@ -262,7 +278,7 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
         expect({ status: story.status, kind: story.pending_kind, blocked: story.blocked_on }).toEqual({
             status: 'pending',
             kind: 'drained',
-            blocked: '5 findings awaiting you'
+            blocked: '4 findings awaiting you'
         });
     });
 
@@ -282,7 +298,7 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
             criterion_ref: 'C-13',
             finding_ref: 'finding_1'
         });
-        expect(fixRuns(rig)).toEqual(['wi_fix_summary_1_1_finding_1_task_1']);
+        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_1_1_finding_1_task_1']);
     });
 
     it('accepting completion discards the leftovers and says how many (L-25b)', async () => {
@@ -305,15 +321,14 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
             status: 'completed',
             kind: 'none',
             accepted: true,
-            // The six rows the Author never answered are what "done" threw away.
-            leftovers: { findings: 6, ideas: 0 },
+            // The five rows the Author never answered are what "done" threw away.
+            leftovers: { findings: 5, ideas: 0 },
             refusals: 0
         });
         expect(story.status_reason).toBe(
-            'the Author accepted completion: 6 findings and 0 Ideas were discarded (L-25b)'
+            'the Author accepted completion: 5 findings and 0 Ideas were discarded (L-25b)'
         );
         expect(ladder(rig)).toEqual([
-            'C-13|summary_1:discarded:major:none:seen1',
             'C-13|plotline_1:discarded:major:none:seen1',
             'C-13|plotline_2:discarded:major:none:seen1',
             'C-13|chapter_1:discarded:major:none:seen2',
@@ -346,7 +361,6 @@ describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold t
         const rig = await disputed();
 
         expect(ladder(rig)).toEqual([
-            'C-13|summary_1:disputed:major:none:seen1',
             'C-13|plotline_1:disputed:major:none:seen1',
             'C-13|plotline_2:disputed:major:none:seen1',
             'C-13|chapter_1:disputed:major:none:seen2',

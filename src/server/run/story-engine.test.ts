@@ -283,9 +283,9 @@ describe('StoryHarnessManager — one harness per Story', () => {
                               }
                           ])
                       }),
-                      usage: { input: 10, output: 5 }
+                      usage: { input: 10, output: 5, cached_input: 0 }
                   }
-                : { message: msg({ content: 'reported' }), usage: { input: 3, output: 2 } };
+                : { message: msg({ content: 'reported' }), usage: { input: 3, output: 2, cached_input: 0 } };
         });
         const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
         const tally = createTally();
@@ -392,8 +392,11 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const rows = manager.statuses();
 
         expect(rows.every((row) => row.rank === 'A')).toBe(true);
+        // The five employees, in roster order: §7.3 appends the Researcher to the catalogue.
+        expect(rows.map((row) => row.kind)).toEqual(['writer', 'editor', 'reader', 'checker', 'researcher']);
         // V-1: an entry point is engine routing, not a roster role the dashboard draws.
         expect(rows.map((row) => (row as { entry?: boolean }).entry)).toEqual([
+            undefined,
             undefined,
             undefined,
             undefined,
@@ -415,7 +418,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
-    it('adds all four defined employees to every Story harness, at Rank A, with the Editor routing the session (R15)', () => {
+    it('adds all five defined employees to every Story harness, at Rank A, with the Editor routing the session (R15)', () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
         const runtime = new MockToolRuntime(store, story.id);
@@ -432,8 +435,21 @@ describe('StoryHarnessManager — one harness per Story', () => {
         // roster is defined once and added whole.
         manager.forStory(story.id);
 
-        expect(Object.keys(built?.agents ?? {}).sort()).toEqual(['checker', 'editor', 'reader', 'writer']);
-        expect(built?.ranks).toEqual({ writer: 'A', editor: 'A', reader: 'A', checker: 'A' });
+        expect(Object.keys(built?.agents ?? {}).sort()).toEqual([
+            'checker',
+            'editor',
+            'reader',
+            'researcher',
+            'writer'
+        ]);
+        expect(built?.ranks).toEqual({
+            writer: 'A',
+            editor: 'A',
+            reader: 'A',
+            checker: 'A',
+            // V-2: the Researcher must be Rank A, or its `research` Work Item could not be owned.
+            researcher: 'A'
+        });
         // The harness needs a session route; the Author's channel is the Editor, so that route is
         // the Editor's (V-1) — it is never shown as a roster role.
         expect(built?.entry).toBe('editor');

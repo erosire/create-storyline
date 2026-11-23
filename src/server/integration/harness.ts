@@ -3,9 +3,10 @@
 // What this module is: the scripted CREW. Every suite here boots the shipped server
 // (`startStorylineServer`, `port: 0`) with the shipped Store, run executor, §8 tool catalogue,
 // criteria engine and Digest builder, and injects exactly one double — a `MockChatClient` whose
-// answers are the crews' tool calls. That is what makes these integration tests rather than route
-// tests: a loop decision is only proven when a real run, holding a real lease and a real brief,
-// calls a real tool that really refuses or really writes.
+// answers are the crews' tool calls, and, for phase ①'s `toolMode: 'none'` runs, the validated
+// JSON the request's `responseFormat` asks for (`structuredAnswer`). That is what makes these
+// integration tests rather than route tests: a loop decision is only proven when a real run,
+// holding a real lease and a real brief, calls a real tool that really refuses or really writes.
 //
 // Why the crew is scripted from the BRIEF and not from a call index: a run's whole memory is the
 // brief (S-2, P2), so the honest double reads it the way a model does — which unit it is judging
@@ -23,6 +24,10 @@
 //     actually briefed it on, split across the two scopes the criteria engine aggregates over
 //     (`criteria/engine.ts:scopeTargets`) — the artifact for everything except C-4/C-10/C-11/C-13,
 //     which are filed at the Story row.
+//   - it answers a `toolMode: 'none'` run in the contract the run advertises: the default
+//     `SummarySample` proves its provenance by echoing the prompt's logline, and the default
+//     `IssueList` is the clean round `{"issues":[]}`. `sampleAnswer`/`screenAnswer` are the knobs
+//     that make one sample lose the comparison or fail validation on purpose.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -31,6 +36,9 @@ import { startStorylineServer, type StorylineRuntimeOptions, type StorylineServe
 import { MockChatClient, type MockHandler, calls, msg } from '../llm/mock';
 import type { ChatRequest, ChatResponse, ToolCall } from '../llm/client';
 import { Store } from '../store/store';
+import { seedHashOf } from '../../shared/seed-hash';
+import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME } from '../../shared/schemas';
+import type { IssueList, SummarySample } from '../../shared/schemas';
 import type { Chapter, Cost, Idea, Plotline, Revision, Story, Summary, Verdict } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -87,12 +95,8 @@ export interface CrewContext {
     unitTarget?: string;
     /** The competing draft a review job names (`revision_id=` in the brief), if any. */
     draftIds: string[];
-    /** True for phase ①'s per-draft Reader pass (the job note carries `Reader pass N of M`). */
+    /** True for phase ①'s per-draft deep review (the job note carries `Reader pass N of M`). */
     reviewPass: boolean;
-    /** True for phase ①'s pre-Writer Seed review (the job line names `reviewSeed`). */
-    seedReview: boolean;
-    /** The findings a phase-① confirmation thread must independently re-check. */
-    confirmIds: string[];
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
     /** D-19: the directive this review thread must turn into tasks. */
@@ -117,41 +121,85 @@ export interface CrewOptions {
     /** How many Ideas each Reader run files; the shipped default of 1 matches §6.7's probe round. */
     readerIdeas?: number;
     /**
-     * A Reader review pass files one defect at this cost (phase ①'s Writer → Reader → Editor loop).
-     * The function form decides per pass, so a test can make the flaw a one-round event.
+     * A deep-review Reader pass files one defect at this cost (§6.4 step 6). The function form
+     * decides per pass, so a test can make the flaw a one-round event (the selected draft's id is
+     * in `ctx.draftIds`).
      */
     readerFinds?: Cost | ((ctx: CrewContext) => Cost | undefined);
     /** Verify Ideas as `refuted` instead of `confirmed`, so the tray gets a real rejection (D-27). */
     refuteIdeas?: boolean;
-    /** Ask the Author to restructure the Seed instead of accepting it (phase ①'s first pass). */
-    seedRestructure?: boolean;
-    /** The Reader's independent confirmation disputes the Editor-approved finding. */
-    readerDispute?: boolean;
     /** Extra tool calls a Checker run makes on a chapter unit before reporting (U-3's drill). */
     checkerDrill?: boolean;
     /** The assistant run's final answer line (A-1: plain text to the Author, no writes). */
     assistantNote?: string;
     /**
-     * Leave one §4.2 block out of the FIRST Writer attempt's `editSummary` — a crew that ends its
-     * run with an incomplete Summary, so the test can watch §4.15's pending → completion path.
-     * A completion run (the brief says which blocks are missing) always writes the whole set.
+     * The JSON a `sample_unit` run answers (§6.4 step 3). The default derives the six prose fields
+     * from the compiled prompt's Seed Brief and echoes the prompt's Knowledge fingerprints, so the
+     * installed Summary provably came from the round's prompt. Return a STRING to answer raw text
+     * instead — `'not json'` is how the schema-repair and retry-cap rows are driven
+     * (`src/server/run/executor.ts:STRUCTURED_ATTEMPTS`).
      */
-    omitSummaryField?: keyof typeof SUMMARY_FIELDS;
+    sampleAnswer?: (turn: SampleTurn) => SummarySample | string;
+    /**
+     * The JSON a `screen_samples` run answers (§6.4 step 4). Default `{issues: []}` — a clean
+     * draft. A test maps `sampleIndex` to a canned critical/high issue to make the deterministic
+     * selector pick a known winner (`src/server/loop/sample-select.ts`).
+     */
+    screenAnswer?: (turn: ScreenTurn) => IssueList | string;
+}
+
+/** The compiled prompt a no-tool sampling run receives (§5); no brief exists in this mode. */
+export interface SampleTurn {
+    /** 1-based sample index the Work Item set as the provider `seed` (§6.4 step 3). */
+    sampleIndex: number;
+    system: string;
+    user: string;
+    prompt: string;
+}
+
+/** The compiled prompt a no-tool screening run receives (§5), with its target draft resolved. */
+export interface ScreenTurn {
+    /** 1-based sample index parsed from the target draft's `premise` line; 0 when unknown. */
+    sampleIndex: number;
+    /** The stored revision the target draft is, when it can be resolved; '' otherwise. */
+    revisionId: string;
+    /** The `## TARGET DRAFT` block, verbatim. */
+    draft: string;
+    system: string;
+    user: string;
+    prompt: string;
 }
 
 // The criteria the engine aggregates over the Story row rather than the artifact: C-4's subject is
 // the whole set, and C-10/C-11/C-13 are whole-level checks (`criteria/engine.ts:scopeTargets`).
 export const STORY_SCOPED_CRITERIA = ['C-4', 'C-10', 'C-11', 'C-13'];
 
-/** The Summary's §4.2 fields — the shipped `C-1` shape requires each of them non-empty. */
-export const SUMMARY_FIELDS = {
-    premise: 'A nobody inherits a lighthouse that chooses its own keeper.',
-    promise: 'Every keeper pays what the lamp asks, and the reader hears the price first.',
-    theme: 'Belonging is a debt the living pay to the dead.',
-    tone: 'tidal, plain-spoken, close third person',
-    ending: 'The last keeper climbs the last gallery and the light chooses her.',
-    world_rules: 'The lamp keeps its own log of every keeper, and the log outlives them.'
+/**
+ * The Seed Brief the scripted Editor derives (§1 step 2, §3.3). Every field is a pure function of
+ * the Seed text, so a test can pin the record exactly and a second Story with the same Seed gets
+ * the same brief. The Seed itself is never written (P5): these are the DERIVED projection's words.
+ */
+export const seedBriefFields = (seed: string) => {
+    const logline = (seed.split('\n')[0] ?? '').trim();
+
+    return {
+        logline,
+        protagonist: `the protagonist of: ${logline}`,
+        want: 'to keep the promise the Seed makes',
+        obstacle: 'what the Seed puts between the protagonist and the want',
+        stakes: 'what the Seed says is lost if the want fails',
+        setting: 'the place and time the Seed names',
+        world_rules: [`the Seed is law (P5): ${logline}`],
+        promise: `the book pays the promise "${logline}" makes`,
+        tone_hints: 'as the Seed tells it',
+        constraints: [] as string[],
+        open_questions: [] as string[]
+    };
 };
+
+/** The Seed text the compiled brief carries — parsed from the SEED section, never from `story[0]`. */
+const seedOfBrief = (brief: string): string =>
+    (/^# SEED — Author truth[^\n]*\n([^\n]*)/m.exec(brief)?.[1] ?? '').trim();
 
 /** A chapter's prose, distinguishable per chapter and per draft, so `toEqual` on bodies is meaningful. */
 export const chapterProse = (order: number, note = ''): string =>
@@ -281,8 +329,6 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
         reviewPass: /Reader pass \d+ of \d+/.test(brief),
-        seedReview: /THE JOB[\s\S]*reviewSeed/.test(brief) && /Review the Seed above/.test(brief),
-        confirmIds: [...brief.matchAll(/Confirm finding (finding_\d+)/g)].map((match) => match[1]),
         phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
     };
 }
@@ -388,34 +434,6 @@ const writerScript: CrewScript = (ctx) => {
         return { content: `Reported after ${ctx.refusals.length} refusal(s) (${ctx.template}).` };
     }
 
-    if (ctx.template === 'writer-summary') {
-        // ① expands the Seed into the §4.2 fields. In a diverging Story the tool files each attempt
-        // as a competing draft by itself (writer.ts:D-3d), which is what gives the Editor a select
-        // job in §15 step 1 — the crew does not ask for it.
-        const blocks: Record<string, string> = { ...SUMMARY_FIELDS };
-        // A first attempt may be scripted short of a block (§4.15's completion path). The loop's
-        // completion brief names the gap ("is still pending: it is missing …"), and that run writes
-        // the whole set — exactly what a model reading the note would do.
-        const brief = String(ctx.request.messages[0]?.content ?? '');
-        const completing = /is still pending: it is missing/.test(brief);
-
-        if (ctx.options.omitSummaryField !== undefined && !completing) delete blocks[ctx.options.omitSummaryField];
-
-        return {
-            toolCalls: [
-                {
-                    name: 'editSummary',
-                    args: {
-                        ...blocks,
-                        ...(summaryId ? { expects: [{ id: summaryId, rev: revOf(store, summaryId) ?? 0 }] } : {}),
-                        why: 'The Seed expanded into the Summary fields (C-1, C-14).'
-                    }
-                },
-                ...verdictCalls(ctx, 'Probe: every central Seed element has a Summary field.')
-            ]
-        };
-    }
-
     if (ctx.template === 'writer-plotlines') {
         const planned = store.plotlines.list().filter((row) => row.story_id === story?.id);
         // D-3b: `chapter_count` is Author truth and it lives on the Summary row, not the Story.
@@ -490,7 +508,8 @@ const writerScript: CrewScript = (ctx) => {
  * the rule).
  */
 const editorScript: CrewScript = (ctx) => {
-    const { draftIds, findingIds, ideaIds } = readBrief(ctx.request.messages[0]?.content ?? '', ctx.store, ctx.options);
+    const brief = String(ctx.request.messages[0]?.content ?? '');
+    const { draftIds, findingIds, ideaIds } = readBrief(brief, ctx.store, ctx.options);
 
     // D-19's directive review: the Author talks to the Editor, and the Editor turns the direction
     // into the queue. The server resolved the affected artifacts, so the review names one task per
@@ -514,36 +533,43 @@ const editorScript: CrewScript = (ctx) => {
               };
     }
 
-    // Phase ①'s first job: read the Seed before any Writer expands it. The scripted Editor accepts
-    // it unless the suite asks for the restructure path.
-    if (ctx.seedReview) {
-        if (ctx.results.length > 0) return { content: `Reported the Seed review (${ctx.template}).` };
+    // §6.4 step 1: the Editor's structure pass reads the Seed for its `seed_hash` and then writes
+    // the DERIVED brief. Two turns, exactly as the template's prompt instructs: readSeed first,
+    // structureSeed second — the tool refuses a hash that does not name the Seed as it stands (P5).
+    //
+    // The job is identified by its TEMPLATE: `work.ts:phase1PipelineCandidates` binds the structure
+    // pass to `editor-seed-structure` explicitly, and every unbound Editor job (`verify_findings`,
+    // `verify_ideas`, `directive_work`, `select`) binds the first assigned Editor — which
+    // `templates.ts:DEFAULT_ASSIGNMENT` makes `editor-general`. Keying on the brief's artifact
+    // heading would keep masking a regression of that assignment order; keying on the template
+    // makes a mis-bound verification fail the slice loudly instead of answering with a Seed read.
+    if (ctx.template === 'editor-seed-structure') {
+        const seed = seedOfBrief(brief);
 
-        return ctx.options.seedRestructure
-            ? {
-                  toolCalls: [
-                      {
-                          name: 'reviewSeed',
-                          args: {
-                              verdict: 'restructure',
-                              missing: ['world', 'stakes'],
-                              notes: 'The Seed does not say what the world costs or what failure takes away.',
-                              why: 'Phase ① cannot expand an unstructured Seed without inventing the missing story (P5).'
-                          }
-                      }
-                  ]
-              }
-            : {
-                  toolCalls: [
-                      {
-                          name: 'reviewSeed',
-                          args: {
-                              verdict: 'accept',
-                              why: 'The Seed names a protagonist, a want, an obstacle, stakes, a world and a change.'
-                          }
-                      }
-                  ]
-              };
+        if (ctx.results.length === 0) return { toolCalls: [{ name: 'readSeed', args: {} }] };
+
+        // `readSeed` returns the hash in `data.seed_hash`; a missing one means the read refused, and
+        // sending '' would only make composition fail a second time. Report instead of guessing.
+        const hash = ctx.results
+            .map((result) => (result.data as Record<string, unknown> | undefined)?.seed_hash)
+            .find((value): value is string => typeof value === 'string' && value.length > 0);
+
+        if (hash === undefined || seed === '') {
+            return { content: `The Seed read did not name a hash to structure against (${ctx.template}).` };
+        }
+
+        return {
+            toolCalls: [
+                {
+                    name: 'structureSeed',
+                    args: {
+                        seed_hash: hash,
+                        ...seedBriefFields(seed),
+                        why: 'The brief restates the Seed and invents nothing (P5, D-17c).'
+                    }
+                }
+            ]
+        };
     }
 
     // The second turn of a session exists only to answer what the tool layer said. Anything other
@@ -634,9 +660,10 @@ const editorScript: CrewScript = (ctx) => {
                 why: 'D-33 verification: the cited passage shows the defect.'
             }
         });
-        // Phase ①'s approval, in the same granular thread. The Reader then performs its own
-        // independent confirmation before the Writer's fix is allowed (see readerScript). Phase ①
-        // approves only critical/major; a minor/taste note is recorded, never turned into work.
+        // Phase ①'s approval, in the same granular thread. The deep review's tool-using Reader is
+        // already the independent read, so the Editor's verification is what arms the next sampling
+        // round (§6.4 step 6). Phase ① approves only critical/major; a minor/taste note is recorded,
+        // never turned into work.
         const finding = ctx.store.findings.get(id);
         const covered = finding !== undefined && (ctx.story?.auto_approve ?? []).includes(finding.cost);
 
@@ -674,6 +701,60 @@ const editorScript: CrewScript = (ctx) => {
     if (!specs.length) return { content: `Nothing to choose (${ctx.template}).` };
 
     return { toolCalls: specs };
+};
+
+/**
+ * The Researcher crew (§6.4 step 2, §7.2): read the Knowledge already recorded, then write one
+ * sourced entry per claim. Two turns, exactly as `researcher-story`'s prompt instructs: a topic
+ * that is already covered is refreshed, never duplicated (D-16).
+ */
+const researcherScript: CrewScript = (ctx) => {
+    if (ctx.results.length === 0) return { toolCalls: [{ name: 'readKnowledge', args: {} }] };
+
+    // A written entry's result carries its id (in `data` for both the create and the repeat shape).
+    if (ctx.results.some((result) => typeof (result.data as Record<string, unknown> | undefined)?.knowledge_id === 'string'))
+        return { content: `Reported the research pass (${ctx.template}).` };
+
+    return {
+        toolCalls: [
+            {
+                name: 'writeKnowledge',
+                args: {
+                    topic: 'period and place',
+                    kind: 'place',
+                    claim: 'the Seed names the place the story happens in',
+                    detail: 'the Seed is the only source here; the detail is what the Seed states, nothing invented',
+                    importance: 'critical',
+                    sources: [
+                        {
+                            url_or_title: 'the Author\u2019s Seed',
+                            claim: 'it names the story\u2019s setting',
+                            accessed_at: '2000-01-01T00:00:00.000Z'
+                        }
+                    ],
+                    why: 'the sampler needs the place it is writing about (T-10)'
+                }
+            },
+            {
+                name: 'writeKnowledge',
+                args: {
+                    topic: 'governing rule',
+                    kind: 'world_rule',
+                    claim: 'the world holds to the promise the Seed makes',
+                    detail: 'the Seed is law (P5)',
+                    importance: 'high',
+                    sources: [
+                        {
+                            url_or_title: 'the Author\u2019s Seed',
+                            claim: 'it makes the book\u2019s promise',
+                            accessed_at: '2000-01-01T00:00:00.000Z'
+                        }
+                    ],
+                    why: 'the sampler must not contradict the promise the Seed makes'
+                }
+            }
+        ]
+    };
 };
 
 /** The Checker crew: verdict lines for the briefed criteria, plus the optional finding and drill. */
@@ -714,28 +795,8 @@ const checkerScript: CrewScript = (ctx) => {
     return specs.length ? { toolCalls: specs } : { content: `Reported (${ctx.template}).` };
 };
 
-/** The Research crew: probe Ideas about the Story as it runs (§6.7), Explorer research (D-25). */
+/** The Reader crew: the deep review (§6.4 step 6), probe Ideas (§6.7), Explorer research (D-25). */
 const readerScript: CrewScript = (ctx) => {
-    // Phase ①'s independent second look: one Reader thread per Editor-approved finding. The
-    // scripted Reader confirms unless the suite asks it to dispute.
-    if (ctx.confirmIds.length > 0) {
-        if (ctx.results.length > 0) return { content: `Reported the confirmation (${ctx.template}).` };
-
-        return {
-            toolCalls: ctx.confirmIds.map((findingId) => ({
-                name: 'confirmFinding',
-                args: {
-                    finding_id: findingId,
-                    verdict: ctx.options.readerDispute ? 'dispute' : 'confirm',
-                    evidence: `Independent re-read of the passage for ${findingId}: the cited lines behave as the finding says.`,
-                    why: ctx.options.readerDispute
-                        ? 'The Reader read the passage itself and does not believe the defect.'
-                        : 'The Editor approved it and the Reader read the passage itself; the defect holds.'
-                }
-            }))
-        };
-    }
-
     // The scripted crew files its Ideas ONCE per Story. A probe round on a Story whose tray was
     // just decided must not silently restock it and turn a Goal test into a tray test.
     const alreadyFiled = ctx.store.ideas.list().filter((idea) => idea.story_id === ctx.story?.id).length;
@@ -743,9 +804,10 @@ const readerScript: CrewScript = (ctx) => {
 
     if (ctx.results.length > 0) return { content: `Reported (${ctx.template}).` };
 
-    // Phase ①'s per-draft Reader pass: judge the sample against the Seed, report on the draft,
-    // and file a defect when the story's seat finds one. It proposes no Ideas — an Idea is the
-    // probe round's output (D-26/D-30), and a review that also restocks the tray never closes.
+    // §6.4 step 6 — phase ①'s DEEP REVIEW: a tool-using Reader judges the selected draft against
+    // the Seed, rates the Summary (the criteria engine scopes C-14 to the Summary row, not the
+    // draft), and files a defect when the story's seat finds one. It proposes no Ideas — an Idea
+    // is the probe round's output (D-26/D-30), and a review that also restocks the tray never closes.
     if (ctx.reviewPass) {
         const revisionId = ctx.draftIds[0];
 
@@ -762,7 +824,9 @@ const readerScript: CrewScript = (ctx) => {
             {
                 name: 'submitVerdict',
                 args: {
-                    target_ref: revisionId,
+                    // The job note says "submitVerdict against <unit_ref>": a Summary draft's
+                    // criteria are aggregated at the Summary row (criteria/engine.ts:scopeTargets).
+                    target_ref: ctx.unitTarget ?? revisionId,
                     criteria_passed: lines,
                     recommendation: lines.some((line) => !line.result) ? 'fix' : 'advance'
                 }
@@ -848,10 +912,11 @@ const assistantScript: CrewScript = (ctx) => {
 
 /** One template's default script; `options.scripts` overrides any of them. */
 export const CREW_SCRIPTS: Record<string, CrewScript> = {
-    'writer-summary': writerScript,
     'writer-plotlines': writerScript,
     'writer-chapters': writerScript,
+    'editor-seed-structure': editorScript,
     'editor-general': editorScript,
+    'researcher-story': researcherScript,
     'checker-consistency': checkerScript,
     'checker-prose': checkerScript,
     // The four built-in Readers of §8.1 (`templates.ts`), all of which answer a probe round.
@@ -882,6 +947,13 @@ export function createCrewClient(
     const handler: MockHandler = (request): ChatResponse => {
         const brief = String(request.messages[0]?.content ?? '');
 
+        // §2 decision 3 / §6.4 steps 3-4: a `toolMode: 'none'` run asks for a schema-constrained
+        // answer, not for tool calls. It carries no ROLE brief at all — its whole memory is the
+        // compiled prompt (§5) — so it is answered BEFORE the brief machinery below and never joins
+        // a script's turn count: the one schema-repair retry must receive a real answer again.
+        if (request.responseFormat !== undefined)
+            return { message: msg({ content: structuredAnswer(request, store, options) }) };
+
         // A request with no brief in front of it is not a crew turn; answer empty and let the
         // executor's normal path close the session.
         if (!brief.includes('ROLE — ')) return { message: msg({ content: '' }) };
@@ -894,6 +966,7 @@ export function createCrewClient(
         const byKind: Record<string, CrewScript> = {
             writer: writerScript,
             editor: editorScript,
+            researcher: researcherScript,
             checker: checkerScript,
             reader: readerScript,
             assistant: assistantScript
@@ -955,8 +1028,6 @@ export function createCrewClient(
             unitTarget: parsed.unitTarget,
             draftIds: parsed.draftIds,
             reviewPass: parsed.reviewPass,
-            seedReview: parsed.seedReview,
-            confirmIds: parsed.confirmIds,
             directiveRef: parsed.directiveRef,
             directiveTargets: parsed.directiveTargets,
             options
@@ -977,6 +1048,123 @@ export function createCrewClient(
     return { client: new MockChatClient(handler), refusals };
 }
 
+/**
+ * The single structured answer of a `toolMode: 'none'` run (§4.3, §6.4 steps 3-4).
+ *
+ * The request carries the schema NAME in `responseFormat`, which is what tells the rig which job
+ * it is answering without reading a brief that does not exist in this mode:
+ *
+ *   * `SummarySample` → the six prose blocks, every one derived from the compiled prompt: the
+ *     `premise` echoes the Seed Brief's `logline`, and `knowledge_used` names every fingerprint the
+ *     prompt's KNOWLEDGE section carried (so a test can prove the sampler saw the research).
+ *   * `IssueList` → `{issues: []}` unless the test's override scripts a defect for a sample.
+ *
+ * A caller-scripted STRING is returned verbatim: `'not json'` is how the schema-repair retry and
+ * the sampling-exhaustion escalation are driven (`src/server/run/executor.ts:STRUCTURED_ATTEMPTS`).
+ * The sample index is the provider `seed` the Work Item set (§6.4 step 3); a screen has no seed,
+ * so its sample index is parsed back out of the target draft's `premise` line (`sample N: …`).
+ */
+function structuredAnswer(request: ChatRequest, store: Store, options: CrewOptions): string {
+    const system = String(request.messages.find((message) => message.role === 'system')?.content ?? '');
+    const user = String(request.messages.find((message) => message.role === 'user')?.content ?? '');
+    const prompt = `${system}\n\n${user}`;
+    const name = request.responseFormat?.name;
+
+    if (name === SUMMARY_SAMPLE_SCHEMA_NAME) {
+        const sampleIndex = typeof request.seed === 'number' && request.seed > 0 ? request.seed : 1;
+        const turn: SampleTurn = { sampleIndex, system, user, prompt };
+        const answer =
+            options.sampleAnswer !== undefined
+                ? options.sampleAnswer(turn)
+                : defaultSampleAnswer(sampleIndex, loglineOf(prompt), knowledgeFingerprintsOf(prompt));
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    if (name === ISSUE_LIST_SCHEMA_NAME) {
+        const draft = prompt.split('## TARGET DRAFT\n')[1] ?? '';
+        const fields = draftFieldsOf(draft);
+        const sampleIndex = Number(/^sample (\d+):/.exec(fields.premise ?? '')?.[1] ?? '0');
+        const turn: ScreenTurn = {
+            sampleIndex,
+            revisionId: revisionIdOf(store, fields),
+            draft,
+            system,
+            user,
+            prompt
+        };
+        const answer = options.screenAnswer !== undefined ? options.screenAnswer(turn) : { issues: [] };
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // An unknown schema is answered with `{}` on purpose: it fails validation the same way a real
+    // mis-dispatch would, rather than being papered over with a clean answer.
+    return '{}';
+}
+
+/** The Seed Brief's one-sentence premise, which is the logline line of the compiled `## SEED BRIEF`. */
+const loglineOf = (prompt: string): string => /^logline: (.*)$/m.exec(prompt)?.[1]?.trim() ?? 'the Seed Brief';
+
+/** The fingerprints the prompt's KNOWLEDGE section renders, in the order the compiler sorted them. */
+const knowledgeFingerprintsOf = (prompt: string): string[] => [
+    ...prompt.matchAll(/\[(k_[0-9a-f]+) · (?:critical|high) · /g)
+].map((match) => match[1]);
+
+/**
+ * The default sampler answer (§4.3's SummarySample). `sample <i>: <logline>` is the guarantee a
+ * test leans on: the installed Summary provably came from the round's compiled prompt.
+ */
+export const defaultSampleAnswer = (
+    sampleIndex: number,
+    logline: string,
+    knowledgeUsed: string[] = []
+): SummarySample => ({
+    premise: `sample ${sampleIndex}: ${logline}`,
+    promise: `sample ${sampleIndex} pays the promise the Seed makes`,
+    theme: `sample ${sampleIndex} theme`,
+    tone: `sample ${sampleIndex} tone`,
+    ending: `sample ${sampleIndex} ending`,
+    world_rules: `sample ${sampleIndex} world rules`,
+    knowledge_used: knowledgeUsed
+});
+
+/** The `key: value` lines of a screen's `## TARGET DRAFT` block (the six Summary prose fields). */
+function draftFieldsOf(draft: string): Record<string, string> {
+    const fields: Record<string, string> = {};
+
+    for (const match of draft.matchAll(/^(premise|promise|theme|tone|ending|world_rules): (.*)$/gm))
+        fields[match[1]] = match[2].trim();
+
+    return fields;
+}
+
+/**
+ * Which stored revision a screen judges. The prompt deliberately carries the draft's FIELDS and
+ * never its id (§5's reproducibility rule), so the resolution is by equality: the summary revision
+ * whose `body.fields` reads exactly the target draft. Ties cannot arise in practice — the newest
+ * match is the draft the sweep just persisted — and the newest is taken if they ever do.
+ */
+function revisionIdOf(store: Store, fields: Record<string, string>): string {
+    const keys = ['premise', 'promise', 'theme', 'tone', 'ending', 'world_rules'];
+
+    if (!keys.every((key) => typeof fields[key] === 'string' && fields[key].length > 0)) return '';
+
+    const matches = store.revisions
+        .list()
+        .filter((revision) => {
+            if (revision.unit_kind !== 'summary') return false;
+
+            const body = revision.body as { fields?: Record<string, unknown> } | undefined;
+            const stored = body?.fields;
+
+            return stored !== undefined && keys.every((key) => stored[key] === fields[key]);
+        })
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
+
+    return matches[0]?.id ?? '';
+}
+
 // ---------------------------------------------------------------------------
 // The fixture
 // ---------------------------------------------------------------------------
@@ -989,6 +1177,8 @@ export interface StorylineFixture {
     origin: string;
     /** Every tool refusal the crews were given, in call order. */
     refusals: CrewRefusal[];
+    /** Every provider request the server made, in call order (structured prompts included). */
+    requests: readonly ChatRequest[];
     /** One Author action: a sweep, then every opened run to completion. */
     tick(): Promise<void>;
     /** Sweeps until `stop` holds; throws with the crew panel if the loop keeps running. */
@@ -1073,6 +1263,9 @@ export async function bootStoryline(options: BootOptions = {}): Promise<Storylin
         root,
         origin: base,
         refusals,
+        // The mock client records every request it received; exposing them keeps a suite from
+        // threading its own recorder through the crew options.
+        requests: client.calls,
         tick,
         settle,
         api,

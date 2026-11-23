@@ -34,7 +34,13 @@ export const REPORT_TOOLS = [
     'reviewSeed',
     'selectRevision',
     'requestMerge',
-    'rejectAll'
+    'rejectAll',
+    // Phase-1 research pipeline (§7.1): an Editor run whose whole product is the Seed Brief, and
+    // a Researcher run whose whole product is Knowledge, must not count as no-op turns (S-4).
+    // Their write IS the report — appending the two names is what keeps those runs out of loop
+    // detection without widening the set to every mutating tool.
+    'structureSeed',
+    'writeKnowledge'
 ] as const;
 
 /** Reads and lookups: these execute for real everywhere, including inside a panel agent (D-38). */
@@ -100,11 +106,24 @@ const schemaName = (schema: { function?: { name?: string } }): string => schema.
  * Every other kind gets the catalogue exactly as the runtime declares it (T-6a). Filtering the
  * DECLARED list rather than the registry is also what keeps T-6a intact: nothing is hidden from a
  * dispatched run, and `listTools` still answers from the registry.
+ *
+ * `toolMode: 'none'` (phase ①'s sampling/screening single-turn mode, §2 decision 3) is checked
+ * FIRST and returns an EMPTY list: that run is not merely restricted, it must never be offered a
+ * tool at all — the answer is a schema-constrained JSON object and one turn. Checking the mode
+ * before the kind is deliberate, because it is the stronger claim: an assistant run's web
+ * exclusion is a permission narrowing; a no-tool run has no tool surface whatsoever.
  */
-export const toolsForRunKind = <T extends { function?: { name?: string } }>(schemas: T[], kind: string): T[] =>
-    kind === 'assistant'
+export const toolsForRunKind = <T extends { function?: { name?: string } }>(
+    schemas: T[],
+    kind: string,
+    toolMode?: 'tools' | 'none'
+): T[] => {
+    if (toolMode === 'none') return [];
+
+    return kind === 'assistant'
         ? schemas.filter((schema) => !(RUN_WEB_TOOLS as readonly string[]).includes(schemaName(schema)))
         : schemas;
+};
 
 /**
  * The arguments that say WHICH decision a proposal is making. Two agents "agree" when their

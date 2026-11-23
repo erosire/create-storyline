@@ -719,7 +719,9 @@ const createTask: ToolDefinition = {
             title: str('The work in one line.'),
             detail: str('What to do, what to read first, and what done looks like (P4).'),
             owner_role: enumOf(
-                ['writer', 'editor', 'reader', 'checker', 'author'],
+                // `researcher` is a dispatched kind (§7.2): a Researcher may queue the research
+                // work it cannot do here, and any kind may route a fact-check to it.
+                ['writer', 'editor', 'reader', 'checker', 'researcher', 'author'],
                 'The kind that should do the work.'
             ),
             criterion_ref: str('The criterion this closes, when it is a criterion queue entry (P12).'),
@@ -856,7 +858,10 @@ const editTask: ToolDefinition = {
             task_id: str('The queue entry (its id).'),
             state: enumOf(['open', 'claimed', 'blocked', 'done', 'wontfix'], 'The new queue state.'),
             detail: str('The note for whoever picks this up next (P4).'),
-            owner_role: enumOf(['writer', 'editor', 'reader', 'checker', 'author'], 'Who does the work now.'),
+            owner_role: enumOf(
+                ['writer', 'editor', 'reader', 'checker', 'researcher', 'author'],
+                'Who does the work now.'
+            ),
             priority: num('Higher is picked up first.'),
             expects: EXPECTS_ARG,
             why: whyArg('Why the entry changed (T-5).')

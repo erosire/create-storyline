@@ -4,8 +4,10 @@
  * §8 groups the tools by who asks for them — §8.1 Writer, §8.2 Editor, §8.3 checker, §8.4 shared,
  * §8.5 research — and the grouping is documentation about the BRIEF, not about registration:
  * T-6a says every session gets §8.1 + §8.2 + §8.3 + §8.4 + §8.5, and "kind selects the brief and
- * the permission row, not the tool list". So this module flattens the five groups into the one
- * list every session holds, and nothing else may decide what a session can see.
+ * the permission row, not the tool list". The Phase-1 research surface (§7.1 of
+ * `documents/phase-1-research-pipeline.md`) is a sixth group with no §8 section. So this module
+ * flattens the six groups into the one list every session holds, and nothing else may decide what
+ * a session can see.
  *
  * Two invariants are checked when this module loads, because both are silent failures otherwise:
  *  - a name registered twice would shadow a §8 row (the second definition never runs);
@@ -15,18 +17,37 @@
 import { PERMISSION_ROWS } from './permissions';
 import { checkerTools } from './checker';
 import { editorTools } from './editor';
+// The Phase-1 pipeline's four tools (documents/phase-1-research-pipeline.md §7.1). They live in
+// their own module and their own group because they belong to NO §8 section: §8.1-§8.5 are the
+// pinned pre-pipeline catalogue, and keeping this surface separate is what lets the §8
+// conformance test still diff those five tables against the spec while T-6a registers this group
+// on every session too.
+import { knowledgeTools } from './knowledge';
 import { plumbingTools } from './plumbing';
 import { researchTools } from './research';
 import { writerTools } from './writer';
 import type { ToolDefinition } from './types';
 
-/** §8's five groups, in §8's order, kept separate so a reviewer can diff them against the spec. */
-export const TOOL_GROUPS: Record<'writer' | 'editor' | 'checker' | 'plumbing' | 'research', ToolDefinition[]> = {
+/**
+ * §8's five groups, in §8's order, kept separate so a reviewer can diff them against the spec —
+ * plus `knowledge`, the Phase-1 research surface (§7.1) that has no §8 section of its own.
+ *
+ * WHY A SIXTH GROUP RATHER THAN FOLDING THESE INTO AN EXISTING ONE: `structureSeed` is the
+ * Editor's, `writeKnowledge`/`retireKnowledge` are the Researcher's and `readKnowledge` is every
+ * kind's. No single §8 group owns that shape, and a tool filed under a group it does not belong
+ * to would make the conformance test lie about which spec table registers it. The group is
+ * registered like every other (T-6a: the whole catalogue on every session).
+ */
+export const TOOL_GROUPS: Record<
+    'writer' | 'editor' | 'checker' | 'plumbing' | 'research' | 'knowledge',
+    ToolDefinition[]
+> = {
     writer: writerTools,
     editor: editorTools,
     checker: checkerTools,
     plumbing: plumbingTools,
-    research: researchTools
+    research: researchTools,
+    knowledge: knowledgeTools
 };
 
 /** Which group a tool came from, for `describeTool` and for the §8 conformance test. */
@@ -73,6 +94,11 @@ export const GOVERNED_COLLECTIONS: readonly string[] = [...new Set(PERMISSION_RO
 /**
  * The names §8.1–§8.5 register, as a set, for the conformance test that pins the catalogue
  * against the spec (T-6c: "what a role can reach is answerable from inside the run").
+ *
+ * The last four are the Phase-1 research surface (documents/phase-1-research-pipeline.md §7.1).
+ * They are listed here — not in the §8 sections above — because the ORDER is the registration
+ * order `TOOL_NAMES` answers in, and a tool that is registered but absent from this list would
+ * make the conformance test pass while the catalogue silently grew.
  */
 export const SPEC_TOOL_NAMES: readonly string[] = [
     // §8.1 — the Writer surface
@@ -126,5 +152,10 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     'searchWeb',
     'fetchPage',
     'proposeIdea',
-    'markUnverifiable'
+    'markUnverifiable',
+    // Phase-1 research pipeline (§7.1) — the `knowledge` group
+    'structureSeed',
+    'writeKnowledge',
+    'readKnowledge',
+    'retireKnowledge'
 ];

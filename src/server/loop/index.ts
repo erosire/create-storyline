@@ -19,6 +19,7 @@ export * from './records';
 export * from './trend';
 export * from './status';
 export * from './work';
+export * from './sample-select';
 export * from './invalidation';
 export * from './directives';
 export * from './engine';

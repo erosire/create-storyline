@@ -76,7 +76,10 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
         'reportGap'
     ],
     // §8.5 — research and proposal.
-    research: ['searchWeb', 'fetchPage', 'proposeIdea', 'markUnverifiable']
+    research: ['searchWeb', 'fetchPage', 'proposeIdea', 'markUnverifiable'],
+    // The Phase-1 research surface (documents/phase-1-research-pipeline.md §7.1). It has no §8
+    // section, which is why it is a sixth group rather than a widening of an existing one.
+    knowledge: ['structureSeed', 'writeKnowledge', 'readKnowledge', 'retireKnowledge']
 };
 
 /**
@@ -370,6 +373,67 @@ const SPEC_TOOL_CONTRACT: Record<
         writes: 'ideas',
         level: 'write',
         allow: 'nnyy'
+    },
+    // ── Phase-1 research (§7.1) ─────────────────────────────────────────────
+    // `allow` stays four characters in the writer/editor/checker/reader order the column has
+    // always used; the Researcher's own column is pinned in permissions.test.ts.
+    structureSeed: {
+        args: [
+            'seed_hash',
+            'logline',
+            'protagonist',
+            'want',
+            'need',
+            'obstacle',
+            'stakes',
+            'setting',
+            'world_rules',
+            'promise',
+            'tone_hints',
+            'constraints',
+            'open_questions',
+            'expects',
+            'why'
+        ],
+        required: [
+            'seed_hash',
+            'logline',
+            'protagonist',
+            'want',
+            'obstacle',
+            'stakes',
+            'setting',
+            'world_rules',
+            'promise',
+            'constraints',
+            'open_questions',
+            'why'
+        ],
+        writes: 'seed_briefs',
+        level: 'write',
+        // §7.1's Editor-only tool; the row already gives the Editor `write`, so only it passes.
+        allow: 'nynn'
+    },
+    writeKnowledge: {
+        args: ['topic', 'kind', 'claim', 'detail', 'importance', 'sources', 'phase', 'why'],
+        required: ['topic', 'kind', 'claim', 'importance', 'sources', 'why'],
+        writes: 'knowledge',
+        level: 'write',
+        allow: 'nnnn'
+    },
+    readKnowledge: {
+        args: ['importance', 'kind', 'phase', 'topic'],
+        required: [],
+        writes: 'knowledge',
+        level: 'read',
+        allow: 'yyyy'
+    },
+    retireKnowledge: {
+        args: ['knowledge_id', 'expects', 'why'],
+        required: ['knowledge_id', 'expects', 'why'],
+        writes: 'knowledge',
+        level: 'write',
+        allow: 'nnnn'
     }
 };
 
@@ -446,18 +510,20 @@ describe('the §8 catalogue', () => {
                 tools: SPEC_GROUP_SIZES[group]
             });
 
-        // T-6a: registration is the flat union of the five sections — 46 tools, no shadowing.
+        // T-6a: registration is the flat union of the five §8 sections plus the Phase-1 research
+        // surface — 51 tools, no shadowing.
         expect(TOOL_NAMES).toEqual([...SPEC_TOOL_NAMES]);
-        expect(TOOL_NAMES.length).toBe(47);
-        expect(ALL_TOOLS.length).toBe(47);
-        expect(TOOL_BY_NAME.size).toBe(47);
+        expect(TOOL_NAMES.length).toBe(51);
+        expect(ALL_TOOLS.length).toBe(51);
+        expect(TOOL_BY_NAME.size).toBe(51);
         // Every tool knows its own section, which is what `describeTool`'s provenance reads.
         expect(TOOL_NAMES.map((name) => GROUP_OF_TOOL.get(name) ?? 'missing')).toEqual([
             ...SPEC_GROUP_SIZES.writer.map(() => 'writer'),
             ...SPEC_GROUP_SIZES.editor.map(() => 'editor'),
             ...SPEC_GROUP_SIZES.checker.map(() => 'checker'),
             ...SPEC_GROUP_SIZES.plumbing.map(() => 'plumbing'),
-            ...SPEC_GROUP_SIZES.research.map(() => 'research')
+            ...SPEC_GROUP_SIZES.research.map(() => 'research'),
+            ...SPEC_GROUP_SIZES.knowledge.map(() => 'knowledge')
         ]);
         // And the contract table below cannot silently fall behind the registry.
         expect(Object.keys(SPEC_TOOL_CONTRACT)).toEqual([...TOOL_NAMES]);
@@ -477,7 +543,7 @@ describe('the §8 catalogue', () => {
                 role: data.role,
                 total: data.total,
                 tools: data.tools.map((row: { name: string }) => row.name)
-            }).toEqual({ roleKind, role: roleKind, total: 47, tools: [...TOOL_NAMES] });
+            }).toEqual({ roleKind, role: roleKind, total: 51, tools: [...TOOL_NAMES] });
         }
     });
 
@@ -527,8 +593,14 @@ describe('the §8 catalogue', () => {
                     writes: contract.writes,
                     level: contract.level,
                     // §8 grants phase ①'s Reader confirmation explicitly (the row gives a Reader
-                    // `write` there, and this tool needs `verify`).
-                    ...(name === 'confirmFinding' ? { extra_kinds: ['reader'] } : {})
+                    // `write` there, and this tool needs `verify`). `structureSeed` names its one
+                    // kind in §7.1 even though the `seed_briefs` row already grants the Editor
+                    // `write`, so `describeTool` states the Editor-only surface out loud.
+                    ...(name === 'confirmFinding'
+                        ? { extra_kinds: ['reader'] }
+                        : name === 'structureSeed'
+                          ? { extra_kinds: ['editor'] }
+                          : {})
                 }
             });
             // The kind column, computed the way `listTools` reports it: one predicate, so the
@@ -549,7 +621,7 @@ describe('the §8 catalogue', () => {
         expect({ role: data.role, role_name: data.role_name, total: data.total, note: data.note }).toEqual({
             role: 'reader',
             role_name: 'reader_1',
-            total: 47,
+            total: 51,
             note: LIST_NOTE
         });
 
@@ -564,6 +636,7 @@ describe('the §8 catalogue', () => {
             allowed_for_editor: false,
             allowed_for_checker: false,
             allowed_for_reader: false,
+            allowed_for_researcher: false,
             allowed_for_this_role: false
         });
         // `updateDigest` is the row that proves presence and permission are separate questions
@@ -577,16 +650,19 @@ describe('the §8 catalogue', () => {
             allowed_for_editor: false,
             allowed_for_checker: false,
             allowed_for_reader: false,
+            allowed_for_researcher: false,
             allowed_for_this_role: false
         });
 
         // `kind` narrows to what that kind could actually call — how a run checks a handoff is
         // possible before it files the task (§7's column sums).
+        // The Phase-1 surface adds one read to every kind (`readKnowledge`), one Editor-only tool
+        // (`structureSeed`) and two Researcher-only tools no other kind may call.
         for (const [kind, total] of [
-            ['writer', 38],
-            ['editor', 35],
-            ['checker', 32],
-            ['reader', 33]
+            ['writer', 39],
+            ['editor', 37],
+            ['checker', 33],
+            ['reader', 34]
         ] as [RoleKind, number][]) {
             const filtered = await callAs(store, kind, 'listTools', { kind });
             const rows = (filtered.data as Record<string, any>).tools as Array<Record<string, unknown>>;
@@ -685,6 +761,8 @@ describe('the §8 catalogue', () => {
                     editor: 'write_verify',
                     checker: 'write',
                     reader: 'write',
+                    // §7.2: the Researcher reads findings and raises none (it does not judge prose).
+                    researcher: 'read',
                     rules: ['D-16', 'D-33', 'D-34', 'D-35'],
                     note: 'any kind may raise one; the Editor confirms, disputes or rewrites it; the Author approves'
                 }

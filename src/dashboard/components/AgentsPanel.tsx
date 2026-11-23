@@ -1,4 +1,4 @@
-// The GLOBAL EMPLOYEE ROSTER — Writer, Editor, Reader and Checker, in tile form.
+// The GLOBAL EMPLOYEE ROSTER — Writer, Editor, Reader, Checker and Researcher, in tile form.
 //
 // VOCABULARY (V-1): a tile is an EMPLOYEE, not an agent. The employee is the standing identity
 // (kind, rank, model) configured once and shared by every Story; it becomes an AGENT only while a
@@ -14,7 +14,7 @@
 // the centre (its Seed, phases and prose), never which employees exist or what the rest of the
 // book is doing to them.
 //
-// WHAT A TILE SAYS: the employee's RANK (all four are Rank A peers, R15 — rank alone delegates to
+// WHAT A TILE SAYS: the employee's RANK (all five are Rank A peers, R15 — rank alone delegates to
 // nobody between peers; V-2 restricts Work Items to Rank A and allows a Rank B employee only as a
 // delegation target), the MODEL it will ask for (U-8 / T-6b), and whether it is running right now.
 // The thread DETAIL deliberately does not live on this rail: a thread belongs to a Story's phase
@@ -37,8 +37,14 @@ import type { AgentStatusRow } from '../api';
  * The fixed render order: alphabetical by employee title. Writer is not first for any reason;
  * the Editor is the Author's channel, not an authority above its peers (R15), so the rail sorts
  * like any other roster.
+ *
+ * The Researcher is the fifth row of the phase-1 pipeline (documents/phase-1-research-pipeline.md
+ * §3.1: Rank A, writes only `knowledge`). It is listed here as well as coming from `GET /agents`
+ * because this list is also the placeholder set a first read renders — an employee missing from it
+ * would be DROPPED from the rail, not merely late, and the Author would never see the Researcher's
+ * tile on a Story whose roster has not answered yet.
  */
-const AGENT_ORDER = ['checker', 'editor', 'reader', 'writer'] as const;
+const AGENT_ORDER = ['checker', 'editor', 'reader', 'researcher', 'writer'] as const;
 
 const ordered = (agents: AgentStatusRow[]): AgentStatusRow[] => {
     const byKind = new Map(agents.map((agent) => [agent.kind, agent]));

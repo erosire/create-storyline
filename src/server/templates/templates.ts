@@ -20,7 +20,6 @@
 // Readers. `attempts`, `agents`, `max_concurrent` and the assignment below are the Author's
 // settings; the only structural rules are in `validateAssignment`.
 import {
-    DEFAULT_SUMMARY_SAMPLING,
     ROLE_KINDS,
     ROLE_AGGREGATIONS,
     STORY_PHASES,
@@ -58,7 +57,12 @@ function builtIn(
     };
 }
 
-/** The Writer row: web is universal (T-6b), so the flag records that the brief tells it to look things up. */
+/**
+ * The Writer row for a TOOL-USING Writer: web is universal (T-6b), so the flag records that the
+ * brief tells it to look things up. The no-tool summary sampler (`writer-summary-sampler`,
+ * `toolMode: 'none'`) declares its role literally instead — it holds no tools at all and its
+ * `web: false` is a statement about the run, not a preference.
+ */
 function writerRole(name: string, prompt: string): TemplateRole {
     return { name, kind: 'writer', web: true, prompt };
 }
@@ -77,38 +81,122 @@ function copyValue<T>(value: T): T {
 // ---------------------------------------------------------------------------
 
 /**
- * The built-in crews. Phase coverage per §6.2 (three loops, three template sets, L-4), one
- * Editor, four Reader angles (§14 item 10's recommendation: genre convention, plausibility
- * and fact, what this Author's readers complain about, mystery and pacing), and two checkers.
+ * The built-in crews. Phase 1 (`pipeline: 'research'`) is served by its own pipeline crews —
+ * the Seed-structuring Editor, the Researcher, the no-tool Summary sampler and the no-tool
+ * screening Reader — then phases ② and ③ by the plotline and chapter Writers, the selection
+ * Editor, the four deep-review Reader angles (§14 item 10's recommendation: genre convention,
+ * plausibility and fact, what this Author's readers complain about, mystery and pacing) and the
+ * two checkers.
  */
 export const BUILT_IN_TEMPLATES: Template[] = [
-    builtIn('writer-summary', {
-        title: 'Summary Writer',
+    builtIn('editor-seed-structure', {
+        title: 'Editor — Seed structure',
         description:
-            'Expands the Seed into the Phase 1 artifact (premise, promise, theme, tone, ending, world rules) and nothing else. Structural prose only — no chapter voice.',
+            'Reads the Seed once, validates it against the structural checklist, and derives the Seed Brief every later phase runs on. Never edits the Seed, never writes a story artifact.',
         roles: [
-            writerRole(
-                'writer',
-                'You are the Writer for phase ① of one Story: the only role that writes story artifacts, and right now the only thing you may write is the Summary.\n' +
-                    'Read the Seed with readSeed. It is Author truth and you never edit it, ever (P5, D-3b). Read the Goal (readGoals) so you know the bar, and read any Ideas the Readers have filed (readIdeas) — an Idea is an input to your draft, never an instruction you may treat as fact until an Editor has verified it (D-27).\n' +
-                    'Your job is ONE coherent expansion of the Seed into premise, promise, theme, tone, ending and world_rules. Write with editSummary — it is your only write in this phase (T-3c) — and never touch chapter_count: the Author declared it and a Writer that changes it has invented a fact (D-3b).\n' +
-                    'You are one of several Writers holding the same brief in parallel and you cannot see the others (L-16). Do not hedge toward a safe middle: commit to the framing you believe this Author would have chosen, and leave the choosing to the Editor (P13, D-3d).\n' +
-                    'Deliver everything central to the Seed (C-14) and contradict nothing in it. Make the tone sheet concrete — voice, POV, tense, register — because every later chapter is judged against what you write here (C-13), and a tone sheet nobody could check is a tone sheet nobody can tune.\n' +
-                    'Do not invent a fact to fill a gap: where the Seed is silent, choose what follows from what it says, and file a finding when the ambiguity is one the Author should settle rather than paper over. Never call updateDigest (the engine derives it, D-12a), never lock (D-1), and end the run with submitVerdict against C-14 and C-15, naming the evidence line for every criterion you fail.'
-            )
+            {
+                name: 'editor',
+                kind: 'editor',
+                // No web: structuring the Seed is a reading of the Author's own text, and nothing
+                // outside the book can settle what the Seed means.
+                web: false,
+                agents: 1,
+                prompt:
+                    'You are the Editor who structures the Seed. You read it once, you judge its shape, and you produce the Seed Brief every later phase runs on. You never edit the Seed and you never write a story artifact (P5, P10, L-19).\n' +
+                    'Read the Seed with readSeed. It is Author truth — read-only forever (P5) — and it is the only source of facts this run may use. Read the Goal (readGoals) so you know what Phase 1 will be judged against.\n' +
+                    'Validate the Seed for structure before you structure it: a protagonist, a want, an obstacle, stakes, a setting, the world rules the story holds to, and a promise the book makes to the reader. Those are the fields the Seed Brief carries. A field the Seed states, the brief restates; a field the Seed leaves silent goes to open_questions — never to a filled-in blank.\n' +
+                    'Call structureSeed ONCE with the structured brief. The brief is a DERIVED projection of the Seed: the raw Seed is never edited, by you or by any later phase, and the brief is the projection the samplers and the Researcher read (P5, D-3b). Pass the Seed\u2019s current hash in seed_hash — structureSeed refuses a brief derived from a Seed that has moved, and a stale brief is worse than none.\n' +
+                    'Where the Seed is silent, put the gap in open_questions and NEVER invent a fact to close it. A protagonist name the Seed never gives, a technology it never mentions, a rule its world never states: each one is a decision the Author did not make, and the pipeline would then build a whole book on a guess. An open question is a legitimate answer; a filled-in blank is not.\n' +
+                    'Call requestAuthor only when the Seed contradicts itself in a way no reading can settle — two mutually exclusive settings, a protagonist who is two different people, a promise its stated ending cannot pay. If a reading exists that makes the Seed coherent, take that reading and record the ambiguity in open_questions: a contradiction you can read around is not a decision you may take from the Author (P7, D-25).\n' +
+                    'Do not write any story artifact (P10) — no Summary, no plotline, no chapter, no Idea — and never call updateDigest (the engine derives it, D-12a). Your only write is structureSeed.\n' +
+                    'End the run as soon as structureSeed reports. Silence after a successful write is the correct ending; a second structureSeed, a Summary draft, or a self-review of what you just wrote is a failed run.'
+            }
         ],
         serves_phase: ['summary'],
-        // §14 item 9: the Summary is the shortest artifact and the most-read one, so Phase 1
-        // gets MORE divergence than a chapter, not less. The standard sample is five Writer
-        // expansions; the Author overrides it per Story (`summary_sampling`).
-        attempts: DEFAULT_SUMMARY_SAMPLING,
-        delegation: ['checker'],
+        attempts: 1,
+        delegation: [],
         done_definition:
-            'The Summary carries premise, promise, theme, tone and ending written from the Seed, chapter_count is untouched, C-14 passes against the Seed with a cited evidence line, and a verdict is filed.',
-        escalation_rule:
-            'requestAuthor when the Seed is ambiguous in a way no further reading can settle, or when the Summary would have to contradict the Seed to satisfy a criterion (P7). Never lock, unlock or backtrack (D-1).',
-        next_phase: 'plotlines',
+            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present.',
+        escalation_rule: 'requestAuthor when the Seed is internally contradictory; never edit the Seed.',
+        next_phase: '',
+        max_concurrent: 1,
+        // D-17c requires selection_rules on every Editor template. This Editor chooses no draft,
+        // so the rules state the structuring checklist the Seed is measured against rather than a
+        // taste in prose — the Author can tighten the checklist from the same U-8 card.
+        selection_rules:
+            'THE STRUCTURING CHECKLIST — these are the rules for reading a Seed faithfully, not a taste in drafts. The pipeline applies them; the Author can make them stricter.\n' +
+            '1. Every field of the brief is a reading of the Seed, never an addition to it: a sentence the Seed cannot support is a fact you invented (P5).\n' +
+            '2. The brief carries protagonist, want, obstacle, stakes, setting, world_rules and promise. A field the Seed leaves silent goes to open_questions — it is not filled in.\n' +
+            '3. world_rules and constraints restate or quote the Seed. A rule inferred from genre convention is a guess about this Author\u2019s world and belongs in open_questions.\n' +
+            '4. logline is the Seed\u2019s own premise in one sentence: shorter than the Seed and losing nothing the Seed actually says.\n' +
+            '5. A contradiction the Seed states against itself is the only reason to stop and requestAuthor; name both sides in open_questions so the Author sees what the brief could not settle.'
+    }),
+
+    builtIn('researcher-story', {
+        title: 'Researcher — Story knowledge',
+        description:
+            'Researches the period, place, technology, people and facts the Story depends on, and writes one sourced Knowledge entry per claim. Reads everything, writes only Knowledge, never the book.',
+        roles: [
+            {
+                name: 'researcher',
+                kind: 'researcher',
+                // T-6b: the flag is an instruction hint, and this role's whole product is a
+                // sourced fact — so the brief tells it to browse and cite.
+                web: true,
+                agents: 1,
+                prompt:
+                    'You are the Researcher: the only role that writes Knowledge, and a role that never writes the book (P10, §7.2). Your product is sourced fact the Writer and the samplers can build on, and every entry is a claim an Editor will hold you to.\n' +
+                    'Read first, research second. The accepted Seed Brief is in your brief — or, when no brief exists yet, read the Seed itself with readSeed (P5: read-only forever). Read what the phase needs: the setting, the period, the promise the Summary has to deliver. Then read what is already there with readKnowledge before you write anything: a topic that is already covered is updated or strengthened, never duplicated — the fingerprint dedupe exists to make the repeat cheap and the source fresher (D-16).\n' +
+                    'Research the period, the place, the technology, the people and the facts the story depends on. The year a scene is set in decides what a character can hold; the harbour decides what the weather does; the trade decides who has money and who does not. Use searchWeb for leads, then fetchPage the one source you will cite — a snippet is not evidence, and a page cited for a claim it does not make is a defect the Editor will refute (T-10).\n' +
+                    'Write ONE writeKnowledge per claim, with topic (the subject key), kind (fact, world_rule, tech, period, place, person, other), claim (one sentence that could be checked), detail (what a writer needs to know about it), importance that MEANS something, and why (T-4, T-11). Only critical and high reach the sampling prompt (§5), so inflating importance spends the sampler\u2019s attention and deflating it loses the fact: critical is the world breaks if a chapter ignores it, high is a reader would notice, normal and low are useful colour but never load-bearing.\n' +
+                    'Every entry carries sources[] with url_or_title, the specific claim the source supports, and accessed_at (T-10, E-0c). One source you have actually read beats five you have not, and a critical or high entry with no source is an opinion wearing the word fact.\n' +
+                    'When research cannot settle something, say so in the entry\u2019s detail — the uncertainty is useful, and the Writer is entitled to know the gap exists. Do not guess to look complete and do not quietly drop the gap.\n' +
+                    'You never write a story artifact (P10): no Summary, no plotline, no chapter, no Idea, and no finding about prose. A fact you cannot establish is a research task (createTask) or an entry whose detail names the uncertainty (D-11).'
+            }
+        ],
+        serves_phase: ALL_PHASES,
+        attempts: 1,
+        delegation: [],
+        done_definition:
+            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one.',
+        // P7: the Researcher stops the loop for exactly one reason — a fact the premise rests on
+        // that cannot be established from here. Everything else is an entry that states its doubt.
+        escalation_rule: 'requestAuthor only when the Story\u2019s premise depends on a fact that cannot be verified from here.',
+        next_phase: '',
         max_concurrent: 1
+    }),
+
+    builtIn('writer-summary-sampler', {
+        title: 'Summary Writer (sampler)',
+        description:
+            'One turn, no tools: answers the compiled Phase 1 prompt with a single SummarySample JSON object. One of N independent samples; a deterministic selector picks the winner.',
+        roles: [
+            {
+                name: 'writer',
+                kind: 'writer',
+                // toolMode: 'none' in the dispatch (§6.2): the sampler holds no tools at all, so
+                // the web flag is off and the prompt is the entire context.
+                web: false,
+                agents: 1,
+                prompt:
+                    'You are the Writer for phase ① in sampling mode. You have NO tools in this run and exactly one turn: answer with ONE JSON object matching the SummarySample schema — premise, promise, theme, tone, ending, world_rules, knowledge_used — and nothing else (no prose frame, no tool call, no question back).\n' +
+                    'Everything you need is already in this prompt: the structured Seed Brief and the critical/high Knowledge. Do not ask for more; a sampler that waits for a better brief produces no sample at all.\n' +
+                    'The Seed Brief is the contract. Deliver everything central to the Seed (C-14) and contradict nothing in it: the premise, the promise and the ending you write must be readings of what the brief actually says. The Seed itself is Author truth and is never edited (P5), so a conflict you cannot resolve inside the brief is a claim you must not make.\n' +
+                    'Do not invent a fact the Knowledge does not support. Where the Seed Brief is silent, choose what follows from what it says — an implication is legitimate, a new setting rule or technology is not. The world_rules you write are rules later chapters will be judged against, so every one of them has to be either the brief\u2019s own or a direct consequence of it.\n' +
+                    'Make the tone sheet concrete: voice, point of view, tense, register. Every later chapter is judged against what you write here (C-13), and a tone sheet nobody could check is one nobody can tune.\n' +
+                    'Never touch chapter_count (D-3b). It is Author truth, the engine writes it once, and it is not in your output — a sample that reasons about chapter counts has invented a fact.\n' +
+                    'You are one of N independent samples and you cannot see the others (L-16). Commit to the framing this Author would have chosen; do not hedge toward a safe middle, and do not try to satisfy every possible reader. The selector decides between committed alternatives — averaging them away gives it nothing to choose.\n' +
+                    'List the fingerprints of the Knowledge entries you leaned on in knowledge_used. The list is the audit of which research reached the draft, and an omitted fingerprint is a source claim you cannot prove.'
+            }
+        ],
+        serves_phase: ['summary'],
+        attempts: 1,
+        delegation: [],
+        done_definition: 'A schema-valid SummarySample delivered in one turn with no tool calls.',
+        // No escalation_rule: a tool-less, one-turn run has no tool that could escalate. A sample
+        // that cannot be written is a failed sample, scored and discarded by the selector (§6.5).
+        next_phase: '',
+        max_concurrent: 6
     }),
 
     builtIn('writer-plotlines', {
@@ -208,6 +296,38 @@ export const BUILT_IN_TEMPLATES: Template[] = [
             '7. Match the tone sheet\u2019s voice, POV, tense and register exactly; where two drafts both match, choose the one that changes more (C-13).\n' +
             '8. Merge only when one draft\u2019s structure and another\u2019s lines fit without a seam. If you would have to write a sentence to close the seam, select instead and let the Writer write it (L-19).\n' +
             '9. When your agents split, name the split in the selection_note rather than averaging it away (D-38).'
+    }),
+
+    builtIn('reader-screening', {
+        title: 'Reader (screening)',
+        description:
+            'One turn, no tools: answers a sample with an IssueList of critical and high defects only. Its issues rank the round\u2019s samples and seed the deep review; they are not findings and cannot block a Writer.',
+        roles: [
+            {
+                name: 'reader',
+                kind: 'reader',
+                // toolMode: 'none' in the screening dispatch (§6.4 step 4): one turn, one JSON
+                // answer, no tool calls — so the prompt carries every rule the schema cannot.
+                web: false,
+                agents: 1,
+                prompt:
+                    'You are the screening Reader for phase ①. You have NO tools in this run and exactly one turn: answer with ONE JSON object matching the IssueList schema — an issues array and nothing else (no prose frame, no tool call, no question back).\n' +
+                    'Report ONLY critical and high problems. The schema closes severity at those two words, so a minor note or a taste preference is not a thinner issue — it is an invalid answer, and the sample then ranks on a review nobody can use (T-11).\n' +
+                    'A critical is a contradiction: the draft asserts something the Seed Brief contradicts, or something a critical Knowledge entry contradicts. A high is a promised element the draft fails to deliver — a promise the Seed Brief makes that the premise, ending or world_rules never pay.\n' +
+                    'Quote the offending field verbatim in quote, and name the field it came from in location. A quotation that is not in the draft is a defect you invented; a location that does not name a field gives the selector nothing to weigh.\n' +
+                    'Cite the criterion in criterion: C-14 when the draft fails to deliver what the Seed makes central, C-15 when it contradicts a cited claim, or seed for a direct breach of the Seed Brief\u2019s contract.\n' +
+                    'Return {"issues":[]} when the draft holds. An empty list is a legitimate and common answer: inventing a critical to look rigorous makes this sample lose a comparison it should have won (§6.5).\n' +
+                    'Do not propose improvements, only defects: no fix_hint unless the fix is implied by the defect itself, no rewritten lines, no suggestions for what the draft should have said. The selector reads your counts, the deep review reads your issues, and neither of them needs your version of the Summary.'
+            }
+        ],
+        serves_phase: ['summary'],
+        attempts: 1,
+        delegation: [],
+        done_definition: 'A schema-valid IssueList delivered in one turn with no tool calls.',
+        // No escalation_rule: a tool-less one-turn run cannot escalate, and an unreadable sample is
+        // an invalid review the selector refuses rather than a question for the Author (§6.5).
+        next_phase: '',
+        max_concurrent: 6
     }),
 
     builtIn('reader-genre', {
@@ -396,20 +516,42 @@ export const BUILT_IN_TEMPLATES: Template[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * The assignment a new Story starts with: one Writer per phase (the loop picks the one whose
- * `serves_phase` matches — D-17b), the Editor that every finding-verification and selection
- * path depends on (T-0, D-33), all four Reader angles (§14 item 10), and the consistency
- * checker.
+ * The assignment a new Story starts with: phase ①'s research-pipeline set (structure, research,
+ * sample, screen — `editor-seed-structure` → `researcher-story` → `writer-summary-sampler` →
+ * `reader-screening`, §6.4), followed by the phase ②/③ Writers (`writer-plotlines`,
+ * `writer-chapters` — the redesign replaces only Phase 1's writer, not the tool-using writers of
+ * the later phases), the Editor that every finding-verification and selection path depends on
+ * (T-0, D-33), all four deep-review Reader angles (§14 item 10), and the consistency checker.
+ *
+ * THE ORDER OF THE TWO EDITORS IS LOAD-BEARING. A job that does not name its template binds the
+ * FIRST assigned template of its role kind (`records.ts:templatesFor` → `work.ts:candidate`), and
+ * that is how the unbound Editor jobs — `verify_findings`, `verify_ideas`, `directive_work`,
+ * `select` — resolve their crew. `editor-general` is the crew those jobs are written for, so it
+ * must precede `editor-seed-structure`; the structuring pass is unaffected because
+ * `work.ts:phase1PipelineCandidates` binds `templateRef: 'editor-seed-structure'` explicitly.
+ * Putting the Seed structurer first made every phase-① verification run on the structuring prompt
+ * (the integration harness had to sniff the brief's artifact heading to work around it).
+ *
+ * The per-phase writer pools stay unambiguous because each Writer's `serves_phase` names exactly
+ * one phase: a phase-② job's pool contains only `writer-plotlines`, a phase-③ job's only
+ * `writer-chapters`, and a phase-① job's only `writer-summary-sampler` (D-17b's `serves_phase`
+ * match, L-4).
  *
  * `checker-prose` is deliberately NOT in it: C-12 is soft and C-13 is the criterion the
  * Author is expected to tune by hand, so the prose crew is an opt-in rather than a default
- * voice in every chapter pass (U-8 assigns it).
+ * voice in every chapter pass (U-8 assigns it). `writer-summary` no longer exists: the Sampler
+ * is the only Phase-1 Writer — the old tool-writing Summary Writer was replaced by the
+ * sample → screen → select pipeline.
  */
 export const DEFAULT_ASSIGNMENT: string[] = [
-    'writer-summary',
+    // The general Editor FIRST: it is the pool pick for every unbound Editor job (see above).
+    'editor-general',
+    'editor-seed-structure',
+    'researcher-story',
+    'writer-summary-sampler',
+    'reader-screening',
     'writer-plotlines',
     'writer-chapters',
-    'editor-general',
     'reader-genre',
     'reader-plausibility',
     'reader-audience',

@@ -51,7 +51,57 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
         seedFinding(world.store, storyId, { target_ref: chapter.id });
         seedTask(world.store, storyId);
         seedIdea(world.store, storyId);
-        seedRevision(world.store, storyId, chapter.id, 'a competing draft', 'run_1');
+        const draft = seedRevision(world.store, storyId, chapter.id, 'a competing draft', 'run_1');
+
+        // Phase ①'s three research collections are story-scoped too (T12/A): one accepted Seed
+        // Brief, one sourced Knowledge entry and one screening review of the draft above. A delete
+        // that leaves any of them behind orphans rows naming a Story the store no longer holds.
+        const brief = world.store.seedBriefs.create(
+            {
+                story_id: storyId,
+                seed_hash: 'seed-fnv-1',
+                logline: 'a mapmaker finds her coastline redrawn',
+                protagonist: 'Maren',
+                want: 'the true chart',
+                obstacle: 'a reservoir',
+                stakes: 'her name on the map',
+                setting: 'the valley',
+                world_rules: ['the Seed is law (P5)'],
+                promise: 'the book pays the promise the Seed makes',
+                constraints: [],
+                open_questions: [],
+                status: 'accepted'
+            },
+            { run_ref: null, why: 'seed a Seed Brief the delete must remove (T12/A)' }
+        );
+        const fact = world.store.knowledge.create(
+            {
+                story_id: storyId,
+                kind: 'place',
+                topic: 'the valley',
+                claim: 'the reservoir drowned the 1911 shoreline',
+                importance: 'critical',
+                sources: [
+                    { url_or_title: 'the survey', claim: 'it charts the old shoreline', accessed_at: '2026-11-22T00:00:00.000Z' }
+                ],
+                fingerprint: 'knowledge|valley|reservoir',
+                seen_count: 1,
+                author: 'researcher'
+            },
+            { run_ref: null, why: 'seed a Knowledge entry the delete must remove (T12/A)' }
+        );
+        const review = world.store.sampleReviews.create(
+            {
+                story_id: storyId,
+                revision_ref: draft.id,
+                reader: 'reader',
+                issues: [],
+                valid: true
+            },
+            { run_ref: null, why: 'seed a screening review the delete must remove (T12/A)' }
+        );
+
+        expect([brief.story_id, fact.story_id, review.story_id]).toEqual([storyId, storyId, storyId]);
 
         world.store.runs.create(
             {
@@ -71,7 +121,8 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
 
         // The knowledge directory materialises on read; the harness exists once a Story dispatches.
         expect((await call(world.app, 'GET', `/stories/${storyId}/knowledge`)).status).toBe(200);
-        expect(world.knowledge.tree(storyId)?.sections).toHaveLength(8);
+        // Nine folders: the eight §4 surfaces plus phase ①'s research mirror (§3.2/§10).
+        expect(world.knowledge.tree(storyId)?.sections).toHaveLength(9);
 
         world.executor.harness.forStory(storyId);
         expect(world.executor.harness.has(storyId)).toBe(true);
@@ -89,6 +140,12 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
         expect(world.store.revisions.list().filter((row) => row.story_id === storyId)).toEqual([]);
         expect(world.store.runs.list().filter((row) => row.story_id === storyId)).toEqual([]);
         expect(world.store.goals.list().filter((row) => row.story_id === storyId)).toEqual([]);
+
+        // T12/A — the three phase-① research collections go in the SAME commit (P1). Each assertion
+        // is "no row names this Story", which is the orphan the defect produced.
+        expect(world.store.seedBriefs.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.knowledge.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.sampleReviews.list().filter((row) => row.story_id === storyId)).toEqual([]);
 
         // The projection outside §4 and the harness are gone with the Story.
         expect(world.knowledge.tree(storyId)).toBeNull();

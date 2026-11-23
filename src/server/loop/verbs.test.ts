@@ -54,10 +54,14 @@ describe('D-31 / D-25 — opening a lock scraps the work above it', () => {
             plotlines_locked: true,
             chapters: 2,
             plotlines: 2,
-            revisions: 2,
-            // 15 unit/story verdicts + 4 filed against a competing DRAFT (§6.2a/D-21: the Checker judges
-            // one draft per run, so each chapter's selected draft carries its own verdict row).
-            verdicts: 19
+            // Phase ①'s selected Summary revision and one selected revision per chapter: `revisions`
+            // counts every unit kind, and the research pipeline leaves its winner as a row.
+            revisions: 3,
+            // 16 unit/story verdicts (phase ①'s deep-review Reader rates the selected Summary
+            // revision, which is one more than the classic walk left) + 4 filed against a competing
+            // DRAFT (§6.2a/D-21: the Checker judges one draft per run, so each chapter's selected
+            // draft carries its own verdict row).
+            verdicts: 20
         });
 
         await rig.engine.backtrack(rig.storyId, 'plotlines');
@@ -74,10 +78,10 @@ describe('D-31 / D-25 — opening a lock scraps the work above it', () => {
             // The drafts and the verdicts about them are gone: they were built on the plotlines the
             // Author is about to change (D-31's "scraps every later artifact, keeps the provenance").
             revisions: 0,
-            // 4 of the 19 go with the drafts they judged: they are `target_kind: 'chapter'` rows, and the
+            // 4 of the 20 go with the drafts they judged: they are `target_kind: 'chapter'` rows, and the
             // backtrack sweep deletes every per-chapter verdict (L-31 / invalidation.ts:342). Deltas only:
             // whether verdicts are provenance that survives (D-25/D-22) or scrap is unsettled upstream.
-            verdicts: 15
+            verdicts: 16
         });
         // Nothing is left queued for artifacts that no longer exist.
         expect(rig.store.tasks.list()).toEqual([]);
@@ -111,9 +115,9 @@ describe('D-31 / D-25 — opening a lock scraps the work above it', () => {
             chapters: 0,
             plotlines: 0,
             revisions: 0,
-            // Same 15 that survive the plotline backtrack above: per-chapter verdicts go (L-31), the
+            // Same 16 that survive the plotline backtrack above: per-chapter verdicts go (L-31), the
             // summary-level rows stay because phase ①'s artifact is rewritten, not deleted (D-25a).
-            verdicts: 15,
+            verdicts: 16,
             idea: 'A cartographer burns every map she draws.',
             // The Summary draft is cleared rather than deleted: the crew rewrites it from the new Seed.
             premise: ''
@@ -539,9 +543,14 @@ describe('G-1 / D-17b — the Goal, the per-chapter bar, and the crew assignment
         const rig = await atChapters(1);
 
         // Every phase needs its own Writer (L-4's three loops, three template sets), and the catalogue's
-        // built-ins are the only templates in this store.
+        // built-ins are the only templates in this store. The phase-① crew is the research pipeline's
+        // four (`editor-seed-structure` → `researcher-story` → `writer-summary-sampler` →
+        // `reader-screening`); `writer-summary` no longer exists.
         const crew = [
-            'writer-summary',
+            'editor-seed-structure',
+            'researcher-story',
+            'writer-summary-sampler',
+            'reader-screening',
             'writer-plotlines',
             'writer-chapters',
             'editor-general',

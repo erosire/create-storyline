@@ -65,10 +65,30 @@ describe('agent models — the global roster (U-8, T-6b)', () => {
         expect(agentModelChoices(store)).toEqual({ reader: 'reader-model' });
     });
 
-    it('knows the four kinds and refuses a fifth at the boundary', () => {
-        expect(['writer', 'editor', 'reader', 'checker'].every(isAgentKind)).toBe(true);
+    it('knows all five employee kinds and refuses an unknown one at the boundary', () => {
+        // `researcher` is the Phase-1 pipeline's fifth employee (§3.1); the list it is known by is
+        // `ROLE_KINDS`, so the boundary test and the model-choice map cannot drift apart.
+        expect(['writer', 'editor', 'reader', 'checker', 'researcher'].every(isAgentKind)).toBe(true);
         expect(isAgentKind('explorer')).toBe(false);
         expect(isAgentKind('')).toBe(false);
+    });
+
+    it('resolves a model for the Researcher through the same precedence as the other four (U-8, T-6b)', () => {
+        const store = Store.empty();
+
+        // Template role model first, when the roster has no choice for the researcher.
+        expect(runModelFor(store, 'gpt-5', 'researcher', 'research-role-model')).toBe('research-role-model');
+        expect(runModelFor(store, 'gpt-5', 'researcher')).toBe('gpt-5');
+
+        // The Author's explicit roster choice wins over the role, and clearing it restores the role.
+        setAgentModel(store, 'researcher', 'research-agent-model');
+
+        expect(agentModelFor(store, 'gpt-5', 'researcher')).toEqual({ model: 'research-agent-model', source: 'agent' });
+        expect(runModelFor(store, 'gpt-5', 'researcher', 'research-role-model')).toBe('research-agent-model');
+
+        setAgentModel(store, 'researcher', null);
+
+        expect(runModelFor(store, 'gpt-5', 'researcher', 'research-role-model')).toBe('research-role-model');
     });
 
     it('survives a restart, and a cleared choice comes back as the process default', async () => {

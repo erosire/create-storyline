@@ -25,6 +25,10 @@ import {
     undecidedIdeas,
     verdictsFor
 } from '../loop/records';
+// §6.4 gate 1's read: "the accepted brief" has exactly one definition in the build — the prompt
+// compiler's deterministic pick (`created_at` then id) — so the Story view reuses it rather than
+// opening a second interpretation of "accepted" that could disagree with what a Writer is told.
+import { acceptedSeedBrief } from '../run/phase1-prompt';
 import type {
     AgentThreadRecord,
     CompletionPreview,
@@ -32,6 +36,9 @@ import type {
     FailingCriterion,
     GoalSurface,
     QueueItem,
+    SamplingHistoryRow,
+    SamplingView,
+    SeedBriefView,
     StoryLevels,
     StoryRow,
     StoryView
@@ -337,6 +344,88 @@ function viewRevisions(store: Store, story: Story): Revision[] {
 }
 
 // ---------------------------------------------------------------------------
+// §10 / §3.3 — phase ①'s Seed Brief and sampling state (the research pipeline's two slices)
+// ---------------------------------------------------------------------------
+
+/** How many completed sampling rounds the view carries (§10: the last five, newest first). */
+const SAMPLING_HISTORY_CAP = 5;
+
+/**
+ * §10 / §3.3 — the ACCEPTED Seed Brief, trimmed to the fields the Story view reads. `null` is the
+ * honest answer before phase ①'s gate 1 (§6.4): a Story whose Editor has not structured the Seed
+ * genuinely has no brief, and the pane must say so rather than render an empty object.
+ *
+ * The arrays (`world_rules`, `constraints`, `open_questions`) and `tone_hints` stay in the record:
+ * they are the prompt compiler's material, not a reading surface, and copying them here would put
+ * two renderings of the same brief on the wire.
+ */
+function seedBriefView(store: Store, story: Story): SeedBriefView | null {
+    const brief = acceptedSeedBrief(store, story.id);
+
+    if (brief === undefined) return null;
+
+    return {
+        id: brief.id,
+        seed_hash: brief.seed_hash,
+        logline: brief.logline,
+        protagonist: brief.protagonist,
+        want: brief.want,
+        obstacle: brief.obstacle,
+        stakes: brief.stakes,
+        setting: brief.setting,
+        promise: brief.promise,
+        status: brief.status
+    };
+}
+
+/**
+ * §10 / §6.5-§6.6 — phase ①'s sampling state for the Story view.
+ *
+ * `round` is `sampling_round ?? 1` — the last COMPLETED round (the loop's own read of the in-flight
+ * round is `sampling_round + 1`, records.ts:samplingRoundOf; §10 asks for the round the view reports,
+ * so a Story that has never sampled says 1, never absent). A backtrack or a Seed edit resets the
+ * counter to 0 (engine.ts's `scrapPhasesAfter` branches) so the reopened phase samples round 1; the
+ * view reports that stored 0 as-is rather than re-deriving the in-flight round a second time.
+ *
+ * `selected` is read off the NEWEST history row rather than the live `revisions` rows: the selection
+ * commit hard-deletes the losers (P13/D-22) and bumps `sampling_round`, so the history line is the
+ * only record that couples the winning id to the counts that won it. A row whose `selected` id is not
+ * among its own samples is a malformed snapshot, and the projection states the absence instead of
+ * inventing counts.
+ *
+ * `history` is capped at the last five rows, NEWEST FIRST: the selection commit appends, so a Story
+ * that has refined many rounds keeps its recent provenance (the older rounds stay in the book).
+ */
+function samplingView(story: Story): SamplingView {
+    const history: SamplingHistoryRow[] = [...(story.sampling_history ?? [])]
+        .sort((left, right) => left.round - right.round)
+        .slice(-SAMPLING_HISTORY_CAP)
+        .reverse()
+        .map((row) => ({
+            round: row.round,
+            at: row.at,
+            samples: row.samples.map((sample) => ({
+                revision_id: sample.revision_id,
+                critical: sample.critical,
+                high: sample.high,
+                valid: sample.valid
+            })),
+            selected: row.selected
+        }));
+
+    const latest = history[0];
+    const chosen = latest?.samples.find((sample) => sample.revision_id === latest.selected);
+
+    return {
+        round: (story as LoopStory).sampling_round ?? 1,
+        ...(chosen === undefined
+            ? {}
+            : { selected: { revision_id: chosen.revision_id, critical: chosen.critical, high: chosen.high } }),
+        history
+    };
+}
+
+// ---------------------------------------------------------------------------
 // §10.2 U-4…U-17 — the whole Story view (one round trip, W9)
 // ---------------------------------------------------------------------------
 
@@ -381,7 +470,12 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
         // (`level_history`, written by `recordRound` in ../loop/trend.ts), not a §4.1 field — so it is
         // projected as its own slice instead of relying on the row's additive fields surviving a
         // serialisation. Bounded by the loop's own cap (L-15a), oldest first, exactly as stored.
-        level_history: levelHistoryOf(story)
+        level_history: levelHistoryOf(story),
+        // §10 — the research pipeline's two slices, both ADDITIVE (§4's preamble: a build may add
+        // fields). `seed_brief` is null before gate 1; `sampling` always answers with a round so the
+        // pane never has to decide what "no sampling yet" looks like.
+        seed_brief: seedBriefView(store, story),
+        sampling: samplingView(story)
     };
 }
 
@@ -592,7 +686,16 @@ export interface FeedEvent {
     storyId?: string;
 }
 
-/** Collections whose rows the STORY region renders, so a write there is a `story` event. */
+/**
+ * Collections whose rows the STORY region renders, so a write there is a `story` event.
+ *
+ * The last three are the research pipeline's (§3.2-§3.4): the Story view now carries the accepted
+ * Seed Brief and the sampling line, and the knowledge pane renders the `knowledge` rows through the
+ * directory. A write to any of them must refresh the region the way a Summary write does — a
+ * Researcher whose entries never appear until the next unrelated commit is a stale reading surface.
+ * `sample_reviews` travels with them because the round's screening counts are what the revision
+ * comparison shows (§10); the projection reads them through `revisions.issue_counts`.
+ */
 const STORY_COLLECTIONS: string[] = [
     'stories',
     'summaries',
@@ -605,7 +708,10 @@ const STORY_COLLECTIONS: string[] = [
     'verdicts',
     'proposals',
     'cast',
-    'ledger'
+    'ledger',
+    'seed_briefs',
+    'knowledge',
+    'sample_reviews'
 ];
 
 /** Collections the CREW panel reads. */

@@ -2,9 +2,10 @@
  * §7 as data: the permission table, the guards the matrix cannot express as a level, and the
  * refusal wording (§12 W2, T-1, T-1a).
  *
- * §7's columns are Author | Assistant | **Writer** | **Editor** | Checker/**Reader**. The Author
- * and the Assistant are not dispatched kinds, so this file pins the four columns the tool layer
- * enforces — cell for cell, in §7's row order — and then the rules the table cannot say as a
+ * §7's columns are Author | Assistant | **Writer** | **Editor** | Checker/**Reader**, and
+ * `documents/phase-1-research-pipeline.md` §7.2 appends a **Researcher** column. The Author and
+ * the Assistant are not dispatched kinds, so this file pins the five columns the tool layer
+ * enforces — cell for cell, in §7's row order, with the three Phase-1 rows appended — and then the rules the table cannot say as a
  * level: the two lock flags (P5, T-3c, L-7), the Author's spans (P9, T-2), the engine-owned state
  * fields (D-1), and the derived Digest (D-12a). T-1a demands the refusal be a teaching message, so
  * the rendered message and its `fix` are pinned as exact strings: an agent that reads "route the
@@ -47,32 +48,56 @@ import type { PermissionLevel, ToolDefinition, ToolExecutionContext } from './ty
  *    run and produce one answer", never a dispatched Work Item).
  */
 const SPEC_PERMISSION_MATRIX: Array<
-    [string, string, PermissionLevel, PermissionLevel, PermissionLevel, PermissionLevel]
+    [
+        string,
+        string,
+        PermissionLevel,
+        PermissionLevel,
+        PermissionLevel,
+        PermissionLevel,
+        PermissionLevel
+    ]
 > = [
-    ['stories.idea (the Seed)', 'stories', 'read', 'read', 'read', 'read'],
-    ['summaries (prose)', 'summaries', 'write', 'read', 'read', 'read'],
-    ['summaries.chapter_count', 'summaries', 'read', 'read', 'read', 'read'],
-    ['ideas', 'ideas', 'read', 'verify', 'write', 'write'],
-    ['plotlines', 'plotlines', 'write', 'read', 'read', 'read'],
-    ['chapters.content (agent-written)', 'chapters', 'write', 'read', 'read', 'read'],
-    ['chapters.content (Author-written span)', 'chapters', 'propose', 'read', 'read', 'read'],
-    ['chapters.title/summary', 'chapters', 'write', 'read', 'read', 'read'],
-    ['revisions', 'revisions', 'write', 'write', 'read', 'read'],
-    ['cast', 'cast', 'write', 'read', 'read', 'read'],
-    ['ledger', 'ledger', 'write', 'read', 'read', 'read'],
-    ['digests', 'digests', 'read', 'read', 'read', 'read'],
-    ['tasks', 'tasks', 'write', 'write', 'write', 'write'],
-    ['verdicts', 'verdicts', 'write', 'write_verify', 'write', 'write'],
-    ['findings', 'findings', 'write', 'write_verify', 'write', 'write'],
-    ['selection_notes', 'revisions', 'read', 'write', 'read', 'read'],
-    ['goals, criteria', 'goals', 'read', 'read', 'read', 'read'],
-    ['stories.phase, stories.status, *.state', 'stories', 'read', 'recommend', 'read', 'read'],
-    ['stories.summary_locked, stories.plotlines_locked, backtrack', 'stories', 'read', 'read', 'read', 'read'],
-    ['templates, recipes', 'templates', 'read', 'read', 'read', 'read'],
-    ['directives', 'directives', 'read', 'read', 'read', 'read'],
-    ['proposals', 'proposals', 'write', 'write', 'write', 'write'],
-    ['sub_agent_runs', 'runs', 'recommend', 'recommend', 'recommend', 'recommend'],
-    ['runs', 'runs', 'read', 'read', 'read', 'read']
+    ['stories.idea (the Seed)', 'stories', 'read', 'read', 'read', 'read', 'read'],
+    ['summaries (prose)', 'summaries', 'write', 'read', 'read', 'read', 'read'],
+    ['summaries.chapter_count', 'summaries', 'read', 'read', 'read', 'read', 'read'],
+    ['ideas', 'ideas', 'read', 'verify', 'write', 'write', 'read'],
+    ['plotlines', 'plotlines', 'write', 'read', 'read', 'read', 'read'],
+    ['chapters.content (agent-written)', 'chapters', 'write', 'read', 'read', 'read', 'read'],
+    ['chapters.content (Author-written span)', 'chapters', 'propose', 'read', 'read', 'read', 'read'],
+    ['chapters.title/summary', 'chapters', 'write', 'read', 'read', 'read', 'read'],
+    ['revisions', 'revisions', 'write', 'write', 'read', 'read', 'read'],
+    ['cast', 'cast', 'write', 'read', 'read', 'read', 'read'],
+    ['ledger', 'ledger', 'write', 'read', 'read', 'read', 'read'],
+    ['digests', 'digests', 'read', 'read', 'read', 'read', 'read'],
+    ['tasks', 'tasks', 'write', 'write', 'write', 'write', 'write'],
+    ['verdicts', 'verdicts', 'write', 'write_verify', 'write', 'write', 'read'],
+    ['findings', 'findings', 'write', 'write_verify', 'write', 'write', 'read'],
+    ['selection_notes', 'revisions', 'read', 'write', 'read', 'read', 'read'],
+    ['goals, criteria', 'goals', 'read', 'read', 'read', 'read', 'read'],
+    ['stories.phase, stories.status, *.state', 'stories', 'read', 'recommend', 'read', 'read', 'read'],
+    [
+        'stories.summary_locked, stories.plotlines_locked, backtrack',
+        'stories',
+        'read',
+        'read',
+        'read',
+        'read',
+        'read'
+    ],
+    ['templates, recipes', 'templates', 'read', 'read', 'read', 'read', 'read'],
+    ['directives', 'directives', 'read', 'read', 'read', 'read', 'read'],
+    // T12/F2: the Researcher writes `knowledge` and `tasks` only, so its proposals cell is `read` —
+    // it is not the Checker's `write` any more (documents/phase-1-research-pipeline.md §7.2).
+    ['proposals', 'proposals', 'write', 'write', 'write', 'write', 'read'],
+    ['sub_agent_runs', 'runs', 'recommend', 'recommend', 'recommend', 'recommend', 'recommend'],
+    ['runs', 'runs', 'read', 'read', 'read', 'read', 'read'],
+    // documents/phase-1-research-pipeline.md §7.2's three new cells, appended in the order the
+    // production table appends them (the first row for a collection is the one a call is judged
+    // against, so insertion would change existing decisions).
+    ['knowledge', 'knowledge', 'read', 'read', 'read', 'read', 'write'],
+    ['seed_briefs', 'seed_briefs', 'read', 'write', 'read', 'read', 'read'],
+    ['sample_reviews', 'sample_reviews', 'read', 'read', 'read', 'read', 'read']
 ];
 
 /**
@@ -81,12 +106,14 @@ const SPEC_PERMISSION_MATRIX: Array<
  * D-12a, and §7's Author-span row is P9.
  */
 const SPEC_REFUSAL_RULES: Record<string, Partial<Record<RoleKind, string>>> = {
-    'chapters.content (agent-written)': { editor: 'L-19', checker: 'P10', reader: 'P10' },
+    // §7.2: a Researcher's story-artifact write is refused naming P10, exactly like a Reader's.
+    'chapters.content (agent-written)': { editor: 'L-19', checker: 'P10', reader: 'P10', researcher: 'P10' },
     // The lock guard below is the one W2 names (P5); this is the phase guard, which is what fires
     // while the Summary is still unlocked (§8.1: "phase `summary` only").
     'summaries (prose)': { writer: 'T-3c' },
     'chapters.content (Author-written span)': { writer: 'P9' },
-    digests: { writer: 'D-12a', editor: 'D-12a', checker: 'D-12a', reader: 'D-12a' }
+    // The Digest is engine-derived for every kind, the Researcher included (D-12a).
+    digests: { writer: 'D-12a', editor: 'D-12a', checker: 'D-12a', reader: 'D-12a', researcher: 'D-12a' }
 };
 
 const KINDS: RoleKind[] = ['writer', 'editor', 'checker', 'reader'];
@@ -126,10 +153,16 @@ describe('the §7 permission table', () => {
         expect(
             PERMISSION_ROWS.map(
                 (row) =>
-                    [row.artifact, row.collection, row.writer, row.editor, row.checker, row.reader] as (
-                        | string
-                        | PermissionLevel
-                    )[]
+                    [
+                        row.artifact,
+                        row.collection,
+                        row.writer,
+                        row.editor,
+                        row.checker,
+                        row.reader,
+                        // §7.2's fifth column, read from the same row object a call is judged on.
+                        row.researcher
+                    ] as (string | PermissionLevel)[]
             )
         ).toEqual(SPEC_PERMISSION_MATRIX);
     });
@@ -190,6 +223,39 @@ describe('the §7 permission table', () => {
         // A collection with no row has no level for anybody.
         expect(levelFor('writer', 'no_such_collection')).toBe('none');
         expect(checkPermission('writer', 'no_such_collection', 'read')).toEqual({ allowed: false, level: 'none' });
+    });
+
+    it('gives the Researcher its own column: knowledge write, everything else read (§7.2)', () => {
+        // The one collection the Researcher owns, and the one level the row grants it there.
+        expect(checkPermission('researcher', 'knowledge', 'write')).toEqual({
+            allowed: true,
+            level: 'write',
+            row: permissionRow('knowledge')
+        });
+        // §7.2's three new rows: the Editor structures the Seed, nobody writes the screening
+        // answer (the engine does), and every dispatched kind reads both.
+        expect(levelFor('editor', 'seed_briefs')).toBe('write');
+        expect(levelFor('researcher', 'seed_briefs')).toBe('read');
+        expect(levelFor('researcher', 'sample_reviews')).toBe('read');
+        // It does not judge prose, so the report rows are reads for it even where a Checker writes.
+        expect(levelFor('researcher', 'verdicts')).toBe('read');
+        expect(levelFor('researcher', 'findings')).toBe('read');
+        expect(levelFor('researcher', 'ideas')).toBe('read');
+        // D-11 still lets it file the task it cannot do itself.
+        expect(levelFor('researcher', 'tasks')).toBe('write');
+        // T12/F2: `proposals` was inherited from the Checker's `write` and is now `read` — a research
+        // run files no §4.16 proposal, because a proposal is an opinion about a story artifact and
+        // §7.2 says the Researcher does not judge those. It reads the tray like `ideas`.
+        expect(levelFor('researcher', 'proposals')).toBe('read');
+        expect(checkPermission('researcher', 'proposals', 'write').allowed).toBe(false);
+        // The whole column in one assertion: every row a read except the three §7.2 describes.
+        expect(
+            PERMISSION_ROWS.filter((row) => row.researcher !== 'read').map((row) => [row.artifact, row.researcher])
+        ).toEqual([
+            ['tasks', 'write'],
+            ['sub_agent_runs', 'recommend'],
+            ['knowledge', 'write']
+        ]);
     });
 
     it('refuses every kind writing the Digest, because the engine derives it (D-12a, D-13)', () => {

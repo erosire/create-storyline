@@ -139,16 +139,18 @@ const editSummary: ToolDefinition = {
         const why = whyOf(ctx);
         const existing = summaryRow(ctx.store, ctx.storyId);
 
-        // D-3d/D-21/§15 step 1: in a diverging Story the Summary competes instead of installing. The
-        // Writer role prompt says it plainly ("you are one of several Writers holding the same brief
-        // in parallel"), and `writer-summary` sets `attempts: 3` (templates.ts:102, "Phase 1 gets MORE
-        // divergence than a chapter, not less"), so the three drafts have to land as `revisions` for
-        // the Editor to `selectRevision` between them. Writing in place here made the third attempt
-        // overwrite the first and left the Editor nothing to choose — the same reason `editChapter`
-        // files a draft (writer.ts:585). The Summary row is the unit, because that is what the loop's
-        // phase-① Work Item names (loop/work.ts:phaseUnits) and what `installDraft` writes back
-        // (editor.ts:274). Without a Summary row there is no unit to draft against, so the first write
-        // of the phase still creates it.
+        // D-3d/D-21/§15 step 1: in a diverging Story the Summary competes instead of installing.
+        // `isDivergenceMode` reads the ASSIGNED templates (a writer role with `agents > 1`, a Writer
+        // template with `attempts > 1`, or more than one Writer), so whenever that set diverges a
+        // Summary write must land as a `revision` for an Editor to `selectRevision` between; writing
+        // in place made one attempt overwrite another and left the Editor nothing to choose — the
+        // same reason `editChapter` files a draft (writer.ts:585). Phase ①'s own Writer does not
+        // take this path: the engine persists each `SummarySample` whole (§6.4 step 3), and the
+        // round's winner is settled deterministically (§6.5) rather than by an Editor. The branch is
+        // kept for the general `editSummary` contract a divergent assignment can still reach. The
+        // Summary row is the unit, because that is what the loop's phase-① Work Item names
+        // (loop/work.ts:phaseUnits) and what `installDraft` writes back (editor.ts:274). Without a
+        // Summary row there is no unit to draft against, so the first write of the phase still creates it.
         if (existing !== undefined && isDivergenceMode(ctx.store, ctx.story)) {
             // A revision is a COMPLETE Summary, not a patch. The Writer may send only the fields it
             // changed (a fix pass often does), so the draft inherits every unchanged field from the
@@ -164,12 +166,9 @@ const editSummary: ToolDefinition = {
             // A Writer that writes its Summary over several calls keeps ONE draft: the second
             // `editSummary` of the same run extends the same `pending` row instead of filing a
             // second, partial one (the draft is `drafted` only when the run closes — §4.15).
-            // The loop's completion job (`wi_complete_*`) is the one run that also adopts a draft
-            // an earlier Writer left short: its brief names exactly the blocks that are missing.
-            const completionRun =
-                ctx.runId !== undefined &&
-                (ctx.store.runs.get(ctx.runId)?.work_item_ref ?? '').startsWith('wi_complete_');
-            const pending = pendingDraftFor(ctx.store, ctx.storyId, 'summary', existing.id, ctx.runId, completionRun);
+            // A draft another run left short is never adopted: the classic `wi_complete_*` completion
+            // job was removed with the phase-1 redesign, and L-16's siblings are blind to each other.
+            const pending = pendingDraftFor(ctx.store, ctx.storyId, 'summary', existing.id, ctx.runId);
             const body = { fields: { ...inherited, ...(pending ? revisionBodyFields(pending) : {}), ...fields } };
 
             const revision =

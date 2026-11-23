@@ -17,11 +17,14 @@ import {
     plotlineOrders,
     queue,
     revisionStates,
+    seedBriefFields,
+    SLICE_SEED,
     storyRow,
     storyView,
     verdictTargets,
     type StorylineFixture
 } from './harness';
+import { seedHashOf } from '../../shared/seed-hash';
 
 /** Walks one Story to the end of a phase and locks it, the way §15's Author does. */
 async function lockPhase(fixture: StorylineFixture, storyId: string) {
@@ -84,93 +87,147 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         expect(await queue(fixture)).toEqual([]);
     });
 
-    it('step 1①: the three blind attempts each expand the Summary into a drafted revision', async () => {
-        // Phase ① opens with the Editor's Seed review; the Writers start on the next sweep.
+    it('step 1①: the Editor structures the Seed and the Researcher records the Knowledge it depends on (§6.4 steps 1-2)', async () => {
+        // Phase ① opens with two priority-0 gates: the Editor's structure pass, then the Researcher's.
+        // Nothing may be sampled until both have closed.
         await fixture.tick();
         await fixture.tick();
 
         const runs = await crewRows(fixture, storyId);
 
-        const refs = runs.map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]=${run.state}`);
-        expect(refs.filter((ref) => !ref.startsWith('wi_seed_review_')).sort()).toEqual([
-            'wi_write_summary_1_1_a1[writer-summary/writer]=torn_down',
-            'wi_write_summary_1_1_a2[writer-summary/writer]=torn_down',
-            'wi_write_summary_1_1_a3[writer-summary/writer]=torn_down'
+        expect(runs.map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]=${run.state}`)).toEqual([
+            `wi_structure_seed_${seedHashOf(SLICE_SEED)}[editor-seed-structure/editor]=torn_down`,
+            'wi_research_1[researcher-story/researcher]=torn_down'
         ]);
-        expect(refs.filter((ref) => ref.startsWith('wi_seed_review_'))).toEqual([
-            expect.stringContaining('[editor-general/editor]=torn_down')
-        ]);
-        expect(runs.map((run) => run.kind)).toEqual(['work', 'work', 'work', 'work']);
-        expect(runs.map((run) => run.no_op)).toEqual([false, false, false, false]);
+        expect(runs.map((run) => run.kind)).toEqual(['work', 'work']);
+        expect(runs.map((run) => run.no_op)).toEqual([false, false]);
 
-        // D-3d: three attempts, three drafts, none installed. The Summary row itself is not the
-        // ledger. §4.15: each Writer's run has closed and every draft carries all six blocks, so
-        // the loop has promoted them from `pending` to `drafted` — the Readers' inbox.
-        expect(revisionStates(fixture.store, storyId)).toEqual([
-            'revision_1:summary_1/drafted',
-            'revision_2:summary_1/drafted',
-            'revision_3:summary_1/drafted'
-        ]);
+        // §3.3: the Editor wrote an ACCEPTED brief derived from the current Seed. Its fields are a
+        // pure function of the Seed, and the Seed itself was never touched (P5).
+        const brief = fixture.store.seedBriefs.list()[0];
 
-        // Fix A's subject, seen from the outside: the unit's criteria are filed at the Summary row.
-        expect(verdictTargets(fixture.store, storyId)).toEqual([
-            { id: 'verdict_1', target: 'summary_1', recommendation: 'advance' },
-            { id: 'verdict_2', target: 'summary_1', recommendation: 'advance' },
-            { id: 'verdict_3', target: 'summary_1', recommendation: 'advance' }
-        ]);
+        expect({
+            story_id: brief.story_id,
+            seed_hash: brief.seed_hash,
+            status: brief.status,
+            ...seedBriefFields(SLICE_SEED)
+        }).toEqual({
+            story_id: storyId,
+            seed_hash: seedHashOf(SLICE_SEED),
+            status: 'accepted',
+            ...seedBriefFields(SLICE_SEED)
+        });
+
+        // §3.2: one `critical` and one `high` claim, each with a source — the two importances the
+        // sampling prompt carries (§5).
+        expect(
+            fixture.store.knowledge
+                .list()
+                .map((entry) => `${entry.topic}:${entry.importance}:${entry.sources.length}`)
+        ).toEqual(['period and place:critical:1', 'governing rule:high:1']);
+
+        // Both gates are closed and nothing below them has run: no sample, no revision, no verdict.
+        expect(revisionStates(fixture.store, storyId)).toEqual([]);
+        expect(verdictTargets(fixture.store, storyId)).toEqual([]);
 
         const row = await storyRow(fixture, storyId);
 
-        expect(row.levels.summary).toBe('2/2');
-        expect(row.levels.plotlines).toBe('n/a');
+        expect(row.levels.summary).toBe('1/2 · failing: C-14');
         expect(row.phase).toBe('summary');
         // The tool layer refused nothing in phase ①: a crew that calls §8 correctly is not punished.
         expect(fixture.refusals).toEqual([]);
     });
 
-    it('step 1①: the Readers critique every draft, then the Editor selects one and the losers disappear (D-3b, D-22)', async () => {
-        // The Author's phase-① order adds a Reader pass between the Writers and the choice:
-        // the sweep that follows the drafts dispatches the one Reader each draft's brief names,
-        // and only the sweep after the Readers close may open the Editor's `select`.
-        // Seed review, Writers, Readers, then the Editor's choice: one phase-① thread per sweep.
-        await fixture.tick();
-        await fixture.tick();
-        await fixture.tick();
-        await fixture.tick();
+    it('step 1①: three no-tool samples, one screening pass each, and the engine installs the least-issue winner (§6.4 steps 3-5)', async () => {
+        // Four more sweeps: three samplers (one per sweep), a screening pass per sample, and the
+        // engine's selection once every sample has its full screening set.
+        for (let sweep = 0; sweep < 4; sweep += 1) await fixture.tick();
 
         const refs = (await crewRows(fixture, storyId)).map((run) => `${run.work_item_ref}[${run.template_ref}]`);
-        expect(refs.filter((ref) => !ref.startsWith('wi_seed_review_')).sort()).toEqual([
-            'wi_read_revision_1_a1[reader-genre]',
-            'wi_read_revision_2_a1[reader-plausibility]',
-            'wi_read_revision_3_a1[reader-audience]',
-            'wi_select_1_summary_1[editor-general]',
-            'wi_write_summary_1_1_a1[writer-summary]',
-            'wi_write_summary_1_1_a2[writer-summary]',
-            'wi_write_summary_1_1_a3[writer-summary]'
-        ]);
-        expect(refs.filter((ref) => ref.startsWith('wi_seed_review_'))).toEqual([
-            expect.stringContaining('[editor-general]')
-        ]);
 
-        // One Summary sample survives as `selected`; phase ① keeps the other samples as `discarded`
-        // so the rail's Overview 1…N tree (and their findings) stays readable. Chapter/plotline
-        // losers are still hard-deleted (D-22). The selected body is the Summary the next phase reads.
-        expect(revisionStates(fixture.store, storyId)).toEqual([
-            'revision_1:summary_1/selected',
-            'revision_2:summary_1/discarded',
-            'revision_3:summary_1/discarded'
+        expect(refs.filter((ref) => ref.startsWith('wi_sample_')).sort()).toEqual([
+            'wi_sample_summary_1_1_1[writer-summary-sampler]',
+            'wi_sample_summary_1_1_2[writer-summary-sampler]',
+            'wi_sample_summary_1_1_3[writer-summary-sampler]'
         ]);
+        expect(refs.filter((ref) => ref.startsWith('wi_screen_')).sort()).toEqual([
+            'wi_screen_revision_1_1[reader-screening]',
+            'wi_screen_revision_2_1[reader-screening]',
+            'wi_screen_revision_3_1[reader-screening]'
+        ]);
+        // There is no Editor `select` in phase ① any more: the selector is deterministic (§6.5).
+        expect(refs.filter((ref) => ref.startsWith('wi_select_'))).toEqual([]);
+
+        // One sample survives as `selected`; the losers and their screening reviews are truncated
+        // (P13/D-22 as the pipeline asks). The `sampling_history` line is the only surviving audit.
+        expect(revisionStates(fixture.store, storyId)).toEqual(['revision_1:summary_1/selected']);
 
         const summary = (await storyView(fixture, storyId)).summary;
 
-        expect(summary.premise).toBe('A nobody inherits a lighthouse that chooses its own keeper.');
-        expect(summary.world_rules).toBe('The lamp keeps its own log of every keeper, and the log outlives them.');
-        expect(summary.locked).toBe(false);
+        expect({
+            premise: summary.premise,
+            promise: summary.promise,
+            theme: summary.theme,
+            tone: summary.tone,
+            ending: summary.ending,
+            world_rules: summary.world_rules,
+            chapter_count: summary.chapter_count,
+            locked: summary.locked
+        }).toEqual({
+            premise: `sample 1: ${SLICE_SEED}`,
+            promise: 'sample 1 pays the promise the Seed makes',
+            theme: 'sample 1 theme',
+            tone: 'sample 1 tone',
+            ending: 'sample 1 ending',
+            world_rules: 'sample 1 world rules',
+            chapter_count: 3,
+            locked: false
+        });
+
+        const story = fixture.store.stories.require(storyId);
+
+        expect(story.sampling_round).toBe(1);
+        expect((story.sampling_history ?? []).map(({ round, samples, selected }) => ({ round, samples, selected }))).toEqual([
+            {
+                round: 1,
+                samples: [
+                    { revision_id: 'revision_1', critical: 0, high: 0, valid: true },
+                    { revision_id: 'revision_2', critical: 0, high: 0, valid: true },
+                    { revision_id: 'revision_3', critical: 0, high: 0, valid: true }
+                ],
+                selected: 'revision_1'
+            }
+        ]);
+
+        // The Goal's C-14 line is not filed by the sampler (it has no tools): it waits for the
+        // tool-using deep review, which is the next stage.
+        expect((await storyRow(fixture, storyId)).levels.summary).toBe('1/2 · failing: C-14');
+        expect(verdictTargets(fixture.store, storyId)).toEqual([]);
     });
 
-    it('step 1①: a passing Goal stops the Story at the signoff without moving the phase (D-1, L-29)', async () => {
-        // Seed review, three Writers, three Readers, the Editor's choice — one thread per sweep.
-        for (let sweep = 0; sweep < 5; sweep += 1) await fixture.tick();
+    it('step 1①: the deep review rates the selected revision, and a passing Goal stops the Story at the signoff (D-1, L-29)', async () => {
+        // The selected revision gets the tool-using Reader pass (§6.4 step 6); its verdict is the
+        // C-14 line, and the phase then stops at the Author's lock.
+        await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 8);
+
+        const runs = await crewRows(fixture, storyId);
+
+        expect(runs.map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]=${run.state}`)).toEqual([
+            `wi_structure_seed_${seedHashOf(SLICE_SEED)}[editor-seed-structure/editor]=torn_down`,
+            'wi_research_1[researcher-story/researcher]=torn_down',
+            'wi_sample_summary_1_1_1[writer-summary-sampler/writer]=torn_down',
+            'wi_sample_summary_1_1_2[writer-summary-sampler/writer]=torn_down',
+            'wi_screen_revision_1_1[reader-screening/reader]=torn_down',
+            'wi_sample_summary_1_1_3[writer-summary-sampler/writer]=torn_down',
+            'wi_screen_revision_2_1[reader-screening/reader]=torn_down',
+            'wi_screen_revision_3_1[reader-screening/reader]=torn_down',
+            'wi_review_revision_1_a1[reader-genre/reader]=torn_down'
+        ]);
+
+        // The deep review rates the Summary row, which is where the criteria engine aggregates C-14.
+        expect(verdictTargets(fixture.store, storyId)).toEqual([
+            { id: 'verdict_1', target: 'summary_1', recommendation: 'advance' }
+        ]);
 
         expect({ ...(await storyRow(fixture, storyId)), title: undefined, progress: undefined }).toEqual({
             id: 'story_1',
@@ -191,10 +248,8 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
             completion_proposed: false
         });
 
-        // Nothing moved on its own: the stop opened no run, and the phase is untouched. The eight
-        // rows are the Seed review, the three Writer samples, their three Reader passes, and the
-        // Editor's choice.
-        expect((await crewRows(fixture, storyId)).length).toBe(8);
+        // Nothing moved on its own: the stop opened no further run, and the phase is untouched.
+        expect((await crewRows(fixture, storyId)).length).toBe(9);
     });
 
     it("step 2: the lock is the Author's, and it is what opens phase ② (L-7, U-16)", async () => {

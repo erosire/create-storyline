@@ -17,6 +17,8 @@
 // criteria, the fingerprint, the chapters. The row the Author reads IS this string, so a vague string
 // here is a spec violation rather than a style problem.
 import {
+    currentSeedBrief,
+    deepReviewPassesOwed,
     dialCovers,
     dialKey,
     dispatchableTasks,
@@ -28,9 +30,20 @@ import {
     liveRuns,
     loopStory,
     repeatIdeas,
+    researchClosed,
+    roundRevisions,
+    SAMPLING_RETRY_ALLOWANCE,
+    sampleAttempts,
+    samplingArmed,
+    samplingRoundOf,
+    samplingSizeOf,
+    screensFor,
+    screeningSizeOf,
+    selectedSummaryRevision,
     storyIdeas,
     storySummary,
     summaryBlockingFindings,
+    summaryRevisions,
     undecidedIdeas,
     storyFindings,
     unconfirmedBlockingFindings,
@@ -129,7 +142,89 @@ export function drainPreconditions(store: Store, story: Story): { met: boolean; 
             `${unverified.length} sourced Idea${unverified.length === 1 ? '' : 's'} still awaiting the Editor's verdict (D-27)`
         );
 
+    // Phase ①'s research pipeline (§6.4, §6.7): the phase is not drained while a stage is still
+    // owed. Each line is one of the gates the sweep actually enforces, in the same plain sentence
+    // shape as the conditions above, so the Author's drain row says WHICH stage is unfinished.
+    if (story.phase === 'summary') unmet.push(...phase1Unmet(store, story));
+
     return { met: unmet.length === 0, unmet };
+}
+
+/** Phase ①'s two pipeline families — a live one means a sample is being written or screened. */
+const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
+
+/**
+ * Phase ①'s stage-by-stage drain reasons (documents/phase-1-research-pipeline.md §6.7):
+ *
+ *   1. no accepted Seed Brief for the CURRENT Seed (`seed_hash` mismatch counts as none);
+ *   2. the brief's research pass has no closed run;
+ *   3. the in-flight sampling round is unfinished — a live sample/screen, a drafted sample short of
+ *      its screening passes, or fewer samples than the size while the retry allowance remains.
+ *
+ * Clause 3 only speaks when the round is ARMED (`records.ts:samplingArmed`): after a clean deep
+ * review with no open fix task the next round is deliberately not owed, and reporting "0 of 3
+ * samples exist" there would keep the Story from ever reading as drained (§6.8's stop rule).
+ */
+function phase1Unmet(store: Store, story: Story): string[] {
+    const brief = currentSeedBrief(store, story);
+    const unmet: string[] = [];
+
+    if (brief === undefined) {
+        unmet.push(
+            'no accepted Seed Brief describes the current Seed — the Editor has not structured it yet (§6.4 step 1)'
+        );
+
+        return unmet;
+    }
+
+    if (!researchClosed(store, story, brief)) {
+        unmet.push(
+            "the Seed Brief has no closed research pass — the Researcher has not recorded the Knowledge it depends on (§6.4 step 2)"
+        );
+
+        return unmet;
+    }
+
+    const summary = storySummary(store, story.id);
+
+    if (summary === undefined) return unmet;
+
+    const live = liveRuns(store, story.id).filter((run) => PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? ''));
+
+    if (live.length > 0)
+        unmet.push(
+            `${live.length} sampling/screening run${live.length === 1 ? '' : 's'} still in flight (§6.4 steps 3-4)`
+        );
+
+    const owed = summaryRevisions(store, story.id).filter(
+        (revision) => revision.state === 'drafted' && screensFor(store, revision.id).length < screeningSizeOf(story)
+    ).length;
+
+    if (owed > 0)
+        unmet.push(
+            `${owed} sample${owed === 1 ? '' : 's'} still owe screening passes (${screeningSizeOf(story)} per sample, §6.4 step 4)`
+        );
+
+    const round = samplingRoundOf(story);
+    const have = roundRevisions(store, story.id, round).length;
+    const size = samplingSizeOf(story);
+    const attempts = sampleAttempts(store, summary.id, round);
+
+    if (samplingArmed(store, story, round) && have < size && attempts < size + SAMPLING_RETRY_ALLOWANCE)
+        unmet.push(
+            `${have} of ${size} sample${size === 1 ? '' : 's'} exist for round ${round} and retries remain (§6.4 step 3)`
+        );
+
+    // §6.4 step 6: the cheap deep review the pipeline buys is owed work, not a detail — a probe
+    // reporting "nothing at the dial" over a half-read draft would be judging a book nobody reviewed.
+    const owedReview = deepReviewPassesOwed(store, story, selectedSummaryRevision(store, story.id));
+
+    if (owedReview > 0)
+        unmet.push(
+            `${owedReview} deep-review pass${owedReview === 1 ? '' : 'es'} still owed for the selected Summary revision (§6.4 step 6)`
+        );
+
+    return unmet;
 }
 
 /** The dial as prose, for the drained reason (§15 step 11's "no critical or major left"). */
@@ -412,6 +507,13 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     const summary = story.phase === 'summary' ? storySummary(store, story.id) : undefined;
     const summaryBlocking =
         summary === undefined ? [] : summaryBlockingFindings(store, story, summary.id);
+    // §6.4 step 6: the deep review of the selected revision is the phase's evidence. Signing off
+    // after one pass of five would lock a Summary nobody finished reviewing, so the owed passes hold
+    // the stop exactly like an open fix task does.
+    const reviewOwed =
+        story.phase === 'summary'
+            ? deepReviewPassesOwed(store, story, selectedSummaryRevision(store, story.id)) > 0
+            : false;
     const summaryRoundQueued =
         story.phase === 'summary'
             ? queued.filter((task) => task.kind === 'fix' || task.kind === 'rewrite' || task.kind === 'merge')
@@ -427,6 +529,7 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
         findingsUnconfirmed === 0 &&
         phaseWorkQueued === 0 &&
         summaryBlocking.length === 0 &&
+        !reviewOwed &&
         story.phase !== 'chapters' &&
         !phaseIsLocked(story)
     ) {

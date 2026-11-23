@@ -164,6 +164,23 @@ export interface LoopStoryAdditions {
     closed_fingerprints?: string[];
     /** L-25/L-26: the completion proposal the Author has not answered yet. */
     completion?: CompletionProposal;
+    /**
+     * Phase ①'s sampling round whose selection last COMPLETED (§6.5/§6.6). Absent = round 1 is still
+     * in flight; the in-flight round is therefore `(sampling_round ?? 0) + 1`, which is the one place
+     * the round number comes from (no clock, no engine memory — L-3). `sampling_history` on `Story`
+     * (shared/types.ts §3.6) is the P11 audit line the selection commit appends.
+     */
+    sampling_round?: number;
+    /**
+     * Phase ①'s sampling RETRY WAVE for the round in flight (T12/E). `records.ts:samplingWaveOf`
+     * defaults the absent field to 0. A round that spent its `summary_sampling + 3` attempt cap
+     * cannot buy another sample until the counter resets, and nothing in the run rows can reset it;
+     * the Author's clear of the failure escalation is the signal, and the sweep answers it by
+     * bumping this number in a commit (`engine.ts:rearmSamplingWave`). The wave rides the sample
+     * claim prefix (`wi_sample_<summary>_<round>_w<wave>_<attempt>`), so a new wave starts at
+     * attempt 1 while every spent run row stays as audit (P11).
+     */
+    sampling_wave?: number;
 }
 
 export type LoopStory = Story & LoopStoryAdditions;

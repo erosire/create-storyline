@@ -20,6 +20,8 @@ import {
     type LoopDirective,
     type LoopStory
 } from './types';
+import { DEFAULT_SUMMARY_READERS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
+import { seedHashOf } from '../../shared/seed-hash';
 import type {
     Chapter,
     Cost,
@@ -31,6 +33,8 @@ import type {
     Revision,
     Run,
     RunState,
+    SampleReview,
+    SeedBrief,
     Story,
     StoryPhase,
     Task,
@@ -189,13 +193,23 @@ export function summaryRevisionsFor(store: Store, storyId: string, unitRef: stri
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
 }
 
-/** The draft the Summary row currently carries. At most one Summary revision is `selected`. */
+/**
+ * The draft the Summary row currently carries. At most one Summary revision is `selected` per unit.
+ *
+ * `unitRef` is OPTIONAL because phase ①'s pipeline asks the Story-wide question ("which Summary
+ * revision did the last selection install?" — §6.6) while the per-unit readers (the select brief,
+ * the blocking-finding filter) ask it for one specific row. With no ref the whole Story's Summary
+ * revisions are considered; a Story has exactly one Summary (§4.2), so the two agree in practice.
+ */
 export function selectedSummaryRevision(
     store: Store,
     storyId: string,
-    unitRef: string
+    unitRef?: string
 ): Revision | undefined {
-    return last(summaryRevisionsFor(store, storyId, unitRef).filter((revision) => revision.state === 'selected'));
+    const rows =
+        unitRef === undefined ? summaryRevisions(store, storyId) : summaryRevisionsFor(store, storyId, unitRef);
+
+    return last(rows.filter((revision) => revision.state === 'selected'));
 }
 
 /**
@@ -210,9 +224,11 @@ export function summaryBlockingFindings(store: Store, story: Story, unitRef: str
 
     return storyFindings(store, story.id).filter((finding) => {
         if (finding.state !== 'confirmed' && finding.state !== 'approved') return false;
-        // Phase ①'s second look: the Reader's independent confirmation is what makes a blocking
-        // defect real work. Until it lands, a confirmed/approved row must not spend a Writer round.
-        if (finding.reader_confirmed !== true) return false;
+        // NO `reader_confirmed` GATE (phase-1 research pipeline, §6.4 step 6): the tool-using deep
+        // review IS the Reader's read of the selected revision, and the Editor's verification of
+        // those findings is the acceptance that arms the next round. The classic pipeline's extra
+        // per-finding confirmation thread was removed with it, so requiring the flag here would
+        // make every finding invisible to the phase gate.
         if (finding.cost !== 'critical' && finding.cost !== 'major') return false;
 
         // A draft-scoped finding names its draft in L-11a's related_refs. A finding with none is
@@ -675,6 +691,291 @@ export function unitIsChecked(store: Store, storyId: string, unitRef: string): b
     const perDraft = competing.filter((revision) => freshVerdictsFor(store, storyId, revision.id, revision).length > 0);
 
     return perDraft.length === competing.length;
+}
+
+// ---------------------------------------------------------------------------
+// Phase ①'s research pipeline (§6.4: structure → research → sample → screen → select)
+// ---------------------------------------------------------------------------
+//
+// The reads the pipeline's own gates are written in terms of. They live HERE rather than in
+// ./work because three modules ask the same questions (the sweep's work generation, the drain
+// preconditions in ./status, and the engine's settlement), and two spellings of "is the round
+// finished?" is exactly the bug this file exists to prevent.
+
+/**
+ * Phase ①'s sampling size (§6.4 step 3): how many Writers expand one Seed Brief per round.
+ *
+ * D-38a puts the count on the Author, and the Story row is where a per-book override lives. The
+ * published standard is `DEFAULT_SUMMARY_SAMPLING`, and it is the fallback the Summary pane's dial
+ * shows — so the loop must use that same number when the Story has no override. Reading a
+ * template's `attempts` here made the pane say "5 Writers" while a persisted template ran 3.
+ */
+export function samplingSizeOf(story: Story): number {
+    const raw = story.summary_sampling;
+
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+
+    return DEFAULT_SUMMARY_SAMPLING;
+}
+
+/**
+ * The retry allowance on top of a round's stage sizes (§6.4 step 3). A sampling run that returns
+ * invalid JSON twice produces NO revision, so the ATTEMPT counter — not the revision count — is what
+ * lets a stage try again; past this allowance the provider is not answering the schema and only the
+ * Author can change that (the escalation in ./work).
+ */
+export const SAMPLING_RETRY_ALLOWANCE = 3;
+
+/**
+ * The attempt cap of one round's SAMPLING family (§6.4 step 3): `summary_sampling` owed samples plus
+ * the retry allowance. Read from here by `./work` (the dispatch gate and the wave-scoped exhaustion
+ * read) and `./engine` (the selection gate and the wave re-arm), so those three call sites cannot
+ * disagree about when a round is spent. `./status`'s drain sentence adds the same two numbers from
+ * the allowance directly; the number is identical, and that file is outside this pass's ownership.
+ */
+export const samplingCapOf = (story: Story): number => samplingSizeOf(story) + SAMPLING_RETRY_ALLOWANCE;
+
+/** Phase ①'s screening count (§6.4 step 4): how many screening Readers judge each sample. */
+export function screeningSizeOf(story: Story): number {
+    const raw = story.summary_readers;
+
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+
+    return DEFAULT_SUMMARY_READERS;
+}
+
+/** The sampling round IN FLIGHT: the rounds before it completed a selection (§6.6). */
+export const samplingRoundOf = (story: Story): number => (story.sampling_round ?? 0) + 1;
+
+/**
+ * Phase ①'s sampling WAVE for the round in flight (T12/E).
+ *
+ * A round that spent its sampling attempt cap leaves the spent runs behind, so the counter cannot
+ * reset by itself; the Author's clear of the failure escalation is what re-arms the round, and the
+ * wave is the generation that makes it possible: the sample claim prefix carries it
+ * (`samplePrefixOf`), so a new wave starts at attempt 1 while every spent run row stays as audit.
+ * `0` is the first wave — the absent field a Story written before the field existed reads as.
+ */
+export const samplingWaveOf = (story: Story): number => {
+    const raw = story.sampling_wave;
+
+    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+};
+
+/** §3.3: the Story's ACCEPTED Seed Brief, newest last. Undefined is a real state (nothing structured). */
+export function acceptedSeedBrief(store: Store, storyId: string): SeedBrief | undefined {
+    return last(
+        store.seedBriefs
+            .list()
+            .filter((brief) => brief.story_id === storyId && brief.status === 'accepted')
+            .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+    );
+}
+
+/**
+ * The accepted brief that describes the Seed AS IT STANDS NOW (§3.3/§6.4 gate 1).
+ *
+ * A brief derived from an older Seed counts as NONE: `seed_hash` is the change detector, so an
+ * Author edit of `stories.idea` (D-25a) re-arms the structuring and no sample may be taken from a
+ * description of a book nobody is writing (P5). Comparing here rather than at every call site keeps
+ * the gate one predicate.
+ */
+export function currentSeedBrief(store: Store, story: Story): SeedBrief | undefined {
+    const brief = acceptedSeedBrief(store, story.id);
+
+    return brief !== undefined && brief.seed_hash === seedHashOf(story.idea) ? brief : undefined;
+}
+
+/** The claim key of one brief's research pass — the brief's `rev` IS the generation (§6.4 gate 2). */
+export const researchKeyOf = (brief: SeedBrief): string => `wi_research_${brief.rev}`;
+
+/** Has the accepted brief's research pass CLOSED? A live run does not count — sampling waits. */
+export function researchClosed(store: Store, story: Story, brief: SeedBrief): boolean {
+    return runsForItem(store, researchKeyOf(brief)).some((run) => run.story_id === story.id && !isLiveRun(run));
+}
+
+/**
+ * Round 1 samples as soon as structure and research are closed; a REFINEMENT round (§6.4 step 7)
+ * waits until the deep review has finished defining the issues it must answer —
+ *
+ *   * at least one OPEN `fix` task exists (the approved work the next prompt carries), AND
+ *   * no critical/major suspicion is still `unconfirmed` (an unverified complaint is not an
+ *     instruction: compiling it into a Writer prompt would spend a round on a claim the Editor
+ *     has not accepted, D-33).
+ *
+ * `round` is passed in so the same predicate serves work generation, the drain preconditions and
+ * the selection sweep (the caller always knows which round it is asking about).
+ */
+export function samplingArmed(store: Store, story: Story, round: number): boolean {
+    if (round <= 1) return true;
+
+    return openFixTasks(store, story.id).length > 0 && unconfirmedBlockingFindings(store, story).length === 0;
+}
+
+/** Every Summary revision of the Story, oldest first (all rounds; losers are deleted by selection). */
+export function summaryRevisions(store: Store, storyId: string): Revision[] {
+    return store.revisions
+        .list()
+        .filter((revision) => revision.story_id === storyId && revision.unit_kind === 'summary')
+        .sort(recency);
+}
+
+/**
+ * The Summary revisions of ONE sampling round, oldest first. `round` defaults to 1 on the row
+ * (§3.5), so a revision written before the pipeline existed is round 1's draft.
+ */
+export function roundRevisions(store: Store, storyId: string, round: number): Revision[] {
+    return summaryRevisions(store, storyId).filter((revision) => (revision.round ?? 1) === round);
+}
+
+/** One draft's screening reviews, oldest first — the selector's evidence (§6.5). */
+export function screensFor(store: Store, revisionId: string): SampleReview[] {
+    return store.sampleReviews
+        .list()
+        .filter((review) => review.revision_ref === revisionId)
+        .sort(recency);
+}
+
+/**
+ * The claim key's PREFIX for one draft's screening family — trailing `_` included.
+ *
+ * The underscore is load-bearing, not cosmetic: revisions are numbered from one counter, and a bare
+ * `wi_screen_revision_1` is a prefix of `wi_screen_revision_10`, so an unanchored count would add a
+ * tenth draft's passes to the first draft's retry counter. `claimKey` always writes `<prefix>_<n>`,
+ * so this is exactly the family.
+ */
+export const screenPrefixOf = (revisionId: string): string => `wi_screen_${revisionId}_`;
+
+/**
+ * The family PREFIX for one round's sampling family — trailing `_` included.
+ *
+ * The key is `wi_sample_<summary>_<round>_<attempt>` in wave 0 and `wi_sample_<summary>_<round>_w<wave>_<attempt>`
+ * from wave 1 (T12/E). The wave segment is inside the prefix, so `sampleAttempts` counts the runs of
+ * the CURRENT wave only: that is what makes the Author's clear re-arm a spent round (the old wave's
+ * rows stay on the ledger but no longer count against the new cap).
+ */
+export const samplePrefixOf = (summaryRef: string, round: number, wave = 0): string =>
+    wave > 0 ? `wi_sample_${summaryRef}_${round}_w${wave}_` : `wi_sample_${summaryRef}_${round}_`;
+
+/** How many screening runs one draft's claim family has already dispatched (the retry counter). */
+export function screenAttempts(store: Store, revisionId: string): number {
+    const prefix = screenPrefixOf(revisionId);
+
+    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+}
+
+/** How many sampling runs the in-flight round's CURRENT WAVE has already dispatched (the retry counter). */
+export function sampleAttempts(store: Store, summaryRef: string, round: number, wave = 0): number {
+    const prefix = samplePrefixOf(summaryRef, round, wave);
+
+    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+}
+
+/**
+ * The attempt cap of one draft's SCREENING family (§6.4 step 4): its owed passes plus the allowance.
+ * Screens are a cheaper pass than a sample, and they have no waves (T12/C): a draft that cannot
+ * collect its reviews inside the cap is selected on the partial set instead.
+ */
+export const screeningCapOf = (story: Story): number => screeningSizeOf(story) + SAMPLING_RETRY_ALLOWANCE;
+
+/** Has one draft spent its whole screening attempt cap? The retry counter, not the row count, decides. */
+export const screeningExhaustedFor = (store: Store, story: Story, revisionId: string): boolean =>
+    screenAttempts(store, revisionId) >= screeningCapOf(story);
+
+/**
+ * May this draft be treated as screened by the selection trigger? (T12/C)
+ *
+ * Two ways, and they are the whole rule: it carries its full review set (`screeningSizeOf`), OR its
+ * screening attempts are exhausted. The second clause is the degrade path — a provider that keeps
+ * answering invalid `IssueList` JSON must not strand the round forever: the sample is selected on
+ * the reviews it did collect (possibly none), and `./work`'s escalation row tells the Author.
+ */
+export const isFullyScreened = (store: Store, story: Story, revisionId: string): boolean =>
+    screensFor(store, revisionId).length >= screeningSizeOf(story) ||
+    screeningExhaustedFor(store, story, revisionId);
+
+/**
+ * The OPEN `fix` tasks (§4.7) — D-34's approved work, and the list the next sampling round's
+ * prompt compiles (§6.8). A `claimed` row is a fix pass in flight, which phase ① no longer runs;
+ * the arming gate reads only what is waiting, so the round cannot be spent on work already moving.
+ */
+export function openFixTasks(store: Store, storyId: string): Task[] {
+    return openTasks(store, storyId).filter((task) => task.kind === 'fix' && task.state === 'open');
+}
+
+/**
+ * The claim key of one deep-review Reader pass over the SELECTED revision (§6.4 step 6).
+ *
+ * A separate family from `wi_screen_` on purpose: the screening passes are no-tool one-turn runs
+ * that rank the samples, while these hold the tool catalogue and judge the winner. One ledger must
+ * not confuse them.
+ */
+export const deepReviewKeyOf = (revisionId: string, pass: number): string => `wi_review_${revisionId}_a${pass}`;
+
+/** How many deep-review passes the selected revision still owes (a live pass does not count). */
+export function deepReviewPassesOwed(store: Store, story: Story, revision: Revision | undefined): number {
+    if (revision === undefined) return 0;
+
+    let owed = 0;
+
+    for (let pass = 1; pass <= screeningSizeOf(story); pass += 1) {
+        if (!runsForItem(store, deepReviewKeyOf(revision.id, pass)).some((run) => !isLiveRun(run))) owed += 1;
+    }
+
+    return owed;
+}
+
+/**
+ * Is the deep review of the round's SELECTED revision finished (§6.4 step 6)?
+ *
+ * The phase's sign-off and the drain probe both wait on this: an Author signing a Summary whose
+ * review has run one pass of five would sign a verdict nobody finished, and a probe would report
+ * "nothing left at the dial" while the cheap review the pipeline bought is still owed. True when
+ * there is no selected revision yet — the sign-off gate has its own conditions for that.
+ */
+export const deepReviewComplete = (store: Store, story: Story, revision: Revision | undefined): boolean =>
+    deepReviewPassesOwed(store, story, revision) === 0;
+
+/**
+ * Open the Author-facing escalation row for a failure the loop cannot fix itself, or return the
+ * one already waiting.
+ *
+ * WHY A TASK AND NOT A STATUS: §4.1's `pending_kind` enum has no "question" member (L-36's comment
+ * in ./status says the same), and P7's channel for "only the Author can decide this" is the queue.
+ * `owner_role: 'author'` is the same shape `requestAuthor` writes (tools/checker.ts), and
+ * `reusePrefix` makes the call idempotent across sweeps: re-escalating every sweep would bury the
+ * Author in identical rows.
+ */
+export function openEscalationTask(
+    store: Store,
+    storyId: string,
+    input: { title: string; detail: string; reusePrefix: string; why: string; priority?: number }
+): Task {
+    const existing = store.tasks
+        .list()
+        .find(
+            (task) =>
+                task.story_id === storyId &&
+                task.kind === 'escalation' &&
+                task.state === 'open' &&
+                task.title.startsWith(input.reusePrefix)
+        );
+
+    if (existing !== undefined) return existing;
+
+    return store.tasks.create(
+        {
+            story_id: storyId,
+            kind: 'escalation',
+            title: input.title,
+            detail: input.detail,
+            owner_role: 'author',
+            state: 'open',
+            priority: input.priority ?? 1,
+            attempts: 0
+        },
+        loopAttr(input.why)
+    ) as Task;
 }
 
 // ---------------------------------------------------------------------------

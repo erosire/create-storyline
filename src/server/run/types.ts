@@ -20,11 +20,23 @@ import type { RoleAggregation, UnitKind } from '../../shared/types';
  * The jobs the loop can dispatch. `assistant` is the Author-invoked run of §8.6 (Author
  * write rights for one run, no web tools, never a locked artifact); everything else is a
  * dispatched Work Item. §6.2 names the original eight as the three loops' jobs; phase ① adds
- * two granular jobs — the pre-phase Seed review and the Reader's independent finding check —
- * so no thread has to carry a whole batch of decisions.
+ * granular jobs — the Seed structuring, the research pass and the two one-turn structured
+ * passes — so no thread has to carry a whole batch of decisions.
+ *
+ * PHASE-1 RESEARCH PIPELINE (documents/phase-1-research-pipeline.md §6.1):
+ *   - `structure_seed` — the Editor derives the Seed Brief from the Author's Seed (no brief =
+ *     no sampling, §6.4 gate 1); the Seed itself is never written (P5).
+ *   - `research` — the Researcher gathers Knowledge for the accepted Seed Brief (§6.4 gate 2).
+ *   - `sample_unit` — the Writer's one-turn, NO-TOOL structured sample (`toolMode: 'none'`).
+ *   - `screen_samples` — the screening Reader's one-turn, NO-TOOL structured IssueList.
+ * `seed_review` was REPLACED by `structure_seed` (no backward compatibility: the sweep and the
+ * brief are the only readers of this vocabulary and both moved in the same wave).
  */
 export const WORK_ITEM_KINDS = [
-    'seed_review',
+    'structure_seed',
+    'research',
+    'sample_unit',
+    'screen_samples',
     'write_unit',
     'check_unit',
     'select',
@@ -76,6 +88,34 @@ export interface WorkItem {
     revisionRef?: string;
     /** Free-text line from the sweep (e.g. a re-brief after `rejectAll`, L-18). */
     note?: string;
+    /**
+     * `'tools'` (default, every existing run) or `'none'` — phase ①'s single-turn
+     * sampling/screening execution mode (§2 decision 3, §6.4). It is an EXECUTION mode, never a
+     * permission change: the permission row and the catalogue stay uniform; a `'none'` run is
+     * simply never offered a tool (`toolsForRunKind` returns `[]`) and the transport asks for a
+     * schema-constrained answer instead of tool calls.
+     */
+    toolMode?: 'tools' | 'none';
+    /**
+     * Structured-output contract for a no-tool run: the schema NAME and the plain JSON Schema
+     * literal from `src/shared/schemas` (`SummarySample`, `IssueList`). Absent means the run is
+     * a tool-carrying prose run.
+     */
+    responseSchema?: { name: string; schema: Record<string, unknown> };
+    /** 1-based sample index within its round — drives the provider `seed` (§5's diversity knob). */
+    sampleIndex?: number;
+    /**
+     * The compiled prompt's hash (the compiler's 16-char sha256 prefix), recorded onto the
+     * revision for cache/audit (P11, §5). The executor also copies it onto `RunResult.promptHash`
+     * and the run row's `brief_hash`, because that IS the memory this run was given.
+     */
+    promptHash?: string;
+    /**
+     * The sampling round this job belongs to (1-based; absent means 1). It is not derivable from
+     * the store — a round-2 sample must read the previous round's SELECTED revision — so the
+     * sweep states it on the item and the compiler consumes it (§5's base-revision rule).
+     */
+    round?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +140,20 @@ export interface RunResult {
     tokens: number;
     toolsCalled: string[];
     error?: string;
+    /**
+     * The validated JSON answer of a `toolMode: 'none'` run (a `SummarySample` or an
+     * `IssueList`, validated against `item.responseSchema`), or undefined. The engine persists
+     * it from here — the Writer/Reader never calls a tool in this mode (§2 decision 2).
+     */
+    structured?: unknown;
+    /** Byte-stable prompt hash, copied onto the revision's `prompt_hash` (§3.5, §5's cache key). */
+    promptHash?: string;
+    /**
+     * Cache accounting, INFORMATIONAL ONLY (E-0): the summed provider usage of the (at most two)
+     * requests the structured run made. `cached_input` is what a cache-aware provider reports,
+     * and nothing in this build branches on it.
+     */
+    usage?: { input: number; output: number; cached_input: number };
 }
 
 // ---------------------------------------------------------------------------

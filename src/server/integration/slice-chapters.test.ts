@@ -76,13 +76,13 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
             20
         );
 
-        // Two attempts per chapter, one survivor: the chapter losers are deleted at selection rather
-        // than kept as a second row, so the ledger is exactly one `selected` draft per chapter. The
-        // phase ① samples are the exception — `discarded` so Overview 1…N survives on the rail.
+        // Two attempts per chapter, one survivor: the losers are deleted at selection rather than
+        // kept as a second row, so the ledger is exactly one `selected` draft per unit. Phase ①
+        // truncates its losing samples the same way (§6.6), so the surviving Summary is one row.
         expect(revisionStates(fixture.store, storyId)).toEqual([
             'revision_1:summary_1/selected',
-            'revision_2:summary_1/discarded',
-            'revision_3:summary_1/discarded',
+            // The summary round used revision ids 2 and 3 for its losing samples; the ids are not
+            // reused after the truncation, so chapter 1's winner is revision_4.
             'revision_4:chapter_1/selected',
             'revision_6:chapter_2/selected',
             'revision_8:chapter_3/selected'

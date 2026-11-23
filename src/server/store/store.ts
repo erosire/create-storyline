@@ -30,11 +30,14 @@ import {
     type Finding,
     type Goal,
     type Idea,
+    type KnowledgeEntry,
     type LedgerEntry,
     type Plotline,
     type Proposal,
     type Revision,
     type Run,
+    type SampleReview,
+    type SeedBrief,
     type Story,
     type StoredRecord,
     type Summary,
@@ -235,7 +238,7 @@ interface CollectionState<T> {
  * so nothing outside the store constructs one.
  *
  * `T` is constrained to records carrying the §4 bookkeeping fields, which is what makes
- * `rev`-based CAS and the `updated_at` stamp type-safe for all 17 collections at once.
+ * `rev`-based CAS and the `updated_at` stamp type-safe for all 20 collections at once.
  */
 export class Collection<T extends StoredRecord> {
     readonly name: CollectionName;
@@ -452,7 +455,7 @@ export class Collection<T extends StoredRecord> {
  * inspects the files.
  */
 export class Store {
-    // The 17 §4 collections, named exactly as §4 names them (MUST NOT rename — W1).
+    // The 20 §4 collections, named exactly as §4 names them (MUST NOT rename — W1).
     readonly stories: Collection<Story>;
     readonly summaries: Collection<Summary>;
     readonly plotlines: Collection<Plotline>;
@@ -470,6 +473,15 @@ export class Store {
     readonly revisions: Collection<Revision>;
     readonly ideas: Collection<Idea>;
     readonly proposals: Collection<Proposal>;
+
+    // The three Phase-1 research collections (§3.2-§3.4 of the research-pipeline doc). They are
+    // appended to the registry, so a snapshot written before they existed hydrates them empty.
+    /** §3.2 — the Researcher's durable facts; the Writer prompt reads `critical`/`high` only. */
+    readonly knowledge: Collection<KnowledgeEntry>;
+    /** §3.3 — the Editor's derived, machine-readable projection of the Seed (never the Seed). */
+    readonly seedBriefs: Collection<SeedBrief>;
+    /** §3.4 — the screening Reader's one-turn issue list per sample; feeds the selector. */
+    readonly sampleReviews: Collection<SampleReview>;
 
     /** The single registry every generic path (snapshot, CAS resolution, rollback) walks. */
     private readonly collections: Record<CollectionName, Collection<AnyRecord>>;
@@ -530,6 +542,9 @@ export class Store {
         this.revisions = this.collections.revisions as unknown as Collection<Revision>;
         this.ideas = this.collections.ideas as unknown as Collection<Idea>;
         this.proposals = this.collections.proposals as unknown as Collection<Proposal>;
+        this.knowledge = this.collections.knowledge as unknown as Collection<KnowledgeEntry>;
+        this.seedBriefs = this.collections.seed_briefs as unknown as Collection<SeedBrief>;
+        this.sampleReviews = this.collections.sample_reviews as unknown as Collection<SampleReview>;
     }
 
     // -- construction -------------------------------------------------------------------

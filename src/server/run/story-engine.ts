@@ -1,18 +1,18 @@
 // The Story runtime built on the @underload/harness ENGINE only.
 //
-// VOCABULARY (V-1). The four profiles this file configures are EMPLOYEES — the standing roster
-// entries Writer, Editor, Reader and Checker. An employee is not an agent; it becomes one only
-// while a thread is executing. `engine.agents[kind]` is the employee's engine profile, and every
-// Run opens one THREAD under it. A template role chooses which employee kind takes a job; the
-// template itself is neither an employee nor an agent (D-38).
+// VOCABULARY (V-1). The five profiles this file configures are EMPLOYEES — the standing roster
+// entries Writer, Editor, Reader, Checker and Researcher. An employee is not an agent; it becomes
+// one only while a thread is executing. `engine.agents[kind]` is the employee's engine profile,
+// and every Run opens one THREAD under it. A template role chooses which employee kind takes a
+// job; the template itself is neither an employee nor an agent (D-38).
 //
 // WHY THIS FILE EXISTS. A Story is a book, a Phase is a session against that book, and a Run is
 // one thread inside the phase's session. The harness package owns the part that is the same for
 // every host — the agent loop, the tool-call protocol, transcript commitment, retries and thread
 // lifecycle — while Storyline owns everything that is specific to the Author: the book, the
 // loop, the permission rows, the criteria and the phases. So Storyline builds ONE harness per
-// Story with the same four employees every story uses (writer, editor, reader, checker), and
-// each dispatched Run opens a thread inside that story's harness.
+// Story with the same five employees every story uses (writer, editor, reader, checker,
+// researcher), and each dispatched Run opens a thread inside that story's harness.
 //
 // ISOLATION. Two stories never share a Harness instance, a tool registry, a transcript or a
 // thread roster. The EMPLOYEE DEFINITIONS are shared values (the same kind, prompt and model),
@@ -54,15 +54,18 @@ import {
 } from './thread-log';
 
 // ---------------------------------------------------------------------------
-// The employee roster: the same four standing identities in every Story's harness
+// The employee roster: the same five standing identities in every Story's harness
 // ---------------------------------------------------------------------------
 
 /**
- * The four EMPLOYEE kinds (V-1). The constant keeps its historical `AGENT` spelling because the
+ * The five EMPLOYEE kinds (V-1). The constant keeps its historical `AGENT` spelling because the
  * engine profile key is the kind; what it enumerates is the roster of employees, not running
  * agents. An employee becomes an agent only for the thread a Run opens under it.
+ *
+ * `researcher` is the Phase-1 addition (documents/phase-1-research-pipeline.md §3.1): it owns a
+ * dispatched Work Item (V-2), reads everything, and writes only `knowledge`.
  */
-const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker'];
+const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker', 'researcher'];
 
 /**
  * R2/R3 — the harness engine's CONTEXT plugins this host runs. Both are shipped built-ins:
@@ -84,7 +87,7 @@ const STORYLINE_BUILTIN_PLUGINS = BUILTIN_PLUGINS.filter(
 
 /**
  * Every configured employee holds the same rank (the harness's authority model, R15). Rank A for
- * all four makes them peers: none is another's subordinate, and the ENGINE registers no
+ * all five makes them peers: none is another's subordinate, and the ENGINE registers no
  * `delegate` door for a single-rank roster. The harness still needs a routing name for an
  * unfocused session, and that name is the Editor — the Author's one channel — not a higher-ranked
  * employee (V-1).
@@ -92,12 +95,16 @@ const STORYLINE_BUILTIN_PLUGINS = BUILTIN_PLUGINS.filter(
  * V-2: only a Rank A employee may own a dispatched Work Item and take action on a phase's
  * requirements. A Rank B employee may be added, but only as a delegation target inside a Rank A
  * thread; it never receives a Work Item and never reports to the loop independently.
+ *
+ * The Researcher is Rank A too (§3.1): the `research` Work Item is a dispatched job like any
+ * other, so a Rank B Researcher could not own it and the pipeline's second gate would never close.
  */
 export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
     writer: 'A',
     editor: 'A',
     reader: 'A',
-    checker: 'A'
+    checker: 'A',
+    researcher: 'A'
 };
 
 /**
@@ -356,6 +363,14 @@ export const STORY_AGENT_CATALOGUE: readonly StoryAgentCatalogueEntry[] = [
         kind: 'checker',
         title: 'Checker',
         description: 'Judges criteria, files findings and tasks, and reports to the Author. Writes no artifacts.'
+    },
+    {
+        // §7.3 of documents/phase-1-research-pipeline.md: the fifth employee. Unlike the four
+        // above it has no §4 story artifact of its own — its product is `knowledge`, and its
+        // writes are refused naming P10 the moment it reaches for the book.
+        kind: 'researcher',
+        title: 'Researcher',
+        description: 'Searches the web, keeps the Story knowledge current, and never writes the book.'
     }
 ];
 

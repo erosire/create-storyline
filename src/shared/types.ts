@@ -94,10 +94,15 @@ export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major'];
 
 /**
  * §4.12 `roles[].kind` — selects the brief and the PERMISSION ROW, never the tool list
- * (D-17a, T-6a). All four kinds hold the whole catalogue; the server refuses the calls a
+ * (D-17a, T-6a). All five kinds hold the whole catalogue; the server refuses the calls a
  * kind may not make (T-1a).
+ *
+ * `researcher` is the Phase-1 research pipeline's employee (documents/phase-1-research-pipeline.md
+ * §3.1): it reads everything and writes only `knowledge`, so the pipeline can research the
+ * period/place/facts a Story depends on without ever touching the book. Appending it (rather
+ * than inserting) keeps the §4 order of the original four intact.
  */
-export const ROLE_KINDS = ['writer', 'editor', 'reader', 'checker'] as const;
+export const ROLE_KINDS = ['writer', 'editor', 'reader', 'checker', 'researcher'] as const;
 export type RoleKind = (typeof ROLE_KINDS)[number];
 
 /** §4.10 `state` — the finding chain: raise (unconfirmed) → verify → approve → fix (D-33, D-34). */
@@ -230,19 +235,21 @@ export interface ChapterSection {
 // ---------------------------------------------------------------------------
 
 /**
- * Phase ①'s standard sampling size: how many Writers expand one Seed into competing Summary
- * drafts. D-17d makes `attempts` the Author's setting; this is the default the built-in
- * `writer-summary` template ships with, and the fallback a Story without an override reads.
+ * Phase ①'s standard sampling size: how many no-tool Writers expand one Seed Brief into competing
+ * `SummarySample` drafts per round. The number is a STORY setting (`summary_sampling`), not a
+ * template's `attempts` — the phase-① sampler is one turn per sample (`attempts: 1`), and this is
+ * the fallback `records.ts:samplingSizeOf` and the Summary pane read when the Story sets nothing.
  *
  * A ROUND IS THREE DRAFTS. Three is enough for a real choice (one kept, two discarded) without
- * turning the first pass into a lottery. Every later round is three fresh drafts written from
- * the kept Summary, so the rail is a linear Revision 1…N history, not a tree.
+ * turning the first pass into a lottery. Every later round is a fresh set written from the kept
+ * revision plus the fix tasks, so the rail is a linear Revision 1…N history, not a tree.
  */
 export const DEFAULT_SUMMARY_SAMPLING = 3;
 
 /**
- * Phase ①'s standard Reader count: how many Readers critique each Summary draft before the
- * Editor reviews their findings. The Author may change it per Story.
+ * Phase ①'s standard Reader count: how many no-tool screening passes judge each sample (§6.4
+ * step 4), and how many deep-review Reader passes the selected revision gets (§6.4 step 6). The
+ * Author may change it per Story (`summary_readers`).
  */
 export const DEFAULT_SUMMARY_READERS = 5;
 
@@ -294,6 +301,19 @@ export interface Story extends StoredRecord {
     summary_sampling?: number;
     /** Phase ①: how many Readers critique each Summary draft before the Editor sees it (default 5). */
     summary_readers?: number;
+    /**
+     * Phase ①'s P11 audit for samples that were truncated (documents/phase-1-research-pipeline.md
+     * §3.6/§6.6). The selection commit hard-deletes the losing `revisions` rows and their
+     * `sample_reviews` (P13/D-22 as the new pipeline asks), so this line — ids, issue counts and
+     * the selected id, one entry per round — is the only surviving record of what competed.
+     * Appended in the `choose_sample` commit, before the deletes.
+     */
+    sampling_history?: Array<{
+        round: number;
+        at: string;
+        samples: Array<{ revision_id: string; critical: number; high: number; valid: boolean }>;
+        selected: string;
+    }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +454,7 @@ export interface Task extends StoredRecord {
     kind: string;
     title: string;
     detail?: string;
-    /** A RoleKind (`writer`/`editor`/`reader`/`checker`) naming who does the work. */
+    /** A RoleKind (`writer`/`editor`/`reader`/`checker`/`researcher`) naming who does the work. */
     owner_role?: string;
     state: TaskState;
     priority: number;
@@ -761,6 +781,28 @@ export interface Revision extends StoredRecord {
     verdict_refs: string[];
     /** T-2a / L-17: required on a selection, and it names the rule applied and what each draft was preferred for. */
     selection_note?: string;
+    /**
+     * Phase ① sampling (documents/phase-1-research-pipeline.md §3.5): how the draft came into
+     * existence. `sampled` is a round-1 one-turn Writer answer the engine persisted from the
+     * validated structured output (D-12a's engine-writes exception); `refined` is every later
+     * round, written from the current revision + the open fix tasks. Absent on rows written
+     * before sampling existed and on deep-review revisions that go through `editSummary`.
+     */
+    origin?: 'sampled' | 'refined';
+    /** 1-based sampling round this sample belongs to; round 1's winner is the First Revision. */
+    round?: number;
+    /**
+     * Byte-stable hash of the compiled first prompt that produced it (§5's cache key and P11
+     * audit). Every sample of one round shares it, which is how the Author proves the prefix
+     * was identical.
+     */
+    prompt_hash?: string;
+    /**
+     * Screening totals, denormalised so the deterministic selector (§6.5: fewest critical, then
+     * fewest high, then fewest total, then earliest) and the dashboard do not have to re-count
+     * `sample_reviews` on every read. Written by the `choose_sample` commit.
+     */
+    issue_counts?: { critical: number; high: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -835,13 +877,150 @@ export interface Proposal extends StoredRecord {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 1 research pipeline — `knowledge`, `seed_briefs`, `sample_reviews`
+// (documents/phase-1-research-pipeline.md §3.2-§3.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * `knowledge.importance` — the Researcher's triage scale, ordered most to least load-bearing.
+ *
+ * `critical`/`high` deliberately reuse the triage words of {@link FINDING_COSTS}, because the
+ * prompt compiler's filter is one comparison against that vocabulary (§5: "only critical and
+ * high entries enter the prompt"); `normal`/`low` stay readable through `readKnowledge` for the
+ * deep-review Reader and never enter a sampling prefix.
+ */
+export const KNOWLEDGE_IMPORTANCE = ['critical', 'high', 'normal', 'low'] as const;
+export type KnowledgeImportance = (typeof KNOWLEDGE_IMPORTANCE)[number];
+
+/** `knowledge.kind` — what class of fact an entry is, so a prompt can pick the ones it needs. */
+export const KNOWLEDGE_KINDS = ['fact', 'world_rule', 'tech', 'period', 'place', 'person', 'other'] as const;
+export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
+
+/**
+ * One citation on a Knowledge entry. Same shape as {@link IdeaSource} because T-10's rule is
+ * the same rule: a source backs ONE named claim (a page cited for a claim it does not make is
+ * a defect, not "mostly right").
+ */
+export interface KnowledgeSource {
+    url_or_title: string;
+    claim: string;
+    accessed_at: string;
+}
+
+/**
+ * §3.2 — the Researcher's artifact: one durable fact the book depends on, with its importance
+ * and its sources.
+ *
+ * D-16's dedupe pattern is reused verbatim: `fingerprint` is a stable hash of
+ * (story_id, normalised topic, normalised claim), a repeat report bumps `seen_count` and
+ * refreshes the sources instead of opening a second row. `phase` is absent when the entry
+ * applies to the whole book (the Researcher is assigned ALL_PHASES for exactly that reason).
+ */
+export interface KnowledgeEntry extends StoredRecord {
+    story_id: string;
+    /** Phase the entry was gathered for. Absent = applies to the whole book. */
+    phase?: StoryPhase;
+    kind: KnowledgeKind;
+    /** Normalised topic key — one entry per topic + claim (dedupe key part). */
+    topic: string;
+    claim: string;
+    detail?: string;
+    importance: KnowledgeImportance;
+    sources: KnowledgeSource[];
+    /** Stable hash of (story_id, topic, normalised claim) — repeats bump seen_count, D-16 pattern. */
+    fingerprint: string;
+    seen_count: number;
+    /** The Researcher role name/run that last wrote it (P11 attribution). */
+    author: string;
+}
+
+/**
+ * `seed_briefs.status` — `draft` while the Editor is still structuring, `accepted` once the
+ * brief matches the current Seed and every non-optional field is present. The pipeline refuses
+ * to sample until an accepted brief exists (§6.4 gate 1).
+ */
+export const SEED_BRIEF_STATES = ['draft', 'accepted'] as const;
+export type SeedBriefState = (typeof SEED_BRIEF_STATES)[number];
+
+/**
+ * §3.3 — the Editor's structured projection of the Author's Seed.
+ *
+ * P5 is preserved by construction: this is a DERIVED record, never an edit of `stories.idea`
+ * (which stays the C-14 reference). `seed_hash` is the hash of the Seed text the brief was
+ * derived from (see `src/shared/seed-hash.ts`), so a Seed edit re-arms the structuring and a
+ * stale brief can never be mistaken for a current one. One accepted brief per Story; a new
+ * `seed_hash` writes a new row and supersedes the old one in the same commit.
+ */
+export interface SeedBrief extends StoredRecord {
+    story_id: string;
+    /** Hash of `stories.idea` this brief was derived from (see src/shared/seed-hash.ts). */
+    seed_hash: string;
+    logline: string;
+    protagonist: string;
+    want: string;
+    need?: string;
+    obstacle: string;
+    stakes: string;
+    setting: string;
+    world_rules: string[];
+    promise: string;
+    tone_hints?: string;
+    constraints: string[];
+    open_questions: string[];
+    status: SeedBriefState;
+    notes?: string;
+}
+
+/**
+ * §3.4 — one screening Reader's `critical`/`high` complaint about ONE sample.
+ *
+ * This is NOT a {@link Finding}: it never enters the D-33/D-34 ladder, cannot block a Writer,
+ * and exists only to rank the round's samples (§6.5) and to seed the deep review's brief.
+ * `criterion` is free text on purpose — `'C-14'`, `'C-15'`, or `'seed'` for a Seed-contract
+ * breach — because the screening schema closes `severity`, not the criterion vocabulary.
+ */
+export interface SampledIssue {
+    severity: 'critical' | 'high';
+    /** 'C-14', 'C-15', or 'seed' for a Seed-contract breach. */
+    criterion: string;
+    location: string;
+    quote: string;
+    detail: string;
+    fix_hint?: string;
+}
+
+/**
+ * §3.4 — the screening Reader's one-turn answer, persisted by the engine from the run's
+ * validated structured output (§2 decision 2 — the same named exception D-12a makes for the
+ * Digest; the Reader never calls a tool in this mode).
+ *
+ * `valid: false` means the schema-repair retry still failed: the sample is judged anyway, with
+ * an explicit error, so the selector can refuse to install an unjudged draft (§6.5).
+ */
+export interface SampleReview extends StoredRecord {
+    story_id: string;
+    revision_ref: string;
+    /** Reader role name that produced it. */
+    reader: string;
+    issues: SampledIssue[];
+    /** false = the one repair retry still failed schema validation. */
+    valid: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Collection registry
 // ---------------------------------------------------------------------------
 
 /**
- * The 17 §4 collection names, in §4 order. Exported as data so the store, the persistence
+ * The 20 §4 collection names, in §4 order. Exported as data so the store, the persistence
  * layer and the dashboard can enumerate the model without hardcoding the list in three
  * places (P15: adding a collection must touch one file).
+ *
+ * The last three are the Phase-1 research pipeline's (§3.2-§3.4): `knowledge`, `seed_briefs`,
+ * `sample_reviews`. They are APPENDED, never inserted, because the original 17 are pinned §4
+ * names and their relative order is what old snapshots were written in. New collections are
+ * additive: every snapshot reader walks this registry, so an old `store.json` loads with the
+ * three new collections empty (§11.1).
  */
 export const COLLECTION_NAMES = [
     'stories',
@@ -860,7 +1039,10 @@ export const COLLECTION_NAMES = [
     'directives',
     'revisions',
     'ideas',
-    'proposals'
+    'proposals',
+    'knowledge',
+    'seed_briefs',
+    'sample_reviews'
 ] as const;
 
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
@@ -887,6 +1069,9 @@ export interface CollectionRecords {
     revisions: Revision;
     ideas: Idea;
     proposals: Proposal;
+    knowledge: KnowledgeEntry;
+    seed_briefs: SeedBrief;
+    sample_reviews: SampleReview;
 }
 
 /** Any §4 record — the type the journal, the audit trail and generic tool plumbing need. */
@@ -914,5 +1099,8 @@ export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
     directives: 'directive',
     revisions: 'revision',
     ideas: 'idea',
-    proposals: 'proposal'
+    proposals: 'proposal',
+    knowledge: 'knowledge_entry',
+    seed_briefs: 'seed_brief',
+    sample_reviews: 'sample_review'
 };

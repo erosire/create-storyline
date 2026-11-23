@@ -6,6 +6,7 @@
  * refused naming the field and the expected shape — including the required `cost` enum on
  * `raiseFinding` and the required `evidence` on a failing criterion (D-15).
  */
+import { KNOWLEDGE_IMPORTANCE, KNOWLEDGE_KINDS } from '../../shared/types';
 import type { PermissionLevel, ToolDefinition } from './types';
 
 /** A property schema, JSON-Schema shaped so the model sees the OpenAI wire form. */
@@ -100,10 +101,44 @@ export const RECOMMENDATION_ENUM = enumOf(
     '`stuck` means the reviewer thinks the Story should go `pending`.'
 );
 
-/** §4.12 `roles[].kind` — the four dispatched kinds. */
+/** §4.12 `roles[].kind` — the five dispatched kinds (§7.2 adds the Researcher). */
 export const ROLE_KIND_ENUM = enumOf(
-    ['writer', 'editor', 'checker', 'reader'],
+    ['writer', 'editor', 'checker', 'reader', 'researcher'],
     'The role kind that should do the work.'
+);
+
+/**
+ * `knowledge.importance` (documents/phase-1-research-pipeline.md §3.2): the Researcher's triage
+ * scale, most to least load-bearing. T-11 puts the set in the schema rather than in a prompt, so
+ * an inflated or invented level is refused with the accepted values.
+ */
+export const KNOWLEDGE_IMPORTANCE_ENUM = enumOf(
+    [...KNOWLEDGE_IMPORTANCE],
+    'How load-bearing the fact is: critical = the world breaks if ignored, high = a reader notices, normal/low = colour.'
+);
+
+/** `knowledge.kind` (§3.2): what class of fact an entry is, so a prompt can pick the ones it needs. */
+export const KNOWLEDGE_KIND_ENUM = enumOf(
+    [...KNOWLEDGE_KINDS],
+    'What class of fact this is (fact | world_rule | tech | period | place | person | other).'
+);
+
+/**
+ * T-10's citation shape, as an array item schema. All three fields are required because
+ * `KnowledgeSource` stores all three: a source without a claim is a bookmark, and a source
+ * without `accessed_at` cannot be re-checked later.
+ */
+export const KNOWLEDGE_SOURCES_ARG: PropertySchema = arr(
+    'The sources backing this claim (T-10): the page or title, the specific claim it supports, and when you read it.',
+    obj(
+        'One citation.',
+        {
+            url_or_title: str('The url or the title of what you read.'),
+            claim: str('The specific claim this source supports — not a paraphrase of its title (T-10).'),
+            accessed_at: str('When you read it (ISO timestamp).')
+        },
+        ['url_or_title', 'claim', 'accessed_at']
+    )
 );
 
 /** §4.15's unit kinds — what a competing draft can be about. */

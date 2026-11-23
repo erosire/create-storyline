@@ -29,6 +29,10 @@
 // depend on a refusal they did not script), and hold any panel logic. A D-38 proposal never reaches
 // this class at all: the wrapper in ./panel short-circuits a mutating call BEFORE `execute`, so
 // `runtime.calls` is exactly "what really executed" — which is what the panel's acceptance needs.
+// The ONE exception to the permission-blind rule is the Phase-1 research surface (structureSeed /
+// writeKnowledge / readKnowledge / retireKnowledge): those three writes are gated by the kind that
+// owns them, because a run-layer test must not be able to script an impossible session (see
+// `wrongKindRefusal`).
 import {
     CasConflict,
     Store,
@@ -39,6 +43,9 @@ import {
     type UpdatePatch
 } from '../store';
 import { BUILT_IN_CRITERIA, defaultGoal } from '../../shared/criteria';
+// The Seed's change-detector hash, shared with `structureSeed` (tools/knowledge.ts) so the mock's
+// P5 refusal fires on exactly the value the real tool would compare (documents/…§3.3).
+import { seedHashOf } from '../../shared/seed-hash';
 import {
     type Chapter,
     type ChapterSection,
@@ -46,9 +53,12 @@ import {
     type Finding,
     type Goal,
     type Idea,
+    type KnowledgeEntry,
+    type KnowledgeSource,
     type Plotline,
     type RecordInit,
     type Revision,
+    type SeedBrief,
     type Story,
     type StoryPhase,
     type StoredRecord,
@@ -135,6 +145,18 @@ const outsideStory = (ctx: MockRunContext, id: string): ToolResult => ({
     ok: false,
     refused: 'T-3',
     message: `${id || 'that record'} is not part of story ${ctx.storyId} — a run exists for exactly one Story (T-3)`
+});
+
+/**
+ * The Phase-1 tools' kind gate (§7.2). This double otherwise never enforces the permission table
+ * — the tool layer's own tests do — but `structureSeed`/`writeKnowledge`/`retireKnowledge` are
+ * handed to the run layer as the Researcher's and the Editor's, and a run-layer test that scripts
+ * a Writer calling one has to see the same P10 a real session would answer.
+ */
+const wrongKindRefusal = (ctx: MockRunContext, tool: string, holder: string): ToolResult => ({
+    ok: false,
+    refused: 'P10',
+    message: `a ${ctx.roleKind} may not ${tool}: §7.2 reserves it for a ${holder}`
 });
 
 /** T-4's rejected-write shape and T-5's missing-`why` shape; anything else is a genuine fault. */
@@ -742,6 +764,162 @@ function defaultTools(): Record<string, MockToolHandler> {
             );
 
             return { ok: true, id: created.id, rev: created.rev };
+        },
+
+        // -- Phase-1 research (documents/phase-1-research-pipeline.md §7.1) ---------------------
+        // The four tools a run-layer test may now script. They are schema-faithful enough for the
+        // run layer's purposes (a real row, a real commit, a real refusal code) and they mirror the
+        // REAL tool's one structural guard per call: the kind gate (§7.2), the Seed hash (P5), and
+        // the retire refusal. The fingerprint here is mock-local on purpose — the run layer's rig
+        // must not import T3's tools module, which is the whole reason this double exists.
+        structureSeed: async (ctx, args, runtime) => {
+            if (ctx.roleKind !== 'editor') return wrongKindRefusal(ctx, 'structureSeed', 'editor');
+
+            const story = storyOf(runtime, ctx);
+
+            if (story === undefined)
+                return { ok: false, refused: 'T-3', message: `no story ${ctx.storyId} in the store (T-3)` };
+
+            const currentHash = seedHashOf(story.idea);
+
+            if (str(args.seed_hash).trim() !== currentHash)
+                return {
+                    ok: false,
+                    refused: 'P5',
+                    message: `seed_hash does not match the Seed this Story holds now (${currentHash}): re-derive from the current Seed`
+                };
+
+            const accepted = runtime.store.seedBriefs
+                .list()
+                .find(
+                    (row) => row.story_id === ctx.storyId && row.seed_hash === currentHash && row.status === 'accepted'
+                );
+
+            if (accepted !== undefined) return { ok: true, repeat: true, id: accepted.id, rev: accepted.rev };
+
+            const created = await inCommit(runtime.store, 'structure_seed', () => {
+                for (const row of runtime.store.seedBriefs
+                    .list()
+                    .filter((brief) => brief.story_id === ctx.storyId && brief.status === 'accepted'))
+                    runtime.store.seedBriefs.update(row.id, { status: 'draft' }, attrFor(ctx, args));
+
+                return runtime.store.seedBriefs.create(
+                    {
+                        story_id: ctx.storyId,
+                        seed_hash: currentHash,
+                        logline: str(args.logline),
+                        protagonist: str(args.protagonist),
+                        want: str(args.want),
+                        need: str(args.need) || undefined,
+                        obstacle: str(args.obstacle),
+                        stakes: str(args.stakes),
+                        setting: str(args.setting),
+                        world_rules: Array.isArray(args.world_rules) ? (args.world_rules as string[]) : [],
+                        promise: str(args.promise),
+                        tone_hints: str(args.tone_hints) || undefined,
+                        constraints: Array.isArray(args.constraints) ? (args.constraints as string[]) : [],
+                        open_questions: Array.isArray(args.open_questions) ? (args.open_questions as string[]) : [],
+                        status: 'accepted'
+                    },
+                    attrFor(ctx, args)
+                ) as SeedBrief;
+            });
+
+            return { ok: true, id: created.id, rev: created.rev };
+        },
+        writeKnowledge: async (ctx, args, runtime) => {
+            if (ctx.roleKind !== 'researcher') return wrongKindRefusal(ctx, 'writeKnowledge', 'researcher');
+
+            const topic = str(args.topic).trim();
+            const claim = str(args.claim).trim();
+            const sources = Array.isArray(args.sources) ? (args.sources as KnowledgeSource[]) : [];
+
+            // Mock-local fingerprint: the same (story, topic, claim) key the real tool hashes.
+            const fingerprint = `mock|${ctx.storyId}|${topic.toLowerCase()}|${claim.toLowerCase()}`;
+            const existing = runtime.store.knowledge
+                .list()
+                .find((row) => row.story_id === ctx.storyId && row.fingerprint === fingerprint);
+
+            if (existing !== undefined) {
+                const merged = [...existing.sources];
+
+                for (const source of sources)
+                    if (!merged.some((row) => row.url_or_title === source.url_or_title)) merged.push(source);
+
+                const bumped = await inCommit(runtime.store, 'write_knowledge', () =>
+                    runtime.store.knowledge.update(
+                        existing.id,
+                        {
+                            seen_count: existing.seen_count + 1,
+                            importance: (str(args.importance) || existing.importance) as KnowledgeEntry['importance'],
+                            sources: merged,
+                            author: ctx.roleName
+                        },
+                        attrFor(ctx, args)
+                    )
+                );
+
+                return { ok: true, repeat: true, id: bumped.id, rev: bumped.rev };
+            }
+
+            const created = await inCommit(runtime.store, 'write_knowledge', () =>
+                runtime.store.knowledge.create(
+                    {
+                        story_id: ctx.storyId,
+                        kind: (str(args.kind) || 'fact') as KnowledgeEntry['kind'],
+                        topic: topic.toLowerCase(),
+                        claim,
+                        detail: str(args.detail) || undefined,
+                        importance: (str(args.importance) || 'normal') as KnowledgeEntry['importance'],
+                        sources,
+                        fingerprint,
+                        seen_count: 1,
+                        author: ctx.roleName,
+                        phase: (str(args.phase) || undefined) as StoryPhase | undefined
+                    },
+                    attrFor(ctx, args)
+                )
+            );
+
+            return { ok: true, id: created.id, rev: created.rev };
+        },
+        readKnowledge: (ctx, args, runtime) => ({
+            ok: true,
+            data: runtime.store.knowledge
+                .list()
+                .filter((row) => row.story_id === ctx.storyId)
+                .filter((row) => (str(args.importance) ? row.importance === str(args.importance) : true))
+                .filter((row) => (str(args.kind) ? row.kind === str(args.kind) : true))
+                .filter((row) => (str(args.topic) ? row.topic.includes(str(args.topic).toLowerCase()) : true))
+        }),
+        retireKnowledge: async (ctx, args, runtime) => {
+            if (ctx.roleKind !== 'researcher') return wrongKindRefusal(ctx, 'retireKnowledge', 'researcher');
+
+            const entry = scopedGet(runtime.store.knowledge, ctx.storyId, str(args.knowledge_id));
+
+            if (entry === undefined) return outsideStory(ctx, str(args.knowledge_id));
+            if (entry.importance === 'low')
+                return {
+                    ok: false,
+                    refused: 'T-11',
+                    message: `knowledge ${entry.id} is already low importance, so there is nothing to retire`
+                };
+
+            try {
+                const updated = runtime.store.knowledge.update(
+                    entry.id,
+                    {
+                        importance: 'low',
+                        detail: `${entry.detail ? `${entry.detail}\n\n` : ''}(retired) ${whyOf(args)}`
+                    },
+                    attrFor(ctx, args),
+                    expectsOf(args)
+                );
+
+                return { ok: true, rev: updated.rev };
+            } catch (error) {
+                return asToolError(error);
+            }
         },
 
         // -- D-17e: the seam the run layer injected ----------------------------------------------

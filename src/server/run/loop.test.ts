@@ -49,7 +49,7 @@ function harness(turns: Array<(request: ChatRequest) => ChatResponse>) {
                 `no scripted turn for call ${state.callIndex} (the loop asked more times than the test scripted)`
             );
 
-        return { ...turn(request), usage: { input: 100, output: 40 } };
+        return { ...turn(request), usage: { input: 100, output: 40, cached_input: 0 } };
     });
 
     return { store, story, runtime, client, requests, context: runtime.createContext(SESSION) };

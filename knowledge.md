@@ -3,11 +3,15 @@
 The loop the Author drives: a Story is a Goal plus a crew that keeps working on it until it runs
 out of work, and an Author who owns every decision the loop stops for.
 
-> **Last verified:** 2026-11-11, against the tree as it stood after the §15 integration suites
-> landed (`src/server/integration/`). Every path and sentence quoted here was read out of a
-> running server — the values come from the integration tests that assert them, and those tests
-> pass. Behaviour this file claims but no test pins is marked as such. No code was touched by
-> this pass beyond the four fixes named in [Fixes this pass made](#fixes-this-pass-made).
+> **Last verified:** 2026-11-23, against the tree as it stood after the Phase-① research pipeline
+> landed (`src/server/loop/work.ts:phase1PipelineCandidates`, `src/server/run/phase1-prompt.ts`,
+> `src/server/loop/engine.ts:trySelectSample`) and after the T12 fix pass (Story delete covers the
+> three research collections, a backtrack scraps the reviews of the revisions it deletes, screening
+> exhaustion degrades to a partial selection, a round cannot select before its sample set exists,
+> a cleared sampling failure re-arms a wave, `/agents` answers alphabetically, and the Researcher's
+> `proposals` cell is `read`). The tests that pin it are `src/server/loop/phase1-research.test.ts`,
+> `loop/phase1-gates.test.ts`, `loop/restart.test.ts`, `loop/sample-select.test.ts`,
+> `run/phase1-prompt.test.ts` and `integration/summary-sampling.test.ts`.
 
 ## What the product is
 
@@ -27,20 +31,22 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 | --------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`.                                                                      |
 | Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                                                       |
-| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Explorer/assistant), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on.                           |
-| Brief     | `src/server/run/brief.ts` | The one artefact a crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2).                                                                                                     |
-| Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`).                                                                 |
-| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill.                                                                                                     |
+| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
+| Brief     | `src/server/run/brief.ts` | The artefact a tool-carrying crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2). A `toolMode: 'none'` run is given the compiled phase-① prompt instead (`run/phase1-prompt.ts`), and its hash is what the row carries. |
+| Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`) — EXCEPT a `toolMode: 'none'` run (phase ①'s samples and screens), which calls `chat.complete` directly from `run/executor.ts`, gets no tool context and therefore opens no engine thread.                                                                 |
+| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ①'s pipeline is `phase1PipelineCandidates`), phase ①'s deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill. |
 | API       | `src/server/api/`         | `routes.ts` is the Author's verbs; `projections.ts` is what the panel and the desk read; `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`). `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport. |
 | Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`), the panels in `components/`, the shell in `StorylineApp.tsx`.                                                                                                                                                                                     |
 
 ## Things that are easy to get wrong
 
-- **A Story row has no `state`.** The panel's `status` (`ready` / `pending` / `stopped` /
-  `completed` / `sealed`) and `pending_kind` (`none` / `phase_signoff` / `idea_selection` /
-  `finding_review` / `proposal_review` / `completion` / `drained` / `stopped`) are both derived by
-  `projections.ts:storyRow` from the Story's flags plus the Goal. `blocked_on` and `status_reason`
-  are the human half of the same decision. A stop is a `status`, not a pending kind.
+- **A Story has no separate `state` field.** `stories.status` (`ready` / `pending` / `completed` /
+  `stopped`, `shared/types.ts:STORY_STATUSES`) and `stories.pending_kind` (`phase_signoff` /
+  `idea_selection` / `finding_approval` / `drained` / `stalled` / `none`) are written by the loop
+  engine and the Author (D-1, D-2a); `api/projections.ts:storyRow` only lifts them onto the panel
+  row beside the derived `levels`, `trend`, `blocked_on`, `active_runs` and `completion_proposed`.
+  A stop is a `status`, not a pending kind; a completion proposal is `completion_proposed` on the
+  panel row, never a status.
 - **`levels` is `n/m`, and an unreached level is `n/a` (L-14).** A fresh Story reads
   `{"summary":"1/2 · failing: C-14","plotlines":"n/a","chapters":"n/a","whole":"n/a"}` — the
   failing list is the point of the string, not decoration. `completion_preview` and the queue are
@@ -49,12 +55,43 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
   (`criteria/engine.ts:scopeTargets`), so `submitVerdict`/`raiseFinding` must resolve a `story_1`
   reference — `tools/artifacts.ts:RESOLVABLE` lists `stories` first and `inStoryScope()` treats a
   Story row's own id as its scope, because a §4.1 Story row carries no `story_id`.
-- **Divergence is not a dial field.** `tools/artifacts.ts:isDivergenceMode` reads
-  `stories.template_refs`; every built-in Writer carries `attempts > 1`, so a default Story files
-  competing drafts from its first attempt (D-3d). The dial itself is `PATCH /stories/:id` with
-  `auto_approve: Cost[]` (D-35), and it is the whole ladder: verify → approve → task → repair.
+- **Divergence is not a dial field, and phase ① no longer uses it.** `tools/artifacts.ts:isDivergenceMode`
+  reads `stories.template_refs`; `writer-plotlines` and `writer-chapters` carry `attempts: 2`, so
+  phases ②/③ file competing drafts and an Editor selects (D-3d, §6.2a). Phase ① has **no
+  `write_unit` and no `select`**: its divergence is the sampling round (`summary_sampling`,
+  `loop/work.ts:phase1PipelineCandidates`), its drafts are samples the engine persists, and its
+  selection is deterministic (`loop/sample-select.ts`). `writer-summary-sampler` is `attempts: 1` —
+  one run is one sample. The dial itself is `PATCH /stories/:id` with `auto_approve: Cost[]` (D-35),
+  and it is the whole ladder: verify → approve → task → repair.
 - **`chapter_count` lives on the Summary**, not on the Story (D-3b), and the chapter set is
-  materialised by the Plotlines **lock** (D-3c) — not by a Writer.
+  materialised by the Plotlines **lock** (D-3c) — not by a Writer. Phase ①'s selection installs the
+  six prose fields and **never** `chapter_count` (`engine.ts:SUMMARY_PROSE_KEYS`), because a sample
+  cannot carry Author truth.
+- **A sampling round is read from three record families, plus its run rows.** `revisions` rows whose
+  `round` is the in-flight round (`records.ts:roundRevisions`), the `sample_reviews` of those revisions
+  (`screensFor`), and `stories.sampling_round`, which counts COMPLETED rounds — the in-flight round
+  is `(sampling_round ?? 0) + 1` (`samplingRoundOf`). Nothing about a round lives in engine memory,
+  so a restart mid-round resumes from those rows (L-3); `engine.trySelectSample` runs once per sweep
+  for exactly that reason.
+- **The losing samples are hard-deleted; `sampling_history` is the stored memory of them.** The
+  selection commit deletes every other revision of the round and every `sample_reviews` row pointing
+  at one, after appending the round's line (ids + issue counts + selected id) to
+  `stories.sampling_history`. The Story view can still RENDER a deleted loser because
+  `api/projections.ts:viewRevisions` reads the journal's delete payload and marks it `discarded` —
+  that is a reading surface, not a surviving row, and no route restores one (D-24's restore is not
+  available for a truncated sample).
+- **An unbound Editor job binds `editor-general` because it is FIRST in `DEFAULT_ASSIGNMENT`.**
+  `records.ts:templatesFor` returns the assigned templates of a role kind in assignment order and
+  `work.ts:candidate` takes the first, so `verify_findings`, `verify_ideas`, `directive_work` and
+  `select` all run on `editor-general` — and the phase-① structuring pass binds
+  `editor-seed-structure` explicitly to stay off it. The ordering is load-bearing: putting the
+  structurer first made every phase-① verification run the structuring prompt.
+- **A `toolMode: 'none'` run has no engine thread.** Phase ①'s `sample_unit`/`screen_samples` runs
+  call `chat.complete` directly (`run/executor.ts:runStructuredTurn`): the run row is the ordinary
+  `spawning → working → torn_down` record and the request/answer pair is retained in the thread log
+  (`single_<runId>`), but `GET /agents` builds `working` from live ENGINE threads — so a sampling run
+  never shows as a live tile thread. It shows in `recent` (read from run rows) and in the employee's
+  retained thread history.
 - **A phase's unit ref differs per phase**: phase ① is the Summary row id, phase ②'s set-level
   work is the empty ref `''`, phase ③'s units are chapter ids. `loop/work.ts` treats `''` as the
   set, and a `ref === ''` unit is not "already drafted" (see Fixes below).
@@ -65,8 +102,10 @@ dispatched, deferred}]}`; `engine.settle()` drains the in-flight runs. Tests dri
   has work.** A phase whose Goal passes short-circuits to `pending/phase_signoff` with its probe
   round deferred — `{ "wi_probe_reader_summary_1": "not dispatched: phase_signoff" }` — and a
   `drained` Story defers the tray's verify jobs — `{ "wi_verify_ideas_1_2_idea_1": "not
-dispatched: drained" }`. Ideas land while a phase is still working, which is why §15 step 1's
-  "tray blocks the lock" needs a withheld criterion to be reachable at all.
+  dispatched: drained" }`. Ideas land while a phase is still working, which is why exercising L-7a
+  needs a tray someone filled. Phase ①'s shipped crew files NO Ideas: the screening Reader has no
+  tools and the deep-review pass is told to report defects, so the tray stays empty in a default
+  phase-① Story.
 
 ## The Author's verbs (routes.ts)
 
@@ -92,6 +131,17 @@ the drafts stay competing), pinned by `api/revision-routes.test.ts`,
 `GET /queue` (a bare array, every Story, oldest first), `GET /runs?story_id=`,
 `GET /stream` (SSE: a `ready` frame, then one per commit group).
 
+`PATCH /stories/:id` also carries phase ①'s two counts — `summary_sampling` (how many one-turn
+samples a round owes, standard 3) and `summary_readers` (how many screening passes judge each, and
+how many deep-review passes the selected revision owes, standard 5), both integer-bounded to
+`SUMMARY_REVIEW_LIMIT` (20) by `routes.ts`; `SummaryPane`'s two number inputs call the same fields.
+Reading a Story: `GET /stories/:id` projects `seed_brief` (the accepted Seed Brief trimmed to its
+reading fields; `null` before gate 1) and `sampling` (`{round, selected?, history}`, history
+newest-first and capped at five) beside the §4 collections (`api/projections.ts`). The knowledge
+tree from `GET /stories/:id/knowledge` now has NINE sections and `research` is FIRST, mirroring
+`store.knowledge`; the left rail still does not render that tree — it is the `knowledge` tool's
+durable directory and a future reading surface.
+
 Lock gates, in order: the Ideas tray first (`cannot lock <phase>: N Ideas still in the tray — each
 must be selected, discarded, or deferred first (L-7a, D-29)` — the tray is every UNDECIDED Idea of the
 phase, `loop/records.ts:undecidedIdeas`, so an Editor verdict on a row does not release the lock), then
@@ -105,8 +155,11 @@ the number U-14's prompt states, counted from the same `DISCARDABLE_IDEA_STATES`
 - **No turn cap in a session** (E-0): a crew that re-issues a refused call grows the transcript
   until the process dies. The test crew caps itself at three turns; a real model stops asking.
 - **A finding a crew re-files after it was repaired restarts the ladder.** T-10's `already_open`
-  guard only covers a finding that is still open; a scripted Checker that files the same flaw
-  every round keeps the loop repairing chapter 3 forever.
+  guard only covers a finding that is still open. A consumed phase-① fix task closes its finding
+  `fixed` in the selection commit (`engine.ts:trySelectSample`) and a classic fix pass does the same
+  in `settleJob`; a re-raise is then a FRESH row with the same fingerprint, which L-16a reads as a
+  regression. A scripted Checker that files the same flaw every round keeps the loop repairing
+  chapter 3 forever.
 - **`POST /complete` has no tray gate.** `engine.acceptCompletion` completes over a tray of
   undecided Ideas and discards them; only the phase lock refuses on the tray (L-7a).
 - **The assistant run reports `role: "writer"`** on its Run row and `work_item_ref:
@@ -115,14 +168,42 @@ the number U-14's prompt states, counted from the same `DISCARDABLE_IDEA_STATES`
   (`run/catalogue.ts:toolsForRunKind`, U-1e — pinned by `run/assistant-run.test.ts`), and every write
   it makes records `attribution.assistant: true` so the audit tells "the machine, on the Author's
   instruction" from a dispatched crew run (§2/D-8 — `tools/assistant-attribution.test.ts`).
-- **A Task row DOES carry a finding pointer** — §4.7's `finding_ref` (`shared/types.ts:399`) — and it
-  is how the sweep finds the fix work again (`loop/records.ts:findingsTasks`,
+- **A Task row DOES carry a finding pointer** — §4.7's `finding_ref` (`shared/types.ts:462`) — and it
+  is how the sweep finds the fix work again (`loop/records.ts:tasksForFinding`,
   `loop/invalidation.ts:createFixTask`). What is NOT on the row is the unit: the unit comes from the
   finding's own `target_ref`, so a task whose finding was discarded has no way back to a unit except
   through the journal.
 - **No route restores a superseded Revision.** `POST /undo` rewinds one §4.4 SPAN (L-17a), and the
-  Author's select deletes the losing drafts (D-22); a draft lost to a selection is recoverable only by
-  reading the journaled row. P11's "attributable" holds; "revertible" does not.
+  Author's select deletes the losing drafts (D-22). Phase ①'s selection is harsher still: the engine
+  hard-deletes the losing samples AND their `sample_reviews` in its own commit, so a truncated sample
+  survives only as a journaled delete payload (`api/projections.ts:viewRevisions` renders it
+  `discarded` for the rail) and as its `sampling_history` counts. P11's "attributable" holds;
+  "revertible" does not, and `D-24`'s Author override cannot reach a sample the engine truncated.
+- **Phase ①'s attempt counters survive, so recovery is a WAVE (sampling) or a degrade (screening).**
+  A sampling/screening attempt counter is the count of run rows under its claim family
+  (`records.ts:sampleAttempts`/`screenAttempts`), and nothing un-runs a row. A sampling round that
+  spent its `summary_sampling + 3` cap is recovered by a wave (T12/E): the Author clears the failure
+  escalation, and the next sweep bumps `stories.sampling_wave` (guarded by the `wave: <n>` recorded in
+  the row's detail, so it happens once per cleared row), which moves the claim prefix to
+  `wi_sample_<summary>_<round>_w<wave>_` and starts the counter at 1 — the spent rows stay as audit.
+  Screening has no wave on purpose: a draft whose `summary_readers + 3` screening attempts are spent
+  counts as screened (`records.ts:isFullyScreened`) and the round selects on the reviews it has, so
+  there is nothing to reset. `editSeed` and a backtrack to `summary` restart the round at wave 0 with
+  every revision scrapped.
+- **Screening exhaustion degrades instead of stalling, and says so.** A sample that cannot collect
+  its `summary_readers` valid reviews inside the cap no longer holds the round: the selection runs on
+  the partial set and the selection commit opens ONE Author escalation titled
+  `Phase ① screening incomplete in round <n> — selection proceeded with partial screening`
+  (`owner_role: 'author'`), whose detail names the sample(s), the cap and the fact that selection
+  proceeded. The zero-sample case is separate and unchanged: `loop/work.ts:samplingExhausted` +
+  `openSamplingFailureTask` ("Phase ① sampling failed after …") for a round that has no draft at all.
+- **`confirm_finding` is dormant.** The Work Item kind and the `confirmFinding` tool still exist, but
+  no job in any phase generates either now and the `reader_confirmed` gate is gone
+  (`loop/records.ts:summaryBlockingFindings` says so where the old gate used to be). The deep review
+  plus the Editor's verification is what accepts a finding.
+- **There is no `pipeline` flag and no classic phase ①.** The research pipeline is the only phase-①
+  algorithm; `write_unit`, `select` and a Checker pass are phases ②/③'s code paths, and
+  `writer-summary` is not in the template catalogue at all.
 - **The merge verb has no pane control.** `mergeRevisions` exists on the client, the store and the
   shell, and `RevisionsCompare` explains it, but there is no widget that collects the `parts` prose the
   route requires — the merge brief has nowhere to be typed yet, so the route is driven from the API.
@@ -197,11 +278,14 @@ Eight spec gaps the review found, each pinned by a test that names the spec id:
 
 ## Where to start reading
 
-`src/server/loop/engine.ts` (the sweep and the states), `src/server/loop/work.ts` (what work the
-loop can even propose), `src/server/api/projections.ts` (what the Author is told),
-`src/server/tools/index.ts` (what the crew may do), `src/server/integration/harness.ts` (a crew
-that only ever sees its brief), and `documents/specifications.md` §15 for the walk all of it is
-built to survive.
+`src/server/loop/engine.ts` (the sweep, the states, and `trySelectSample`), `src/server/loop/work.ts`
+(what work the loop can even propose — `phase1PipelineCandidates` is phase ①),
+`src/server/loop/sample-select.ts` (the ranking, alone), `src/server/run/phase1-prompt.ts` (the
+sampling/screening prompt compiler), `src/server/run/executor.ts` (the no-tool turn),
+`src/server/api/projections.ts` (what the Author is told), `src/server/tools/index.ts` (what the crew
+may do), `src/server/integration/harness.ts` (a crew that only ever sees its brief), and
+`documents/specifications.md` §16 for the phase-① pipeline and §15 for the walk all of it is built to
+survive.
 
 ## The knowledge directory and the employee roster (2026-11-22)
 
@@ -210,7 +294,8 @@ global employee roster. Both are projections, and neither is a second source of 
 
 - **The directory** (`src/server/knowledge/story-knowledge.ts`) writes through the harness's
   cross-session knowledge engine (`createKnowledgeEngine` + `loadKnowledgeFileStore`) — the same
-  engine the `knowledge` tool uses. One article per section; the eight sections are Summary,
+  engine the `knowledge` tool uses. One article per section; the nine sections are Research (FIRST,
+  mirroring `store.knowledge` — the Researcher's entries with importance and sources), Summary,
   Plotlines, Chapters, Characters, Continuity, Goal, Ideas, Findings. The bytes live at
   `<storeRoot>/harness/knowledge/`, outside every session, so a destroyed harness or a restart
   cannot take them away. The book is still the authority: every store commit re-derives the
@@ -220,12 +305,14 @@ global employee roster. Both are projections, and neither is a second source of 
   tool and a future reading surface, while the left rail is now the Story's phrase navigator
   (`src/dashboard/components/StoryOutline.tsx`).
 - **The employee roster** (`src/server/run/story-engine.ts`) is fixed and global: Writer, Editor,
-  Reader and Checker, all at Rank A (the harness's peers, so rank alone delegates to nobody). The
+  Reader, Checker and Researcher, all at Rank A (the harness's peers, so rank alone delegates to
+  nobody). The Researcher is the phase-① addition: it reads everything and writes only `knowledge`
+  (plus a queue task), and a write that reaches for the book is refused naming P10. The
   Editor is the Author's one channel — a directive is addressed to it, and it turns the direction
   into the tasks the loop runs. That is routing, not a rank and not an entry role: `entry` no longer
   exists on the client contract or the roster projection, and the harness's own session route names
   the Editor (`STORY_AGENT_ENTRY`).
-  VOCABULARY (specification V-1): these four are EMPLOYEES, not agents. An employee is the standing
+  VOCABULARY (specification V-1): these five are EMPLOYEES, not agents. An employee is the standing
   identity (kind, rank, model, permission row); it becomes an AGENT only while a thread executes.
   Only a Rank A employee may own a dispatched Work Item and act on a phase's requirements; a Rank B
   employee may be added only as a delegation target inside a Rank A thread (V-2). `GET /agents`
@@ -252,7 +339,9 @@ global employee roster. Both are projections, and neither is a second source of 
   owns a lazily-built engine `harness()` per Story, so tool registries, transcripts and threads
   are isolated by book. The Story's phase is Storyline's session record (the engine has no session
   object), and every dispatched Work Item, panel agent or delegated sub-context opens a thread
-  inside it. The engine executes the loop; Storyline keeps the §8 catalogue, permission rows, the
+  inside it — except a `toolMode: 'none'` phase-① sample/screen, which calls the provider directly
+  and keeps only its run row plus a synthesised retained-thread record (`single_<runId>`). The engine
+  executes the loop; Storyline keeps the §8 catalogue, permission rows, the
   brief, the run rows, the panel and the template delegation rules.
 - **The server is Storyline's.** `@underload/harness` is imported as the engine only. There is no
   `HarnessBootConfiguration`, no harness-server session store and no `variables.harness`: the
@@ -280,11 +369,19 @@ carries the employee roster. The three columns stay in place on every view. The 
 
 - **Summary** — `SummaryPane`. It marks the phrase with a tick when
   `story-nav.ts:summaryReadyForReview` is true (the Summary is signed, or the Summary phase's
-  Goal passes with prose present). Competing Summary revisions (`unit_kind: 'summary'`) render as
-  overview candidates; the newest verdict filed **on a draft** with `hard_pass` and
-  `recommendation: 'advance'` marks that draft "Editor recommends", and every draft has its own
-  Select (`POST /stories/:id/revisions/:revisionId/select`, D-24). A unit-level verdict never
-  names a column, so it does not create a recommendation.
+  Goal passes with prose present, no competing draft and no `confirmed`/`approved`
+  `critical`/`major` finding on the selected draft). That tick is NOT the server's sign-off gate:
+  it does not consult the owed deep-review passes or the unconfirmed findings `loop/status.ts`
+  requires, so the rail can tick a phase the sweep would still hold.
+  Phase ①'s history is a FLAT `Revision 1 … N` list: `api/projections.ts`
+  returns the live revisions plus the losers it recovers from the journal's delete payloads
+  (marked `discarded`), `story-nav.ts:summaryRevisions` labels them in creation order, and the
+  pane shows the Summary on record, the two sampling counts and that list. The engine's pick is the
+  row with `state: 'selected'` (and the `sampling` slice's `selected` counts); "Editor recommends"
+  appears only when a verdict was filed **on a draft** with `hard_pass` and
+  `recommendation: 'advance'` — phase ①'s deep-review Readers file against the unit, so normally
+  none does. Every `drafted` draft still has its own Select
+  (`POST /stories/:id/revisions/:revisionId/select`, D-24), which is the Author's override.
 - **Characters** — `CharactersPane`. It reads `view.cast` (the §4.5 sheet added to the Story view
   beside `view.ledger`) and shows want / need / arc / voice / state now. It can ask the Editor to
   start or update the cast through the directive route; **Characters is a supporting phrase, not
@@ -340,56 +437,26 @@ The UI follows that model:
   `AgentStatusRow.entry` field are gone. The roster and its templates are defined in code at server
   boot; the UI offers no template editor.
 
-## Phase ① is a sampled Writer → Reader → Editor pipeline (2026-11-22)
+## Phase ① was a sampled Writer → Reader → Editor pipeline (2026-11-22)
 
-The Summary is no longer drafted and immediately handed to an Editor. The Author set the phase to
-a sampled review loop, and both counts are the Author's settings:
+This is HISTORY, kept because earlier notes and commits point at it. It describes the build this
+file saw on 2026-11-22; the shipped phase ① is the 2026-11-23 section at the foot of this file.
+None of the phase-① families it names — `wi_seed_review_*`, `wi_read_*`, `wi_confirm_finding_*`,
+`wi_fix_*`, and an Editor `select` — is generated for phase ① any more; only
+`wi_verify_finding_*` survives, fed by the deep review instead.
 
-- **The Seed is reviewed before it is expanded.** One Editor thread (`wi_seed_review_<story>_<hash>`)
-  reads the Author's Seed for the six things a Summary needs (protagonist, want, obstacle, stakes,
-  world, change) and reports with `reviewSeed`. `accept` lets the Writers start; `restructure` queues
-  an Author escalation naming the missing structure. The key follows the Seed TEXT, so an Author edit
-  (D-25a) re-arms the review and `writeTrigger` refuses the first draft until the new review closes.
-- **Sampling** — `writer-summary` ships `attempts: 5`, and a Story may override it with
-  `stories.summary_sampling` (`POST /stories` or `PATCH /stories/:id`). Ten means ten Writers
-  expanding the Seed into ten competing Summary drafts.
-- **Readers per sample** — `stories.summary_readers`, standard five, set by the same routes and by
-  the two count controls in `SummaryPane`. Each completed draft gets that many Reader passes.
-- **The order is per draft, not per stage.** A Writer files its revision as `pending` and keeps
-  extending the same row until its run returns; when the run closes, the loop promotes the draft to
-  `drafted` and only then generates Reader jobs (`wi_read_<revision>_a<n>`). So a Reader starts on
-  the first finished sample while other Writers are still running, and never on a half-written one.
-  A revised draft is a new revision with fresh Readers.
-- **Readers read the Seed and ONE draft.** The Work Item carries `revisionRef`, and the brief's
-  revision section renders only that draft (D-21 keeps the rest from a Reader). The job tells the
-  Reader to file `raiseFinding` with an evidence line and to rate the draft with `submitVerdict`;
-  a Reader never edits (D-26, D-30, T-9).
-- **The Editor verifies each critique in its own thread before choosing.** One
-  `wi_verify_finding_<finding>` run per report (never a batch across findings); `verifyFinding`
-  confirms or disputes it, and `approveFinding decision:auto` lets the Story's dial create the fix
-  task for a covered `critical`/`major` finding. The Editor's `select` waits until every competing
-  draft has all its Reader passes closed and no finding is unconfirmed — the choice is the last
-  look, never the first.
-- **A Reader then confirms the approved finding independently.** One
-  `wi_confirm_finding_<finding>` run per `critical`/`major` approval; `confirmFinding` records the
-  Reader's own check as `reader_confirmed`. Phase ①'s Writer fix waits for that flag
-  (`fixWork`), and a `dispute` withdraws the queued fix in the same commit — so no Writer spends a
-  round on a claim only the Editor believed.
-- **A revision is one corrected draft.** `divergenceGap` stops sampling once an Editor selection
-  exists, so a valid critique sends back one `wi_fix_*` Writer job, not the whole sampling set
-  again. That draft gets its own Readers, the Editor verifies them, and the loop repeats until a
-  selection leaves no valid finding and the phase Goal passes. A phase sign-off also waits while a
-  confirmed finding's fix task is still open, so the correction is never parked by the stop.
-- No consistency checker runs in phase ① in this pipeline: the review crew is the Readers and the
-  Editor, as the Author specified. Checkers still serve phases ② and ③.
-
-`src/server/loop/summary-pipeline.test.ts` pins the plan (two drafts × five Readers each, no
-Editor choice early) and `src/server/integration/summary-review.test.ts` pins the real-server
-order, including a valid critique returning to the Writer as a new read-then-selected draft.
+In that build an Editor reviewed the Seed first (`wi_seed_review_<story>_<hash>` with `reviewSeed`),
+`writer-summary` sampled it with `attempts > 1`, each finished draft got `summary_readers`
+tool-using Reader passes (`wi_read_<revision>_a<n>`), an Editor verified each critique
+(`wi_verify_finding_<finding>_<n>`) and selected among the drafted revisions (`select`), and a Reader
+then confirmed each approved finding (`wi_confirm_finding_<finding>`, `reader_confirmed`) before
+`wi_fix_*` Writer work was queued. The tests that pinned it
+(`loop/summary-pipeline.test.ts`, `integration/summary-review.test.ts`) were replaced by
+`loop/phase1-research.test.ts` and `integration/summary-sampling.test.ts`.
 
 ## A draft is Pending until its Writer returns, then Drafted for the review crew (2026-11-23)
 
-§4.15's two new states are the phase ① order made mechanical:
+§4.15's two states serve the tool-using Writers of phases ②/③; a phase-① sample is born `drafted`:
 
 - **`pending`** — the row a Writer files on its first `editSummary`/`editChapter`. A later write in
   the same run extends that row instead of filing a second, partial draft. No Reader, Checker or
@@ -398,11 +465,13 @@ order, including a valid critique returning to the Writer as a new read-then-sel
   the same commit that closes the run, and a sweep-time `reconcileDrafts` catches a draft written
   after its run ended (or recovered after a restart). For a Summary, `drafted` also requires every
   §4.2 block to be present (`shared/summary.ts`).
-- **The incomplete case is Writer work, not a stall.** A Summary short of a block stays `pending`,
-  and `loop/work.ts:summaryCompletionJobs` opens ONE `wi_complete_<unit>_<revision>_<n>` Writer job
-  whose think-note the brief renders (`THE JOB` — "is still pending: it is missing …"). That run
-  adopts the same draft (`tools/artifacts.ts:pendingDraftFor`, completion runs only — a fresh
-  sampling attempt stays blind, L-16) and adds the blocks. Readers start only after it is complete.
+- **Phase ①'s samples skip `pending` entirely.** `settleJob` creates the revision `drafted` in the
+  commit that closes the sampling run, because the engine persists a whole validated
+  `SummarySample` — there is no half-written sample to promote. The classic completion job
+  (`wi_complete_*`, `summaryCompletionJobs`) is gone with the classic pipeline: a Summary draft
+  short of a block is simply never reviewable (`reconcileDrafts` leaves it `pending`), and no run
+  adopts another run's partial draft (`tools/artifacts.ts:pendingDraftFor` returns only the same
+  run's row — L-16's siblings stay blind).
 - `competing` stays in the enum as the historical spelling of a reviewable draft, so a store written
   before this change still reads correctly. `pending`/`drafted` are in the Swagger enum and in
   `documents/specifications.md` §4.15.
@@ -459,3 +528,158 @@ The home view is two tabs (`components/HomeDesk.tsx`):
 The old per-field `Ask assistant` control is gone from `SummaryPane`; the Author's channel is the
 directive bar, addressed to the Editor. The bar is present on every view, including Requests, and
 carries only one input field with a floating label.
+
+## Phase ① is structure → research → sample → screen → select → deep review → refine (2026-11-23)
+
+The Summary is no longer written by a tool-using Writer. The shipped phase ① is a research pipeline,
+and every stage is a record the sweep can read after a restart. In order:
+
+```
+the Editor structures the Seed    (structure_seed)      → seed_briefs: one accepted SeedBrief
+the Researcher gathers Knowledge  (research)            → knowledge: sourced, importance-triaged entries
+N no-tool one-turn samples        (sample_unit)         → revisions: `drafted`, origin sampled/refined, round set
+M no-tool one-turn screens        (screen_samples)      → sample_reviews: critical/high IssueLists
+the ENGINE selects                (engine settle)       → Summary prose + sampling_history
+the deep review with tools        (check_unit)          → findings on the selected revision
+the Editor verifies               (verify_findings)     → confirm/dispute, one finding per thread
+the dial auto-approves            (D-35)                → a `fix` task
+round N+1's prompt carries BASE REVISION + FIX TASKS    → …until a clean round signs the phase off
+```
+
+**The Seed is never edited (P5).** `structureSeed` writes a DERIVED `seed_briefs` row — logline,
+protagonist, want/need, obstacle, stakes, setting, world_rules, promise, tone hints, constraints,
+open questions — and refuses a `seed_hash` that is not the current Seed's, naming P5. One accepted
+brief per Story; a re-dispatched Editor converges on the existing row, and a new Seed hash
+supersedes the old brief in the same commit. A brief whose hash no longer matches the Seed counts as
+NO brief (`loop/records.ts:currentSeedBrief`), so an Author edit re-arms the structuring and every
+later stage waits.
+
+**The Researcher is the fifth employee.** `researcher-story` runs at Rank A, holds the web and the
+whole catalogue, and writes only `knowledge` (plus a queue task). `writeKnowledge` records one
+sourced claim per entry with an `importance` that means something — `critical`, `high`, `normal`,
+`low`, and only the first two ever reach a sampling prompt — at least one `{url_or_title, claim,
+accessed_at}` citation (T-10), and a `fingerprint` that dedupes (D-16: a repeat bumps `seen_count`,
+merges the sources and takes the new triage). `readKnowledge` is the bounded lookup (40 rows,
+`critical` → `low`, newest first within a level) the deep-review Reader and Editor hold;
+`retireKnowledge` marks a stale entry `low` and appends `(retired)` to its detail instead of deleting
+it. Every session holds all four tools (T-6a); §7's permission rows decide who may call them.
+
+**Sampling is tool-less, one turn and the same prompt for every sample.** `summary_sampling`
+(standard 3) is how many samples a round owes. Each `sample_unit` run is one assistant turn with an
+empty offered-tool list and a `response_format` contract — `SummarySample` (premise, promise, theme,
+tone, ending, world_rules, knowledge_used; `additionalProperties: false`; no `chapter_count`) — built
+by `run/phase1-prompt.ts`. The system turn is the `writer-summary-sampler` role prompt plus the
+output contract and is identical for every sample of every round; the user turn is the Seed Brief,
+the `critical`/`high` Knowledge (sorted by importance then fingerprint), and from round 2 the BASE
+REVISION (the previous round's selected draft) plus the FIX TASKS. Diversity is the provider `seed`
+(the sample's 1-based index); the prompt is byte-identical, and its sha256 (first 16 hex chars) lands
+on the run row's `brief_hash` and the revision's `prompt_hash`. There is no TypeBox: the schemas are
+plain JSON Schema literals in `shared/schemas/`; the client asks for `json_schema`, downgrades once
+to `json_object` if the provider rejects the field, and the executor allows exactly ONE schema-repair
+retry before the run fails and persists nothing.
+
+**Screening is the same mode with a different contract.** `summary_readers` (standard 5) is both the
+number of screening passes per sample and the number of deep-review passes the selected revision
+owes. Each `screen_samples` run answers an `IssueList` — `severity` closed to `critical`/`high`,
+verbatim `quote`, field `location`, `criterion` in `C-14`/`C-15`/`seed` — and the engine persists it
+as one `sample_reviews` row. These are not findings: they never enter D-33/D-34, cannot block a
+Writer, and exist to rank the round and seed the deep review. A failed screen persists no row, so
+the attempt counter — not the row count — is what buys the retry.
+
+**Selection is the engine's, and it is deterministic.** `engine.trySelectSample` runs after every
+sample/screen settlement and once per sweep. It fires only when the in-flight round
+(`sampling_round + 1`) has a `drafted` revision, no revision of it is already `selected`, the round
+OWES NO MORE SAMPLES — the full `summary_sampling` set exists, or the round's sample attempts (current
+wave) reached `summary_sampling + 3` so the survivors are all there will be — every `drafted` sample is
+SCREENED (its full `summary_readers` set, or its screening attempts reached `summary_readers + 3`, in
+which case the selection commit opens the partial-screening escalation), and no live
+`wi_sample_*`/`wi_screen_*` run remains.
+`loop/sample-select.ts` ranks them: **fewest `critical` → fewest `high` → fewest total → the earliest
+sample** (creation order; id last). One commit then installs the winner's six prose fields on the
+Summary — `premise`, `promise`, `theme`, `tone`, `ending`, `world_rules`, and NEVER `chapter_count` —
+marks it `selected` with its `issue_counts`, appends the round's `sampling_history` line BEFORE any
+delete, hard-deletes every other revision of the round and every `sample_reviews` row pointing at
+one, marks the open `fix` tasks `done`, closes each finding they named — while still
+`confirmed`/`approved` — as `fixed`, and advances `sampling_round`. The
+losers exist afterwards only as that history line and as the journal's delete payload (the Story view
+still renders them as `discarded`); no route restores one.
+
+**The deep review is where the Readers get their tools back.** Once a round has selected, the winner
+gets `summary_readers` `check_unit` passes — `wi_review_<selected>_a<pass>` — rotating over
+`reader-genre`, `reader-plausibility`, `reader-audience` and `reader-mystery`, with the whole
+catalogue and the web. Their findings (any cost) each get their own Editor `verify_findings` thread
+(`wi_verify_finding_<finding>_<n>`), and the Story's dial auto-approves what it covers, which
+creates the `fix` task.
+
+**A refinement round waits for approved work.** Round 1 samples as soon as the brief and its research
+are closed. Round N+1 is armed only when a `fix` task is `open` AND no `critical`/`major` finding is
+still `unconfirmed` (`records.ts:samplingArmed`). Its compiled prompt carries the previous round's
+selected draft and those tasks, and its own selection consumes them. If the dial does not cover the
+confirmed costs, no task exists and the Story waits at `pending`/`finding_approval` until the Author
+approves one.
+
+**Sign-off and drain.** `phase_signoff` needs the Goal (C-14/C-15) passed plus no competing draft, no
+`pending` draft, no sourced Idea awaiting verification, no unconfirmed blocking finding, no
+phase-① `fix`/`rewrite`/`merge` task, no `critical`/`major` finding open on the selected revision,
+every deep-review pass closed, and an empty tray. The lock itself is unchanged. The drain adds the
+pipeline's stages to L-37's four (`loop/status.ts:phase1Unmet`): an accepted brief for the current
+Seed, a closed research pass, no live sample/screen, the in-flight round complete (selected) or
+deliberately not owed, and the deep review closed. Both resets are explicit: `editSeed` and a
+backtrack to `summary` set `sampling_round` to 0, `sampling_history` to empty and `sampling_wave` to
+0, because both scrap the revisions and samples those fields describe.
+
+The job keys, which are the whole ledger:
+
+| job | key | notes |
+| --- | --- | --- |
+| `structure_seed` | `wi_structure_seed_<seedHash>` | one per Seed hash; priority 0; binds `editor-seed-structure` explicitly |
+| `research` | `wi_research_<brief.rev>` | one per accepted brief revision; priority 0; `researcher-story` |
+| `sample_unit` | `wi_sample_<summary>_<round>_<attempt>`, or `wi_sample_<summary>_<round>_w<wave>_<attempt>` after a re-armed wave | `<attempt>` is 1-based and store-derived; ONE per sweep per round while no sampler is live |
+| `screen_samples` | `wi_screen_<revision>_<attempt>` | one owed pass per drafted sample; per-revision family |
+| `check_unit` (deep review) | `wi_review_<selected>_a<pass>` | one per pass, rotating the four Reader angles; tools ON |
+| `verify_findings` | `wi_verify_finding_<finding>_<n>` | `<n>` is the dispatch generation; one thread per finding; binds `editor-general` (FIRST in `DEFAULT_ASSIGNMENT`) |
+
+The deviations from the design document, stated plainly because the docs describe the CODE:
+
+1. **Selection is an engine settlement, not a dispatched `choose_sample` Work Item.** The kind was
+   never shipped; `trySelectSample` is called from `settleJob` and from the sweep.
+2. **There is no `pipeline` flag.** New and existing Stories run the same phase ①; `seed_review` is
+   not in `WORK_ITEM_KINDS` (it was replaced by `structure_seed`), and `writer-summary` is not in the
+   catalogue at all.
+3. **No TypeBox.** The schemas are plain JSON Schema literals; the transport negotiates
+   `json_schema` → `json_object`; the client is non-streaming, so there is no streaming repair — one
+   model-side repair retry instead.
+4. **`confirm_finding` is no longer dispatched in phase ① and the `reader_confirmed` gates are
+   gone.** The Work Item kind and the `confirmFinding` tool remain in the vocabulary/catalogue; the
+   deep review + Editor verification replaced the confirmation thread.
+5. **A consumed fix task closes its finding (`fixed`); a re-raise is a fresh row (L-16a).** The
+   selection commit closes the finding the task named; a sample that did not fix the defect re-files
+   the fingerprint and reads as a regression rather than trusting the write.
+6. **Sampling and screening carry implicit attempt caps of size + 3.** A sampling round with no
+   sample after `summary_sampling + 3` attempts raises ONE `escalation` task for the Author (title
+   prefix "Phase ① sampling failed after", reused across sweeps). Its `detail` records the wave, and
+   clearing the row makes the sweep bump `stories.sampling_wave` and re-arm the round under
+   `wi_sample_<summary>_<round>_w<wave>_1` (T12/E: the promised recovery is real). A sample whose
+   `summary_readers + 3` screening attempts are spent counts as screened; the round selects on the
+   partial reviews and opens ONE `Phase ① screening incomplete in round <n>` escalation (T12/C). A
+   round also refuses to select while samples are genuinely still owed: the full `summary_sampling`
+   set must exist, or the sampling cap must be spent (T12/D).
+7. **Sign-off and drain also wait for every deep-review pass of the selected revision**
+   (`records.ts:deepReviewPassesOwed`), so the phase is not signed on a half-reviewed draft.
+8. **`editSeed`/backtrack-to-summary reset `sampling_round`, `sampling_history` and `sampling_wave`.**
+9. **C-16/C-17 were NOT added.** The Goal's summary level is still C-14/C-15; the Seed Brief is an
+   input, never the contract C-14 measures against.
+10. **A no-tool run does not appear as a live engine thread on the employee tile.** It calls
+    `chat.complete` directly; its run row (`spawning → working → torn_down`) and its retained thread
+    record (`single_<runId>`) are the history, and `GET /agents`' `working` list is built from engine
+    threads only.
+
+The tests that pin all of it: `src/server/loop/phase1-research.test.ts` (the whole loop: gates,
+samples, screens, selection, truncation, round 2, sign-off),
+`src/server/loop/phase1-gates.test.ts` (the degradation and retry rules: scrapped revisions take
+their screening reviews, screening exhaustion selects partially and escalates, no early selection,
+the wave re-arm, R8's negative gate), `src/server/loop/restart.test.ts` (a mid-round restart
+re-buys the lost sample under a new key and selects once), `src/server/loop/sample-select.test.ts`
+(the ranking), `src/server/run/phase1-prompt.test.ts` (the byte-stable hash, the importance filter,
+the round-2 sections), `src/server/integration/summary-sampling.test.ts` (the real server), and
+`src/server/llm/structured.test.ts` (the transport fallback and the validator).

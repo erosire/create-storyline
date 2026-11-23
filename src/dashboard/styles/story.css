@@ -90,6 +90,14 @@
     font-weight: 600;
 }
 
+/* §10 / §3.3 — the Editor's derived brief, one line under the Author's Seed. It is visibly a
+ * DERIVED line (muted, labelled) so the Seed above it keeps reading as the law (P5). */
+.sv-seed-brief {
+    margin: 0.25rem 0;
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
 /* --------------------------------------------------------- the phase strip (U-12a) */
 
 .sv-phase-strip {
@@ -190,6 +198,15 @@
 .sv-story-progress {
     color: var(--muted);
     font-size: 0.72rem;
+}
+
+/* §10 / §6.6 — phase ①'s round counter. Chrome, not status: the same muted tone as the reason,
+ * pushed to the end of the line by the status row's own flex gap. */
+.sv-story-sampling {
+    margin-left: auto;
+    color: var(--dim);
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
 }
 
 .sv-story-reason {
@@ -1399,6 +1416,15 @@
 
 .sv-kind-reader,
 .sv-kind-checker {
+    background: var(--accent-2-soft);
+    color: var(--accent-2);
+}
+
+/* The Researcher sits in the same family as the judging crew: the two saturated fills stay the
+ * Writer's (it writes the book) and the Editor's (it is the Author's channel), while a role that
+ * supports them with facts reads quieter (U-8a's "the crew that writes never looks like the crew
+ * that judges"). */
+.sv-kind-researcher {
     background: var(--accent-2-soft);
     color: var(--accent-2);
 }

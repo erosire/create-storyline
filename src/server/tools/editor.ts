@@ -20,6 +20,7 @@ import {
 import { SEED_STRUCTURE_AREAS, type SeedStructureArea } from '../../shared/summary';
 import {
     chapterRows,
+    collectionOf,
     commitSelection,
     competingRevisions,
     findingRows,
@@ -288,7 +289,10 @@ const selectRevision: ToolDefinition = {
             expects.filter((entry) => entry.id === target.id)
         );
 
-        const unitRev = (store[target.collection].get(target.id) as { rev?: number } | undefined)?.rev;
+        // `collectionOf` rather than `store[target.collection]`: the registry key and the Store's
+        // field name diverge for the Phase-1 collections, so a generic index is not a total type
+        // (tools/artifacts.ts:COLLECTION_ACCESSOR).
+        const unitRev = (collectionOf(store, target.collection).get(target.id) as { rev?: number } | undefined)?.rev;
         return ok(
             {
                 id: winner.id,
@@ -647,14 +651,20 @@ function enumDimension() {
     } as Record<string, unknown>;
 }
 
-// ── the pre-phase Seed review ──────────────────────────────────────────────
+// ── the Seed review report (kept in the catalogue; phase ① dispatches `structure_seed`) ────────
 
 /**
- * Phase ①'s first job: the Editor reads the Author's Seed before any Writer expands it. The
- * Seed is Author truth and read-only for every crew (P5), so the only honest outcomes are
- * "accept" (nothing to write) and "restructure" (an escalation naming the missing structure).
- * This exists as its own report tool so the review thread ends with a report rather than a
- * no-op turn (S-4), and so the loop can hold the Writers until the review has closed.
+ * A report-only Seed review: the Editor reads the Author's Seed, accepts it as structured enough
+ * to expand, or asks the Author for the missing structure. The Seed is Author truth and read-only
+ * for every crew (P5), so the only honest outcomes are "accept" (nothing to write) and
+ * "restructure" (an escalation naming the missing structure). This exists as its own report tool
+ * so a review thread ends with a report rather than a no-op turn (S-4).
+ *
+ * PHASE ① NO LONGER DISPATCHES THIS. The `seed_review` job family was replaced by `structure_seed`
+ * (`documents/phase-1-research-pipeline.md` §6.4 step 1) — the `editor-seed-structure` template
+ * binds `structureSeed` and the loop holds the Writers until an ACCEPTED Seed Brief exists. The
+ * tool stays in the catalogue (T-6a: one vocabulary for every session) as the Editor's report for
+ * a Seed it cannot structure; no job prompt asks for it.
  */
 const reviewSeed: ToolDefinition = {
     name: 'reviewSeed',

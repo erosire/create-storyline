@@ -7,6 +7,14 @@
 // spec or the seeded state forces — including the token totals, which the scripted `usage` makes
 // plain arithmetic rather than a guess.
 import { describe, expect, it, vi } from 'vitest';
+import {
+    ISSUE_LIST_SCHEMA_NAME,
+    IssueListSchema,
+    SUMMARY_SAMPLE_SCHEMA_NAME,
+    SummarySampleSchema,
+    type IssueList,
+    type SummarySample
+} from '../../shared/schemas';
 import type { Chapter, Run } from '../../shared/types';
 import type { ChatRequest, ChatResponse } from '../llm';
 import { LlmError } from '../llm';
@@ -18,6 +26,7 @@ import { buildBrief } from './brief';
 import { resolveHarness } from './harness';
 import { RunExecutor } from './executor';
 import {
+    AUTHOR_ATTR,
     MockToolRuntime,
     seedChapter,
     seedDigest,
@@ -27,6 +36,8 @@ import {
     seedStory,
     seedTemplate
 } from './mock';
+import { compileSamplePrompt, compileScreenPrompt } from './phase1-prompt';
+import { StoryThreadLog } from './thread-log';
 import type { WorkItem } from './types';
 
 /** §4.13's `end_reason` for a natural end — pinned in ./executor, restated here as the contract. */
@@ -181,7 +192,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             }
                         ])
                     }),
-                    usage: { input: 120, output: 45 }
+                    usage: { input: 120, output: 45, cached_input: 0 }
                 };
 
             // Turn 2: the escalation is the report S-4 counts (a Writer "escalates", it does not verdict).
@@ -193,13 +204,13 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             { name: 'requestAuthor', args: { question: 'does the valley flood on purpose?' } }
                         ])
                     }),
-                    usage: { input: 90, output: 30 }
+                    usage: { input: 90, output: 30, cached_input: 0 }
                 };
 
             // Turn 3: no tool call — §9's natural end.
             return {
                 message: msg({ content: 'the chapter carries the promise through to the cost' }),
-                usage: { input: 60, output: 80 }
+                usage: { input: 60, output: 80, cached_input: 0 }
             };
         });
 
@@ -304,7 +315,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             // The model stopped without calling a report tool — S-4's bug-in-a-brief case, measured
             // rather than prevented.
             message: msg({ content: 'the chapter is fine as it is' }),
-            usage: { input: 50, output: 10 }
+            usage: { input: 50, output: 10, cached_input: 0 }
         }));
 
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
@@ -402,7 +413,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                         }
                     ])
                 }),
-                usage: { input: 50, output: 25 }
+                usage: { input: 50, output: 25, cached_input: 0 }
             };
         });
 
@@ -660,7 +671,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             }
                         ])
                     }),
-                    usage: { input: 100, output: 20 }
+                    usage: { input: 100, output: 20, cached_input: 0 }
                 };
             if (isSubContext && toolResults === 0)
                 return {
@@ -680,17 +691,17 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             }
                         ])
                     }),
-                    usage: { input: 70, output: 30 }
+                    usage: { input: 70, output: 30, cached_input: 0 }
                 };
             if (isSubContext)
                 return {
                     message: msg({ content: 'the map is set up and never paid off in chapter_1' }),
-                    usage: { input: 40, output: 50 }
+                    usage: { input: 40, output: 50, cached_input: 0 }
                 };
 
             return {
                 message: msg({ content: 'the sub-context filed it; the run reports' }),
-                usage: { input: 30, output: 25 }
+                usage: { input: 30, output: 25, cached_input: 0 }
             };
         });
 
@@ -788,10 +799,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             { name: 'delegate', args: { role: 'researcher', task: 'check the 1911 map' } }
                         ])
                     }),
-                    usage: { input: 40, output: 10 }
+                    usage: { input: 40, output: 10, cached_input: 0 }
                 };
 
-            return { message: msg({ content: 'I will judge it myself then' }), usage: { input: 20, output: 15 } };
+            return { message: msg({ content: 'I will judge it myself then' }), usage: { input: 20, output: 15, cached_input: 0 } };
         });
 
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
@@ -844,13 +855,13 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             }
                         ])
                     }),
-                    usage: { input: 100, output: 40 }
+                    usage: { input: 100, output: 40, cached_input: 0 }
                 };
             }
 
             return {
                 message: msg({ content: `agent ${agent === null ? '?' : agent[1]} chose its draft and reported` }),
-                usage: { input: 100, output: 40 }
+                usage: { input: 100, output: 40, cached_input: 0 }
             };
         });
 
@@ -938,7 +949,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const brief = briefOf(store, item);
         const { client } = record(() => ({
             message: msg({ content: 'nothing to add' }),
-            usage: { input: 10, output: 5 }
+            usage: { input: 10, output: 5, cached_input: 0 }
         }));
         const executor = new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' });
 
@@ -970,7 +981,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const { store, runtime, item, template } = rig();
         const { client, requests } = record(() => ({
             message: msg({ content: 'nothing to add' }),
-            usage: { input: 1, output: 1 }
+            usage: { input: 1, output: 1, cached_input: 0 }
         }));
         const executor = new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' });
 
@@ -994,5 +1005,338 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         await executor.execute(item);
 
         expect(requests[0]?.model).toBe('role-only');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// §4.2 / §2 decision 3 — the single-turn, no-tool structured run
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase ① in the state a `sample_unit`/`screen_samples` job arrives at: a Story in the summary
+ * phase, the two Phase-1 templates, an accepted Seed Brief, and the draft a screen judges.
+ *
+ * A no-tool run assembles NO brief (its memory is the compiled prompt, §5), so the fixture only
+ * needs what the compiler reads — which is exactly what makes these tests prove the compiler is
+ * the run's whole input.
+ */
+function samplingRig() {
+    const store = Store.empty();
+    const story = seedStory(store, {
+        phase: 'summary',
+        idea: 'A cartographer returns to the valley she mapped as a girl.'
+    });
+
+    seedTemplate(store, {
+        name: 'writer-summary-sampler',
+        roles: [
+            {
+                name: 'writer',
+                kind: 'writer',
+                prompt: 'You are the Writer for phase ① in sampling mode. Answer with ONE JSON object.'
+            }
+        ],
+        serves_phase: ['summary']
+    });
+
+    seedTemplate(store, {
+        name: 'reader-screening',
+        roles: [
+            {
+                name: 'reader',
+                kind: 'reader',
+                prompt: 'You are the screening Reader for phase ①. Report ONLY critical and high problems.'
+            }
+        ],
+        serves_phase: ['summary']
+    });
+
+    store.seedBriefs.create(
+        {
+            story_id: story.id,
+            seed_hash: 'abcd1234',
+            logline: 'A cartographer finds her map is wrong.',
+            protagonist: 'Maren',
+            want: 'to prove the map',
+            obstacle: 'the reservoir',
+            stakes: 'her memory',
+            setting: 'a drowned valley, 1963',
+            world_rules: ['no magic'],
+            promise: 'map and territory reconcile',
+            constraints: [],
+            open_questions: [],
+            status: 'accepted'
+        },
+        AUTHOR_ATTR
+    );
+
+    const draft = store.revisions.create(
+        {
+            story_id: story.id,
+            unit_kind: 'summary',
+            unit_ref: 'summary_1',
+            body: {
+                fields: {
+                    premise: 'Maren returns.',
+                    promise: 'She floods it.',
+                    theme: 'Loss.',
+                    tone: 'Cold.',
+                    ending: 'Water.',
+                    world_rules: 'Engineering.'
+                }
+            },
+            run_ref: 'run_2',
+            state: 'drafted',
+            verdict_refs: [],
+            round: 1
+        },
+        AUTHOR_ATTR
+    );
+
+    const runtime = new MockToolRuntime(store, story.id);
+    const sampleItem: WorkItem = {
+        id: 'wi_sample_summary_1_1',
+        storyId: story.id,
+        kind: 'sample_unit',
+        templateRef: 'writer-summary-sampler',
+        roleName: 'writer',
+        toolMode: 'none',
+        responseSchema: { name: SUMMARY_SAMPLE_SCHEMA_NAME, schema: SummarySampleSchema },
+        sampleIndex: 2,
+        round: 1
+    };
+
+    return { store, story, draft, runtime, sampleItem };
+}
+
+/** The one JSON answer a scripted sampler gives — exact, so `structured` can be `toEqual`-ed. */
+const SAMPLE_ANSWER: SummarySample = {
+    premise: 'Maren returns to a valley the reservoir redrew.',
+    promise: 'The map and the water reconcile.',
+    theme: 'Memory against measurement.',
+    tone: 'Plain, cold, precise.',
+    ending: 'She floods the valley on purpose.',
+    world_rules: 'No magic; the reservoir is engineering.',
+    knowledge_used: ['K-aaa']
+};
+
+describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', () => {
+    it('sends ONE tool-less request with the schema contract and the sample seed, and returns the parsed answer', async () => {
+        const { store, story, runtime, sampleItem } = samplingRig();
+        const compiled = compileSamplePrompt(store, story.id, { round: 1 });
+        const { client, requests } = record(() => ({
+            message: msg({ content: JSON.stringify(SAMPLE_ANSWER) }),
+            usage: { input: 40, output: 10, cached_input: 5 }
+        }));
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(
+            sampleItem
+        );
+
+        // §4.2: exactly one request, and NOTHING that could make it a tool run.
+        expect(requests.length).toBe(1);
+        expect('tools' in requests[0]).toBe(false);
+        expect('temperature' in requests[0]).toBe(false);
+        expect(requests[0].responseFormat).toEqual({ name: SUMMARY_SAMPLE_SCHEMA_NAME, schema: SummarySampleSchema });
+        // §5's diversity knob: the 1-based sample index rides as the provider seed.
+        expect(requests[0].seed).toBe(2);
+        expect(requests[0].messages.map((message) => message.role)).toEqual(['system', 'user']);
+        expect(requests[0].messages[0].content).toBe(compiled.system);
+        expect(requests[0].messages[1].content).toBe(compiled.user);
+
+        // §2 decision 2: the engine persists the validated answer, so it never becomes a no-op.
+        expect(result).toEqual({
+            runId: 'run_1',
+            ended: 'completed',
+            no_op: false,
+            tokens: 50,
+            toolsCalled: [],
+            structured: SAMPLE_ANSWER,
+            promptHash: compiled.hash,
+            usage: { input: 40, output: 10, cached_input: 5 }
+        });
+
+        // D-18/S-2: the row exists through spawn → work → teardown, and its `brief_hash` is the
+        // COMPILED PROMPT's hash — that is the memory the model was actually given.
+        const row = store.runs.get('run_1')!;
+
+        expect({
+            id: row.id,
+            state: row.state,
+            kind: row.kind,
+            role: row.role,
+            brief_hash: row.brief_hash,
+            no_op: row.no_op,
+            tokens: row.tokens,
+            end_reason: row.end_reason
+        }).toEqual({
+            id: 'run_1',
+            state: 'torn_down',
+            kind: 'work',
+            role: 'writer',
+            brief_hash: compiled.hash,
+            no_op: false,
+            tokens: 50,
+            end_reason: 'completed — one structured turn, validated against the response schema (§4.2)'
+        });
+    });
+
+    it('repairs once: an invalid answer gets one retry with the validator’s error, then the valid one is taken', async () => {
+        const { store, story, runtime, sampleItem } = samplingRig();
+        const compiled = compileSamplePrompt(store, story.id, { round: 1 });
+        const { client, requests } = record((_request, state) =>
+            state.callIndex === 0
+                ? { message: msg({ content: 'nope' }), usage: { input: 10, output: 5, cached_input: 0 } }
+                : { message: msg({ content: JSON.stringify(SAMPLE_ANSWER) }), usage: { input: 20, output: 8, cached_input: 4 } }
+        );
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(
+            sampleItem
+        );
+
+        expect(requests.length).toBe(2);
+        // The repair turn keeps the previous answer in the transcript and names the failure.
+        expect(requests[1].messages.map((message) => message.role)).toEqual(['system', 'user', 'assistant', 'user']);
+        expect(requests[1].messages[2].content).toBe('nope');
+        expect(requests[1].messages[3].content).toBe(
+            'Your previous answer was not valid: assistant content is not valid JSON: "nope". Re-emit the COMPLETE JSON object matching the schema, and nothing else.'
+        );
+
+        // S-6: both provider calls count — the failed one cost a request too.
+        expect(result).toEqual({
+            runId: 'run_1',
+            ended: 'completed',
+            no_op: false,
+            tokens: 43,
+            toolsCalled: [],
+            structured: SAMPLE_ANSWER,
+            promptHash: compiled.hash,
+            usage: { input: 30, output: 13, cached_input: 4 }
+        });
+    });
+
+    it('fails the run after the one repair when the second answer is invalid too, and names the error on the row', async () => {
+        const { store, runtime, sampleItem } = samplingRig();
+        const { client, requests } = record(() => ({
+            message: msg({ content: 'still not json' }),
+            usage: { input: 10, output: 5, cached_input: 0 }
+        }));
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(
+            sampleItem
+        );
+
+        // TWO attempts exactly — the repair budget is one, never a second (§4.2).
+        expect(requests.length).toBe(2);
+        expect(result).toEqual({
+            runId: 'run_1',
+            ended: 'failed',
+            no_op: true,
+            tokens: 30,
+            toolsCalled: [],
+            error:
+                'Error: structured answer failed schema validation after 2 attempts: assistant content is not valid JSON: "still not json"'
+        });
+
+        const row = store.runs.get('run_1')!;
+
+        expect(row.state).toBe('failed');
+        // S-3: the row says exactly why the run ended, and the validation error is the reason.
+        expect(row.end_reason).toBe(
+            'failed: Error: structured answer failed schema validation after 2 attempts: assistant content is not valid JSON: "still not json"'
+        );
+    });
+
+    it('screens ONE named draft with the IssueList contract and keeps the sibling samples out of the prompt', async () => {
+        const { store, story, draft, runtime } = samplingRig();
+        const compiled = compileScreenPrompt(store, story.id, draft.id);
+        const issues: IssueList = {
+            issues: [
+                {
+                    severity: 'critical',
+                    criterion: 'seed',
+                    location: 'ending',
+                    quote: 'She floods it.',
+                    detail: 'The Seed Brief promises a reconciliation the ending does not stage.'
+                }
+            ]
+        };
+        const { client, requests } = record(() => ({
+            message: msg({ content: JSON.stringify(issues) }),
+            usage: { input: 30, output: 12, cached_input: 0 }
+        }));
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute({
+            id: 'wi_screen_summary_1_1_2',
+            storyId: story.id,
+            kind: 'screen_samples',
+            templateRef: 'reader-screening',
+            roleName: 'reader',
+            revisionRef: draft.id,
+            toolMode: 'none',
+            responseSchema: { name: ISSUE_LIST_SCHEMA_NAME, schema: IssueListSchema }
+        });
+
+        expect(requests.length).toBe(1);
+        expect(requests[0].responseFormat).toEqual({ name: ISSUE_LIST_SCHEMA_NAME, schema: IssueListSchema });
+        // A screen is not a sample: no `seed` is asked for, and the prompt is the screening one.
+        expect('seed' in requests[0]).toBe(false);
+        expect(requests[0].messages[0].content).toBe(compiled.system);
+        expect(requests[0].messages[1].content).toBe(compiled.user);
+        expect(requests[0].messages[1].content).toContain('## TARGET DRAFT\npremise: Maren returns.');
+
+        expect(result).toEqual({
+            runId: 'run_1',
+            ended: 'completed',
+            no_op: false,
+            tokens: 42,
+            toolsCalled: [],
+            structured: issues,
+            promptHash: compiled.hash,
+            usage: { input: 30, output: 12, cached_input: 0 }
+        });
+    });
+
+    it('retains the exchange in the thread log, because no engine thread exists for this mode', async () => {
+        const { store, story, runtime, sampleItem } = samplingRig();
+        const compiled = compileSamplePrompt(store, story.id, { round: 1 });
+        const threadLog = StoryThreadLog.memory();
+        const { client } = record(() => ({
+            message: msg({ content: JSON.stringify(SAMPLE_ANSWER) }),
+            usage: { input: 1, output: 1, cached_input: 0 }
+        }));
+
+        const result = await new RunExecutor({
+            store,
+            runtime,
+            chat: client,
+            defaultModel: 'gpt-5',
+            threadLog
+        }).execute(sampleItem);
+
+        const records = threadLog.list('writer');
+
+        expect(records).toHaveLength(1);
+        expect({
+            thread_id: records[0].thread_id,
+            run_id: records[0].run_id,
+            role: records[0].role,
+            role_name: records[0].role_name,
+            state: records[0].state,
+            tokens: records[0].tokens,
+            request: records[0].request,
+            answer: records[0].answer,
+            retained: records[0].retained
+        }).toEqual({
+            thread_id: 'single_run_1',
+            run_id: result.runId,
+            role: 'writer',
+            role_name: 'writer',
+            state: 'torn_down',
+            tokens: 2,
+            request: `${compiled.system}\n\n---\n\n${compiled.user}`,
+            answer: JSON.stringify(SAMPLE_ANSWER),
+            retained: true
+        });
     });
 });

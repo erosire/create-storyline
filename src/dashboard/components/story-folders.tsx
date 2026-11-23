@@ -21,6 +21,14 @@ export function SeedPane({ view }: { view: StoryViewData }) {
             </header>
 
             <p className="sv-seed-body">{view.story.idea}</p>
+            {/* §10 / §3.3 — the Editor's ACCEPTED Seed Brief is a derived record, never an edit of
+                the Seed (P5). The pane shows its logline only: the brief is an input, not the
+                contract (phase ②/③ measure against the locked Summary and the raw Seed, C-14). */}
+            {view.seed_brief ? (
+                <p className="sv-seed-brief">
+                    The Editor&apos;s brief: {view.seed_brief.logline}
+                </p>
+            ) : null}
             {view.summary ? (
                 <p className="sv-seed-measure">
                     The book&apos;s measure: {view.summary.chapter_count} chapters (D-3b).

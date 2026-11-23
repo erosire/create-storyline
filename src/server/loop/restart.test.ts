@@ -146,6 +146,80 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
         ]);
     });
 
+    it('T12/H7 — a phase-① round interrupted mid-sample resumes under a NEW key and completes exactly once', async () => {
+        // The in-memory store is the whole hand-over: the second rig's engine reads the SAME records
+        // (P1/L-3), and `recover()` runs in its constructor — that is the restart (probe-f's
+        // blueprint, without the disk the real server needs).
+        const store = Store.empty();
+        const first = await createRig({ store, summarySampling: 3, summaryReaders: 1 });
+
+        // Walk to the first persisted sample, then stop: the round is mid-flight.
+        for (let index = 0; index < 12; index += 1) {
+            await first.step();
+
+            if (store.revisions.list().filter((revision) => revision.story_id === first.storyId).length >= 1) break;
+        }
+
+        expect(store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+
+        // SIGKILL's fingerprint: the SECOND sample's run row exists and is live, but its owner died
+        // with the old process. Nothing abandons it but the restarted engine's `recover()`.
+        const orphan = store.runs.create(
+            {
+                story_id: first.storyId,
+                work_item_ref: 'wi_sample_summary_1_1_2',
+                role: 'writer',
+                state: 'working',
+                started_at: new Date().toISOString(),
+                tokens: 0,
+                kind: 'work',
+                delegated: []
+            },
+            { run_ref: null, why: 'the process died while sample 2 was in flight (probe-f)' }
+        );
+
+        const second = await createRig({ store, attach: true });
+
+        await second.run(40);
+
+        // The orphan is abandoned at construction, with S-3's restart sentence.
+        expect({
+            state: store.runs.require(orphan.id).state,
+            end_reason: store.runs.require(orphan.id).end_reason
+        }).toEqual({
+            state: 'abandoned',
+            end_reason: 'the engine restarted and this run had no owner in this process (L-3, S-4a)'
+        });
+
+        // The lost sample is re-bought under the NEXT attempt key, and no key is ever dispatched
+        // twice (L-2's claim is the run row, so the abandoned row keeps its own key).
+        const keys = store.runs
+            .list()
+            .filter((run) => (run.work_item_ref ?? '').startsWith('wi_sample_summary_1_1_'))
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((run) => `${run.work_item_ref}:${run.state}`);
+
+        expect(keys).toEqual([
+            'wi_sample_summary_1_1_1:torn_down',
+            'wi_sample_summary_1_1_2:abandoned',
+            'wi_sample_summary_1_1_3:torn_down',
+            'wi_sample_summary_1_1_4:torn_down'
+        ]);
+        expect(new Set(keys.map((key) => key.split(':')[0])).size).toBe(keys.length);
+
+        // The round reached its full sample set and selected ONCE: one selected revision survives the
+        // truncation, and the single audit line names the three samples the round produced.
+        const story = second.story();
+
+        expect(store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
+            'revision_1:selected'
+        ]);
+        expect(story.sampling_round).toBe(1);
+        expect((story.sampling_history ?? []).map((entry) => entry.samples.map((sample) => sample.revision_id))).toEqual([
+            ['revision_1', 'revision_2', 'revision_3']
+        ]);
+    });
+
     it('a run whose owner goes quiet loses its lease, and the item returns to the queue (S-4a, D-36)', async () => {
         const store = await Store.load(root);
         const rig = await createRig({ store, story: { chapter_count: 1 }, leaseIdleMs: 1 });

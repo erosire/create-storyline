@@ -6,7 +6,7 @@
 // only has to satisfy what the client actually reads: `status` and `text()`).
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RETRY_DELAY_MS, LlmError, createOpenAICompatClient, isAbortError, isLlmError } from './client';
-import type { ChatMessage, ChatRequest, ToolSchema } from './client';
+import type { ChatMessage, ChatRequest, ResponseFormat, ToolSchema } from './client';
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -109,7 +109,10 @@ describe('createOpenAICompatClient — request shape', () => {
                 body: json({ model: 'crew/basalt', messages })
             }
         ]);
-        expect(response).toEqual({ message: { content: 'verdict: pass' }, usage: { input: 120, output: 34 } });
+        expect(response).toEqual({
+            message: { content: 'verdict: pass' },
+            usage: { input: 120, output: 34, cached_input: 0 }
+        });
     });
 
     it('collapses a trailing slash on baseUrl so the completions path is never doubled', async () => {
@@ -178,6 +181,177 @@ describe('createOpenAICompatClient — request shape', () => {
 
     it('reports the default single-retry backoff as 1000ms (the seam exists so tests need not wait for it)', () => {
         expect(DEFAULT_RETRY_DELAY_MS).toBe(1_000);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Structured output (§4.2): response_format plus the sampling knobs
+// ---------------------------------------------------------------------------
+
+describe('createOpenAICompatClient — structured output request shape', () => {
+    const schema: Record<string, unknown> = {
+        type: 'object',
+        properties: {
+            premise: { type: 'string', minLength: 1 },
+            knowledge_used: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['premise', 'knowledge_used'],
+        additionalProperties: false
+    };
+
+    it('sends response_format json_schema verbatim, alongside temperature and seed', async () => {
+        const provider = stub([{ status: 200, body: json({ choices: [{ message: { content: '{"premise":"ok"}' } }] }) }]);
+        const responseFormat: ResponseFormat = { name: 'SummarySample', schema, strict: true };
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'crew/writer',
+            fetchImpl: provider.fetchImpl
+        });
+
+        await client.complete({
+            model: 'crew/writer',
+            messages,
+            temperature: 0.7,
+            seed: 11,
+            responseFormat
+        });
+
+        expect(provider.seen.length).toBe(1);
+        expect(JSON.parse(provider.seen[0].body)).toEqual({
+            model: 'crew/writer',
+            messages,
+            temperature: 0.7,
+            seed: 11,
+            response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'SummarySample', strict: true, schema }
+            }
+        });
+    });
+
+    it('defaults strict to true, and omits temperature/seed the request does not carry', async () => {
+        const provider = stub([{ status: 200, body: json({ choices: [{ message: { content: '{}' } }] }) }]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl
+        });
+
+        await client.complete({ model: 'm', messages, responseFormat: { name: 'IssueList', schema } });
+
+        expect(JSON.parse(provider.seen[0].body)).toEqual({
+            model: 'm',
+            messages,
+            response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'IssueList', strict: true, schema }
+            }
+        });
+    });
+});
+
+describe('createOpenAICompatClient — response_format negotiation', () => {
+    const schema: Record<string, unknown> = {
+        type: 'object',
+        properties: { issues: { type: 'array', items: { type: 'string' } } },
+        required: ['issues'],
+        additionalProperties: false
+    };
+
+    const tools: ToolSchema[] = [
+        {
+            type: 'function',
+            function: { name: 'submitVerdict', description: 'File the verdict.', parameters: { type: 'object' } }
+        }
+    ];
+
+    it('downgrades to json_object exactly once when a 4xx names the response_format field', async () => {
+        // Mixed case on purpose: providers spell the rejected parameter however they like.
+        const provider = stub([
+            { status: 400, body: 'Unsupported parameter: Response_Format (json_schema is not available).' },
+            { status: 200, body: json({ choices: [{ message: { content: '{"issues":[]}' } }] }) }
+        ]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl,
+            retryDelayMs: 0
+        });
+
+        const response = await client.complete({
+            model: 'm',
+            messages,
+            tools,
+            temperature: 0.3,
+            seed: 42,
+            responseFormat: { name: 'IssueList', schema }
+        });
+
+        expect(response).toEqual({ message: { content: '{"issues":[]}' } });
+        expect(provider.seen.length).toBe(2);
+        expect(JSON.parse(provider.seen[0].body)).toEqual({
+            model: 'm',
+            messages,
+            tools,
+            temperature: 0.3,
+            seed: 42,
+            response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'IssueList', strict: true, schema }
+            }
+        });
+        // "Keeping everything else identical" is the contract: only response_format changes.
+        expect(JSON.parse(provider.seen[1].body)).toEqual({
+            model: 'm',
+            messages,
+            tools,
+            temperature: 0.3,
+            seed: 42,
+            response_format: { type: 'json_object' }
+        });
+    });
+
+    it('surfaces the second 4xx as a fatal LlmError after the one downgrade', async () => {
+        const provider = stub([
+            { status: 400, body: 'response_format is unsupported' },
+            { status: 400, body: 'json_object is unsupported too' }
+        ]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl,
+            retryDelayMs: 0
+        });
+
+        const failure = (await rejection(
+            client.complete({ model: 'm', messages, responseFormat: { name: 'IssueList', schema } })
+        )) as LlmError;
+
+        expect(provider.seen.length).toBe(2);
+        expect(JSON.parse(provider.seen[1].body).response_format).toEqual({ type: 'json_object' });
+        expect(isLlmError(failure)).toBe(true);
+        expect({ status: failure.status, body: failure.body }).toEqual({
+            status: 400,
+            body: 'json_object is unsupported too'
+        });
+    });
+
+    it('does not downgrade a 4xx that never names response_format/json_schema', async () => {
+        const provider = stub([{ status: 400, body: 'invalid model' }]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl,
+            retryDelayMs: 0
+        });
+
+        const failure = (await rejection(
+            client.complete({ model: 'm', messages, responseFormat: { name: 'IssueList', schema } })
+        )) as LlmError;
+
+        expect(provider.seen.length).toBe(1);
+        expect(JSON.parse(provider.seen[0].body).response_format.type).toBe('json_schema');
+        expect({ status: failure.status, body: failure.body }).toEqual({ status: 400, body: 'invalid model' });
     });
 });
 
@@ -283,6 +457,75 @@ describe('createOpenAICompatClient — response mapping', () => {
         expect({ status: (failure as LlmError).status, body: (failure as LlmError).body }).toEqual({
             status: 200,
             body: json(flat)
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Cache accounting (§4.2, §5): both provider shapes map to cached_input; absent means 0
+// ---------------------------------------------------------------------------
+
+describe('createOpenAICompatClient — cache accounting', () => {
+    const answer = { choices: [{ message: { content: 'ok' } }] };
+
+    it('maps a flat usage.cached_tokens into cached_input', async () => {
+        const provider = stub([
+            {
+                status: 200,
+                body: json({ ...answer, usage: { prompt_tokens: 100, completion_tokens: 20, cached_tokens: 64 } })
+            }
+        ]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl
+        });
+
+        expect(await client.complete({ model: 'm', messages })).toEqual({
+            message: { content: 'ok' },
+            usage: { input: 100, output: 20, cached_input: 64 }
+        });
+    });
+
+    it('maps OpenAI prompt_tokens_details.cached_tokens into cached_input', async () => {
+        const provider = stub([
+            {
+                status: 200,
+                body: json({
+                    ...answer,
+                    usage: {
+                        prompt_tokens: 100,
+                        completion_tokens: 20,
+                        prompt_tokens_details: { cached_tokens: 64 }
+                    }
+                })
+            }
+        ]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl
+        });
+
+        expect(await client.complete({ model: 'm', messages })).toEqual({
+            message: { content: 'ok' },
+            usage: { input: 100, output: 20, cached_input: 64 }
+        });
+    });
+
+    it('defaults cached_input to 0 when the provider reports no cache field', async () => {
+        const provider = stub([
+            { status: 200, body: json({ ...answer, usage: { prompt_tokens: 100, completion_tokens: 20 } }) }
+        ]);
+        const client = createOpenAICompatClient({
+            baseUrl: 'https://relay.test/v1',
+            model: 'm',
+            fetchImpl: provider.fetchImpl
+        });
+
+        expect(await client.complete({ model: 'm', messages })).toEqual({
+            message: { content: 'ok' },
+            usage: { input: 100, output: 20, cached_input: 0 }
         });
     });
 });

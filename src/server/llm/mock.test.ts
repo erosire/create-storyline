@@ -32,13 +32,50 @@ describe('MockChatClient', () => {
 
     it('passes a handler-authored ChatResponse through untouched, including usage', async () => {
         const client = new MockChatClient(() =>
-            Promise.resolve({ message: { content: 'done' }, usage: { input: 5, output: 7 } })
+            Promise.resolve({ message: { content: 'done' }, usage: { input: 5, output: 7, cached_input: 3 } })
         );
 
         expect(await client.complete({ model: 'm', messages })).toEqual({
             message: { content: 'done' },
-            usage: { input: 5, output: 7 }
+            usage: { input: 5, output: 7, cached_input: 3 }
         });
+    });
+
+    it('hands the handler the full structured-output request and records it in calls', async () => {
+        const seen: ChatRequest[] = [];
+        const client = new MockChatClient((request) => {
+            seen.push(request);
+
+            return { message: { content: '{"premise":"ok","theme":"memory","knowledge_used":[]}' } };
+        });
+        const responseFormat = {
+            name: 'SummarySample',
+            schema: {
+                type: 'object',
+                properties: { premise: { type: 'string', minLength: 1 } },
+                required: ['premise'],
+                additionalProperties: false
+            },
+            strict: true
+        };
+        const request: ChatRequest = {
+            model: 'crew/writer',
+            messages,
+            temperature: 0.8,
+            seed: 21,
+            responseFormat
+        };
+
+        const response = await client.complete(request);
+
+        expect(response).toEqual({
+            message: { content: '{"premise":"ok","theme":"memory","knowledge_used":[]}' }
+        });
+        // The handler sees the same full request the executor built (S-2, §4.2).
+        expect(seen).toEqual([request]);
+        expect(client.calls).toEqual([request]);
+        expect(client.calls[0].responseFormat).toEqual(responseFormat);
+        expect([client.calls[0].temperature, client.calls[0].seed]).toEqual([0.8, 21]);
     });
 });
 

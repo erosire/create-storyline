@@ -249,11 +249,14 @@ paths:
       operationId: getStoryKnowledge
       summary: Read the Story's durable knowledge directory
       description: >-
-        Eight folders (summary, plotlines, chapters, cast, continuity, goal, ideas, findings),
-        one knowledge article per folder, each entry a paragraph. The server re-derives the
-        sections from the book and flushes the article bytes before answering, so a commit that
-        landed since the last sync is visible and durable in this response. An unavailable
-        knowledge store answers `degraded: true` rather than failing the read.
+        Nine folders (research, summary, plotlines, chapters, cast, continuity, goal, ideas,
+        findings), one knowledge article per folder, each entry a paragraph. `research` mirrors the
+        Story's `knowledge` rows (the Researcher's artifact, §3.2): one paragraph per entry with its
+        importance, kind, topic, claim, detail and source, sorted critical → high → normal → low and
+        capped at 30 entries with a trailing count. The server re-derives the sections from the book
+        and flushes the article bytes before answering, so a commit that landed since the last sync
+        is visible and durable in this response. An unavailable knowledge store answers
+        `degraded: true` rather than failing the read.
       responses:
         '200':
           description: Knowledge tree.
@@ -957,8 +960,8 @@ paths:
       operationId: listAgents
       summary: Read the global employee roster
       description: >-
-        One row per employee kind (writer, editor, reader, checker), in catalogue order, whether
-        or not any Story is selected. A row carries the model the employee asks for, where that
+        One row per employee kind (checker, editor, reader, researcher, writer), ALPHABETICALLY by
+        kind, whether or not any Story is selected. A row carries the model the employee asks for, where that
         model came from, the template roles that name their own model for the kind, every live
         thread across every Story, and the newest closed runs so a provider fault stays visible
         (S-3). This is a projection of the global roster; it is not per-Story state.
@@ -1429,9 +1432,29 @@ components:
     Cost:
       type: string
       enum: [critical, major, minor, taste]
+    KnowledgeImportance:
+      type: string
+      description: >-
+        The Researcher's triage scale (documents/phase-1-research-pipeline.md §3.2), most to
+        least load-bearing. Only `critical` and `high` enter the sampling prompt (§5).
+      enum: [critical, high, normal, low]
+    KnowledgeKind:
+      type: string
+      description: What class of fact a knowledge entry is (§3.2).
+      enum: [fact, world_rule, tech, period, place, person, other]
+    SeedBriefState:
+      type: string
+      description: >-
+        `accepted` is the one brief the pipeline reads; a superseded brief is parked as `draft`
+        so exactly one accepted row exists per Story (§3.3).
+      enum: [draft, accepted]
     RoleKind:
       type: string
-      enum: [writer, editor, reader, checker]
+      description: >-
+        The dispatched employee kinds (§4.12). `researcher` is the Phase-1 addition
+        (documents/phase-1-research-pipeline.md §3.1): it reads the book and writes only
+        `knowledge`, plus the tasks it files for work it cannot do itself (D-11).
+      enum: [writer, editor, reader, checker, researcher]
     FindingState:
       type: string
       enum: [unconfirmed, confirmed, approved, fixed, disputed, discarded]
@@ -2029,6 +2052,30 @@ components:
                 type: string
             selection_note:
               type: string
+            # §3.5 additions to the pre-pipeline Revision row (no §4 field renamed or dropped).
+            origin:
+              type: string
+              description: How this draft came into existence (§3.5).
+              enum: [sampled, refined]
+            round:
+              type: integer
+              minimum: 1
+              description: 1-based sampling round; 1 is the First Revision's round.
+            prompt_hash:
+              type: string
+              description: >-
+                Byte-stable hash of the compiled first prompt that produced the draft: the cache
+                key and the proof that two samples shared a prefix (§5).
+            issue_counts:
+              type: object
+              description: Screening issues, denormalised for the selector and the dashboard (§3.5).
+              required: [critical, high]
+              additionalProperties: false
+              properties:
+                critical:
+                  type: integer
+                high:
+                  type: integer
     IdeaSource:
       type: object
       required: [url_or_title, claim, accessed_at]
@@ -2111,6 +2158,170 @@ components:
               type: string
             state:
               $ref: '#/components/schemas/ProposalState'
+    # ---------------------------------------------------------------------
+    # Phase-1 research pipeline collections
+    # (documents/phase-1-research-pipeline.md §3.2-§3.4)
+    # ---------------------------------------------------------------------
+    KnowledgeSource:
+      type: object
+      description: >-
+        One citation on a knowledge entry (T-10): the page or title, the specific claim it
+        supports, and when it was read.
+      required: [url_or_title, claim, accessed_at]
+      additionalProperties: false
+      properties:
+        url_or_title:
+          type: string
+        claim:
+          type: string
+        accessed_at:
+          type: string
+    KnowledgeEntry:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          description: >-
+            §3.2 — one durable fact the book depends on. Deduped by `fingerprint` = (story,
+            normalised topic, normalised claim): a repeat bumps `seen_count` and refreshes the
+            sources instead of opening a second row (D-16).
+          required: [story_id, kind, topic, claim, importance, sources, fingerprint, seen_count, author]
+          properties:
+            story_id:
+              type: string
+            phase:
+              allOf:
+                - $ref: '#/components/schemas/StoryPhase'
+              description: Absent = the entry applies to the whole book.
+            kind:
+              $ref: '#/components/schemas/KnowledgeKind'
+            topic:
+              type: string
+              description: Normalised topic key — the dedupe key (one entry per topic + claim).
+            claim:
+              type: string
+            detail:
+              type: string
+            importance:
+              $ref: '#/components/schemas/KnowledgeImportance'
+            sources:
+              type: array
+              items:
+                $ref: '#/components/schemas/KnowledgeSource'
+            fingerprint:
+              type: string
+              description: Stable hash of (story_id, topic, normalised claim) — the D-16 pattern, reused.
+            seen_count:
+              type: integer
+            author:
+              type: string
+              description: The Researcher role name/run that last wrote the row (P11).
+    SeedBrief:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          description: >-
+            §3.3 — the Editor's structured projection of the Author's Seed. P5 is preserved by
+            construction: this is a DERIVED row, never an edit of `stories.idea`.
+          required:
+            - story_id
+            - seed_hash
+            - logline
+            - protagonist
+            - want
+            - obstacle
+            - stakes
+            - setting
+            - world_rules
+            - promise
+            - constraints
+            - open_questions
+            - status
+          properties:
+            story_id:
+              type: string
+            seed_hash:
+              type: string
+              description: >-
+                Hash of `stories.idea` this brief was derived from (src/shared/seed-hash.ts); a
+                Seed edit re-arms the structuring.
+            logline:
+              type: string
+            protagonist:
+              type: string
+            want:
+              type: string
+            need:
+              type: string
+            obstacle:
+              type: string
+            stakes:
+              type: string
+            setting:
+              type: string
+            world_rules:
+              type: array
+              items:
+                type: string
+            promise:
+              type: string
+            tone_hints:
+              type: string
+            constraints:
+              type: array
+              items:
+                type: string
+            open_questions:
+              type: array
+              items:
+                type: string
+            status:
+              $ref: '#/components/schemas/SeedBriefState'
+            notes:
+              type: string
+    SampledIssue:
+      type: object
+      description: >-
+        §3.4 — one screening Reader complaint about one sample. Not a Finding: it never enters the
+        D-33/D-34 ladder and cannot block a Writer.
+      required: [severity, criterion, location, quote, detail]
+      additionalProperties: false
+      properties:
+        severity:
+          type: string
+          enum: [critical, high]
+        criterion:
+          type: string
+          description: "'C-14', 'C-15', or 'seed' for a Seed-contract breach."
+        location:
+          type: string
+        quote:
+          type: string
+        detail:
+          type: string
+        fix_hint:
+          type: string
+    SampleReview:
+      allOf:
+        - $ref: '#/components/schemas/StoredRecord'
+        - type: object
+          description: >-
+            §3.4 — the screening Reader's one-turn answer, persisted by the engine from the run's
+            validated structured output. Engine-written: no kind holds a write on it (§7.2).
+          required: [story_id, revision_ref, reader, issues, valid]
+          properties:
+            story_id:
+              type: string
+            revision_ref:
+              type: string
+            reader:
+              type: string
+            issues:
+              type: array
+              items:
+                $ref: '#/components/schemas/SampledIssue'
+            valid:
+              type: boolean
+              description: false = the one schema-repair retry still failed; the sample is judged with an error.
     # ---------------------------------------------------------------------
     # §10 projections
     # ---------------------------------------------------------------------
@@ -2371,6 +2582,106 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LevelHistoryRow'
+        seed_brief:
+          allOf:
+            - $ref: '#/components/schemas/SeedBriefView'
+          nullable: true
+          description: >-
+            §10/§3.3 — the ACCEPTED Seed Brief, trimmed to the reading surface. Null before phase ①'s
+            gate 1 (no accepted brief yet). Additive: a client that predates it simply ignores it.
+        sampling:
+          $ref: '#/components/schemas/SamplingView'
+    SeedBriefView:
+      type: object
+      description: >-
+        §3.3 — the Editor's derived, machine-readable projection of the Author's Seed, trimmed to what
+        the Story view renders. The Seed itself stays `stories.idea` and is never edited (P5); the
+        arrays and tone hints belong to the prompt compiler.
+      required: [id, seed_hash, logline, protagonist, want, obstacle, stakes, setting, promise, status]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        seed_hash:
+          type: string
+        logline:
+          type: string
+        protagonist:
+          type: string
+        want:
+          type: string
+        obstacle:
+          type: string
+        stakes:
+          type: string
+        setting:
+          type: string
+        promise:
+          type: string
+        status:
+          $ref: '#/components/schemas/SeedBriefState'
+    SamplingSample:
+      type: object
+      description: One sample's screening tally, as the selector ranked it (§6.5).
+      required: [revision_id, critical, high]
+      additionalProperties: false
+      properties:
+        revision_id:
+          type: string
+        critical:
+          type: integer
+        high:
+          type: integer
+    SamplingHistorySample:
+      type: object
+      description: One sample of a completed round — its tally plus whether its screening list validated.
+      required: [revision_id, critical, high, valid]
+      additionalProperties: false
+      properties:
+        revision_id:
+          type: string
+        critical:
+          type: integer
+        high:
+          type: integer
+        valid:
+          type: boolean
+    SamplingHistoryRow:
+      type: object
+      description: >-
+        §3.6/§6.6 — one completed sampling round's P11 audit line. The losing samples are hard-deleted
+        by the selection commit, so this row is the surviving record of what competed.
+      required: [round, at, samples, selected]
+      additionalProperties: false
+      properties:
+        round:
+          type: integer
+        at:
+          type: string
+        samples:
+          type: array
+          items:
+            $ref: '#/components/schemas/SamplingHistorySample'
+        selected:
+          type: string
+    SamplingView:
+      type: object
+      description: >-
+        §10/§6.5-§6.6 — phase ①'s sampling state: the last completed round, the sample the last
+        selection installed (with the counts that won it), and the bounded audit history.
+      required: [round, history]
+      additionalProperties: false
+      properties:
+        round:
+          type: integer
+          description: Last completed round — `sampling_round ?? 1` (the in-flight round is one higher).
+        selected:
+          $ref: '#/components/schemas/SamplingSample'
+        history:
+          type: array
+          description: The Story's sampling_history rows, capped at the last five, newest first.
+          items:
+            $ref: '#/components/schemas/SamplingHistoryRow'
     QueueItem:
       type: object
       description: One decision on the cross-Story Author queue.
@@ -2417,7 +2728,7 @@ components:
       properties:
         key:
           type: string
-          enum: [summary, plotlines, chapters, cast, continuity, goal, ideas, findings]
+          enum: [research, summary, plotlines, chapters, cast, continuity, goal, ideas, findings]
         title:
           type: string
         article_id:

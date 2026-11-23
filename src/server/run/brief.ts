@@ -41,6 +41,10 @@ import { chapterContent } from '../../shared/chapter';
 import type { CommitEvent, Store } from '../store';
 import { REPORT_TOOLS } from './catalogue';
 import { permissionLine, type ResolvedHarness } from './harness';
+// The Seed Brief and Knowledge renderers are shared with the Phase-1 compiler (./phase1-prompt):
+// the same record must read the same way in a tool run's brief and in a sampling prefix, or the
+// two prompts would disagree about what the Author's Seed means (§3.3, §5).
+import { acceptedSeedBrief, promptKnowledge, renderKnowledgeBlock, renderSeedBrief } from './phase1-prompt';
 import type { WorkItem } from './types';
 
 // ---------------------------------------------------------------------------
@@ -447,8 +451,18 @@ const idSuffix = (id: string): number => {
  */
 function jobStatement(item: WorkItem): string {
     switch (item.kind) {
-        case 'seed_review':
-            return 'Review the Seed above BEFORE any Writer expands it. Check that it names the six things a Summary needs — protagonist, want, obstacle, stakes, world and change — and that its wording is precise enough to be contradicted. Call `reviewSeed` with `accept` when the Seed is structured enough, or with `restructure` and the missing areas when it is not; a restructure request asks the Author (sole owner of the Seed, P5) for the missing structure, and the Writer waits for the next Seed revision.';
+        case 'structure_seed':
+            // §3.3 / §6.4 gate 1: the Editor derives the brief; the Seed is never written (P5).
+            return 'Structure the Seed above BEFORE anything is sampled from it (the pipeline refuses sampling until an accepted brief exists). Read it once: it is Author truth and read-only forever (P5), and it is the only source of facts this run may use. Validate the structure a Summary needs — protagonist, want, obstacle, stakes, setting, world rules, and a promise — then call `structureSeed` ONCE with the derived brief and the Seed\u2019s current hash. A field the Seed states, the brief restates; a field the Seed leaves silent goes to `open_questions`, never to an invented blank (D-17c, P7). Never edit the Seed, never write a story artifact (P10, L-19), and stop as soon as `structureSeed` reports.';
+        case 'research':
+            // §3.2 / §6.4 gate 2: the Researcher's product is Knowledge, with sources.
+            return 'Research what this Story depends on — the period, place, technology, people and facts a draft would otherwise have to guess — and record each claim with `writeKnowledge`: one entry per claim, an importance level, and at least one source you actually read (T-10). Do not write story artifacts (P10) and do not raise findings about prose: when a fact cannot be established from here, file a task or escalate with `requestAuthor` rather than inventing it (P7). Dedupe is automatic (a repeat report bumps `seen_count`), so report the fact once; `retireKnowledge` marks an entry that is no longer true instead of deleting it.';
+        case 'sample_unit':
+            // Unreachable through the assembled brief (a sampling run has no tools and gets the
+            // compiled prompt instead), stated anyway so the kind is never described as an edit.
+            return 'This job is the single-turn sampling mode: the compiled prompt is your whole memory, you have no tools, and your answer is one JSON object matching the SummarySample schema (§4.3, §2 decision 3). Nothing in the book is written by this run — the engine persists the sample.';
+        case 'screen_samples':
+            return 'This job is the single-turn screening mode: judge the one draft the compiled prompt carries, with no tools, and answer with one JSON object matching the IssueList schema — critical and high issues only (§4.3, §6.4 step 4). Report defects, never improvements, and return an empty list when the draft holds.';
         case 'write_unit':
             return item.unit?.kind === 'summary'
                 ? 'Write ONE Summary from the Author requirements and the structured Seed above: fill every §4.2 block — premise, promise, theme, tone, ending, world_rules — in that order, keeping the Seed untouched (P5). When the job names findings or tasks, correct exactly those defects while keeping all six blocks complete. Report the draft with `submitVerdict` (you are the only thing that writes story artifacts — P10, D-17b).'
@@ -569,7 +583,20 @@ function renderJob(store: Store, item: WorkItem, fieldClip: number): string {
 // ---------------------------------------------------------------------------
 
 function renderEtiquette(kind: RoleKind): string {
+    // §7.2's researcher row: its write is Knowledge, never the book. Stated as its own line
+    // because the generic "every tool is registered" sentence would otherwise read as permission
+    // to reach for a story artifact — P10 refuses that call, and a brief should teach the route
+    // before the refusal does (T-1a).
+    const researcherLines =
+        kind === 'researcher'
+            ? [
+                  'You are the Researcher: never write a story artifact (P10) — no Summary, plotline, chapter, Idea, verdict or finding. Your writes are `writeKnowledge` and `retireKnowledge` only; `readKnowledge` is how you check what is already known before you research it again.',
+                  'Every entry cites a source you actually read, and the source backs the claim you attached it to (T-10). A claim you cannot source belongs in a task or in `requestAuthor`, not in Knowledge — escalate rather than guess (P7).'
+              ]
+            : [];
+
     return [
+        ...researcherLines,
         `Every tool in §8 is registered on this session whatever your kind — ${permissionLine(kind)}. A call your kind may not make is REFUSED at the call, naming the rule (T-1a), so try rather than guess: a refusal is information, not a failure.`,
         "`listTools` lists the catalogue this session holds and `describeTool` gives one tool's exact shape (T-6c) — cheaper than guessing a field and being refused (T-11).",
         'Every mutating tool takes `expects: [{id, rev}]` and `why` (T-4, T-5). A rejected write returns the CURRENT record: re-read what it says now, re-apply your change against that, and send it again with the rev you were handed. Never force — concurrent crews are expected, not exceptional (T-4).',
@@ -713,6 +740,27 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
     // 3. The Seed, verbatim and marked untouchable (P5, D-3b).
     parts.push({ heading: 'SEED — Author truth, read-only for you at every phase, forever', body: story.idea });
 
+    // 3b. The Seed Brief (§3.3) — the Editor's DERIVED projection of the Seed. Every normal run
+    //     sees it right after the Seed because it is the machine-readable form of the same truth:
+    //     the Seed stays law (P5), and the brief is what a Worker can actually check a draft
+    //     against. Omitted when the Story has no accepted brief yet — a stated absence already
+    //     exists above (the raw Seed), and an empty heading would only add noise.
+    const seedBrief = acceptedSeedBrief(store, story.id);
+
+    if (seedBrief !== undefined) {
+        parts.push({
+            heading: 'SEED BRIEF (structured from the Author\'s Seed — derived, the Seed itself stays law, P5)',
+            body: renderSeedBrief(seedBrief)
+        });
+    }
+
+    // 3c. The Knowledge a tool run must not contradict (§3.2, §5). Same filter and order as the
+    //     compiler (`critical` then `high`, by fingerprint); the brief omits `detail` so a long
+    //     research corpus cannot push a chapter brief past E-3 — `readKnowledge` carries the rest.
+    const knowledge = renderKnowledgeBlock(promptKnowledge(store, story.id));
+
+    if (knowledge !== '') parts.push({ heading: 'KNOWLEDGE — critical and high', body: knowledge });
+
     // 4. The Digest (D-13: the brief IS Digest + artifact + criteria, so no run has to read the book).
     parts.push({
         heading: `DIGEST${digest ? ` rev ${digest.rev}` : ''}${digest?.stale ? ' — STALE' : ''} (derived by the engine, never a crew: D-12a)`,
@@ -748,7 +796,11 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
 
 /** The heading names the unit so an agent cannot mistake which record it is judging. */
 function artifactHeading(store: Store, item: WorkItem, story: Story): string {
-    if (item.kind === 'seed_review') return 'the Seed (Author truth, read-only for you — P5)';
+    // §6.1's two new tool-carrying kinds. The Editor's structure pass reads the Seed and writes a
+    // DERIVED brief (the Seed itself is never edited, P5); the Researcher's pass produces the
+    // Story's Knowledge, so its "artifact" is what the book's facts rest on (§3.2).
+    if (item.kind === 'structure_seed') return 'the Seed (structure pass — you derive the brief, never edit the Seed, P5)';
+    if (item.kind === 'research') return "the Story's knowledge (research pass)";
 
     if (item.unit === undefined) {
         if (story.phase === 'summary') return 'the Summary draft (whole-Story job)';

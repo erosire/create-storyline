@@ -72,12 +72,15 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(failures).toEqual([]);
     });
 
-    it('the roster is the crews §6.2 and §14 item 10 name, and every one is duplicate-only (D-17)', () => {
+    it('the roster is the crews the Phase-1 pipeline, §6.2 and §14 item 10 name, and every one is duplicate-only (D-17)', () => {
         expect(BUILT_IN_TEMPLATES.map((template) => template.name)).toEqual([
-            'writer-summary',
+            'editor-seed-structure',
+            'researcher-story',
+            'writer-summary-sampler',
             'writer-plotlines',
             'writer-chapters',
             'editor-general',
+            'reader-screening',
             'reader-genre',
             'reader-plausibility',
             'reader-audience',
@@ -91,23 +94,128 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         }
 
         // One Writer per loop (L-4: separate templates and separate done-definitions).
-        expect(byName('writer-summary').serves_phase).toEqual(['summary']);
+        expect(byName('writer-summary-sampler').serves_phase).toEqual(['summary']);
         expect(byName('writer-plotlines').serves_phase).toEqual(['plotlines']);
         expect(byName('writer-chapters').serves_phase).toEqual(['chapters']);
 
-        // The Editor and the four Reader angles, plus the two checkers.
+        // The Seed-structuring Editor, the four deep-review Reader angles and the screening
+        // Reader, plus the two checkers.
+        expect(byName('editor-seed-structure').roles.map((role) => role.kind)).toEqual(['editor']);
         expect(byName('editor-general').roles.map((role) => role.kind)).toEqual(['editor']);
         expect(
-            ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery'].map(
+            ['reader-screening', 'reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery'].map(
                 (name) => byName(name).roles[0].kind
             )
-        ).toEqual(['reader', 'reader', 'reader', 'reader']);
+        ).toEqual(['reader', 'reader', 'reader', 'reader', 'reader']);
         expect(byName('checker-consistency').roles[0].kind).toBe('checker');
         expect(byName('checker-prose').roles[0].kind).toBe('checker');
     });
 
-    it('D-17d / E-4 / §14 item 9: divergence defaults ABOVE one, and Phase 1 gets most', () => {
-        expect(byName('writer-summary').attempts).toBe(3);
+    it('the old tool-writing Summary Writer is gone: the Sampler is the only Phase-1 Writer', () => {
+        // The Phase-1 redesign replaced `writer-summary` with the sample → screen → select
+        // pipeline. No backward compatibility is kept, so the slug must not survive anywhere in
+        // the roster — a leftover would be a second, differently-behaved Phase-1 Writer.
+        expect(BUILT_IN_TEMPLATES.map((template) => template.name)).not.toContain('writer-summary');
+        expect(DEFAULT_ASSIGNMENT).not.toContain('writer-summary');
+    });
+
+    it('§8: the four Phase-1 pipeline crews carry the fixed slugs, phases, kinds and single turns', () => {
+        // `editor-seed-structure` — the Seed-structuring Editor. Its selection_rules exist
+        // because D-17c demands them of every Editor template, and they state the structuring
+        // checklist rather than a taste in drafts.
+        const structure = byName('editor-seed-structure');
+
+        expect([
+            structure.title,
+            structure.serves_phase,
+            structure.attempts,
+            structure.delegation,
+            structure.max_concurrent
+        ]).toEqual(['Editor — Seed structure', ['summary'], 1, [], 1]);
+        expect(structure.roles.map((role) => [role.name, role.kind, role.web, role.agents])).toEqual([
+            ['editor', 'editor', false, 1]
+        ]);
+        expect(structure.selection_rules).toContain('STRUCTURING CHECKLIST');
+        // P5/P10 and the one-write contract live in the prompt, because the tool list cannot say
+        // what a role must NOT do (D-17a).
+        expect(structure.roles[0].prompt).toContain('structureSeed');
+        expect(structure.roles[0].prompt).toContain('open_questions');
+        expect(structure.roles[0].prompt).toContain('never edit');
+        expect(structure.done_definition).toBe(
+            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present.'
+        );
+        expect(structure.escalation_rule).toBe(
+            'requestAuthor when the Seed is internally contradictory; never edit the Seed.'
+        );
+
+        // `researcher-story` — the only Knowledge writer, dispatched for every phase.
+        const researcher = byName('researcher-story');
+
+        expect([
+            researcher.title,
+            researcher.serves_phase,
+            researcher.attempts,
+            researcher.delegation,
+            researcher.max_concurrent
+        ]).toEqual(['Researcher — Story knowledge', ['summary', 'plotlines', 'chapters'], 1, [], 1]);
+        expect(researcher.roles.map((role) => [role.name, role.kind, role.web, role.agents])).toEqual([
+            ['researcher', 'researcher', true, 1]
+        ]);
+        // T-10: leads from searchWeb, evidence from fetchPage, and one entry per claim.
+        expect(researcher.roles[0].prompt).toContain('searchWeb');
+        expect(researcher.roles[0].prompt).toContain('fetchPage');
+        expect(researcher.roles[0].prompt).toContain('writeKnowledge');
+        expect(researcher.roles[0].prompt).toContain('readKnowledge');
+        expect(researcher.done_definition).toBe(
+            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one.'
+        );
+
+        // `writer-summary-sampler` — no tools, one turn, one `SummarySample`.
+        const sampler = byName('writer-summary-sampler');
+
+        expect([
+            sampler.title,
+            sampler.serves_phase,
+            sampler.attempts,
+            sampler.delegation,
+            sampler.max_concurrent
+        ]).toEqual(['Summary Writer (sampler)', ['summary'], 1, [], 6]);
+        expect(sampler.roles.map((role) => [role.name, role.kind, role.web, role.agents])).toEqual([
+            ['writer', 'writer', false, 1]
+        ]);
+        expect(sampler.roles[0].prompt).toContain('NO tools');
+        expect(sampler.roles[0].prompt).toContain('SummarySample');
+        expect(sampler.roles[0].prompt).toContain('chapter_count');
+        expect(sampler.roles[0].prompt).toContain('knowledge_used');
+        expect(sampler.done_definition).toBe('A schema-valid SummarySample delivered in one turn with no tool calls.');
+        // A tool-less run holds nothing that could escalate, so no escalation rule is claimed.
+        expect(sampler.escalation_rule).toBeUndefined();
+
+        // `reader-screening` — no tools, one turn, one `IssueList` of critical/high only.
+        const screening = byName('reader-screening');
+
+        expect([
+            screening.title,
+            screening.serves_phase,
+            screening.attempts,
+            screening.delegation,
+            screening.max_concurrent
+        ]).toEqual(['Reader (screening)', ['summary'], 1, [], 6]);
+        expect(screening.roles.map((role) => [role.name, role.kind, role.web, role.agents])).toEqual([
+            ['reader', 'reader', false, 1]
+        ]);
+        expect(screening.roles[0].prompt).toContain('IssueList');
+        expect(screening.roles[0].prompt).toContain('{"issues":[]}');
+        expect(screening.roles[0].prompt).toContain('C-14');
+        expect(screening.roles[0].prompt).toContain('C-15');
+        expect(screening.done_definition).toBe('A schema-valid IssueList delivered in one turn with no tool calls.');
+        expect(screening.escalation_rule).toBeUndefined();
+    });
+
+    it('D-17d / E-4 / §14 item 9: divergence is the sampler count, and the later Writers keep theirs', () => {
+        // Phase 1's divergence moved from a template's `attempts` to the round's sample count
+        // (§6.4: `sample_unit` × `summary_sampling`), so each sample is one deterministic turn.
+        expect(byName('writer-summary-sampler').attempts).toBe(1);
         expect(byName('writer-plotlines').attempts).toBe(2);
         expect(byName('writer-chapters').attempts).toBe(2);
 
@@ -117,7 +225,7 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(byName('checker-consistency').attempts).toBe(1);
     });
 
-    it('D-30 / T-6b: the Readers are defined by their instructions and hold web research', () => {
+    it('D-30 / T-6b: the deep-review Readers are defined by their instructions and hold web research', () => {
         for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
             const role = byName(name).roles[0];
 
@@ -131,6 +239,16 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // The plausibility angle is the one whose value IS research, so it is told to fetch the
         // source it cites rather than trusting a snippet (D-27, T-10).
         expect(byName('reader-plausibility').roles[0].prompt).toContain('fetchPage');
+    });
+
+    it('the screening Reader is the exception: no tools, one turn, defects only', () => {
+        // `toolMode: 'none'` (§6.2): a screening pass holds no `proposeIdea` and no web, because
+        // its answer is one schema-validated JSON object and its issues are ranked, not debated.
+        const screening = byName('reader-screening').roles[0];
+
+        expect(screening.web).toBe(false);
+        expect(screening.prompt).not.toContain('proposeIdea');
+        expect(screening.prompt).toContain('Do not propose improvements, only defects');
     });
 
     it('P12 / U-8b: the Editor template carries the Author\u2019s selection_rules as editable starter text', () => {
@@ -151,16 +269,19 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(byName('checker-consistency').serves_phase).toEqual(['summary', 'plotlines', 'chapters']);
     });
 
-    it('D-17e: only the Writer and the Editor templates declare in-run delegation, and every target is a role', () => {
+    it('D-17e: only the Writer and the selection Editor templates declare in-run delegation, and every target is a role', () => {
         const delegation = Object.fromEntries(
             BUILT_IN_TEMPLATES.map((template) => [template.name, template.delegation ?? []])
         );
 
         expect(delegation).toEqual({
-            'writer-summary': ['checker'],
+            'editor-seed-structure': [],
+            'researcher-story': [],
+            'writer-summary-sampler': [],
             'writer-plotlines': ['checker'],
             'writer-chapters': ['checker'],
             'editor-general': ['reader', 'checker'],
+            'reader-screening': [],
             'reader-genre': [],
             'reader-plausibility': [],
             'reader-audience': [],
@@ -173,22 +294,52 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
 
 describe('W8 — T-0 structural assignment rules', () => {
     it('the default assignment is legal at every phase', () => {
+        // `createStory` applies this set to a Story that starts in `summary`, and the same rows
+        // carry the Story through phases ② and ③, so it has to validate in all three.
         for (const phase of ['summary', 'plotlines', 'chapters'] as StoryPhase[]) {
             expect(validateAssignment(storyAt(phase), DEFAULT_ASSIGNMENT)).toEqual([]);
         }
 
-        // §14 item 10's four angles and the one Editor are all in it; the prose checker is the
+        // §6.4's four Phase-1 pipeline crews, the two later-phase Writers, §14 item 10's four
+        // deep-review angles and the one selection Editor are all in it; the prose checker is the
         // opt-in crew, which is why U-8 (not the default) assigns it.
+        //
+        // `editor-general` leads the Editor pair on purpose: an unbound Editor job (`verify_findings`,
+        // `verify_ideas`, `directive_work`, `select`) binds the FIRST assigned editor template
+        // (`work.ts:candidate` → `records.ts:templatesFor` order). The structure pass binds its
+        // template explicitly, so it is unaffected by the order.
         expect(DEFAULT_ASSIGNMENT).toEqual([
-            'writer-summary',
+            'editor-general',
+            'editor-seed-structure',
+            'researcher-story',
+            'writer-summary-sampler',
+            'reader-screening',
             'writer-plotlines',
             'writer-chapters',
-            'editor-general',
             'reader-genre',
             'reader-plausibility',
             'reader-audience',
             'reader-mystery',
             'checker-consistency'
+        ]);
+    });
+
+    it('each Writer serves exactly one phase, so every phase has exactly one writer pool', () => {
+        // The default carries one Writer per phase and the pools must not overlap: a phase-② job
+        // resolved against this set finds `writer-plotlines` and nothing else (D-17b, L-4).
+        const writers = BUILT_IN_TEMPLATES.filter((template) =>
+            template.roles.some((role) => role.kind === 'writer')
+        );
+
+        expect(
+            (['summary', 'plotlines', 'chapters'] as StoryPhase[]).map((phase) => [
+                phase,
+                writers.filter((template) => template.serves_phase.includes(phase)).map((template) => template.name)
+            ])
+        ).toEqual([
+            ['summary', ['writer-summary-sampler']],
+            ['plotlines', ['writer-plotlines']],
+            ['chapters', ['writer-chapters']]
         ]);
     });
 
@@ -200,11 +351,19 @@ describe('W8 — T-0 structural assignment rules', () => {
 
     it('T-0 / D-33: a Reader or checker assigned without an Editor is refused', () => {
         // Someone is about to file findings the loop would act on unverified.
-        expect(validateAssignment(storyAt('summary'), ['writer-summary', 'reader-genre'])).toEqual([
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'reader-genre'])).toEqual([
             'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Reader or checker finding must be verified before the loop acts on it (D-33, T-0)'
         ]);
 
-        expect(validateAssignment(storyAt('summary'), ['writer-summary', 'checker-consistency'])).toHaveLength(1);
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'checker-consistency'])).toHaveLength(
+            1
+        );
+
+        // The screening Reader is a Reader too — its issues rank samples, but the rule that a
+        // non-Writer crew needs an Editor does not care which Reader flavour it is.
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'reader-screening'])).toEqual([
+            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Reader or checker finding must be verified before the loop acts on it (D-33, T-0)'
+        ]);
     });
 
     it('T-0 / D-23: attempts > 1 without an Editor is refused — nobody would choose between the drafts', () => {
@@ -351,7 +510,7 @@ describe('W8 — validateTemplate refuses the harnesses that cannot run', () => 
 
         ghostDelegate.delegation = ['poet'];
         expect(validateTemplate(ghostDelegate)).toEqual([
-            'template editor-ghost.delegation names "poet", which is neither a role kind (writer, editor, reader, checker) nor one of this template\u2019s roles (D-17e)'
+            'template editor-ghost.delegation names "poet", which is neither a role kind (writer, editor, reader, checker, researcher) nor one of this template\u2019s roles (D-17e)'
         ]);
     });
 

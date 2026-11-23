@@ -2,17 +2,22 @@
  * §7 as data: one row per artifact, transcribed cell for cell, plus the guards the matrix
  * cannot express as a level (the two lock flags, the Author's spans, the derived Digest).
  *
- * §7's columns are Author | Assistant | Writer | Editor | Checker/Reader. Only the last four
- * matter here — the Author and the Assistant are not dispatched kinds — and `reader` and
- * `checker` share the last column except where T-1b says otherwise. Permission is enforced at
- * the call, never by hiding the tool (T-1a), and the refusal names the rule (§12 W2).
+ * §7's columns are Author | Assistant | Writer | Editor | Checker/Reader | **Researcher**. Only
+ * the last five matter here — the Author and the Assistant are not dispatched kinds — and
+ * `reader` and `checker` share the last of §7's original columns except where T-1b says
+ * otherwise. The Researcher column is
+ * `documents/phase-1-research-pipeline.md` §7.2: it is `read` wherever a Checker reads today,
+ * with four deliberate differences the row comments state (it WRITES `knowledge`, it may file a
+ * `tasks` entry — D-11 — and it only reads `verdicts`/`findings`/`ideas` because it does not
+ * judge prose). Permission is enforced at the call, never by hiding the tool (T-1a), and the
+ * refusal names the rule (§12 W2).
  */
 import type { RoleKind } from '../../shared/types';
 import type { CAS, Store } from '../store/store';
 import { isCompleted, isStopped, refusalResult, rolePhrase, toFailureResult, ToolRefusal } from './utilities';
 import type { PermissionLevel, ToolDefinition, ToolExecutionContext, ToolResult } from './types';
 
-/** One §7 row: the artifact, the four dispatched kinds' levels, and the rules it encodes. */
+/** One §7 row: the artifact, the five dispatched kinds' levels, and the rules it encodes. */
 export interface PermissionRow {
     /** Artifact as §7 names it, mapped to the §4 collection a tool writes. */
     artifact: string;
@@ -22,6 +27,12 @@ export interface PermissionRow {
     editor: PermissionLevel;
     checker: PermissionLevel;
     reader: PermissionLevel;
+    /**
+     * `documents/phase-1-research-pipeline.md` §7.2's new column. The Researcher reads the book
+     * and writes only `knowledge` (plus a task, D-11); it never judges prose, so its
+     * `verdicts`/`findings`/`ideas` cells are `read` even where a Checker's are `write`.
+     */
+    researcher: PermissionLevel;
     /** The rules this row enforces, quoted by `describeTool` so the agent can read the law. */
     criterion_refs: string[];
     /**
@@ -49,6 +60,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['P5', 'D-3b', 'D-25a'],
         note: 'Author-written, read-only for every agent at every phase, forever'
     },
@@ -59,6 +71,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-3', 'T-3c', 'L-30', 'P5'],
         refusal_rules: { writer: 'T-3c' },
         note: 'the Writer writes only in phase `summary` and only while `summary_locked` is false'
@@ -70,6 +83,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-3b', 'D-3c'],
         note: 'author truth: declared, never chosen by an agent'
     },
@@ -80,6 +94,9 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'verify',
         checker: 'write',
         reader: 'write',
+        // §7.2: the Researcher reads the tray (an Idea can name a fact worth researching) and
+        // proposes none — its output is Knowledge, not a suggestion about the book.
+        researcher: 'read',
         criterion_refs: ['D-26', 'D-27', 'D-31', 'D-32'],
         note: 'a Reader proposes; the Editor verifies; the Writer reads, including the decided ones'
     },
@@ -90,6 +107,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['L-7', 'D-2a', 'P7', 'D-3c'],
         note: 'write until `plotlines_locked`, then propose'
     },
@@ -100,9 +118,12 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['L-19', 'D-37', 'P7'],
-        // §12 W2: "an Editor's prose write is refused naming L-19".
-        refusal_rules: { editor: 'L-19', checker: 'P10', reader: 'P10' },
+        // §12 W2: "an Editor's prose write is refused naming L-19". §7.2 makes the Researcher's
+        // refusal explicit too: it names P10, exactly as a Checker's or a Reader's does, so the
+        // researcher learns the one route that works — file a task and let the Writer write it.
+        refusal_rules: { editor: 'L-19', checker: 'P10', reader: 'P10', researcher: 'P10' },
         note: 'the Editor chooses drafts, it never writes prose (L-19)'
     },
     {
@@ -112,6 +133,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['P9', 'T-2', 'D-37a'],
         refusal_rules: { writer: 'P9' },
         note: 'tracked at section granularity (`sections[].origin === "author"`), so only that span is frozen'
@@ -123,6 +145,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['P7', 'D-1']
     },
     {
@@ -132,6 +155,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-21', 'D-22', 'D-3d', 'L-16', 'L-17', 'L-18', 'L-20'],
         note: 'the Writer creates them through `editChapter`; only the Editor selects, merges or deletes'
     },
@@ -142,6 +166,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-9', 'C-9']
     },
     {
@@ -151,6 +176,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-10', 'C-5', 'C-6', 'L-13'],
         note: 'ledger writes are what make C-5/C-6 mechanically checkable'
     },
@@ -161,11 +187,20 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        // The Researcher reads the Digest like every kind, and may not write it for the same
+        // reason: it is engine-derived (D-12a), not a crew artifact.
+        researcher: 'read',
         criterion_refs: ['D-12a', 'D-13', 'L-21'],
         // §8.4 registers `updateDigest` on every session and §7 refuses every kind: the refusal
         // names D-12a (the engine derives the Digest), not the generic P10, because the agent has
         // to be told WHICH rule it hit in order to route the work as a `digest_gap` finding (D-13).
-        refusal_rules: { writer: 'D-12a', editor: 'D-12a', checker: 'D-12a', reader: 'D-12a' },
+        refusal_rules: {
+            writer: 'D-12a',
+            editor: 'D-12a',
+            checker: 'D-12a',
+            reader: 'D-12a',
+            researcher: 'D-12a'
+        },
         // U-3a: the row cannot be satisfied by handing the job to another kind, so the fix names the
         // only call that works — the `digest_gap` FINDING the loop reads back as the signal to widen
         // the Digest (src/server/digest/digest.ts's `isExpanded`). It used to send the agent to
@@ -182,6 +217,9 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write',
         checker: 'write',
         reader: 'write',
+        // D-11/§7.2: the Researcher may file the `fix`/`research` task it cannot do itself — a
+        // queue entry is a plan, not a story artifact, so it is the one write beyond Knowledge.
+        researcher: 'write',
         criterion_refs: ['D-11', 'L-11', 'L-18'],
         note: 'the queue holds the plan, not the transcript; every kind may file the fix it sees'
     },
@@ -192,6 +230,9 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write_verify',
         checker: 'write',
         reader: 'write',
+        // §7.2: a Researcher does not judge prose, so it reads verdicts and files none. Its
+        // product is Knowledge; a judgement about the book belongs to a kind that reads the book.
+        researcher: 'read',
         criterion_refs: ['D-3', 'D-15', 'D-28', 'P6'],
         note: 'a verdict is a report; only the engine advances a chapter on it'
     },
@@ -202,6 +243,9 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write_verify',
         checker: 'write',
         reader: 'write',
+        // §7.2: same as verdicts — a finding is a claim about prose, and the Researcher's output is
+        // Knowledge. It reads the open findings so it can research a fact one of them rests on.
+        researcher: 'read',
         criterion_refs: ['D-16', 'D-33', 'D-34', 'D-35'],
         note: 'any kind may raise one; the Editor confirms, disputes or rewrites it; the Author approves'
     },
@@ -212,6 +256,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['T-2a', 'L-17'],
         note: 'rides on `selectRevision`; the only window the Author has into automated taste'
     },
@@ -222,6 +267,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['G-4', 'L-15', 'P15'],
         note: 'a checker cannot soften the bar it is measured against'
     },
@@ -232,6 +278,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'recommend',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-1', 'D-2a', 'L-10'],
         note: 'the loop engine and the Author own the state machine; an agent may only recommend `done`'
     },
@@ -242,6 +289,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-25', 'D-25a', 'L-29', 'L-30', 'L-31', 'L-32', 'L-33', 'L-34'],
         note: 'the Author, alone'
     },
@@ -252,6 +300,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-17', 'D-17c', 'L-27']
     },
     {
@@ -261,6 +310,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-19', 'U-9'],
         note: 'the Author writes them; the crew reads them in its brief'
     },
@@ -271,6 +321,11 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'write',
         checker: 'write',
         reader: 'write',
+        // T12/F2: the Researcher writes `knowledge` and `tasks` ONLY (documents/phase-1-research-
+        // pipeline.md §7.2, §16.3). The cell used to be inherited from the Checker's `write`, which
+        // let a research run file §4.16 proposals — a story-artifact opinion, which is exactly the
+        // judgement §7.2 says the Researcher does not make. It reads the tray; it proposes nothing.
+        researcher: 'read',
         criterion_refs: ['P9', 'D-20', 'D-20a'],
         note: 'the agent→Author direction only; the Author accepts or rejects'
     },
@@ -281,6 +336,7 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'recommend',
         checker: 'recommend',
         reader: 'recommend',
+        researcher: 'recommend',
         criterion_refs: ['D-17e', 'T-2b', 'D-38'],
         note: '`delegate` only: in-run reasoning the run layer answers, never a dispatched Work Item'
     },
@@ -291,13 +347,64 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         editor: 'read',
         checker: 'read',
         reader: 'read',
+        researcher: 'read',
         criterion_refs: ['D-18', 'S-1'],
         note: 'the run layer writes its own row; no tool edits a run'
+    },
+    // ── the three Phase-1 collections (documents/phase-1-research-pipeline.md §3.2-§3.4) ──
+    // APPENDED, never inserted: the rows above are the §7 transcription in §7's own order, and
+    // `permissionRow()` answers with the FIRST row for a collection, so inserting here would
+    // change which cell an existing tool is judged against.
+    {
+        artifact: 'knowledge',
+        collection: 'knowledge',
+        writer: 'read',
+        editor: 'read',
+        checker: 'read',
+        reader: 'read',
+        // The one collection the Researcher owns. §7.2: "the Researcher researches; every other
+        // kind reads" — so the knowledge row is the inverse of every other row's shape. D-16 and
+        // T-10 are the two rules the Researcher's own writes are judged by (fingerprint dedupe,
+        // and a citation that names the claim it supports).
+        researcher: 'write',
+        criterion_refs: ['D-16', 'T-10'],
+        note: 'the Researcher researches; every other kind reads'
+    },
+    {
+        artifact: 'seed_briefs',
+        collection: 'seed_briefs',
+        writer: 'read',
+        editor: 'write',
+        checker: 'read',
+        reader: 'read',
+        researcher: 'read',
+        // P5 is preserved by construction: the brief is DERIVED from `stories.idea`, and C-14 keeps
+        // measuring the Summary against the raw Seed rather than against this projection.
+        criterion_refs: ['P5', 'D-3b', 'C-14'],
+        note: "the Editor structures the Author's Seed; the Seed itself stays read-only forever (P5)"
+    },
+    {
+        artifact: 'sample_reviews',
+        collection: 'sample_reviews',
+        writer: 'read',
+        editor: 'read',
+        checker: 'read',
+        reader: 'read',
+        researcher: 'read',
+        // §6.4/§6.5: the screening Reader's answer is persisted by the ENGINE (it holds no tools in
+        // that mode), so no kind writes this collection and every dispatched kind may read it.
+        criterion_refs: ['D-15', 'D-16'],
+        note: "engine-written from the screening Reader's structured answer"
     }
 ];
 
-/** The four dispatched kinds, in §7's column order (less Author and Assistant). */
-const ROLE_ORDER: RoleKind[] = ['writer', 'editor', 'checker', 'reader'];
+/**
+ * The five dispatched kinds, in §7's column order (less Author and Assistant). §7.2 appends the
+ * Researcher column, so it comes last; the order matters only for `permissionRefusal`'s "route
+ * the job to a …" hint, where the first kind holding the level wins — and every pre-existing
+ * holder comes before the Researcher, so no existing refusal changes its advice.
+ */
+const ROLE_ORDER: RoleKind[] = ['writer', 'editor', 'checker', 'reader', 'researcher'];
 
 /**
  * A `read` requirement is satisfied by anything above `none`: §7 states read access in prose

@@ -9,10 +9,16 @@
 // `<storeRoot>/harness/knowledge/`, outside every session, so a killed run, a destroyed
 // harness, or a restarted server cannot take the directory with it.
 //
-// ONE ARTICLE PER SECTION. A Story has eight folders (Summary, Plotlines, Chapters, Cast,
-// Continuity, Goal, Ideas, Findings); each folder is one knowledge article and each entry is
+// ONE ARTICLE PER SECTION. A Story has nine folders (Research, Summary, Plotlines, Chapters,
+// Cast, Continuity, Goal, Ideas, Findings); each folder is one knowledge article and each entry is
 // one paragraph. That keeps every article far below the engine's 64-paragraph cap and means a
 // chapter edit rewrites one small article instead of the whole story.
+//
+// RESEARCH IS THE NEW FIRST FOLDER (documents/phase-1-research-pipeline.md §3.2/§10): it mirrors
+// `store.knowledge` — the Researcher's own artifact — so the Author's knowledge pane shows the same
+// entries the sampling prompt is built from. It reads first because the pipeline runs
+// Seed → structure → research → sample; the Summary is what the research informs, not what precedes
+// it.
 //
 // THE STORE IS THE SOURCE OF TRUTH; THE KNOWLEDGE BASE IS A PROJECTION. Every commit to the
 // book re-derives the affected story's sections. An entry a human (or a crew) edits through
@@ -29,16 +35,18 @@ import {
     type KnowledgeStore
 } from '@underload/harness';
 import { chapterContent } from '../../shared/chapter';
-import type {
-    CastMember,
-    Chapter,
-    Criterion,
-    Finding,
-    Idea,
-    LedgerEntry,
-    Plotline,
-    Story,
-    Summary
+import {
+    KNOWLEDGE_IMPORTANCE,
+    type CastMember,
+    type Chapter,
+    type Criterion,
+    type Finding,
+    type Idea,
+    type KnowledgeEntry,
+    type LedgerEntry,
+    type Plotline,
+    type Story,
+    type Summary
 } from '../../shared/types';
 import type { Store } from '../store/store';
 
@@ -46,8 +54,19 @@ import type { Store } from '../store/store';
 // The directory
 // ---------------------------------------------------------------------------
 
-/** The folders every Story carries, in reading order. `empty` is the placeholder's sentence. */
+/**
+ * The folders every Story carries, in reading order. `empty` is the placeholder's sentence.
+ *
+ * `research` is first because it is phase ①'s first artifact (§6.4): the Researcher's facts are
+ * what the Summary is written against, and an empty research folder is information — it says the
+ * Researcher has not run — rather than a missing folder.
+ */
 export const STORY_SECTIONS = [
+    {
+        key: 'research',
+        title: 'Research',
+        empty: 'No research yet — the Researcher gathers the facts, places and sources the book depends on in phase ①.'
+    },
     {
         key: 'summary',
         title: 'Summary',
@@ -117,6 +136,13 @@ const ENTRY_TAG_PREFIX = 'entry:';
 const KNOWLEDGE_KIND_TAG = 'storyline-knowledge';
 const PLACEHOLDER_TAG = 'placeholder';
 const MAX_ENTRIES_PER_SECTION = 63;
+
+/**
+ * The research folder's own cap. It is deliberately far below the engine's 63: a knowledge pane is a
+ * reading surface, and thirty load-bearing facts with a trailing "N more" is a page an Author can
+ * scan; sixty-three is a dump. The truncation paragraph names the real number so nothing is hidden.
+ */
+const MAX_RESEARCH_ENTRIES = 30;
 
 /**
  * The harness knowledge engine caps one paragraph at 4000 characters. Leave room for the title
@@ -309,6 +335,43 @@ function goalEntries(criteria: Criterion[], thresholdSoft: number | undefined): 
     ];
 }
 
+/**
+ * §3.2 / §10 — the Researcher's entries as the directory mirrors them, one paragraph per entry:
+ *
+ *   [<importance> · <kind>] <topic>                                  (the entry's title line)
+ *   <claim>[ — <detail>][ (source: <url_or_title>)]                  (the entry's body)
+ *
+ * WHY THE TITLE/BODY SPLIT: the engine renders an entry as `title\n\nbody` (see `textOf`), which is
+ * the same convention every other section uses (a label line, then the content). Splitting there
+ * keeps the importance badge and the topic scannable while the claim stays one readable line.
+ *
+ * SORTING: `KNOWLEDGE_IMPORTANCE` IS the triage scale (critical → high → normal → low), so its index
+ * is the sort key; `id` breaks ties so the same store always renders the same article — the sync's
+ * diff compares text, and an unstable order would rewrite the durable bytes on every commit.
+ *
+ * ONE SOURCE, NOT ALL: the requested format names a single `url_or_title`, and T-10's rule is that a
+ * source backs ONE named claim. The first citation is that source; the full `sources` array stays on
+ * the record for a pane that wants every citation.
+ */
+function researchEntries(entries: KnowledgeEntry[]): DesiredEntry[] {
+    return [...entries]
+        .sort(
+            (left, right) =>
+                KNOWLEDGE_IMPORTANCE.indexOf(left.importance) - KNOWLEDGE_IMPORTANCE.indexOf(right.importance) ||
+                left.id.localeCompare(right.id)
+        )
+        .map((entry) => {
+            const detail = entry.detail === undefined || entry.detail.trim().length === 0 ? '' : ` — ${entry.detail}`;
+            const source = entry.sources[0] === undefined ? '' : ` (source: ${entry.sources[0].url_or_title})`;
+
+            return {
+                key: `knowledge:${entry.id}`,
+                title: `[${entry.importance} · ${entry.kind}] ${entry.topic}`,
+                body: `${entry.claim}${detail}${source}`
+            };
+        });
+}
+
 function ideaEntries(ideas: Idea[]): DesiredEntry[] {
     return ideas.map((idea) => ({
         key: `idea:${idea.id}`,
@@ -342,17 +405,27 @@ function findingEntries(findings: Finding[]): DesiredEntry[] {
 }
 
 function desiredEntries(store: Store, story: Story, section: StorySectionKey): DesiredEntry[] {
-    const cap = (entries: DesiredEntry[]): DesiredEntry[] =>
-        entries.length <= MAX_ENTRIES_PER_SECTION
+    // `limit` defaults to the engine's own cap; `research` passes its smaller reading-surface cap.
+    // The overflow paragraph keeps counting the SAME way (the truncated count, then the limit that
+    // truncated it), so a limit change never silently changes what "N more" means.
+    const cap = (entries: DesiredEntry[], limit: number = MAX_ENTRIES_PER_SECTION): DesiredEntry[] =>
+        entries.length <= limit
             ? entries
             : [
-                  ...entries.slice(0, MAX_ENTRIES_PER_SECTION - 1),
+                  ...entries.slice(0, limit - 1),
                   {
                       key: `${section}:overflow`,
                       title: 'More…',
-                      body: `${entries.length - (MAX_ENTRIES_PER_SECTION - 1)} more entries are in the book; the knowledge article caps one section at ${MAX_ENTRIES_PER_SECTION} paragraphs.`
+                      body: `${entries.length - (limit - 1)} more entries are in the book; the knowledge article caps one section at ${limit} paragraphs.`
                   }
               ];
+
+    if (section === 'research') {
+        return cap(
+            researchEntries(store.knowledge.list().filter((row) => row.story_id === story.id)),
+            MAX_RESEARCH_ENTRIES
+        );
+    }
 
     if (section === 'summary') {
         return cap(summaryEntries(store.summaries.list().find((row) => row.story_id === story.id)));
@@ -466,7 +539,7 @@ export class StoryKnowledge {
         }
     }
 
-    /** Re-derive one Story's eight articles. Safe to call on every read. */
+    /** Re-derive one Story's nine articles. Safe to call on every read. */
     syncStory(storyId: string): void {
         if (this.closed) return;
 
@@ -489,7 +562,7 @@ export class StoryKnowledge {
     }
 
     /**
-     * Delete every article this Story owns: its eight projected folders (tagged `story:<id>`) and
+     * Delete every article this Story owns: its nine projected folders (tagged `story:<id>`) and
      * any article its own harness created (owner `storyline:<id>`). Deleting the Story deletes the
      * harness, so its knowledge goes with it — nothing is left for a later read to re-materialise.
      * Returns how many articles were removed; the caller flushes to make the deletion durable.

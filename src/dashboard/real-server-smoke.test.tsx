@@ -89,10 +89,16 @@ describe('the dashboard over the real server', () => {
         expect(text).toContain('phase summary is open: the Seed is being expanded (L-29 stops it at the lock)');
     });
 
-    it('the same screen after one sweep keeps rendering the real Story payload', async () => {
-        // Phase ① opens with the Editor's Seed review; the Writer samples start on the next sweep.
-        await fixture.tick();
-        await fixture.tick();
+    it('the same screen once the phase-① crew has sampled keeps rendering the real Story payload', async () => {
+        // Phase ①'s opener is gated (documents/phase-1-research-pipeline.md §6.4): sweep 1 structures
+        // the Seed, sweep 2 researches it, and only then — with an ACCEPTED brief and the research
+        // closed — do the `summary_sampling` Writer samples start. Walking to the first sampler is
+        // therefore a proof the two gates really ran, not a sleep: the crew below cannot exist on a
+        // server that skipped one.
+        await fixture.settle(
+            () => fixture.store.runs.list().some((run) => run.template_ref === 'writer-summary-sampler'),
+            20
+        );
 
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
         const runs = (await fixture.api<Array<Record<string, unknown>>>('GET', `/runs?story_id=${storyId}`)).body;
@@ -111,12 +117,15 @@ describe('the dashboard over the real server', () => {
         ).toBeGreaterThan(0);
         expect(text).toContain('Summary — Phrase 1');
 
-        // The crew is the server's run rows: the templates that actually ran, not a fixture list.
+        // The crew is the server's run rows: the templates that actually ran, not a fixture list —
+        // phase ①'s opener in dispatch order (templates.ts:DEFAULT_ASSIGNMENT). `writer-summary` no
+        // longer exists; the Sampler replaced it, and it buys one sample per sweep (§6.4 step 3's
+        // claim key), so the FIRST sampler row is exactly where this walk stopped.
         expect(runs.map((run) => run.template_ref)).toEqual([
-            'editor-general',
-            'writer-summary',
-            'writer-summary',
-            'writer-summary'
+            'editor-seed-structure',
+            'researcher-story',
+            'writer-summary-sampler'
         ]);
+        expect(runs.map((run) => run.role)).toEqual(['editor', 'researcher', 'writer']);
     });
 });

@@ -1549,13 +1549,29 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** U-8 — the template catalogue, as rows (§4.12 as-is). */
     /**
-     * U-8 — the GLOBAL employee roster, in catalogue order: Writer, Editor, Reader, Checker. Each
-     * row carries every live engine thread that employee is currently running as an agent, across
-     * every Story, with the Story title and phase session. No Story has to be selected, and no
-     * thread has to be running, for the Author to see the roster. The panel renders the tiles
-     * alphabetically; this projection order is the catalogue's, not a priority.
+     * U-8's roster as the Author sees it: the harness projection, sorted ALPHABETICALLY by employee
+     * kind — Checker, Editor, Reader, Researcher, Writer.
+     *
+     * WHY THE SORT LIVES HERE (T12/F1): the harness projects the roster in CATALOGUE order (Writer,
+     * Editor, Reader, Checker, Researcher), which is a registration order and carries no meaning for
+     * the Author. U-8 and the design document say the roster lists alphabetically, and the order is a
+     * presentation question, so the route sorts a copy of the projection — the harness keeps its own
+     * order for every other caller (`GET /agents/:kind/threads`, the run catalogue).
+     *
+     * ONE function for GET and PATCH, because `PATCH /agents/:kind` promises to answer "the same
+     * projection `GET /agents` answers": two sorts would let the tiles re-order under the Author's
+     * click.
      */
-    app.get('/agents', (c) => c.json(deps.executor.harness.statuses(), 200));
+    const agentRoster = () =>
+        [...deps.executor.harness.statuses()].sort((left, right) => left.kind.localeCompare(right.kind));
+
+    /**
+     * U-8 — the GLOBAL employee roster, alphabetically (see `agentRoster`). Each row carries every
+     * live engine thread that employee is currently running as an agent, across every Story, with the
+     * Story title and phase session. No Story has to be selected, and no thread has to be running,
+     * for the Author to see the roster.
+     */
+    app.get('/agents', (c) => c.json(agentRoster(), 200));
 
     /**
      * U-8 — the threads one employee ran, across every Story and every phrase session, oldest
@@ -1569,7 +1585,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return errorResponse(
                 c,
                 404,
-                `no agent named "${kind}" — the global roster is writer, editor, reader and checker (U-8).`
+                `no agent named "${kind}" — the global roster is writer, editor, checker, reader and researcher (U-8).`
             );
         }
 
@@ -1622,7 +1638,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return errorResponse(
                 c,
                 404,
-                `no agent named "${kind}" — the global roster is writer, editor, reader and checker (U-8).`
+                `no agent named "${kind}" — the global roster is writer, editor, checker, reader and researcher (U-8).`
             );
         }
 
@@ -1654,7 +1670,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(deps.executor.harness.statuses(), 200);
+        // The SAME projection GET /agents answers — including its alphabetical order (T12/F1).
+        return c.json(agentRoster(), 200);
     });
 
     app.get('/templates', (c) => c.json(store.templates.list(), 200));

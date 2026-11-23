@@ -24,15 +24,9 @@
 // lease is `runs.updated_at`, refreshed after every tool call by {@link heartbeat}. A four-hour
 // run is fine while it keeps calling tools; a hung run stops refreshing and lapses (L-2), and
 // the sweep re-adopts or abandons it (L-3).
-import { LlmError, type ChatClient, type ToolSchema } from '../llm';
-import {
-    ROLE_KINDS,
-    type RoleAggregation,
-    type RoleKind,
-    type Run,
-    type RunDelegation,
-    type Story
-} from '../../shared/types';
+import { LlmError, type ChatClient, type ChatMessage, type ToolSchema } from '../llm';
+import { parseStructuredContent } from '../llm/structured';
+import { type RoleAggregation, type RoleKind, type Run, type RunDelegation, type Story } from '../../shared/types';
 import { type Store, type UpdatePatch } from '../store';
 import { runModelFor } from './agent-models';
 import { buildBrief, type AssembledBrief } from './brief';
@@ -40,9 +34,10 @@ import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
 import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
+import { compileSamplePrompt, compileScreenPrompt, type CompiledPrompt } from './phase1-prompt';
 import { runEngineAgent, StoryHarnessManager } from './story-engine';
 import { resolveAggregation } from './types';
-import type { StoryThreadLog } from './thread-log';
+import type { StoryThreadLog, StoryThreadRecord, StoryThreadState } from './thread-log';
 import {
     type RunExecutorDeps,
     type RunResult,
@@ -65,7 +60,12 @@ interface RunScope {
     tally: RunTally;
     /** The run's own tool context — the identity every executed write is attributed to (P11, D-38). */
     context: RunToolContext;
-    briefing: AssembledBrief & { hash: string };
+    /**
+     * The assembled brief (S-2), present for every tool-carrying run. A `toolMode: 'none'` run has
+     * no brief: its whole memory is the compiled Phase-1 prompt (./phase1-prompt), and assembling
+     * a tool-oriented brief would only put text the model never sees into the bookkeeping.
+     */
+    briefing?: AssembledBrief & { hash: string };
     agents: number;
     aggregate: RoleAggregation;
     /**
@@ -81,6 +81,20 @@ interface RunScope {
 
 /** §4.13's `end_reason` for a natural end — the row records WHY it ended (S-3). */
 const END_COMPLETED = 'completed — the model returned no tool call and the run reported';
+
+/**
+ * §4.13's `end_reason` for a `toolMode: 'none'` run. It is a different sentence on purpose: a
+ * structured run never "returned no tool call and reported" — it was given no tool to call, and
+ * its single schema-validated answer is what the engine persists (§2 decision 2).
+ */
+const END_STRUCTURED = 'completed — one structured turn, validated against the response schema (§4.2)';
+
+/**
+ * How many provider calls a no-tool run may make. TWO is the whole budget the design allows:
+ * one answer plus at most ONE schema-repair retry (§4.2, §2's "at most one schema-repair
+ * retry"). A run that is still invalid after the retry FAILS — never a second repair.
+ */
+const STRUCTURED_ATTEMPTS = 2;
 
 /**
  * Why a live run was aborted. The Author's cord is only ONE of the ways a run stops being its
@@ -303,11 +317,24 @@ export class RunExecutor {
         // teardown can quote the split: U-8d wants the crew panel to mark a run whose internals
         // disagreed, and the row is the only thing the crew panel reads (D-38).
         let panelOutcome: PanelOutcome | undefined;
+        // The structured answer of a `toolMode: 'none'` run. Declared out here because BOTH the
+        // completion path (RunResult) and `finally` (the retained thread record) read it.
+        let structuredValue: unknown;
+        let structuredUsage: RunResult['usage'];
+        let structuredText = '';
+        let structuredPromptHash: string | undefined;
+        /** The two turns the structured run was given — the retained thread's `request` (U-8). */
+        let structuredRequest = '';
 
         try {
+            // §2 decision 3: a no-tool run is the single-turn structured mode. It has no brief and
+            // no tool context — the compiled prompt is its whole memory.
+            const structuredRun = item.toolMode === 'none';
+
             // S-2: the brief is assembled here, from the store alone — and BEFORE the loop
             // starts, because the run's whole memory has to exist before its first turn does.
-            const briefing = buildBrief(this.store, item, harness);
+            // (A structured run skips it: see `RunScope.briefing`.)
+            const briefing = structuredRun ? undefined : buildBrief(this.store, item, harness);
             const agents = Math.max(1, harness.role?.agents ?? 1);
             const aggregate = resolveAggregation(agents, harness.role?.aggregate);
             const phase = (this.store.stories.get(item.storyId) as Story | undefined)?.phase ?? 'chapters';
@@ -322,37 +349,65 @@ export class RunExecutor {
                 controller,
                 tally,
                 context: undefined,
-                briefing,
+                ...(briefing === undefined ? {} : { briefing }),
                 agents,
                 aggregate,
-                // U-1e: the tool list is decided once, here, from the Work Item's kind — the loop,
-                // the panel's agents and every delegate get this same list (see `RunScope.tools`).
-                tools: toolsForRunKind(this.runtime.schemas(), item.kind),
+                // U-1e + §2 decision 3: the tool list is decided once, here, from the Work Item's
+                // kind AND its execution mode — the loop, the panel's agents and every delegate get
+                // this same list (see `RunScope.tools`). A `none` mode returns an EMPTY list.
+                tools: toolsForRunKind(this.runtime.schemas(), item.kind, item.toolMode),
                 // §2: the Author-invoked run of §8.6 is the one run kind the audit has to label
                 // separately, so the flag rides on the scope and reaches the session below.
                 assistant: item.kind === 'assistant'
             };
 
-            scope.context = this.runtime.createContext(this.sessionFor(scope), {
-                // D-17e: the run answers its own `delegate` tool calls with an inner agent loop.
-                delegate: (role, task) => this.delegate(scope, role, task)
-            });
+            // A no-tool run never gets a tool context: nothing can execute a call it cannot make,
+            // and building the context would suggest the mode is a filter rather than a mode.
+            if (!structuredRun) {
+                scope.context = this.runtime.createContext(this.sessionFor(scope), {
+                    // D-17e: the run answers its own `delegate` tool calls with an inner agent loop.
+                    delegate: (role, task) => this.delegate(scope, role, task)
+                });
+            }
+
+            // The prompt is compiled BEFORE the row says `working`, so its hash reaches the row
+            // before the first token exactly as a tool run's `brief_hash` does (D-18, S-2).
+            const compiled = structuredRun ? this.compilePrompt(scope) : undefined;
+
+            if (compiled !== undefined) structuredRequest = `${compiled.system}\n\n---\n\n${compiled.user}`;
 
             // S-2 + §4.13: the brief's identity is recorded on the row the moment it exists, so
-            // the Author can reconstruct what a finished run was told (D-12a's promise).
+            // the Author can reconstruct what a finished run was told (D-12a's promise). For a
+            // structured run the compiled prompt IS that memory, so its hash is what the row names.
+            const briefHash = compiled?.hash ?? briefing?.hash ?? '';
+
             this.store.runs.update(
                 runId,
-                { state: 'working', session_ref: `sess_${runId}`, brief_hash: briefing.hash },
-                { run_ref: runId, why: `brief assembled and hashed (${briefing.hash.slice(0, 12)}…) — S-2` }
+                { state: 'working', session_ref: `sess_${runId}`, brief_hash: briefHash },
+                {
+                    run_ref: runId,
+                    why: `${compiled === undefined ? 'brief assembled' : 'structured prompt compiled'} and hashed (${briefHash.slice(0, 12)}…) — S-2`
+                }
             );
 
-            if (agents > 1) {
+            if (compiled !== undefined) {
+                const outcome = await this.runStructuredTurn(scope, compiled);
+
+                structuredValue = outcome.value;
+                structuredUsage = outcome.usage;
+                structuredText = outcome.text;
+                structuredPromptHash = compiled.hash;
+            } else if (scope.briefing === undefined) {
+                // Unreachable by construction (a tool run assembled its brief above); stated so a
+                // future refactor fails the run instead of sending an empty system turn.
+                throw new Error('a tool-carrying run has no assembled brief (S-2) — the run cannot start');
+            } else if (agents > 1) {
                 // D-38: the role is a PANEL. The panel replaces this run's outer loop — it does
                 // not run alongside one — so the loop still receives one report (S-1, D-38).
                 panelOutcome = await runPanel(
                     { chat: this.chat, runtime: this.runtime, runAgent: this.runAgent },
                     {
-                        brief: briefing.text,
+                        brief: scope.briefing.text,
                         kickoff: kickoffLine(REPORT_TOOLS),
                         model: scope.model,
                         roleName: scope.harness.roleName,
@@ -392,7 +447,7 @@ export class RunExecutor {
                         label: runId,
                         runId,
                         requestTitle: requestTitleOf(item),
-                        system: briefing.text,
+                        system: scope.briefing.text,
                         kickoff: kickoffLine(REPORT_TOOLS),
                         model: scope.model,
                         context: scope.context,
@@ -411,20 +466,39 @@ export class RunExecutor {
             // S-4: a run that called no report tool is a no-op turn and must count toward loop
             // detection — the flag is the loop's input (L-15), and S-4's own note is that a
             // Writer run that wrote nothing and escalated nothing is a bug in its brief.
-            const noOp = tally.reports.length === 0;
+            //
+            // A `toolMode: 'none'` run is the ONE exception, and it is not a loosening of S-4: the
+            // validated structured answer IS its report (§2 decision 2 — the engine persists it),
+            // so a successful structured run did produce the thing its job exists to produce.
+            const noOp = item.toolMode === 'none' ? false : tally.reports.length === 0;
 
-            result = { runId, ended: 'completed', no_op: noOp, tokens: tally.tokens, toolsCalled: [...tally.executed] };
+            result = {
+                runId,
+                ended: 'completed',
+                no_op: noOp,
+                tokens: tally.tokens,
+                toolsCalled: [...tally.executed],
+                // Omitted rather than `undefined`, so a reader of the result can tell a structured
+                // run from a prose one without a `in` check (and toEqual assertions stay exact).
+                ...(structuredValue === undefined ? {} : { structured: structuredValue }),
+                ...(structuredPromptHash === undefined ? {} : { promptHash: structuredPromptHash }),
+                ...(structuredUsage === undefined ? {} : { usage: structuredUsage })
+            };
             // A panel that disagreed says so on the row too (D-38, U-8d): the dissent's home is the
             // `selection_note` the panel appended it to, and the row is where the crew panel looks.
+            // A structured run states what it actually did: one validated turn, no tool calls.
+            const endReason = structuredRun
+                ? END_STRUCTURED
+                : panelOutcome === undefined || panelOutcome.dissent === ''
+                  ? END_COMPLETED
+                  : `${END_COMPLETED}; panel disagreed — ${panelOutcome.dissent} (${panelOutcome.answered} of ${scope.agents} agents answered)`;
+
             finalRow = {
                 state: 'torn_down',
                 ended_at: new Date().toISOString(),
                 tokens: tally.tokens,
                 no_op: noOp,
-                end_reason:
-                    panelOutcome === undefined || panelOutcome.dissent === ''
-                        ? END_COMPLETED
-                        : `${END_COMPLETED}; panel disagreed — ${panelOutcome.dissent} (${panelOutcome.answered} of ${scope.agents} agents answered)`
+                end_reason: endReason
             };
         } catch (error) {
             const noOp = tally.reports.length === 0;
@@ -482,9 +556,205 @@ export class RunExecutor {
             this.controllers.delete(runId);
             this.killed.delete(runId);
             this.teardown(runId, finalRow);
+
+            // A no-tool run never enters the engine, so nothing else writes its thread record:
+            // `StoryHarness.run`'s retention is mirrored here, in the same shape and on every path
+            // (a failed sample is exactly the thread the Author needs, S-3/U-8).
+            if (structuredRequest !== '') {
+                this.retainStructuredThread(item, harness, startedAt, structuredRequest, structuredText, result);
+            }
         }
 
         return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // §4.2 / §2 decision 3 — the single-turn, no-tool structured run
+    // -------------------------------------------------------------------------
+
+    /**
+     * Which compiled prompt this Work Item runs on (§5). Kind decides, not the template: a
+     * `screen_samples` job judges the ONE draft its `revisionRef` names (D-21), and every other
+     * no-tool kind is a sampling round whose base revision comes from `item.round`.
+     */
+    private compilePrompt(scope: RunScope): CompiledPrompt {
+        const { item } = scope;
+
+        if (item.kind === 'screen_samples') {
+            if (item.revisionRef === undefined || item.revisionRef.length === 0) {
+                // A screen with no draft can judge nothing; failing loudly beats an empty issue
+                // list the selector would read as "this sample is clean" (§6.5).
+                throw new Error('a screen_samples item must name the draft it judges in revisionRef (§6.4 step 4)');
+            }
+
+            return compileScreenPrompt(this.store, item.storyId, item.revisionRef);
+        }
+
+        // The round is on the item because it is not derivable from the store (§6.8): round 2+
+        // must read the PREVIOUS round's selected revision, and only the sweep knows the round.
+        return compileSamplePrompt(this.store, item.storyId, { round: item.round ?? 1 });
+    }
+
+    /**
+     * Executes the structured mode (§4.2): ONE assistant turn with no tools and a
+     * `response_format`, plus at most one schema-repair retry.
+     *
+     * WHY THE DIRECT TRANSPORT PATH AND NOT AN ENGINE THREAD (the investigation this build was
+     * asked to record):
+     *   (a) The engine's stream request type is `{model, messages, tools, signal}` — it has no
+     *       place for `response_format` or `seed`, and `StoryHarness.streamFor` calls
+     *       `chat.complete` without them, so an engine thread CANNOT deliver §4.2's structured
+     *       contract or §5's sampling seed.
+     *   (b) `GET /agents` builds `working` from live ENGINE threads (`StoryHarnessManager.statuses`
+     *       → `StoryHarness.statuses`), while `recent` reads the store's run rows.
+     * So this path owns the provider call directly. The trade-off, stated plainly: the run row is
+     * created/updated/closed exactly like a normal run (D-18, S-3 — `spawning` → `working` →
+     * `torn_down`) and appears in every store-derived surface, but it does NOT appear as a live
+     * `working` thread on the employee tile while it runs, because no engine thread exists. A
+     * one-turn sampling call is seconds long and cannot host tools, so a live tile would add a
+     * thread surface for a run whose whole product is its answer; the retained thread log below
+     * keeps the request/answer history complete (U-8).
+     *
+     * Tokens are added to the run's tally per call (S-6/E-0), including the repair attempt — a
+     * failed answer still cost the provider call.
+     */
+    private async runStructuredTurn(
+        scope: RunScope,
+        compiled: CompiledPrompt
+    ): Promise<{ value: unknown; text: string; usage?: RunResult['usage'] }> {
+        const schema = scope.item.responseSchema;
+
+        if (schema === undefined) {
+            throw new Error(
+                `a toolMode:'none' ${scope.item.kind} run must name its responseSchema (name + plain JSON Schema) — §4.3`
+            );
+        }
+
+        const messages: ChatMessage[] = [
+            { role: 'system', content: compiled.system },
+            { role: 'user', content: compiled.user }
+        ];
+
+        // Summed across the (at most two) requests: `tokens` on the run row is the run's provider
+        // cost, and reporting only the last call would under-count a repaired answer.
+        let usage: { input: number; output: number; cached_input: number } | undefined;
+        let lastError = '';
+
+        for (let attempt = 1; attempt <= STRUCTURED_ATTEMPTS; attempt += 1) {
+            // P8: a cord pulled between turns must not spend another request.
+            this.abortIfStopped(scope.controller.signal);
+
+            // NO `tools` key at all: §2 decision 3 is an execution mode, so the request carries no
+            // tool surface and no `temperature` (§5's diversity is the `seed`, nothing else).
+            const response = await this.chat.complete({
+                model: scope.model,
+                messages,
+                responseFormat: schema,
+                ...(scope.item.sampleIndex === undefined ? {} : { seed: scope.item.sampleIndex }),
+                signal: scope.controller.signal
+            });
+
+            if (response.usage !== undefined) {
+                scope.tally.tokens += response.usage.input + response.usage.output;
+                usage = {
+                    input: (usage?.input ?? 0) + response.usage.input,
+                    output: (usage?.output ?? 0) + response.usage.output,
+                    cached_input: (usage?.cached_input ?? 0) + response.usage.cached_input
+                };
+            }
+
+            const text = response.message.content ?? '';
+            const parsed = parseStructuredContent(text, schema.schema);
+
+            if (parsed.ok) return { value: parsed.value, text, ...(usage === undefined ? {} : { usage }) };
+
+            lastError = parsed.error;
+
+            // The previous attempt stays in the transcript, so the model can SEE what it answered
+            // and re-emit corrected JSON; the repair line names the validator's exact failure.
+            if (attempt < STRUCTURED_ATTEMPTS) {
+                messages.push(
+                    { role: 'assistant', content: text },
+                    {
+                        role: 'user',
+                        content: `Your previous answer was not valid: ${parsed.error}. Re-emit the COMPLETE JSON object matching the schema, and nothing else.`
+                    }
+                );
+            }
+        }
+
+        throw new Error(
+            `structured answer failed schema validation after ${STRUCTURED_ATTEMPTS} attempts: ${lastError}`
+        );
+    }
+
+    /**
+     * Throws the signal's own reason so an Author Stop / stopped Story / lapsed lease surfaces as
+     * the cancellation it is (`wasAborted` then closes the row as `abandoned`, S-3). Same rule as
+     * ./loop's `throwIfAborted`; duplicated here because a no-tool run never enters that loop.
+     */
+    private abortIfStopped(signal: AbortSignal): void {
+        if (!signal.aborted) return;
+
+        const reason = signal.reason;
+
+        if (reason === undefined) {
+            const synthesised = new Error('run aborted');
+            synthesised.name = 'AbortError';
+
+            throw synthesised;
+        }
+
+        throw reason;
+    }
+
+    /**
+     * The retained thread record for a no-tool run (the mirror of `StoryHarness.run`'s
+     * `threadLog.append`, reached from `execute`'s `finally`). `thread_id` is synthesised because
+     * no engine thread exists — the row is keyed by the run instead, and the value is stable for
+     * the life of the record. Nothing here is read by the model; it is the Author's history (U-8).
+     */
+    private retainStructuredThread(
+        item: WorkItem,
+        harness: ResolvedHarness,
+        startedAt: string,
+        request: string,
+        answer: string,
+        result: RunResult
+    ): void {
+        if (this.threadLog === undefined) return;
+
+        const story = this.store.stories.get(item.storyId) as Story | undefined;
+        const state: StoryThreadState =
+            result.ended === 'completed' ? 'torn_down' : result.ended === 'killed' ? 'abandoned' : 'failed';
+
+        const record: StoryThreadRecord = {
+            thread_id: `single_${result.runId}`,
+            run_id: result.runId,
+            story_id: item.storyId,
+            story_title: story?.title ?? item.storyId,
+            phase: story?.phase ?? 'chapters',
+            role: harness.kind,
+            role_name: harness.roleName,
+            title: requestTitleOf(item),
+            state,
+            started_at: startedAt,
+            ended_at: new Date().toISOString(),
+            tokens: result.tokens,
+            request,
+            // A failed or repaired-then-failed run has no validated answer; the raw text is
+            // deliberately not retained as if it were one (S-3's "why did this thread end" is the
+            // run row's `end_reason`).
+            answer: result.structured === undefined ? answer : JSON.stringify(result.structured),
+            ...(result.error === undefined ? {} : { error: result.error }),
+            retained: true
+        };
+
+        try {
+            this.threadLog.append(record);
+        } catch {
+            // Retention is presentation; losing one line must not change the run's outcome.
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -657,21 +927,23 @@ export class RunExecutor {
     /**
      * D-17e: `delegation` names the roles a template may delegate to inside its own run. An
      * absent field means "undeclared" and is allowed (the built-in templates that forbid it say
-     * so with an explicit empty list, e.g. `reader-genre.delegation: []`), and a kind name is
-     * always allowed because the delegation list may legitimately name a kind rather than a role.
+     * so with an explicit empty list, e.g. `reader-genre.delegation: []`).
+     *
+     * WHY AN EXPLICIT LIST IS HONOURED STRICTLY, INCLUDING FOR A KIND NAME: this method used to
+     * allow ANY RoleKind through regardless of the list, so a template could "safely" name a kind
+     * in its own list. When `researcher` joined `ROLE_KINDS` (phase-1 research pipeline §3.1) that
+     * loophole silently turned every template's explicit `delegation: []` into "the Researcher is
+     * fine", which is exactly the fan-out D-17e lets a template forbid. A list that NAMES a kind
+     * still works through `includes` — the entry is what grants the door, never the spelling.
      */
     private delegationAllowed(scope: RunScope, role: string): { allowed: boolean; reason?: string } {
         const declared = scope.harness.template?.delegation;
 
         // An absent `delegation` field is undeclared rather than forbidden: the built-in roster
-        // forbids explicitly (`reader-genre.delegation: []`), and T-6a's "all four kinds see all
+        // forbids explicitly (`reader-genre.delegation: []`), and T-6a's "every kind sees all
         // tools" applies to the catalogue, not to what a template chooses to fan out to.
         if (declared === undefined) return { allowed: true };
         if (declared.includes(role)) return { allowed: true };
-
-        // A delegation list may name a KIND instead of a role name (T-0: `kind` is what selects
-        // the permission row, and the inner agent inherits the parent's row either way).
-        if ((ROLE_KINDS as readonly string[]).includes(role)) return { allowed: true };
 
         return {
             allowed: false,

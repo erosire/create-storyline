@@ -81,6 +81,9 @@ const CREW_SURFACE = [
     'readDigest',
     'readFindings',
     'readGoals',
+    // The Phase-1 research surface is part of the one catalogue every session holds (T-6a);
+    // `readKnowledge` is a read, the three writes are still gated by §7.2's kind column.
+    'readKnowledge',
     'readPlotline',
     'readSeed',
     'readSummary',
@@ -88,12 +91,15 @@ const CREW_SURFACE = [
     'rejectAll',
     'requestAuthor',
     'requestMerge',
+    'retireKnowledge',
     'reviewSeed',
     'searchWeb',
     'selectRevision',
+    'structureSeed',
     'submitVerdict',
     'verifyFinding',
-    'verifyIdea'
+    'verifyIdea',
+    'writeKnowledge'
 ];
 
 /** §7's assistant row: the same surface with `fetchPage` and `searchWeb` gone — everything else intact. */

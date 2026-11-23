@@ -299,6 +299,68 @@ describe('StoryView — the stalled review still lands on the Summary (U-1a, L-2
     });
 });
 
+describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', () => {
+    it('states the sampling round on the Story meta while the Story is in phase ①', () => {
+        const view = summaryPhaseView();
+
+        const { container, rerender } = render(
+            <StoryView
+                view={{ ...view, sampling: { round: 3, history: [] } }}
+                actions={fixtureActions().actions}
+                now={NOW}
+            />
+        );
+
+        expect(container.querySelector('.sv-story-sampling')?.textContent).toBe('Sampling round 3');
+
+        // Later phases do not sample, so the line is off there even when the payload carries a round.
+        const inChapters = { ...view, story: { ...view.story, phase: 'chapters' as const } };
+        rerender(
+            <StoryView
+                view={{ ...inChapters, sampling: { round: 3, history: [] } }}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'chapters' }}
+            />
+        );
+
+        expect(container.querySelector('.sv-story-sampling')).toBeNull();
+    });
+
+    it('shows the Editor’s accepted brief on the Seed folder without replacing the Seed (P5)', () => {
+        const view = summaryPhaseView();
+        const { container } = render(
+            <StoryView
+                view={{
+                    ...view,
+                    seed_brief: {
+                        id: 'seed_brief_1',
+                        seed_hash: 'seed-hash-current',
+                        logline: 'A cartographer maps a sea that remembers her fleet.',
+                        protagonist: 'Ilsa Vane',
+                        want: 'a chart that is true',
+                        obstacle: 'the sea recolours every line',
+                        stakes: 'her name is next',
+                        setting: 'a drowned chart',
+                        promise: 'every sounding answers',
+                        status: 'accepted'
+                    }
+                }}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'seed' }}
+            />
+        );
+
+        // The Seed is still the Author's text, verbatim and first (P5)…
+        expect(container.querySelector('.sv-seed-body')?.textContent).toBe(view.story.idea);
+        // …and the brief is a labelled, derived line under it.
+        expect(container.querySelector('.sv-seed-brief')?.textContent).toBe(
+            "The Editor's brief: A cartographer maps a sea that remembers her fleet."
+        );
+    });
+});
+
 describe('StoryView — phases hidden by the focused view still write their routes', () => {
     it('offers the plotline lock on the Plotlines pane when that is the current phase', () => {
         const view = fixtureView();

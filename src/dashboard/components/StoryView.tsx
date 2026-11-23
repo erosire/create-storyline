@@ -92,6 +92,12 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                 <p className={`sv-story-status ${statusClass(story.status, story.pending_kind)}`}>
                     <span className="sv-story-status-badge">{storyStatusLabel(story.status, story.pending_kind)}</span>
                     {story.status_reason ? <span className="sv-story-reason">{story.status_reason}</span> : null}
+                    {/* §10 / §6.6 — phase ①'s sampling round, the one number that tells the Author
+                        which round the Summary panes are showing. Only phase ① samples, so the line
+                        stays off later phases (and off a payload that predates the projection). */}
+                    {story.phase === 'summary' && view.sampling !== undefined ? (
+                        <span className="sv-story-sampling">Sampling round {view.sampling.round}</span>
+                    ) : null}
                 </p>
 
                 {active.panel === 'seed' ? <SeedPane view={view} /> : null}

@@ -15,7 +15,7 @@ function makeRuntime() {
 }
 
 describe('GET /stories/:id/knowledge', () => {
-    it('answers the eight folders from the Story rows', async () => {
+    it('answers the nine folders from the Story rows', async () => {
         const { runtime, story } = makeRuntime();
 
         const response = await runtime.app.request(`http://localhost/v1/storyline/stories/${story.id}/knowledge`);
@@ -31,6 +31,7 @@ describe('GET /stories/:id/knowledge', () => {
         expect(tree.story_id).toBe(story.id);
         expect(tree.degraded).toBe(false);
         expect(tree.sections.map((section) => section.key)).toEqual([
+            'research',
             'summary',
             'plotlines',
             'chapters',
@@ -50,6 +51,18 @@ describe('GET /stories/:id/knowledge', () => {
         // The empty folders are still in the response: the directory's shape is the story's shape.
         const cast = tree.sections.find((section) => section.key === 'cast');
         expect(cast?.entries[0]?.tags).toContain('placeholder');
+
+        // §10 / §3.2 — the research folder exists on a Story the Researcher has not visited yet, and
+        // it STATES the absence rather than disappearing (an empty research folder is information).
+        const research = tree.sections.find((section) => section.key === 'research');
+        expect(research?.entries).toEqual([
+            {
+                key: 'research:empty',
+                title: 'Research',
+                body: 'No research yet — the Researcher gathers the facts, places and sources the book depends on in phase ①.',
+                tags: [`story:${story.id}`, 'section:research', 'entry:research:empty', 'placeholder']
+            }
+        ]);
     });
 
     it('refuses a Story that is not in the book before touching the knowledge store', async () => {
@@ -65,7 +78,7 @@ describe('GET /stories/:id/knowledge', () => {
 });
 
 describe('GET /agents', () => {
-    it('lists the four global Story agents and their live thread count', async () => {
+    it('lists the five global Story agents and their live thread count', async () => {
         const { runtime } = makeRuntime();
 
         const response = await runtime.app.request('http://localhost/v1/storyline/agents');
@@ -74,7 +87,9 @@ describe('GET /agents', () => {
 
         const listings = (await response.json()) as Array<{ kind: string; status: string; working: unknown[] }>;
 
-        expect(listings.map((row) => row.kind)).toEqual(['writer', 'editor', 'reader', 'checker']);
+        // §7.3 / U-8: the roster lists ALPHABETICALLY (T12/F1 — the route sorts the harness
+        // catalogue projection, which appends the Researcher last).
+        expect(listings.map((row) => row.kind)).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
         expect(listings.every((row) => row.status === 'idle' && row.working.length === 0)).toBe(true);
     });
 });

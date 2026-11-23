@@ -11,10 +11,18 @@ const ENV = {
     STORYLINE_PROVIDER_API_KEY: ''
 };
 
+/**
+ * The roster exactly as `GET /agents` answers it: ALPHABETICAL by employee kind (T12/F1).
+ *
+ * The harness projects in catalogue order (writer, editor, reader, checker, researcher), but U-8 and
+ * documents/phase-1-research-pipeline.md §7.3 say the roster lists alphabetically, so the route sorts
+ * a copy. This fixture is therefore the ROUTE's order, not the catalogue's — the distinction is the
+ * point of the first test below.
+ */
 const idleRows = (model: string) => [
     {
-        kind: 'writer',
-        title: 'Writer',
+        kind: 'checker',
+        title: 'Checker',
         status: 'idle',
         rank: 'A',
         model,
@@ -45,9 +53,22 @@ const idleRows = (model: string) => [
         working: [],
         recent: []
     },
+    // §7.3 of documents/phase-1-research-pipeline.md: the fifth employee. The catalogue appends it
+    // after the original four; alphabetically it sits fourth, between Reader and Writer.
     {
-        kind: 'checker',
-        title: 'Checker',
+        kind: 'researcher',
+        title: 'Researcher',
+        status: 'idle',
+        rank: 'A',
+        model,
+        model_source: 'default',
+        template_models: [],
+        working: [],
+        recent: []
+    },
+    {
+        kind: 'writer',
+        title: 'Writer',
         status: 'idle',
         rank: 'A',
         model,
@@ -59,7 +80,7 @@ const idleRows = (model: string) => [
 ];
 
 describe('GET /agents', () => {
-    it('answers the four global employees, and the model each one asks for, before any Story dispatches work', async () => {
+    it('answers the five global employees, and the model each one asks for, before any Story dispatches work', async () => {
         const runtime = buildStorylineRuntime({
             store: Store.empty(),
             engineConfig: { autoSweep: false },
@@ -70,7 +91,19 @@ describe('GET /agents', () => {
         const response = await runtime.app.request('http://localhost/v1/storyline/agents');
 
         expect(response.status).toBe(200);
+        // The roster is ALPHABETICAL, not the harness catalogue's order (U-8 / §7.3, T12/F1): the
+        // exact array pins the presentation order, so a revert to catalogue order fails here.
         expect(await response.json()).toEqual(idleRows('scripted'));
+
+        // The same five rows, in that same order: the roster is the whole set of dispatched kinds
+        // (T-0/§7.2), and a kind missing from it is a tile the Author can never configure.
+        const kinds = (
+            (await (await runtime.app.request('http://localhost/v1/storyline/agents')).json()) as Array<{
+                kind: string;
+            }>
+        ).map((row) => row.kind);
+
+        expect(kinds).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
     });
 
     it('keeps a torn-down run and its reason visible on the idle agent’s tile (S-3)', async () => {
@@ -210,7 +243,7 @@ describe('GET /agents/:kind/threads', () => {
 
         expect(response.status).toBe(404);
         expect(await response.json()).toEqual({
-            error: 'no agent named "explorer" — the global roster is writer, editor, reader and checker (U-8).'
+            error: 'no agent named "explorer" — the global roster is writer, editor, checker, reader and researcher (U-8).'
         });
     });
 });
@@ -288,7 +321,7 @@ describe('GET /agents/models', () => {
 });
 
 describe('PATCH /agents/:kind', () => {
-    it('sets one agent’s model and leaves the other three on the process default', async () => {
+    it('sets one agent’s model and leaves the other four on the process default', async () => {
         const runtime = buildStorylineRuntime({
             store: Store.empty(),
             engineConfig: { autoSweep: false },
@@ -303,15 +336,23 @@ describe('PATCH /agents/:kind', () => {
         });
 
         expect(response.status).toBe(200);
-        expect(await response.json()).toEqual([
-            { ...idleRows('scripted')[0], model: 'deepseek-r1', model_source: 'agent' },
-            ...idleRows('scripted').slice(1)
-        ]);
+        // The PATCH answer is the same projection GET answers — SAME alphabetical order (T12/F1),
+        // with only the Writer's row changed.
+        expect(await response.json()).toEqual(
+            idleRows('scripted').map((row) =>
+                row.kind === 'writer' ? { ...row, model: 'deepseek-r1', model_source: 'agent' } : row
+            )
+        );
 
-        // The write is the roster's, not the request's: a second GET reads the choice back.
+        // The write is the roster's, not the request's: a second GET reads the choice back. The
+        // Writer is the LAST tile alphabetically.
         const reread = await runtime.app.request('http://localhost/v1/storyline/agents');
 
-        expect((await reread.json())[0]).toMatchObject({ kind: 'writer', model: 'deepseek-r1', model_source: 'agent' });
+        expect((await reread.json())[4]).toMatchObject({
+            kind: 'writer',
+            model: 'deepseek-r1',
+            model_source: 'agent'
+        });
     });
 
     it('clears a choice with null, returning the agent to the process default', async () => {
@@ -342,7 +383,47 @@ describe('PATCH /agents/:kind', () => {
         });
     });
 
-    it('refuses an unknown employee kind rather than inventing a fifth tile (U-8)', async () => {
+    it('sets and clears the Researcher’s model like any other employee (U-8, §7.3)', async () => {
+        const runtime = buildStorylineRuntime({
+            store: Store.empty(),
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: ENV
+        });
+
+        const set = await runtime.app.request('http://localhost/v1/storyline/agents/researcher', {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: 'deepseek-r1' })
+        });
+
+        expect(set.status).toBe(200);
+        // Row 4 of the ALPHABETICAL roster projection (Checker, Editor, Reader, Researcher, Writer):
+        // the same object every other kind answers, with the Author's choice on it and its source
+        // recorded (T-6b).
+        const rows = (await set.json()) as Array<Record<string, unknown>>;
+
+        expect(rows[3]).toEqual({
+            ...idleRows('scripted')[3],
+            model: 'deepseek-r1',
+            model_source: 'agent'
+        });
+
+        const cleared = await runtime.app.request('http://localhost/v1/storyline/agents/researcher', {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ model: null })
+        });
+
+        expect(cleared.status).toBe(200);
+        expect((await cleared.json())[3]).toMatchObject({
+            kind: 'researcher',
+            model: 'scripted',
+            model_source: 'default'
+        });
+    });
+
+    it('refuses an unknown employee kind rather than inventing a sixth tile (U-8)', async () => {
         const runtime = buildStorylineRuntime({
             store: Store.empty(),
             engineConfig: { autoSweep: false },
@@ -358,7 +439,7 @@ describe('PATCH /agents/:kind', () => {
 
         expect(response.status).toBe(404);
         expect(await response.json()).toEqual({
-            error: 'no agent named "explorer" — the global roster is writer, editor, reader and checker (U-8).'
+            error: 'no agent named "explorer" — the global roster is writer, editor, checker, reader and researcher (U-8).'
         });
     });
 

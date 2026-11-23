@@ -1,12 +1,19 @@
 // U-8 — the global EMPLOYEE roster's model choices.
 //
-// VOCABULARY (V-1): the four entries — Writer, Editor, Reader, Checker — are EMPLOYEES. They are
-// standing roster identities, not agents; an employee becomes an agent only while a thread runs.
+// VOCABULARY (V-1): the five entries — Writer, Editor, Reader, Checker, Researcher — are
+// EMPLOYEES. They are standing roster identities, not agents; an employee becomes an agent only
+// while a thread runs.
 //
 // WHY THIS IS A SETTING, NOT A TEMPLATE FIELD: a template is a crew definition (D-38) and its
-// roles may name their own model (T-6b), but the four employees themselves are global and shared
-// by every Story. The employee rail configures THAT identity, so its model choice is one host-level
+// roles may name their own model (T-6b), but the employees themselves are global and shared by
+// every Story. The employee rail configures THAT identity, so its model choice is one host-level
 // fact rather than a value copied onto every template card.
+//
+// THE SLOT TABLE IS `ROLE_KINDS` (src/shared/types.ts): the five-kind list is the single place a
+// kind is declared, so every function below iterates it and a new employee (the Researcher,
+// documents/phase-1-research-pipeline.md §3.1) needs a slot THERE and nowhere else. `runModelFor`
+// therefore resolves `'researcher'` through the same precedence as the other four: which is the
+// whole contract this module exists to keep in one place.
 //
 // PRECEDENCE (T-6b, stated once here so both the executor and the panel agree):
 //   1. the Author's explicit choice for this employee kind on the global roster;
@@ -45,7 +52,10 @@ export interface AgentTemplateModel {
     model: string;
 }
 
-/** True for one of the four Storyline employee kinds, so a bad path parameter cannot reach the store. */
+/**
+ * True for one of the five Storyline employee kinds (writer, editor, reader, checker,
+ * researcher), so a bad path parameter cannot reach the store.
+ */
 export const isAgentKind = (value: string): value is RoleKind => (ROLE_KINDS as readonly string[]).includes(value);
 
 /**

@@ -275,6 +275,9 @@ export function materialiseChapters(store: Store, story: Story, count: number): 
  *
  * What goes: the prose and the structure, hard — chapters and their revisions when backing up to
  * `plotlines`; plotlines, chapters, digests and per-chapter verdicts when backing up to `summary`.
+ * Every deleted revision's `sample_reviews` rows go in the same commit (T12/B): a screening review is
+ * a review OF one sample, so a review whose `revision_ref` no longer resolves is an orphan, not
+ * provenance.
  *
  * The reopened phase's OWN artifact survives: backing up to `plotlines` unlocks the plotlines rather
  * than deleting them, exactly as backing up to `summary` keeps the Summary row and clears its lock.
@@ -311,6 +314,10 @@ export function scrapPhasesAfter(
         counts.chapters += 1;
     }
 
+    // The revisions this backtrack actually deletes, so the screening reviews below can be scoped to
+    // exactly them — a review of a SURVIVING revision is evidence, not debris (T12/B).
+    const scrappedRevisions = new Set<string>();
+
     for (const revision of store.revisions.list()) {
         if (revision.story_id !== story.id) continue;
         // Drafts belong to the chapter they were written against; backing up to `chapters` keeps the
@@ -318,7 +325,22 @@ export function scrapPhasesAfter(
         if (rank >= phaseRank('chapters')) continue;
 
         store.revisions.delete(revision.id, loopAttr(why));
+        scrappedRevisions.add(revision.id);
         counts.revisions += 1;
+    }
+
+    // T12/B: a `sample_reviews` row is a review OF one revision (`revision_ref`), so it is scoped to
+    // that revision's life. Deleting the revisions and keeping their reviews orphaned the rows — a
+    // `revision_ref` naming a row the store no longer holds, which the Story view then renders as a
+    // screening of nothing. Only reviews pointing at a DELETED revision go; the surviving revision's
+    // reviews stay (the selection commit already truncated the losers' rows, and a review of the kept
+    // draft is the provenance §6.6 keeps). The same commit, so the two halves are never observable
+    // apart (P1).
+    if (scrappedRevisions.size > 0) {
+        store.sampleReviews.deleteWhere(
+            (review) => review.story_id === story.id && scrappedRevisions.has(review.revision_ref),
+            loopAttr(`${why}; the screening reviews of the deleted revisions go with them (§3.4, T12/B)`)
+        );
     }
 
     if (rank <= phaseRank('plotlines')) {

@@ -40,6 +40,7 @@ import type {
     Proposal,
     Revision,
     Run,
+    SeedBriefState,
     Story,
     StoryPhase,
     StoryStatus,
@@ -130,6 +131,59 @@ export interface CompletionPreview {
 }
 
 /**
+ * §10 / §3.3 — the ACCEPTED Seed Brief as the Story view carries it: the Editor's derived,
+ * machine-readable projection of the Seed, TRIMMED to the reading surface (the arrays —
+ * `world_rules`, `constraints`, `open_questions` — belong to the prompt compiler, not the pane).
+ * Read-only by construction: the Seed itself stays `stories.idea` and is never edited (P5).
+ */
+export interface SeedBriefView {
+    id: string;
+    /** Hash of the Seed text this brief was derived from; a Seed edit re-arms the structuring (§3.3). */
+    seed_hash: string;
+    logline: string;
+    protagonist: string;
+    want: string;
+    obstacle: string;
+    stakes: string;
+    setting: string;
+    promise: string;
+    /** `accepted` for every brief this projection sends null-less; the state travels for the pane's badge. */
+    status: SeedBriefState;
+}
+
+/** One sample's screening tally, as the selector ranked it (§6.5: critical, then high, then total). */
+export interface SamplingSample {
+    revision_id: string;
+    critical: number;
+    high: number;
+}
+
+/**
+ * One completed sampling round's P11 audit line (`Story.sampling_history`, shared/types.ts §3.6).
+ * The losing samples are hard-deleted by the selection commit (P13/D-22), so this row — ids, issue
+ * counts, validity and the selected id — is the only surviving record of what competed (§2 item 5).
+ */
+export interface SamplingHistoryRow {
+    round: number;
+    at: string;
+    samples: Array<SamplingSample & { valid: boolean }>;
+    selected: string;
+}
+
+/**
+ * §10 / §6.5-§6.6 — phase ①'s sampling state: the round the loop is on, the sample the last
+ * selection installed (with the counts that won it), and the bounded audit history.
+ */
+export interface SamplingView {
+    /** Last COMPLETED round (`sampling_round ?? 1`); the in-flight round is one higher (§6.6). */
+    round: number;
+    /** The last round's chosen sample and its issue counts. Absent until a selection has happened. */
+    selected?: SamplingSample;
+    /** The Story's `sampling_history` rows, capped at the last 5, newest first. */
+    history: SamplingHistoryRow[];
+}
+
+/**
  * `GET /stories/:id` — everything THE STORY region (U-4…U-17) needs in one read, so a
  * refresh is one round trip rather than fifteen. Each slice is the §4 collection as-is.
  */
@@ -176,6 +230,18 @@ export interface StoryView {
      * the pane says so instead of inventing history (L-15a bounds the list, oldest first).
      */
     level_history?: LevelHistoryRow[];
+    /**
+     * §10 / §3.3 — the accepted Seed Brief, or null while the Editor has not structured this Seed
+     * (phase ①'s gate 1, §6.4). Optional on the wire consumer's side purely as the additive-field
+     * convention: the shipped server always sends the key, and an older payload omits it rather than
+     * pretending a brief exists.
+     */
+    seed_brief?: SeedBriefView | null;
+    /**
+     * §10 / §6.6 — phase ①'s sampling round, the selected sample and the capped audit history. Same
+     * additive convention: the shipped server always sends it (`round: sampling_round ?? 1`).
+     */
+    sampling?: SamplingView;
 }
 
 /**

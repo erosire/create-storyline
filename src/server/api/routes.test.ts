@@ -309,7 +309,10 @@ describe('§10.2 U-1 — the Stories panel', () => {
             'digest',
             // U-1a: the stalled screen's "what the crews tried across rounds". Additive, and it rides
             // last so the pinned order above stays the order the projection builds.
-            'level_history'
+            'level_history',
+            // §10: the research pipeline's two additive slices, built after the loop's history.
+            'seed_brief',
+            'sampling'
         ]);
         expect(Object.keys(view.summary as object).sort()).toEqual([
             'chapter_count',
@@ -334,6 +337,10 @@ describe('§10.2 U-1 — the Stories panel', () => {
             confirmed_per_cost: { critical: 0, major: 0, minor: 0, taste: 0 },
             downgrades: 0
         });
+        // §10: a Story that has not been structured or sampled still answers both slices — a null
+        // brief (gate 1 has not run) and round 1 with no history, never absent keys.
+        expect(view.seed_brief).toBeNull();
+        expect(view.sampling).toEqual({ round: 1, history: [] });
 
         const goal = view.goal as {
             phase_progress: string;
@@ -1011,12 +1018,17 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
             'assignment names "no-such-harness", which is not a template in the catalogue (D-17b)'
         );
 
-        // A writer-only crew is refused too: drafts need an Editor to select them (D-23), so the whole
-        // crew has to be assigned, which is exactly what the built-in default set is.
-        const writerOnly = await call(app, 'POST', '/stories/story_1/templates', { template_ids: ['writer-summary'] });
+        // A name no template answers to is refused by name, and the assignment ALSO fails T-0's
+        // Writer rule: the write permission comes only from a template that actually exists and was
+        // assigned as a Writer, so a misspelt or removed slug can never grant one (D-17b, P10).
+        // `writer-summary` no longer exists (the phase-1 redesign replaced it with the Sampler,
+        // templates.ts:DEFAULT_ASSIGNMENT), which is exactly why a missing slug is the fixture here.
+        const writerOnly = await call(app, 'POST', '/stories/story_1/templates', { template_ids: ['writer-orphan'] });
 
         expect(writerOnly.status).toBe(409);
-        expect(errorOf(writerOnly)).toContain('assignment needs an Editor template');
+        expect(errorOf(writerOnly)).toBe(
+            'that assignment is refused: assignment names "writer-orphan", which is not a template in the catalogue (D-17b); assignment has no Writer template — write permission comes only from a template assigned as a Writer (D-17b, P10) (T-0, D-17b)'
+        );
 
         const good = await call(app, 'POST', '/stories/story_1/templates', {
             template_ids: store.stories.require('story_1').template_refs

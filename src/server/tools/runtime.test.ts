@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Store } from '../store/store';
+import { seedHashOf } from '../../shared/seed-hash';
 import type { Chapter, ChapterSection, Revision, RoleKind, Story, StoryPhase } from '../../shared/types';
 import type { ToolSchema } from '../llm/client';
 import { createToolRuntime, type RunToolContext, type ToolResult, type ToolRuntime } from './index';
@@ -313,98 +314,6 @@ describe('the W2 call pipeline', () => {
         });
     });
 
-    it('lets the loop’s completion run extend the incomplete draft it was sent for (§4.15)', async () => {
-        store.stories.update(
-            story.id,
-            { phase: 'summary', template_refs: ['diverging'] },
-            { why: 'seed: phase ① with a diverging Writer template' }
-        );
-        store.templates.create(
-            {
-                name: 'diverging',
-                title: 'Diverging Writer',
-                roles: [{ name: 'writer', kind: 'writer', prompt: 'write the Summary' }],
-                serves_phase: ['summary'],
-                done_definition: 'the Summary carries its blocks',
-                attempts: 2,
-                builtin: false,
-                editable: true
-            },
-            { why: 'seed: diverging writer template' }
-        );
-
-        // The Writer whose draft is short has already closed its run; the loop's completion job is
-        // a SECOND run for the same unit and must extend that same pending row.
-        const first = store.runs.create(
-            {
-                story_id: story.id,
-                work_item_ref: 'wi_write_summary_1_1_a1',
-                role: 'writer',
-                state: 'torn_down',
-                started_at: '2026-11-23T10:00:00.000Z',
-                ended_at: '2026-11-23T10:00:10.000Z',
-                tokens: 10,
-                kind: 'work',
-                no_op: false,
-                delegated: []
-            },
-            { run_ref: null, why: 'seed: the first Writer run closed' }
-        );
-        const revision = store.revisions.create(
-            {
-                story_id: story.id,
-                unit_kind: 'summary',
-                unit_ref: 'summary_1',
-                body: { fields: { premise: 'the first block', promise: 'the second block' } },
-                run_ref: first.id,
-                state: 'pending',
-                verdict_refs: []
-            },
-            { run_ref: first.id, why: 'seed: the draft is missing four blocks' }
-        );
-        const completion = store.runs.create(
-            {
-                story_id: story.id,
-                work_item_ref: `wi_complete_summary_1_${revision.id}_1`,
-                role: 'writer',
-                state: 'working',
-                started_at: '2026-11-23T10:01:00.000Z',
-                tokens: 0,
-                kind: 'work',
-                no_op: false,
-                delegated: []
-            },
-            { run_ref: null, why: 'seed: the completion Writer run' }
-        );
-
-        const runtime = createToolRuntime(store);
-        const context = runtime.createContext(sessionFor(story.id, 'writer', { runId: completion.id }));
-        const result = await runtime.execute(context, 'editSummary', {
-            tone: 'close third person',
-            theme: 'belonging',
-            ending: 'the light goes out',
-            world_rules: 'the lamp logs its keepers',
-            expects: [{ id: 'summary_1', rev: 1 }],
-            why: 'the four blocks the completion brief named'
-        });
-
-        expect(result.ok).toBe(true);
-
-        const rows = store.revisions.list();
-
-        expect(rows).toHaveLength(1);
-        expect(rows[0].id).toBe(revision.id);
-        expect(rows[0].state).toBe('pending');
-        expect((rows[0].body as { fields: Record<string, unknown> }).fields).toMatchObject({
-            premise: 'the first block',
-            promise: 'the second block',
-            tone: 'close third person',
-            theme: 'belonging',
-            ending: 'the light goes out',
-            world_rules: 'the lamp logs its keepers'
-        });
-    });
-
     it('refuses a ref that belongs to another Story naming T-3 (T-3 scope)', async () => {
         const other = seedStory(store, 'Other Story');
         const otherChapter = store.chapters.create(
@@ -561,9 +470,10 @@ describe('the W2 call pipeline', () => {
         // The nearest name is the real verb the agent mangled, and the rest are the other `edit*`
         // tools — the point is that the fix is obvious in one turn (T-6c).
         expect((result.similar as string[]).slice(0, 3)).toEqual(['editChapter', 'editCast', 'editLedger']);
-        // §8.1 (8) + §8.2 (10) + §8.3 (6) + §8.4 (17) + §8.5 (4). Every session holds all of them
-        // whatever its kind (T-6a), so the count is itself a conformance number.
-        expect(result.catalogue_size).toBe(47);
+        // §8.1 (8) + §8.2 (10) + §8.3 (6) + §8.4 (17) + §8.5 (4) + the Phase-1 research surface
+        // (4). Every session holds all of them whatever its kind (T-6a), so the count is itself a
+        // conformance number.
+        expect(result.catalogue_size).toBe(51);
     });
 
     it('refuses an unknown role kind naming T-0 rather than defaulting it (T-0)', async () => {
@@ -573,7 +483,8 @@ describe('the W2 call pipeline', () => {
             ok: false,
             refused: 'T-0',
             role_kind: 'writter',
-            expected_kinds: ['writer', 'editor', 'reader', 'checker']
+            // §7.2's five dispatched kinds — the Researcher is a session kind like the rest.
+            expected_kinds: ['writer', 'editor', 'reader', 'checker', 'researcher']
         });
     });
 
@@ -1298,6 +1209,384 @@ describe('the W2 call pipeline', () => {
             rev: 1
         });
     });
+
+    // ── §7.2's Researcher column (documents/phase-1-research-pipeline.md) ───────────────────
+
+    /** The one citation §7.1/T-10 requires: the page, the claim it supports, when it was read. */
+    const SOURCE = {
+        url_or_title: 'The 1880 Service Revolver, ch. 2',
+        claim: 'The pattern held six rounds and was loaded through a gate.',
+        accessed_at: '2026-11-23T09:00:00.000Z'
+    };
+
+    /** A well-formed `structureSeed` call for the Seed this fixture Story holds. */
+    const seedCall = () => ({
+        seed_hash: seedHashOf(story.idea),
+        logline: 'A keeper learns the light was never the point.',
+        protagonist: 'The keeper',
+        want: 'To keep the light burning',
+        obstacle: 'The debt the light was built on',
+        stakes: 'The harbour',
+        setting: 'A rock in the North Sea, 1880',
+        world_rules: ['No magic; the light is engineering.'],
+        promise: 'The debt is paid by the last page.',
+        constraints: ['No flashbacks after chapter 3.'],
+        open_questions: [],
+        why: 'The Seed states every structural field this brief restates.'
+    });
+
+    it('lets a Researcher write knowledge, and refuses a Writer naming P10 (D-16, §7.2)', async () => {
+        const written = await call('researcher', 'writeKnowledge', {
+            topic: '1880 service revolver',
+            kind: 'tech',
+            claim: 'An 1880 service revolver holds six rounds.',
+            detail: 'Loaded through a gate on the right side.',
+            importance: 'critical',
+            sources: [SOURCE],
+            why: 'A chapter puts one in the keeper hands.'
+        });
+
+        expect(written.ok).toBe(true);
+        expect(written.data).toEqual({
+            knowledge_id: 'knowledge_entry_1',
+            id: 'knowledge_entry_1',
+            fingerprint: 'k_e53db99a',
+            topic: '1880 service revolver',
+            importance: 'critical',
+            reaches_sampling: true,
+            kind: 'tech',
+            sources: 1,
+            current_rev: 1
+        });
+        expect(written.summary).toBe('Knowledge knowledge_entry_1 recorded (tech, critical)');
+
+        // §7.2: only the Researcher writes `knowledge`; every other kind reads it. The refusal
+        // names P10 and routes the job, exactly as a Checker's or a Reader's prose refusal does.
+        const refused = await call('writer', 'writeKnowledge', {
+            topic: '1880 service revolver',
+            kind: 'tech',
+            claim: 'An 1880 service revolver holds six rounds.',
+            importance: 'critical',
+            sources: [SOURCE],
+            why: 'The Writer tries to write the book instead.'
+        });
+
+        expect({ ok: refused.ok, refused: refused.refused, message: refused.message }).toEqual({
+            ok: false,
+            refused: 'P10',
+            message:
+                'Rule: P10 — a writer may not writeKnowledge on knowledge: §7 gives a writer "read" there. Route the job to a researcher'
+        });
+    });
+
+    it("refuses a Researcher's Summary write naming P10, so research never becomes prose (§7.2)", async () => {
+        const refused = await call('researcher', 'editSummary', {
+            premise: 'The researcher decides the book.',
+            expects: [{ id: 'summary_1', rev: 1 }],
+            why: 'It read a good source.'
+        });
+
+        expect({ ok: refused.ok, refused: refused.refused, message: refused.message }).toEqual({
+            ok: false,
+            refused: 'P10',
+            message:
+                'Rule: P10 — a researcher may not editSummary on summaries (prose): §7 gives a researcher "read" there. Route the job to a writer'
+        });
+        // Nothing was written: the refusal is the record (T-1a).
+        expect(store.summaries.list()[0]?.premise).toBe('A keeper, a light, a debt.');
+    });
+
+    it('bumps seen_count and merges sources on a repeat, and takes the new importance (D-16)', async () => {
+        const first = await call('researcher', 'writeKnowledge', {
+            topic: '1880 service revolver',
+            kind: 'tech',
+            claim: 'An 1880 service revolver holds six rounds.',
+            importance: 'normal',
+            sources: [SOURCE],
+            why: 'First sighting.'
+        });
+
+        expect(first.repeat).toBeUndefined();
+
+        const second = await call('researcher', 'writeKnowledge', {
+            topic: '1880 Service Revolver',
+            kind: 'tech',
+            claim: 'An 1880 service revolver holds six rounds.',
+            importance: 'high',
+            sources: [
+                SOURCE,
+                {
+                    url_or_title: 'Board of Ordnance ledger, 1881',
+                    claim: 'Six rounds were the service load.',
+                    accessed_at: '2026-11-23T09:10:00.000Z'
+                }
+            ],
+            why: 'A second source confirms the load and the entry matters more.'
+        });
+
+        // The fingerprint normalises case, so a re-capitalised topic is the same entry.
+        expect({ repeat: second.repeat, data: second.data }).toEqual({
+            repeat: true,
+            data: {
+                knowledge_id: 'knowledge_entry_1',
+                id: 'knowledge_entry_1',
+                fingerprint: 'k_e53db99a',
+                topic: '1880 service revolver',
+                importance: 'high',
+                kind: 'tech',
+                seen_count: 2,
+                sources: [
+                    SOURCE,
+                    {
+                        url_or_title: 'Board of Ordnance ledger, 1881',
+                        claim: 'Six rounds were the service load.',
+                        accessed_at: '2026-11-23T09:10:00.000Z'
+                    }
+                ],
+                current_rev: 2
+            }
+        });
+        expect(store.knowledge.list()).toHaveLength(1);
+    });
+
+    it('refuses a knowledge write with no citation, naming T-10 (T-10)', async () => {
+        const refused = await call('researcher', 'writeKnowledge', {
+            topic: 'the harbour freezes',
+            kind: 'place',
+            claim: 'The harbour freezes in January.',
+            importance: 'high',
+            sources: [],
+            why: 'It decides the finale.'
+        });
+
+        expect({ ok: refused.ok, refused: refused.refused, message: refused.message }).toEqual({
+            ok: false,
+            refused: 'T-10',
+            message:
+                'Rule: T-10 — writeKnowledge needs at least one source: every knowledge entry names what it stands on'
+        });
+    });
+
+    it('refuses a citation with a missing field at the schema first, naming the field (T-11, T-10)', async () => {
+        const refused = await call('researcher', 'writeKnowledge', {
+            topic: 'the harbour freezes',
+            kind: 'place',
+            claim: 'The harbour freezes in January.',
+            importance: 'high',
+            sources: [{ url_or_title: 'Almanac', claim: 'The harbour froze on 5 January 1881.' }],
+            why: 'It decides the finale.'
+        });
+
+        // T-11's order: the body is validated before the tool body runs, so the missing field is
+        // named with its path. (The tool's own T-10 guard is the second line of defence, reached
+        // only if a caller bypasses the schema.)
+        expect({ ok: refused.ok, refused: refused.refused, issues: refused.issues }).toEqual({
+            ok: false,
+            refused: 'T-11',
+            issues: [{ field: 'sources[0].accessed_at', expected: 'string' }]
+        });
+    });
+
+    it('lets every kind read knowledge, most load-bearing first (T-7, §7.2)', async () => {
+        // The stored `topic` is the NORMALISED key (D-16's dedupe part), so the fixtures use
+        // spellings that survive normalisation unchanged; the repeat test covers the normalising.
+        for (const [topic, importance] of [
+            ['the harbour freezes', 'normal'],
+            ['six round revolver', 'critical'],
+            ['the light is engineering', 'high']
+        ] as const)
+            await call('researcher', 'writeKnowledge', {
+                topic,
+                kind: 'fact',
+                claim: `${topic} is true in this world.`,
+                importance,
+                sources: [SOURCE],
+                why: 'Seed research.'
+            });
+
+        for (const kind of ['writer', 'editor', 'checker', 'reader', 'researcher'] as const) {
+            const read = await call(kind, 'readKnowledge', {});
+
+            expect({ kind, ok: read.ok }).toEqual({ kind, ok: true });
+        }
+
+        const read = await call('reader', 'readKnowledge', {});
+        const data = read.data as Record<string, unknown>;
+
+        expect(
+            (data.entries as Array<{ topic: string; importance: string }>).map((row) => [row.topic, row.importance])
+        ).toEqual([
+            ['six round revolver', 'critical'],
+            ['the light is engineering', 'high'],
+            ['the harbour freezes', 'normal']
+        ]);
+        expect({ total: data.total, limit: data.limit, truncated: data.truncated }).toEqual({
+            total: 3,
+            limit: 40,
+            truncated: false
+        });
+
+        const filtered = await call('reader', 'readKnowledge', { importance: 'critical' });
+        expect((filtered.data as { total: number }).total).toBe(1);
+    });
+
+    it('bounds readKnowledge at 40 rows and says the page was truncated (T-7)', async () => {
+        for (let index = 0; index < 41; index += 1)
+            await call('researcher', 'writeKnowledge', {
+                topic: `fact ${index}`,
+                kind: 'fact',
+                claim: `Fact number ${index} holds in this world.`,
+                importance: 'normal',
+                sources: [SOURCE],
+                why: 'Bulk research for the cap.'
+            });
+
+        const read = await call('reader', 'readKnowledge', {});
+        const data = read.data as Record<string, unknown>;
+
+        expect({ total: data.total, limit: data.limit, truncated: data.truncated }).toEqual({
+            total: 41,
+            limit: 40,
+            truncated: true
+        });
+        expect((data.entries as unknown[]).length).toBe(40);
+        expect(data.note).toBe(
+            'The page is bounded (T-7); filter by importance, kind, phase or topic to see the rest.'
+        );
+    });
+
+    it('refuses structureSeed for every kind but the Editor (P10, §7.2)', async () => {
+        for (const kind of ['writer', 'checker', 'reader', 'researcher'] as const) {
+            const refused = await call(kind, 'structureSeed', seedCall());
+
+            expect({ kind, ok: refused.ok, refused: refused.refused }).toEqual({
+                kind,
+                ok: false,
+                refused: 'P10'
+            });
+        }
+
+        const accepted = await call('editor', 'structureSeed', seedCall());
+
+        expect(accepted.ok).toBe(true);
+        expect(accepted.data).toMatchObject({
+            seed_brief_id: 'seed_brief_1',
+            seed_hash: seedHashOf(story.idea),
+            status: 'accepted'
+        });
+        expect(store.seedBriefs.list()).toHaveLength(1);
+    });
+
+    it('reports the Seed hash on readSeed, so the Editor can send it back to structureSeed (§3.3)', async () => {
+        const read = await call('editor', 'readSeed', {});
+        const data = read.data as Record<string, unknown>;
+
+        // The value `structureSeed` compares against; without it the Editor could only guess.
+        expect(data.seed_hash).toBe(seedHashOf(story.idea));
+        expect(read.rev).toBe(store.stories.require(story.id).rev);
+    });
+
+    it('refuses a Seed Brief derived from a Seed that moved, naming P5 (P5)', async () => {
+        const refused = await call('editor', 'structureSeed', { ...seedCall(), seed_hash: 'deadbeef' });
+
+        expect({ ok: refused.ok, refused: refused.refused, field: refused.field }).toEqual({
+            ok: false,
+            refused: 'P5',
+            field: 'seed_hash'
+        });
+        expect(store.seedBriefs.list()).toEqual([]);
+    });
+
+    it('answers a second structureSeed for the same Seed with the existing brief (idempotence)', async () => {
+        const first = await call('editor', 'structureSeed', seedCall());
+        const second = await call('editor', 'structureSeed', seedCall());
+
+        expect(second.repeat).toBe(true);
+        expect(second.data).toMatchObject({
+            seed_brief_id: (first.data as { seed_brief_id: string }).seed_brief_id,
+            status: 'accepted'
+        });
+        expect(store.seedBriefs.list()).toHaveLength(1);
+    });
+
+    it('supersedes the accepted brief when the Seed changes, in one commit (P5, T-4)', async () => {
+        await call('editor', 'structureSeed', seedCall());
+        store.stories.update(
+            story.id,
+            { idea: 'A keeper, a light, a debt — and a second light.' },
+            { why: 'The Author edits the Seed.' }
+        );
+
+        const reRead = store.stories.require(story.id);
+        const accepted = await call('editor', 'structureSeed', {
+            ...seedCall(),
+            seed_hash: seedHashOf(reRead.idea),
+            why: 'The Seed moved, so the brief is derived again.'
+        });
+
+        expect(accepted.ok).toBe(true);
+        expect(store.seedBriefs.list().map((brief) => [brief.id, brief.status])).toEqual([
+            ['seed_brief_1', 'draft'],
+            ['seed_brief_2', 'accepted']
+        ]);
+    });
+
+    it('retires a knowledge entry to low with the mark kept for the audit, and refuses a second retire', async () => {
+        await call('researcher', 'writeKnowledge', {
+            topic: 'the harbour freezes',
+            kind: 'place',
+            claim: 'The harbour freezes in January.',
+            detail: 'Ice from the 5th.',
+            importance: 'high',
+            sources: [SOURCE],
+            why: 'It decides the finale.'
+        });
+
+        const retired = await call('researcher', 'retireKnowledge', {
+            knowledge_id: 'knowledge_entry_1',
+            expects: [{ id: 'knowledge_entry_1', rev: 1 }],
+            why: 'The scene moved south.'
+        });
+
+        expect(retired.ok).toBe(true);
+        expect(store.knowledge.list()[0]).toMatchObject({
+            importance: 'low',
+            detail: 'Ice from the 5th.\n\n(retired) The scene moved south.'
+        });
+
+        const again = await call('researcher', 'retireKnowledge', {
+            knowledge_id: 'knowledge_entry_1',
+            expects: [{ id: 'knowledge_entry_1', rev: 2 }],
+            why: 'Nothing changed.'
+        });
+
+        expect({ ok: again.ok, refused: again.refused }).toEqual({ ok: false, refused: 'T-11' });
+    });
+
+    it('refuses a stale retire with the current record returned (T-4)', async () => {
+        await call('researcher', 'writeKnowledge', {
+            topic: 'the harbour freezes',
+            kind: 'place',
+            claim: 'The harbour freezes in January.',
+            importance: 'high',
+            sources: [SOURCE],
+            why: 'It decides the finale.'
+        });
+        // Move the row, so the rev the caller read is stale.
+        store.knowledge.update('knowledge_entry_1', { seen_count: 2 }, { why: 'moved by another run' });
+
+        const stale = await call('researcher', 'retireKnowledge', {
+            knowledge_id: 'knowledge_entry_1',
+            expects: [{ id: 'knowledge_entry_1', rev: 1 }],
+            why: 'The scene moved south.'
+        });
+
+        expect({ cas_conflict: stale.cas_conflict, refused: stale.refused }).toEqual({
+            cas_conflict: true,
+            refused: 'T-4'
+        });
+        expect(store.knowledge.list()[0]?.importance).toBe('high');
+    });
 });
 
 /**
@@ -1329,7 +1618,9 @@ describe('the pinned tool-runtime contract', () => {
         runRef: string;
         templateRef: string;
         roleName: string;
-        roleKind: 'writer' | 'editor' | 'reader' | 'checker';
+        // §7.2's five dispatched kinds: the Researcher is a first-class session kind, so the
+        // pinned context carries it exactly like the original four.
+        roleKind: 'writer' | 'editor' | 'reader' | 'checker' | 'researcher';
         services: {
             delegate?: (roleName: string, task: string) => Promise<{ ok: boolean; summary?: string; error?: string }>;
         };
@@ -1344,7 +1635,7 @@ describe('the pinned tool-runtime contract', () => {
                 runRef: string;
                 templateRef: string;
                 roleName: string;
-                roleKind: 'writer' | 'editor' | 'reader' | 'checker';
+                roleKind: 'writer' | 'editor' | 'reader' | 'checker' | 'researcher';
             },
             hooks?: {
                 delegate?: (

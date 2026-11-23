@@ -14,10 +14,16 @@ import { describe, expect, it } from 'vitest';
 
 import { createRig, walkToChapters, type Rig } from './mock';
 
-/** Draft rows as the store holds them: id, state, and the note the Editor left when it chose. */
+/**
+ * DRAFT rows as the store holds them: id, state, and the note the Editor left when it chose.
+ *
+ * Chapter rows only: phase ①'s research pipeline leaves the SUMMARY's selected revision in the store
+ * (`loop-sample-select`'s winner), and this file is about the chapter divergence set.
+ */
 function drafts(rig: Rig): string[] {
     return rig.store.revisions
         .list()
+        .filter((revision) => revision.unit_kind === 'chapter')
         .sort((left, right) => left.id.localeCompare(right.id))
         .map((revision) => `${revision.id}:${revision.state}:${revision.selection_note ?? 'none'}`);
 }
@@ -66,7 +72,7 @@ describe("D-17d / L-16 — the template's `attempts` buys that many blind drafts
         // Each draft was its own competing row while the set was being built (D-21); after the Editor's
         // choice, only the winner is a row at all.
         expect(drafts(rig)).toEqual([
-            'revision_1:selected:rule: keeps the chapter contract; revision_1 states the change on the page'
+            'revision_4:selected:rule: keeps the chapter contract; revision_4 states the change on the page'
         ]);
     });
 
@@ -84,18 +90,18 @@ describe("D-17d / L-16 — the template's `attempts` buys that many blind drafts
         // One checker pass per competing draft, each naming the draft it is told to read. The Work Item
         // has no revision field, so the draft is named in the job line and read with `listRevisions`.
         expect(runRefs(rig, 'wi_check_chapter')).toEqual([
-            'wi_check_chapter_1_1_revision_1',
-            'wi_check_chapter_1_2_revision_2',
-            'wi_check_chapter_1_3_revision_3'
+            'wi_check_chapter_1_1_revision_4',
+            'wi_check_chapter_1_2_revision_5',
+            'wi_check_chapter_1_3_revision_6'
         ]);
         expect(
             runRefs(rig, 'wi_check_chapter')
                 .map((ref) => rig.items.get(ref)?.note)
                 .filter((note) => note !== undefined)
         ).toEqual([
-            'This run judges draft revision_1 of chapter_1; read it with `listRevisions` and file your verdict against it.',
-            'This run judges draft revision_2 of chapter_1; read it with `listRevisions` and file your verdict against it.',
-            'This run judges draft revision_3 of chapter_1; read it with `listRevisions` and file your verdict against it.'
+            'This run judges draft revision_4 of chapter_1; read it with `listRevisions` and file your verdict against it.',
+            'This run judges draft revision_5 of chapter_1; read it with `listRevisions` and file your verdict against it.',
+            'This run judges draft revision_6 of chapter_1; read it with `listRevisions` and file your verdict against it.'
         ]);
     });
 });
@@ -112,7 +118,7 @@ describe("D-22 / L-17 — the Editor's choice deletes the losers and records why
         // as `rejected` rows on a chapter that has moved on. The `selection_note` survives on the winner,
         // because L-17 asks that a re-run of the same divergence be able to say what was preferred.
         expect(drafts(rig)).toEqual([
-            'revision_1:selected:rule: keeps the chapter contract; revision_1 states the change on the page'
+            'revision_4:selected:rule: keeps the chapter contract; revision_4 states the change on the page'
         ]);
     });
 
@@ -132,7 +138,7 @@ describe("D-22 / L-17 — the Editor's choice deletes the losers and records why
         }).toEqual({
             order: 1,
             state: 'done',
-            current_revision: 'revision_1',
+            current_revision: 'revision_4',
             last_score: '4/4',
             competing: 0
         });

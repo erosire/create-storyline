@@ -132,6 +132,10 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         const review = fixture.store.runs.list().filter((run) => run.work_item_ref === 'wi_directive_directive_1');
 
         expect(review).toHaveLength(1);
+        // The job binds the first editor template the Story is assigned (`records.ts:templatesFor`
+        // order), which the research pipeline's roster puts at `editor-general` — the crew a
+        // directive review is written for (`templates.ts:DEFAULT_ASSIGNMENT`). The point of the row
+        // is that it is a real Editor thread, not that any one Editor slug owns directives.
         expect({ role: review[0]?.role, template: review[0]?.template_ref }).toEqual({
             role: 'editor',
             template: 'editor-general'

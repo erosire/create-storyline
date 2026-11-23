@@ -416,3 +416,204 @@ describe('brief — S-2 assembly', () => {
         );
     });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 1's two shared inputs (§3.3, §5) and the two new tool kinds
+// ---------------------------------------------------------------------------
+
+describe('brief — the Seed Brief, the Knowledge, and the new Phase-1 kinds', () => {
+    it('carries the derived Seed Brief and the critical/high Knowledge right after the Seed (§3.3, §5)', () => {
+        const { store, story } = seedStore();
+
+        store.seedBriefs.create(
+            {
+                story_id: story.id,
+                seed_hash: 'abcd1234',
+                logline: 'A cartographer finds her map is wrong.',
+                protagonist: 'Maren',
+                want: 'to prove the map',
+                need: 'to accept the water',
+                obstacle: 'the reservoir',
+                stakes: 'her memory',
+                setting: 'a drowned valley, 1963',
+                world_rules: ['no magic', 'the reservoir is engineering'],
+                promise: 'map and territory reconcile',
+                tone_hints: 'cold, precise',
+                constraints: ['no flashbacks'],
+                open_questions: ['who flooded the valley?'],
+                status: 'accepted'
+            },
+            AUTHOR_ATTR
+        );
+
+        // The compiler's filter and order, plus a `detail` the BRIEF must omit (E-3): the tool run
+        // can `readKnowledge` for the rest, while the sampling prefix keeps it (§5).
+        store.knowledge.create(
+            {
+                story_id: story.id,
+                kind: 'place',
+                topic: 'harbour',
+                claim: 'The harbour freezes in January.',
+                detail: 'A DETAIL THE BRIEF MUST NOT CARRY',
+                importance: 'critical',
+                sources: [{ url_or_title: 'Atlas', claim: 'freezes', accessed_at: '1963-01-01' }],
+                fingerprint: 'K-aaa',
+                seen_count: 1,
+                author: 'researcher'
+            },
+            AUTHOR_ATTR
+        );
+        store.knowledge.create(
+            {
+                story_id: story.id,
+                kind: 'period',
+                topic: 'revolver',
+                claim: '1880 revolvers hold six rounds.',
+                importance: 'high',
+                sources: [{ url_or_title: 'https://example.test/revolver', claim: 'six rounds', accessed_at: '1963-01-01' }],
+                fingerprint: 'K-bbb',
+                seen_count: 1,
+                author: 'researcher'
+            },
+            AUTHOR_ATTR
+        );
+        // `normal` never enters a brief's Knowledge section either (the same filter, §5).
+        store.knowledge.create(
+            {
+                story_id: story.id,
+                kind: 'fact',
+                topic: 'coin',
+                claim: 'A shilling was twelve pence.',
+                importance: 'normal',
+                sources: [],
+                fingerprint: 'K-ccc',
+                seen_count: 1,
+                author: 'researcher'
+            },
+            AUTHOR_ATTR
+        );
+
+        const item = itemFor();
+        const early = buildBrief(store, item, resolveHarness(store, item)).sections;
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        // P5 is stated IN the heading: the brief is derived, and the Seed above it stays law.
+        expect(early.indexOf(`SEED BRIEF (structured from the Author's Seed — derived, the Seed itself stays law, P5)`)).toBe(
+            early.indexOf('SEED — Author truth, read-only for you at every phase, forever') + 1
+        );
+        expect(early.indexOf('KNOWLEDGE — critical and high')).toBe(
+            early.indexOf(`SEED BRIEF (structured from the Author's Seed — derived, the Seed itself stays law, P5)`) + 1
+        );
+        expect(early.indexOf(`DIGEST rev 1 (derived by the engine, never a crew: D-12a)`)).toBe(
+            early.indexOf('KNOWLEDGE — critical and high') + 1
+        );
+
+        expect(text).toContain(
+            `SEED BRIEF (structured from the Author's Seed — derived, the Seed itself stays law, P5)\n` +
+                'seed_hash: abcd1234\n' +
+                'logline: A cartographer finds her map is wrong.\n' +
+                'protagonist: Maren\n' +
+                'want: to prove the map\n' +
+                'need: to accept the water\n' +
+                'obstacle: the reservoir\n' +
+                'stakes: her memory\n' +
+                'setting: a drowned valley, 1963\n' +
+                'world_rules:\n- no magic\n- the reservoir is engineering\n' +
+                'promise: map and territory reconcile\n' +
+                'tone_hints: cold, precise\n' +
+                'constraints:\n- no flashbacks\n' +
+                'open_questions:\n- who flooded the valley?'
+        );
+        expect(text).toContain(
+            'KNOWLEDGE — critical and high\n' +
+                '[K-aaa · critical · place] harbour: The harbour freezes in January. — source: Atlas\n' +
+                '[K-bbb · high · period] revolver: 1880 revolvers hold six rounds. — source: https://example.test/revolver'
+        );
+        expect(text).not.toContain('A DETAIL THE BRIEF MUST NOT CARRY');
+        expect(text).not.toContain('K-ccc');
+    });
+
+    it('omits both parts when the Story has no accepted brief and no prompt-worthy Knowledge (§5)', () => {
+        const { store } = seedStore();
+        const item = itemFor();
+        const brief = buildBrief(store, item, resolveHarness(store, item));
+
+        expect(brief.text).not.toContain('SEED BRIEF');
+        expect(brief.text).not.toContain('KNOWLEDGE — critical and high');
+        expect(brief.sections).not.toContain(`SEED BRIEF (structured from the Author's Seed — derived, the Seed itself stays law, P5)`);
+    });
+
+    it('gives the Researcher its own etiquette: Knowledge is the only write, every entry cites a source (P10, T-10)', () => {
+        const { store } = seedStore();
+
+        seedTemplate(store, {
+            name: 'researcher-story',
+            roles: [
+                {
+                    name: 'researcher',
+                    kind: 'researcher',
+                    web: true,
+                    prompt: 'You research the period and the place, and you never write the book.'
+                }
+            ],
+            serves_phase: ['summary', 'plotlines', 'chapters']
+        });
+
+        const item = itemFor({
+            templateRef: 'researcher-story',
+            roleName: 'researcher',
+            kind: 'research',
+            unit: { kind: 'summary', ref: 'summary_1' }
+        });
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        expect(text).toContain(
+            'You are the Researcher: never write a story artifact (P10) — no Summary, plotline, chapter, Idea, verdict or finding. Your writes are `writeKnowledge` and `retireKnowledge` only; `readKnowledge` is how you check what is already known before you research it again.'
+        );
+        expect(text).toContain(
+            'Every entry cites a source you actually read, and the source backs the claim you attached it to (T-10). A claim you cannot source belongs in a task or in `requestAuthor`, not in Knowledge — escalate rather than guess (P7).'
+        );
+        // §7.2's permission row is still stated beside it (T-1a: refuse, teach, never silently allow).
+        expect(text).toContain('You are the Researcher: you search the web and record what you find');
+    });
+
+    it('names the two new Phase-1 artifacts in the artifact heading (§6.1)', () => {
+        const { store } = seedStore();
+
+        seedTemplate(store, {
+            name: 'editor-seed-structure',
+            roles: [{ name: 'editor', kind: 'editor', prompt: 'You structure the Seed.' }],
+            serves_phase: ['summary']
+        });
+        seedTemplate(store, {
+            name: 'researcher-story',
+            roles: [{ name: 'researcher', kind: 'researcher', prompt: 'You research.' }],
+            serves_phase: ['summary']
+        });
+
+        // `unit: undefined` is the whole-Story shape these two passes have: the structure pass reads
+        // the Seed, and the research pass gathers facts for it — neither names a chapter.
+        const structureItem = itemFor({
+            templateRef: 'editor-seed-structure',
+            roleName: 'editor',
+            kind: 'structure_seed',
+            unit: undefined
+        });
+        const researchItem = itemFor({
+            templateRef: 'researcher-story',
+            roleName: 'researcher',
+            kind: 'research',
+            unit: undefined
+        });
+
+        const structure = buildBrief(store, structureItem, resolveHarness(store, structureItem));
+        const research = buildBrief(store, researchItem, resolveHarness(store, researchItem));
+
+        expect(structure.sections).toContain(
+            'ARTIFACT UNDER REVIEW — the Seed (structure pass — you derive the brief, never edit the Seed, P5)'
+        );
+        expect(research.sections).toContain("ARTIFACT UNDER REVIEW — the Story's knowledge (research pass)");
+        // `seed_review` is gone, not aliased: the old heading must never render again.
+        expect(structure.text).not.toContain('the Seed (Author truth, read-only for you — P5)');
+    });
+});

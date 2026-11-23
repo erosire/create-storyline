@@ -74,7 +74,15 @@ const RESOLVABLE: RefKind[] = [
     'proposals',
     'directives',
     'digests',
-    'templates'
+    'templates',
+    // The Phase-1 collections (documents/phase-1-research-pipeline.md §3.2-§3.4). They are listed
+    // so a §7.1 tool can name one by id: `retireKnowledge` takes a `knowledge_id`, and the loop's
+    // engine-side settlement (step 9 of the plan) reads a `seed_brief`/`sample_review` ref. Story
+    // scoping needs no special case — every one of the three carries `story_id`, so the same
+    // `inStoryScope`/`rowsInStoryScope` path `findings`/`revisions` use applies unchanged.
+    'knowledge',
+    'seed_briefs',
+    'sample_reviews'
 ];
 
 /** A label for one collection, singular, for refusal prose ("that id is a chapter"). */
@@ -82,12 +90,53 @@ export function kindLabel(collection: CollectionName): string {
     return COLLECTION_SINGULARS[collection].replace(/_/g, ' ');
 }
 
+/**
+ * The generic shape the ref resolver needs from one collection (W1's `Collection`).
+ *
+ * WHY AN EXPLICIT MAP RATHER THAN `store[collection]`: the registry key and the `Store` field name
+ * diverge for the three Phase-1 collections (`seed_briefs` → `store.seedBriefs`,
+ * `sample_reviews` → `store.sampleReviews`), so a generic index over `CollectionName` is not a
+ * type the compiler can prove. A `Record<CollectionName, …>` is total by construction: adding a
+ * §4 collection without adding it here is a type error, which is exactly the guard we want.
+ */
+const COLLECTION_ACCESSOR: Record<
+    CollectionName,
+    (store: Store) => { list(): unknown[]; get(id: string): unknown }
+> = {
+    stories: (store) => store.stories,
+    summaries: (store) => store.summaries,
+    plotlines: (store) => store.plotlines,
+    chapters: (store) => store.chapters,
+    cast: (store) => store.cast,
+    ledger: (store) => store.ledger,
+    tasks: (store) => store.tasks,
+    digests: (store) => store.digests,
+    verdicts: (store) => store.verdicts,
+    findings: (store) => store.findings,
+    goals: (store) => store.goals,
+    templates: (store) => store.templates,
+    runs: (store) => store.runs,
+    directives: (store) => store.directives,
+    revisions: (store) => store.revisions,
+    ideas: (store) => store.ideas,
+    proposals: (store) => store.proposals,
+    knowledge: (store) => store.knowledge,
+    // `seed_briefs`/`sample_reviews` are the two registry keys whose Store field is camelCase
+    // (store.ts:482-484), which is the whole reason the map exists.
+    seed_briefs: (store) => store.seedBriefs,
+    sample_reviews: (store) => store.sampleReviews
+};
+
 /** Reads the store's typed collection by name without a per-collection switch. */
 export function collectionOf(
     store: Store,
     collection: CollectionName
 ): { list(): unknown[]; get(id: string): unknown } {
-    return store[collection] as unknown as { list(): unknown[]; get(id: string): unknown };
+    const access = COLLECTION_ACCESSOR[collection];
+    // A name outside the registry cannot reach this map (the parameter is `CollectionName`), so
+    // this branch is unreachable for typed callers; it keeps a runtime caller from crashing.
+    if (!access) return { list: () => [], get: () => undefined };
+    return access(store);
 }
 
 /** A record's `story_id`, for the T-3 scope check. */
@@ -122,9 +171,12 @@ function labelOf(collection: CollectionName, record: Record<string, unknown>): s
     const title = typeof record.title === 'string' ? record.title : '';
     const name = typeof record.name === 'string' ? record.name : '';
     const subject = typeof record.subject === 'string' ? record.subject : '';
+    // `knowledge` (§3.2) has no §4 label field: its searchable key is the normalised `topic`, so a
+    // `knowledge_id` may name the topic ("1880 revolvers") instead of `knowledge_entry_4`.
+    const topic = typeof record.topic === 'string' ? record.topic : '';
     const order = typeof record.order === 'number' ? `#${record.order}` : '';
     const id = typeof record.id === 'string' ? record.id : '';
-    return heading || title || name || subject || order || id || kindLabel(collection);
+    return heading || title || name || subject || topic || order || id || kindLabel(collection);
 }
 
 /**
@@ -195,12 +247,10 @@ export async function resolveRef(
     // 5. the ref names a record in a collection the caller did not ask for: report the kind.
     const prefix = trimmed.replace(/_\d+$/, '');
     const sniffed = RESOLVABLE.find((name) => COLLECTION_SINGULARS[name] === prefix);
-    if (
-        sniffed &&
-        !expect.includes(sniffed) &&
-        store[sniffed].get(trimmed) &&
-        inStoryScope(sniffed, store[sniffed].get(trimmed), storyId)
-    ) {
+    // `collectionOf`, not `store[sniffed]`: the three Phase-1 collections key differently on the
+    // Store (see COLLECTION_ACCESSOR), so the sniff must go through the same map every read does.
+    const sniffedRecord = sniffed === undefined ? undefined : collectionOf(store, sniffed).get(trimmed);
+    if (sniffed && !expect.includes(sniffed) && sniffedRecord && inStoryScope(sniffed, sniffedRecord, storyId)) {
         return { resolved: null, wrongKind: sniffed };
     }
     for (const collection of RESOLVABLE) {
@@ -485,34 +535,25 @@ export function pendingRevisions(
 }
 
 /**
- * The `pending` draft a Writer may keep writing: its own row first (a second write in the same run
- * extends the same draft). `adoptUnattended` lets the loop's completion job (`loop/work.ts:
- * summaryCompletionJobs`) extend a draft an earlier Writer left unfinished; a fresh sampling
- * attempt must NOT do that — L-16's siblings are blind to each other, so it files its own draft.
- * A live sibling's draft is never touched either way.
+ * The `pending` draft a Writer may keep writing: only its OWN row is returned (a second write in
+ * the same run extends the same draft). A draft another Writer left unfinished is never adopted —
+ * L-16's siblings are blind to each other, so each files its own draft, and phase ①'s samples are
+ * persisted whole by the engine in a single turn (no partial draft can exist). The classic
+ * `summaryCompletionJobs` / `wi_complete_*` adoption path was removed with the sample → screen →
+ * select pipeline.
  */
 export function pendingDraftFor(
     store: Store,
     storyId: string,
     unitKind: Revision['unit_kind'],
     unitRef: string,
-    runId: string | undefined,
-    adoptUnattended = false
+    runId: string | undefined
 ): Revision | undefined {
     const pending = revisionRows(store, storyId).filter(
         (row) => row.unit_kind === unitKind && row.unit_ref === unitRef && row.state === 'pending'
     );
 
-    const own = pending.find((row) => row.run_ref === runId);
-
-    if (own !== undefined) return own;
-    if (!adoptUnattended) return undefined;
-
-    return pending.find((row) => {
-        const run = row.run_ref === undefined ? undefined : store.runs.get(row.run_ref);
-
-        return run === undefined || run.state === 'torn_down' || run.state === 'failed' || run.state === 'abandoned';
-    });
+    return pending.find((row) => row.run_ref === runId);
 }
 
 /**

@@ -27,9 +27,14 @@ export type MockHandler = (request: ChatRequest, state: MockState) => ChatRespon
  * `callIndex` is what lets a test script a tool loop without a closure of its own: turn 0
  * asks for a tool, turn 1 reports the result, turn 2 submits the verdict (S-4).
  * `callCount` is a read-only counter for assertions ("the run asked the model twice").
+ *
+ * The handler receives the FULL `ChatRequest` — `responseFormat`, `temperature`, and `seed`
+ * included (§4.2) — and every request is also recorded in `calls`, so a test can assert the
+ * structured-output wire shape without threading its own recorder through the handler.
  */
 export class MockChatClient implements ChatClient {
     private readonly handler: MockHandler;
+    private readonly received: ChatRequest[] = [];
     private count = 0;
 
     constructor(handler: MockHandler) {
@@ -41,9 +46,17 @@ export class MockChatClient implements ChatClient {
         return this.count;
     }
 
+    /** Every request this instance received, in call order (the same objects the handler saw). */
+    get calls(): readonly ChatRequest[] {
+        return this.received;
+    }
+
     async complete(request: ChatRequest): Promise<ChatResponse> {
         const state: MockState = { callIndex: this.count };
 
+        // Record before invoking the handler: a handler that throws still represents a call
+        // this client received, and the exact request is what tests need to inspect.
+        this.received.push(request);
         this.count += 1;
 
         return this.handler(request, state);

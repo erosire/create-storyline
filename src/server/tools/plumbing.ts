@@ -14,6 +14,9 @@
  *    `expects` is right first time (T-4).
  */
 import { BUILT_IN_CRITERIA } from '../../shared/criteria';
+// `readSeed` reports the Seed's change-detector hash so the Editor can send it to `structureSeed`
+// (P5, documents/phase-1-research-pipeline.md §3.3). Same function the tool compares against.
+import { seedHashOf } from '../../shared/seed-hash';
 import type {
     CastMember,
     Chapter,
@@ -103,6 +106,10 @@ const readSeed: ToolDefinition = {
                 title: ctx.story.title,
                 // T-7: the Seed is Author prose and can run long; the dashboard holds the rest.
                 idea: clip(ctx.story.idea),
+                // `structureSeed` refuses a brief whose `seed_hash` is not the CURRENT Seed's
+                // (P5), so the value has to be readable from the one tool that reads the Seed —
+                // otherwise the Editor would have to guess a hash it was told to send back.
+                seed_hash: seedHashOf(ctx.story.idea),
                 phase: ctx.story.phase,
                 status: ctx.story.status,
                 status_reason: ctx.story.status_reason,
@@ -947,6 +954,9 @@ function permissionRowView(row: PermissionRow): Record<string, unknown> {
         editor: row.editor,
         checker: row.checker,
         reader: row.reader,
+        // §7.2's fifth column. Rendered here too, or `describeTool` would answer a Researcher's
+        // "may I?" from four cells and hide the one cell that grants it.
+        researcher: row.researcher,
         rules: row.criterion_refs,
         ...(row.note ? { note: row.note } : {})
     };
@@ -965,7 +975,9 @@ const listTools: ToolDefinition = {
         type: 'object',
         properties: {
             kind: enumOf(
-                ['writer', 'editor', 'reader', 'checker'],
+                // §7.2's five dispatched kinds: a run asks "can a Researcher reach this?" the same
+                // way it asks about any other kind before filing a task for it.
+                ['writer', 'editor', 'reader', 'checker', 'researcher'],
                 'Restrict to the tools one role kind may actually call.'
             ),
             writes: str('Restrict to the tools that touch one collection (for example "chapters" or "tasks").')
@@ -992,6 +1004,9 @@ const listTools: ToolDefinition = {
                 allowed_for_editor: mayCallKind('editor', def),
                 allowed_for_checker: mayCallKind('checker', def),
                 allowed_for_reader: mayCallKind('reader', def),
+                // §7.2: one more flag, because the knowledge tools are the first ones whose answer
+                // differs materially for the Researcher (it alone may write `knowledge`).
+                allowed_for_researcher: mayCallKind('researcher', def),
                 allowed_for_this_role: toolAllowed(ctx, def)
             }));
         // `kind` narrows to what that kind may call — how a run checks a handoff is possible

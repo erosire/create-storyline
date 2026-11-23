@@ -28,7 +28,8 @@ import {
     isReadOnlyTool,
     isReportTool,
     primaryActionOf,
-    proposalKey
+    proposalKey,
+    toolsForRunKind
 } from './catalogue';
 import type { RunDelegation, RoleAggregation } from '../../shared/types';
 
@@ -65,7 +66,7 @@ function panelClient(behaviour: PanelBehaviour) {
             if (behaviour.aggregator === undefined)
                 throw new Error('an aggregator call arrived with none scripted (D-38: `majority` must not call one)');
 
-            return { message: { content: behaviour.aggregator(request) }, usage: { input: 200, output: 30 } };
+            return { message: { content: behaviour.aggregator(request) }, usage: { input: 200, output: 30, cached_input: 0 } };
         }
 
         const index = Number(/You are agent (\d+) of/.exec(system)?.[1] ?? '0');
@@ -75,7 +76,7 @@ function panelClient(behaviour: PanelBehaviour) {
 
         const turn = request.messages.filter((message) => message.role === 'assistant').length;
 
-        return { message: behaviour.agent(index, turn), usage: { input: 100, output: 40 } };
+        return { message: behaviour.agent(index, turn), usage: { input: 100, output: 40, cached_input: 0 } };
     });
 
     return { client, requests };
@@ -174,7 +175,10 @@ const roleOrder = (entries: RunDelegation[]) => [...entries].sort((left, right) 
 // ---------------------------------------------------------------------------
 
 describe('catalogue — S-4’s report set and D-38’s proposals', () => {
-    it('names S-4’s eight report tools plus the two outcomes the rest of §9 makes first-class (S-4, L-18)', () => {
+    it('names S-4’s eight report tools plus the outcomes §9 and §7.1 make first-class (S-4, L-18)', () => {
+        // The closed list, in declaration order. `structureSeed`/`writeKnowledge` are §7.1's two
+        // phase-1 writes that ARE the product of their run: an Editor structuring the Seed and a
+        // Researcher recording Knowledge must not be counted as no-op turns (S-4).
         expect(REPORT_TOOLS).toEqual([
             'submitVerdict',
             'raiseFinding',
@@ -187,7 +191,9 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
             'reviewSeed',
             'selectRevision',
             'requestMerge',
-            'rejectAll'
+            'rejectAll',
+            'structureSeed',
+            'writeKnowledge'
         ]);
 
         for (const name of REPORT_TOOLS) expect(isReportTool(name)).toBe(true);
@@ -195,6 +201,22 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
         expect(isReportTool('readChapter')).toBe(false);
         expect(isReportTool('editChapter')).toBe(false);
         expect(isReportTool('delegate')).toBe(false);
+    });
+
+    it('offers a `toolMode: none` run NO tool at all, whatever its kind (§2 decision 3)', () => {
+        // The mode is stronger than the kind's narrowing: a sampling/screening run is not
+        // "restricted", it has no tool surface — so the list is empty even for a Writer, and even
+        // for the catalogue the runtime declares in full (T-6a).
+        const store = Store.empty();
+        const story = seedStory(store);
+        const runtime = new MockToolRuntime(store, story.id);
+        const schemas = runtime.schemas();
+
+        expect(schemas.length > 0).toBe(true);
+        expect(toolsForRunKind(schemas, 'writer', 'none')).toEqual([]);
+        expect(toolsForRunKind(schemas, 'reader', 'none')).toEqual([]);
+        // …while the default stays exactly the declared catalogue for a non-assistant kind.
+        expect(toolsForRunKind(schemas, 'writer')).toBe(schemas);
     });
 
     it('classifies reads as reads and everything else as a proposal, with `delegate` neither (D-38, D-17e)', () => {

@@ -39,12 +39,13 @@ import {
 import { MockChatClient, calls, msg } from '../llm/mock';
 import { Store } from '../store/store';
 import { LoopEngine } from './engine';
-import { LIVE_RUN_STATES } from './records';
-import { seedReviewKey } from './work';
+import { LIVE_RUN_STATES, researchKeyOf } from './records';
 import { DEFAULT_GLOBAL_MAX_CONCURRENT } from './types';
+import { seedHashOf } from '../../shared/seed-hash';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
+import type { IssueList, SummarySample } from '../../shared/schemas';
 import type { Cost, Finding, Story } from '../../shared/types';
 import type { LoopEngineConfig, SweepReport } from './types';
 
@@ -69,8 +70,6 @@ export interface CrewBehaviour {
         | ((round: number) => { cost: Cost; title: string; criterion?: string } | undefined);
     /** The Editor's verdict on each finding it verifies (W4e: the disputed false positive). */
     verdictFor?: FindingVerdict;
-    /** The pre-phase Seed review's answer (default `accept`). */
-    seedVerdict?: 'accept' | 'restructure';
     /** The Reader's independent confirmation of an Editor-approved finding (default `confirm`). */
     readerConfirm?: 'confirm' | 'dispute';
     /** Ideas the verify-ideas job confirms or refutes; default `verified`. */
@@ -80,6 +79,19 @@ export interface CrewBehaviour {
      * which is what lets a Story drain at all in a test that is about something else.
      */
     checkerFinds?: Array<{ cost: Cost; title: string; criterion?: string }>;
+    /**
+     * What a `sample_unit` run answers (§6.4 step 3). The default derives the six prose fields from
+     * the Seed Brief the compiled prompt carries, so the installed Summary provably came from the
+     * round's prompt. Return a STRING to answer with raw text instead — an invalid JSON answer is how
+     * the retry-cap and re-arm rows are driven (`"not json"` twice = a failed sample).
+     */
+    sampleAnswer?: (input: { item: WorkItem; sampleIndex: number; prompt: string }) => SummarySample | string;
+    /**
+     * What a `screen_samples` run answers (§6.4 step 4). Default `{issues: []}` — a clean draft.
+     * `revisionId` is the draft being screened, so a test can make ONE sample lose on a canned
+     * critical issue while its siblings stay clean (`selectSample`'s ranking, §6.5).
+     */
+    screenAnswer?: (input: { item: WorkItem; revisionId: string; prompt: string }) => IssueList | string;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +112,12 @@ export interface RigOptions {
     /** The crew's scripted behaviour (above). */
     crew?: CrewBehaviour;
     /**
-     * Phase ①'s Seed review is already closed (default true) so a rig that is about the draft
-     * pipeline starts where it used to. Set false to watch the review gate the first Writer.
+     * The Seed is already STRUCTURED and RESEARCHED (default true): an accepted `SeedBrief` for the
+     * current Seed and a closed `wi_research_<brief.rev>` run, so a rig that is about the sampling
+     * pipeline starts at its first sample. Set false to watch `structure_seed` and `research` gate
+     * the first sample (§6.4 steps 1-2).
      */
-    seedReviewed?: boolean;
+    seedStructured?: boolean;
     /** Extra tool overrides, on top of the rig's two (a test that wants a refusing tool). */
     tools?: Record<string, MockToolHandler>;
     /** `flat_rounds` / `regress_tolerance` overrides for the stall rows (L-21). */
@@ -158,6 +172,70 @@ export const seedPlotlineSet = (store: Store, storyId: string, count: number) =>
             payoffs: `the steeple bell (${order})`
         });
     }
+};
+
+/**
+ * The Seed Brief the scripted Editor derives, shared by the live `structure_seed` answer and by
+ * `seedPhase1Structure` so the two paths cannot drift: a test that runs the Editor's pass and a test
+ * that seeds the finished state assert against ONE set of values.
+ *
+ * The values are deliberately generic placeholders — the rig is a clock, not a prose generator — but
+ * they claim nothing the Seed does not (`logline` IS the Seed's first line), so a test asserting
+ * `sample 1: <logline>` proves the sampler's prompt carried this brief.
+ */
+const scriptedBriefFields = (seed: string) => ({
+    logline: seed.split('\n')[0]?.trim() ?? seed,
+    protagonist: 'the protagonist the Seed names',
+    want: 'what the Seed says they pursue',
+    obstacle: 'what the Seed puts in the way',
+    stakes: 'what the Seed says is lost',
+    setting: 'the place the Seed names',
+    world_rules: ['the Seed is law (P5)'],
+    promise: 'the book pays the promise the Seed makes',
+    tone_hints: 'as the Seed tells it',
+    constraints: [] as string[],
+    open_questions: [] as string[]
+});
+
+/**
+ * The state a finished `structure_seed` + `research` pass leaves behind (§6.4 steps 1-2): an
+ * ACCEPTED `SeedBrief` whose `seed_hash` is the current Seed's, and a CLOSED run for the brief's
+ * research key, which is exactly what `records.ts:researchClosed` reads.
+ *
+ * The brief's fields are deliberately derived from the Seed's first line so a test can prove the
+ * sampler's prompt carried THIS brief (`premise: sample 1: <logline>` comes back through the mock's
+ * default sample answer). No `knowledge` row is seeded: the compiled prompt's KNOWLEDGE block is
+ * optional by design (§5 omits an empty section), and a test that wants one can seed it.
+ */
+export const seedPhase1Structure = (store: Store, storyId: string): void => {
+    const story = store.stories.require(storyId);
+    const at = new Date().toISOString();
+
+    const brief = store.seedBriefs.create(
+        {
+            story_id: storyId,
+            seed_hash: seedHashOf(story.idea),
+            ...scriptedBriefFields(story.idea),
+            status: 'accepted'
+        },
+        { run_ref: null, why: 'seed: the Editor accepted a Seed Brief for the current Seed (§6.4 step 1)' }
+    );
+
+    store.runs.create(
+        {
+            story_id: storyId,
+            work_item_ref: researchKeyOf(brief),
+            role: 'researcher',
+            state: 'torn_down',
+            started_at: at,
+            ended_at: at,
+            tokens: 0,
+            kind: 'work',
+            no_op: false,
+            delegated: []
+        },
+        { run_ref: null, why: 'seed: the research pass for the accepted Seed Brief already closed (§6.4 step 2)' }
+    );
 };
 
 /**
@@ -290,28 +368,11 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
         storyId = created.story_id;
     }
 
-    // Phase ①'s first thread is the Seed review. The rig seeds it CLOSED by default so existing
-    // draft-pipeline tests start at the Writer they are about; `seedReviewed: false` is the
-    // test that watches the review run first and hold the Writer back.
-    if (options.attach !== true && options.seedReviewed !== false) {
-        const reviewed = store.stories.require(storyId);
-
-        store.runs.create(
-            {
-                story_id: storyId,
-                work_item_ref: seedReviewKey(reviewed),
-                role: 'editor',
-                state: 'torn_down',
-                started_at: new Date().toISOString(),
-                ended_at: new Date().toISOString(),
-                tokens: 0,
-                kind: 'work',
-                no_op: false,
-                delegated: []
-            },
-            { run_ref: null, why: 'seed: phase ① Seed review already accepted (work.ts seedReviewClosed)' }
-        );
-    }
+    // Phase ①'s two opening stages. The rig seeds them CLOSED by default so a test that is about
+    // sampling (or about phases ②/③, which walks through phase ①) starts where it means to;
+    // `seedStructured: false` leaves both un-run and lets the sweep dispatch the Editor's
+    // `structure_seed` and then the Researcher's `research` (§6.4 steps 1-2).
+    if (options.attach !== true && options.seedStructured !== false) seedPhase1Structure(store, storyId);
 
     // L-1's switch is ON for every rig: `start()` with `autoSweep: false` means "the loop is running, and
     // the test is the clock". A stopped engine refuses every sweep (L-1), which is W5's stop test, not the
@@ -465,6 +526,12 @@ function answerCrew(
         .map((run) => ({ run, item: items.get(run.work_item_ref ?? '') }))
         .filter((entry): entry is { run: (typeof live)[number]; item: WorkItem } => entry.item !== undefined);
 
+    // §6.4 steps 3-4: a no-tool run asks for a SCHEMA-CONSTRAINED answer, not for tool calls, so it
+    // is answered before the tool-call machinery below and never joins the `acted` set — the one
+    // schema-repair retry must receive a real answer again, not the prose that ends a tool run.
+    if (request.responseFormat !== undefined)
+        return { message: msg({ content: structuredAnswer(store, items, request, crew) }) };
+
     const chosen =
         candidates.find(
             (entry) => entry.item.unit !== undefined && entry.item.unit.ref !== '' && text.includes(entry.item.unit.ref)
@@ -517,24 +584,66 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
     }
 
     switch (item.kind) {
-        case 'seed_review': {
-            const verdict = crew.seedVerdict ?? 'accept';
+        // §6.4 step 1: the Editor derives the brief from the Seed and writes it ONCE. `structureSeed`
+        // (the W5 double) refuses a `seed_hash` that does not match the Seed, so the answer sends the
+        // hash the record holds — the same guard the real tool applies (P5).
+        case 'structure_seed': {
+            const seed = store.stories.get(item.storyId)?.idea ?? '';
 
             return [
                 {
-                    name: 'reviewSeed',
-                    args:
-                        verdict === 'accept'
-                            ? { verdict, why: 'the Seed names a protagonist, a want, an obstacle and a change' }
-                            : {
-                                  verdict,
-                                  missing: ['world', 'stakes'],
-                                  notes: 'the Seed does not say what the world costs or what failure takes away',
-                                  why: 'the Author has to supply the missing structure before phase ①'
-                              }
+                    name: 'structureSeed',
+                    args: {
+                        seed_hash: seedHashOf(seed),
+                        ...scriptedBriefFields(seed),
+                        why: 'the brief restates the Seed and invents nothing (P5, D-17c)'
+                    }
                 }
             ];
         }
+
+        // §6.4 step 2: the Researcher records the facts the brief depends on, with sources (T-10).
+        // Two entries — one `critical`, one `high` — so the compiled prompt's KNOWLEDGE block has a
+        // ranked list to render and a test can prove both importances reach the sampler.
+        case 'research':
+            return [
+                {
+                    name: 'writeKnowledge',
+                    args: {
+                        topic: 'period and place',
+                        kind: 'place',
+                        claim: 'the Seed names the place the story happens in',
+                        detail: 'the Seed is the only source here; the detail is what the Seed states, nothing invented',
+                        importance: 'critical',
+                        sources: [
+                            {
+                                url_or_title: 'the Author\u2019s Seed',
+                                claim: 'it names the story\u2019s setting',
+                                accessed_at: '2000-01-01T00:00:00.000Z'
+                            }
+                        ],
+                        why: 'the sampler needs the place it is writing about (T-10)'
+                    }
+                },
+                {
+                    name: 'writeKnowledge',
+                    args: {
+                        topic: 'governing rule',
+                        kind: 'world_rule',
+                        claim: 'the world holds to the promise the Seed makes',
+                        detail: 'the Seed is law (P5)',
+                        importance: 'high',
+                        sources: [
+                            {
+                                url_or_title: 'the Author\u2019s Seed',
+                                claim: 'it makes the book\u2019s promise',
+                                accessed_at: '2000-01-01T00:00:00.000Z'
+                            }
+                        ],
+                        why: 'the sampler must not contradict the promise the Seed makes'
+                    }
+                }
+            ];
 
         case 'write_unit': {
             const unit = item.unit;
@@ -613,17 +722,24 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                 });
             }
 
-            for (const finding of crew.checkerFinds ?? []) {
-                report.push({
-                    name: 'raiseFinding',
-                    args: {
-                        target_ref: item.unit?.ref ?? item.storyId,
-                        criterion_ref: finding.criterion ?? 'C-4',
-                        title: finding.title,
-                        evidence: `the checker saw it: ${finding.title}`,
-                        cost: finding.cost
-                    }
-                });
+            // `checkerFinds` is the CHECKER's knob (§4.12's consistency crew). A phase-①
+            // `check_unit` job with `roleName: 'reader'` is the deep-review Reader, whose findings
+            // are a different judgement (D-30's angles, filed against the selected revision), so the
+            // rig must not let a checker fixture leak into the Summary review — the defect a test
+            // scripts for the chapters would otherwise arm sampling rounds nobody meant to test.
+            if (item.roleName !== 'reader') {
+                for (const finding of crew.checkerFinds ?? []) {
+                    report.push({
+                        name: 'raiseFinding',
+                        args: {
+                            target_ref: item.unit?.ref ?? item.storyId,
+                            criterion_ref: finding.criterion ?? 'C-4',
+                            title: finding.title,
+                            evidence: `the checker saw it: ${finding.title}`,
+                            cost: finding.cost
+                        }
+                    });
+                }
             }
 
             return report;
@@ -768,6 +884,69 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
             return [];
     }
 }
+
+/**
+ * The JSON answer of a `toolMode: 'none'` run (§6.4 steps 3-4). The request carries the schema in
+ * `responseFormat`, so the rig knows which job it is answering without reading the live run rows —
+ * and for a sample, `seed` is the 1-based sample index the Work Item set (§5's only diversity knob),
+ * which is what keeps two live samplers distinguishable under a wider capacity.
+ *
+ * An answer the caller scripts as a STRING is returned verbatim: `"not json"` is how the schema
+ * failure path is driven (two attempts, no revision, the attempt counter re-arms the round).
+ */
+function structuredAnswer(
+    store: Store,
+    items: Map<string, WorkItem>,
+    request: ChatRequest,
+    crew: CrewBehaviour
+): string {
+    const prompt = request.messages.map((message) => message.content).join('\n\n');
+    const kind: WorkItem['kind'] = request.responseFormat?.name === 'IssueList' ? 'screen_samples' : 'sample_unit';
+    const pool = store.runs
+        .list()
+        .filter((run) => LIVE_RUN_STATES.includes(run.state))
+        .map((run) => items.get(run.work_item_ref ?? ''))
+        .filter((item): item is WorkItem => item !== undefined && item.kind === kind);
+
+    const chosen =
+        pool.find((item) => item.sampleIndex !== undefined && item.sampleIndex === request.seed) ??
+        (pool.length === 1 ? pool[0] : pool[pool.length - 1]);
+
+    // No live job of that kind: `{}` fails the schema on purpose, so the run's failure is visible in
+    // the same way a real mis-dispatch would be rather than being papered over with a clean answer.
+    if (chosen === undefined) return '{}';
+
+    if (kind === 'sample_unit') {
+        const logline = /logline: (.*)/.exec(prompt)?.[1]?.trim() ?? 'the Seed Brief';
+        const sampleIndex = chosen.sampleIndex ?? 1;
+        const answer =
+            crew.sampleAnswer !== undefined
+                ? crew.sampleAnswer({ item: chosen, sampleIndex, prompt })
+                : defaultSampleAnswer(sampleIndex, logline);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    const revisionId = chosen.revisionRef ?? '';
+    const answer =
+        crew.screenAnswer !== undefined
+            ? crew.screenAnswer({ item: chosen, revisionId, prompt })
+            : { issues: [] as IssueList['issues'] };
+
+    return typeof answer === 'string' ? answer : JSON.stringify(answer);
+}
+
+
+/** The default sampler answer: the six §4.2 prose blocks, each provably derived from the round. */
+const defaultSampleAnswer = (sampleIndex: number, logline: string): SummarySample => ({
+    premise: `sample ${sampleIndex}: ${logline}`,
+    promise: `sample ${sampleIndex} pays the promise the Seed makes`,
+    theme: `sample ${sampleIndex} theme`,
+    tone: `sample ${sampleIndex} tone`,
+    ending: `sample ${sampleIndex} ending`,
+    world_rules: `sample ${sampleIndex} world rules`,
+    knowledge_used: []
+});
 
 /** The refs a checker's verdicts have to cover for the phase Goal to be answerable (criteria engine). */
 function verdictTargets(store: Store, item: WorkItem): Array<{ ref: string; kind: string }> {
