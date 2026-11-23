@@ -54,7 +54,14 @@ describe('GET /loop', () => {
         const reply = await call(runtime().app, 'GET');
 
         expect(reply.status).toBe(200);
-        expect(reply.body).toEqual({ global_max_concurrent: DEFAULT_GLOBAL_MAX_CONCURRENT, live_runs: 0 });
+        // S-5's shipped ceiling is EXACTLY 12 threads, spelled as a literal here: reading it back through
+        // `DEFAULT_GLOBAL_MAX_CONCURRENT` would let the projection drift with the constant and still pass.
+        expect(reply.body).toEqual({ global_max_concurrent: 12, live_runs: 0 });
+        // ...and the constant itself is pinned, because that is the value the boot falls back to
+        // (`api/server.ts:234` leaves `globalMaxConcurrent` undefined when env/config/store are all unset,
+        // and `engine.ts:209` fills in `DEFAULT_GLOBAL_MAX_CONCURRENT`). Changing `loop/types.ts:304`
+        // without changing this line is a shipped-default change, and it must fail here.
+        expect(DEFAULT_GLOBAL_MAX_CONCURRENT).toBe(12);
     });
 
     it('reports the ceiling the process booted with, when the env var set it (S-5)', async () => {
@@ -102,7 +109,7 @@ describe('GET /loop', () => {
             { run_ref: null, author: true, why: 'seed a closed run the count must ignore' }
         );
 
-        expect((await call(built.app, 'GET')).body).toEqual({ global_max_concurrent: 4, live_runs: 3 });
+        expect((await call(built.app, 'GET')).body).toEqual({ global_max_concurrent: 12, live_runs: 3 });
     });
 });
 
@@ -172,8 +179,9 @@ describe('PATCH /loop', () => {
 
 describe('the ceiling survives a restart', () => {
     // It is host configuration, so it rides the store's non-journaled `settings` section — the same
-    // seam the roster's model choices use (U-8). A ceiling that reset to 4 on every boot would make
-    // the rail's dropdown a suggestion rather than a control.
+    // seam the roster's model choices use (U-8). A ceiling that reset to the shipped default
+    // (`DEFAULT_GLOBAL_MAX_CONCURRENT`) on every boot would make the rail's dropdown a suggestion rather
+    // than a control.
     it('remembers the Author’s ceiling in the settings, and writes nothing to the journal', async () => {
         const built = runtime();
 

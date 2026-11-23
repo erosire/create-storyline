@@ -29,7 +29,20 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // judges, so the dial's ladder (verify → approve → task → repair) has something to walk; it
         // files once, because a crew that re-files a repaired flaw would spin the loop forever. The
         // Idea the L-37 round files is §15 step 5's completion tray.
-        fixture = await bootStoryline({ raiseFindings: 'critical', readerIdeas: 1 });
+        // SCHEDULING FIXTURE, not the shipped default. The `step 3a` assertion below pins WHICH chapter the
+        // crew's single critical finding lands on (`finding_1` → `chapter_3`), and that is decided by the
+        // order the sweeps complete the chapter-check runs in — a function of S-5's fan-out ceiling. The
+        // shipped ceiling is 12 (`loop/types.ts:304`); this fixture pins the engine back to 4 so the
+        // dispatch order, and the finding's `target_ref`, are fixed rather than emergent. `api/server.ts:234`
+        // ranks an injected `engineConfig.globalMaxConcurrent` above the stored setting and below the env
+        // pin, so this is the value the sweep reads. `autoSweep: false` is repeated on purpose:
+        // `harness.ts:1276` spreads `options.runtime` LAST, over the merged config at 1273, so omitting it
+        // would put the loop's own timer back in charge of the clock (L-1: a test is the clock).
+        fixture = await bootStoryline({
+            raiseFindings: 'critical',
+            readerIdeas: 1,
+            runtime: { engineConfig: { autoSweep: false, globalMaxConcurrent: 4 } }
+        });
         storyId = await createSliceStory(fixture, 3);
         await openDial(fixture, storyId);
 
@@ -118,6 +131,9 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // The finding is the Checker's (`raiseFinding` on the chapter unit, C-7). The Editor's quick
         // validity check confirms it and keeps the filed cost — re-weighting is an explicit
         // correction, not part of marking the finding valid (D-33, D-34).
+        // `target_ref: 'chapter_3'` is the FIRST unit the checker crew finished judging, which the ceiling
+        // pinned in `beforeAll` is what makes deterministic; it is not a rule of the ladder. The subject
+        // here is the ladder's walk (open → verified → approved → task → repaired).
         expect(view.findings[0]).toMatchObject({
             id: 'finding_1',
             cost: 'critical',
@@ -134,11 +150,16 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         ]);
 
         // The repair was a Writer run on the finding's own unit, and the crew hit no tool rule doing it.
+        // The `wi_fix_*` filter pins the whole repair leg rather than one member of it: exactly one run, on
+        // the finding's own unit (`chapter_3` — the ceiling pinned in `beforeAll` is what fixes that unit),
+        // named by the finding and the task it came from.
         expect(
-            (await fixture.api<Array<Record<string, unknown>>>('GET', `/runs?story_id=${storyId}`)).body.map((run) =>
-                String(run.work_item_ref)
-            )
-        ).toContain('wi_fix_chapter_3_1_finding_1_task_1');
+            (
+                await fixture.api<Array<Record<string, unknown>>>('GET', `/runs?story_id=${storyId}`)
+            ).body
+                .filter((run) => String(run.work_item_ref).startsWith('wi_fix_'))
+                .map((run) => `${run.work_item_ref}[${run.template_ref}]`)
+        ).toEqual(['wi_fix_chapter_3_1_finding_1_task_1[writer-chapters]']);
         expect([
             ...new Set(fixture.refusals.map((refusal) => `${refusal.template}/${refusal.tool}/${refusal.rule}`))
         ]).toEqual(['writer-plotlines/createPlotline/T-4', 'writer-plotlines/createPlotline/T-11']);

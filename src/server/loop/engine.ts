@@ -150,6 +150,7 @@ import {
 import { BUILT_IN_TEMPLATES, DEFAULT_ASSIGNMENT, validateAssignment } from '../templates';
 import { defaultGoal } from '../../shared/criteria';
 import { missingSummaryBlocksOf } from '../../shared/summary';
+import { DEFAULT_AUTO_APPROVE_COSTS } from '../../shared/types';
 import type {
     Chapter,
     Cost,
@@ -2041,7 +2042,9 @@ export class LoopEngine implements EngineApi {
                     status: 'ready',
                     status_reason: 'phase summary is open: the Seed is being expanded (L-29 stops it at the lock)',
                     trend: 'unknown',
-                    auto_approve: input.auto_approve ?? (['critical', 'major'] as Cost[]),
+                    // D-35's default dial (critical, major, minor); spread so the row never shares the
+                    // module-level array with the constant the tools and the UI also read.
+                    auto_approve: input.auto_approve ?? [...DEFAULT_AUTO_APPROVE_COSTS],
                     author_stop: false,
                     digest_rev: 0,
                     // D-17b: write permission comes from a template ASSIGNED to the Story.

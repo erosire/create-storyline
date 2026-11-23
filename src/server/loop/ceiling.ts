@@ -15,7 +15,7 @@
 //      one thing that outranks a click, because the person who exports it is sizing a box, not
 //      steering a book;
 //   2. the number the Author last chose in the rail (this setting);
-//   3. `DEFAULT_GLOBAL_MAX_CONCURRENT` (`loop/types.ts`) — 4, the shipped standard.
+//   3. `DEFAULT_GLOBAL_MAX_CONCURRENT` (`loop/types.ts`) — 12, the shipped standard.
 // So the env var seeds a store that has never been configured, and an unset env var — the normal case —
 // leaves the Author's choice in charge across restarts.
 import type { Store } from '../store';

@@ -301,7 +301,7 @@ export const CLOSED_FINGERPRINT_LIMIT = 200;
 export const UNDO_STACK_LIMIT = 8;
 
 /** S-5's global fan-out ceiling default, used when the config omits one. */
-export const DEFAULT_GLOBAL_MAX_CONCURRENT = 4;
+export const DEFAULT_GLOBAL_MAX_CONCURRENT = 12;
 
 /** D-36/S-4a: a run row untouched for this long has a dead owner and its lease has lapsed. */
 export const DEFAULT_LEASE_IDLE_MS = 120_000;
@@ -412,7 +412,7 @@ export interface CreateStoryInput {
     chapter_count?: number;
     /** The Goal row's initial shape; omitting it leaves the evaluated default in place. */
     goal?: GoalPatch;
-    /** D-35's dial. Defaults to `['critical', 'major']` (D-35). */
+    /** D-35's dial. Defaults to `['critical', 'major', 'minor']` (D-35). */
     auto_approve?: Cost[];
     /** §4.12 slugs to assign. Defaults to `DEFAULT_ASSIGNMENT` (D-17b). */
     template_refs?: string[];

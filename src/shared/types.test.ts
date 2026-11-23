@@ -52,9 +52,11 @@ describe('§4 enums', () => {
         expect(TRENDS).toEqual(['improving', 'flat', 'regressing', 'unknown']);
     });
 
-    it('the cost scale is ordered and its default dial is critical + major (D-35)', () => {
+    // D-35's shipped default now includes `minor`: a fresh Story auto-approves the top three costs
+    // and leaves only `taste` on the Author's desk.
+    it('the cost scale is ordered and its default dial is critical + major + minor (D-35)', () => {
         expect(FINDING_COSTS).toEqual(['critical', 'major', 'minor', 'taste']);
-        expect(DEFAULT_AUTO_APPROVE_COSTS).toEqual(['critical', 'major']);
+        expect(DEFAULT_AUTO_APPROVE_COSTS).toEqual(['critical', 'major', 'minor']);
     });
 
     it('the crew kinds and their aggregation modes are §4.12/D-38', () => {

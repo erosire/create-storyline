@@ -87,10 +87,10 @@ export const FINDING_COSTS = ['critical', 'major', 'minor', 'taste'] as const;
 export type Cost = (typeof FINDING_COSTS)[number];
 
 /**
- * The dial's built-in default (D-35): on for `critical` and `major`, off for `minor` and
- * `taste`. Exported so the store, the tools and the UI cannot drift apart on it.
+ * The dial's built-in default (D-35): on for `critical`, `major` and `minor`, off for `taste`.
+ * Exported so the store, the tools and the UI cannot drift apart on it.
  */
-export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major'];
+export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major', 'minor'];
 
 /**
  * §4.12 `roles[].kind` — selects the brief and the PERMISSION ROW, never the tool list

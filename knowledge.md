@@ -346,7 +346,7 @@ global employee roster. Both are projections, and neither is a second source of 
   through `store.setSetting` under `loop_global_max_concurrent` (`loop/ceiling.ts`): host configuration
   beside the roster's models, never journaled, so it cannot reach the Digest's derivation (D-12a).
   Precedence at boot is `STORYLINE_GLOBAL_MAX_CONCURRENT` (an operator's pin) → the Author's stored
-  choice → `DEFAULT_GLOBAL_MAX_CONCURRENT` (4).
+  choice → `DEFAULT_GLOBAL_MAX_CONCURRENT` (12).
 - **One harness per Story, one session per phase, one thread per Run.** `StoryHarnessManager`
   owns a lazily-built engine `harness()` per Story, so tool registries, transcripts and threads
   are isolated by book. The Story's phase is Storyline's session record (the engine has no session

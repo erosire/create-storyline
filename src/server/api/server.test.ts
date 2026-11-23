@@ -151,7 +151,8 @@ describe('the listener', () => {
             plotlines_locked: false,
             levels: { summary: '1/2 · failing: C-14', plotlines: 'n/a', chapters: 'n/a', whole: 'n/a' },
             trend: 'unknown',
-            auto_approve: ['critical', 'major'],
+            // The POST body omitted the dial, so D-35's shipped default lands (critical + major + minor).
+            auto_approve: ['critical', 'major', 'minor'],
             active_runs: 0,
             completion_proposed: false
         });

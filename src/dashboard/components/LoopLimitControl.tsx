@@ -26,7 +26,7 @@ import type { LoopSettings } from '../api';
 
 /**
  * The stances offered. Every one is a whole number of threads, and the set brackets the shipped
- * default (`DEFAULT_GLOBAL_MAX_CONCURRENT` = 4) on both sides without pretending a provider can serve
+ * default (`DEFAULT_GLOBAL_MAX_CONCURRENT` = 12) on both sides without pretending a provider can serve
  * sixty completions at once — the ceiling protects the Author's attention (E-0a) and the relay, and
  * anything past 32 is an operator decision made in an env var, not a click.
  */

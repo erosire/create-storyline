@@ -73,7 +73,8 @@ describe('§15 step 0 — createStory', () => {
             title: 'The Reservoir',
             summary_locked: false,
             plotlines_locked: false,
-            auto_approve: ['critical', 'major'],
+            // D-35's shipped default: `createStory` lands the full three-cost dial when the Seed omits one.
+            auto_approve: ['critical', 'major', 'minor'],
             chapters: 0,
             chapter_count: 2
         });

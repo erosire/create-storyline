@@ -276,8 +276,10 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
         expect(verifyRuns(rig)).toEqual([]);
         expect(ideaRows(rig)).toEqual(['idea_1:selected:unverified']);
+        // The dial phrase is `dialPhrase` over D-35's shipped default (critical + major + minor), so the
+        // drained reason lists three costs — `status.ts:276-284` joins all but the last with `, `.
         expect(rig.story().status_reason).toBe(
-            'no critical or major left to work on (D-35b) · a fresh round of Readers and checkers found nothing at that threshold (L-37) · completion not proposed: the phase Goal is 1/2 · failing: C-15'
+            'no critical, major or minor left to work on (D-35b) · a fresh round of Readers and checkers found nothing at that threshold (L-37) · completion not proposed: the phase Goal is 1/2 · failing: C-15'
         );
         expect(
             new CriteriaEngine().evaluateCode(rig.store, rig.storyId).find((result) => result.criterion === 'C-15')
