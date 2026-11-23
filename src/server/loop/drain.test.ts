@@ -23,7 +23,7 @@ import { completionPreview, storyView } from '../api/projections';
 import { CriteriaEngine } from '../criteria/engine';
 import { DigestBuilder } from '../digest/digest';
 import { authorAttr } from './records';
-import { createRig, seedIdea, walkToChapters, walkToDrain, type Rig } from './mock';
+import { createRig, seedIdea, seedTask, walkToChapters, walkToDrain, type Rig } from './mock';
 import type { Verdict } from '../../shared/types';
 
 /** The Idea row as one string: id, state, and whether the Editor has answered. */
@@ -351,5 +351,97 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
                         .join('+')}`
             )
         ).toEqual(['revision_1:verdict_1', 'revision_4:verdict_8', 'revision_7:verdict_17']);
+    });
+});
+
+/**
+ * H2/R2 — an OPEN Author question is the wait it describes.
+ *
+ * A phase-① escalation (the sampling cap row, and its `phase1FixPrerequisites` stall/ownership
+ * siblings) is opened `open` with `owner_role: 'author'`, never `blocked`: `engine.ts:rearmSamplingWave`,
+ * the reuse lookup in `work.ts:openEscalationTask` and the Author's clear all key on the OPEN row, so a
+ * row's STATE is not what can make it a wait — the decision machine has to see it. `decideStory` step 4
+ * read only `blocked` rows, so a Story whose round ended on an unanswered question fell through to
+ * `ready`, and the dashboard's pill kept claiming Working with no candidate to dispatch and no run live.
+ *
+ * The pair below is the whole rule: the question becomes the Author wait exactly when the sweep has
+ * nothing executable in front of it, and stays out of the way when it does. Note that `input.dispatchable`
+ * is the CANDIDATE count (`engine.ts` hands `decideStory` the generated list, L-36), while
+ * `records.ts:dispatchableTasks` counts the ROW — the row being a hold is exactly why the pill could not
+ * read `ready` honestly either way.
+ */
+describe('H2/R2 — an open Author question reads as the Author wait, and only when the crew is done', () => {
+    /**
+     * The escalation shape phase ① writes: `open`, Author-owned, never `blocked`. The SAMPLING family is
+     * used deliberately — the two `phase1FixPrerequisites` families are named by title prefix and
+     * `engine.settleFixPrerequisites` closes those as soon as the task set that opened them empties,
+     * which would hide the read this fixture is about.
+     */
+    function seedQuestion(rig: Rig) {
+        return seedTask(rig.store, rig.storyId, {
+            kind: 'escalation',
+            title: 'Phase ① sampling failed after 4 attempts — no draft answered the fixes this round was armed with',
+            detail: 'wave: 2 · task_9 (unresolved on revision_2)',
+            owner_role: 'author',
+            state: 'open'
+        });
+    }
+
+    it('reads an open Author question as the wait it names — never `ready`, never a silent drain', async () => {
+        const rig = await walkToDrain(await createRig({ story: { chapter_count: 2 } }), 2);
+
+        // The clean-drain reading this Story had BEFORE the question existed.
+        expect({ status: rig.story().status, pending: rig.story().pending_kind }).toEqual({
+            status: 'pending',
+            pending: 'drained'
+        });
+
+        const question = seedQuestion(rig);
+        const report = await rig.step();
+
+        // Nothing to run: no candidate is generated from an Author row, and no run is live.
+        expect(report.stories[0]?.started).toEqual([]);
+        expect(report.stories[0]?.wanted).toEqual([]);
+        // The sweep's own report is what the API projects (W9), so the read is pinned on the wire. The
+        // `blocked_on` column is a store field (the report carries status/pending/reason only).
+        expect({
+            status: report.stories[0]?.status,
+            pending: report.stories[0]?.pending_kind
+        }).toEqual({
+            status: 'pending',
+            pending: 'drained'
+        });
+        // The sentence the Author actually reads, naming the row they have to answer (P7). It is NOT the
+        // clean-drain leftovers sentence, and it is NOT `ready`.
+        expect(String(report.stories[0]?.status_reason)).toContain('the crew asked you');
+        expect(String(report.stories[0]?.status_reason)).toContain(question.title);
+        expect(rig.story().blocked_on).toBe('the Author: an open question');
+        // `liveRuns` (status.ts) is exactly this shape, and step 4 refuses to name a question while one
+        // is live.
+        expect(
+            rig.store.runs.list().filter((run) => ['spawning', 'working', 'reporting'].includes(run.state))
+        ).toEqual([]);
+        // And the row is untouched: the fix is in the READ, never in rewriting the row's state, which is
+        // what keeps the rearm/reuse/clear semantics that key on the open row intact.
+        expect(rig.store.tasks.require(question.id)).toMatchObject({ state: 'open', kind: 'escalation' });
+    });
+
+    it("does not claim an idle Author wait while the crew's own work is in front of the question", async () => {
+        const rig = await walkToDrain(await createRig({ story: { chapter_count: 2 } }), 2);
+
+        seedQuestion(rig);
+        // The Author's directive is CREW work — the Editor's review thread — so the sweep has something
+        // executable and step 4 must not open. `input.dispatchable` is the CANDIDATE count (L-36), not
+        // the task-row count, which is why an Author-owned row can hold the drain and still leave the
+        // sweep with nothing to run.
+        const chapter = rig.store.chapters.list().sort((left, right) => left.order - right.order)[0];
+
+        await rig.engine.processDirective(rig.storyId, 'cut the 1911 survey map entirely', [chapter.id]);
+
+        const report = await rig.step();
+
+        expect(report.stories[0]?.started).toEqual(['wi_directive_directive_1']);
+        expect(String(report.stories[0]?.status_reason)).not.toContain('the crew asked you');
+        expect(rig.story().blocked_on).not.toBe('the Author: an open question');
     });
 });

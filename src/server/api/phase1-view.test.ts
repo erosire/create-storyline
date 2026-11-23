@@ -77,8 +77,18 @@ const HISTORY = Array.from({ length: 7 }, (_, index) => {
         round,
         at: `2026-11-2${round}T09:00:00.000Z`,
         samples: [
-            { revision_id: `revision_${round}a`, critical: round, high: 0, valid: true },
-            { revision_id: `revision_${round}b`, critical: 0, high: round, valid: round % 2 === 0 }
+            // H1-C1/F3 — the fix each candidate left outstanding is part of the audit line, and the pane
+            // has to be able to read it: the drafts themselves (and their `sample_reviews` rows) are
+            // hard-deleted by the selection, and the task rows may already be `wontfix`. The even rounds
+            // carry one, so the projection's pass-through is pinned by the same fixture that pins the cap.
+            {
+                revision_id: `revision_${round}a`,
+                critical: round,
+                high: 0,
+                valid: true,
+                unresolved_fixes: round % 2 === 0 ? [`task_${round}`] : []
+            },
+            { revision_id: `revision_${round}b`, critical: 0, high: round, valid: round % 2 === 0, unresolved_fixes: [] }
         ],
         selected: `revision_${round}a`
     };
@@ -228,7 +238,8 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
                         revision_id: sample.revision_id,
                         critical: sample.critical,
                         high: sample.high,
-                        valid: sample.valid
+                        valid: sample.valid,
+                        unresolved_fixes: sample.unresolved_fixes
                     })),
                     selected: entry.selected
                 };
@@ -273,6 +284,95 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
                     at: '2026-11-21T09:00:00.000Z',
                     samples: HISTORY[0].samples,
                     selected: 'revision_1a'
+                }
+            ]
+        });
+    });
+
+    it('carries the outstanding fix ids on every history sample, and normalises a pre-H1 line to none', async () => {
+        // H1-C1/F3 — the rejection record has to reach the Author. A candidate refused for a fix task
+        // leaves nothing else behind: §6.6's selection commit deletes the draft AND its `sample_reviews`
+        // rows, and the `fix` task it failed may already be `wontfix` by the time this pane opens. So the
+        // projection sends `unresolved_fixes` on every sample line, and a history line written before the
+        // field existed normalises to `[]` instead of going absent — one shape on the wire, no branching
+        // on which build wrote the row.
+        const world = makeApp();
+        const storyId = await createStory(world.app);
+        const row = world.store.stories.require(storyId);
+
+        world.store.stories.update(
+            storyId,
+            {
+                sampling_round: 8,
+                sampling_history: [
+                    {
+                        round: 7,
+                        at: '2026-11-27T09:00:00.000Z',
+                        samples: [
+                            {
+                                revision_id: 'revision_7a',
+                                critical: 0,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: ['task_11']
+                            },
+                            {
+                                revision_id: 'revision_7b',
+                                critical: 0,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: []
+                            }
+                        ],
+                        // The round that selected on the counts while a candidate still owed a fix.
+                        selected: 'revision_7b'
+                    },
+                    {
+                        // A line from before the field existed: neither sample carries it.
+                        round: 8,
+                        at: '2026-11-28T09:00:00.000Z',
+                        samples: [
+                            { revision_id: 'revision_8a', critical: 0, high: 1, valid: true },
+                            { revision_id: 'revision_8b', critical: 0, high: 0, valid: true }
+                        ],
+                        selected: 'revision_8a'
+                    }
+                ]
+            },
+            { run_ref: null, why: 'seed: a rejected round beside a pre-H1 one (§3.6)' },
+            [{ id: storyId, rev: row.rev }]
+        );
+
+        const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body as { sampling: unknown };
+
+        expect(view.sampling).toEqual({
+            round: 8,
+            active_round: 9,
+            selected: { revision_id: 'revision_8a', critical: 0, high: 1 },
+            history: [
+                {
+                    round: 8,
+                    at: '2026-11-28T09:00:00.000Z',
+                    samples: [
+                        { revision_id: 'revision_8a', critical: 0, high: 1, valid: true, unresolved_fixes: [] },
+                        { revision_id: 'revision_8b', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
+                    ],
+                    selected: 'revision_8a'
+                },
+                {
+                    round: 7,
+                    at: '2026-11-27T09:00:00.000Z',
+                    samples: [
+                        {
+                            revision_id: 'revision_7a',
+                            critical: 0,
+                            high: 0,
+                            valid: true,
+                            unresolved_fixes: ['task_11']
+                        },
+                        { revision_id: 'revision_7b', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
+                    ],
+                    selected: 'revision_7b'
                 }
             ]
         });

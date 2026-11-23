@@ -31,7 +31,8 @@
 // `http://localhost:8800/providers/private/v1/models`. The same provider root is what the harness
 // engine dials for completions, so the list can never drift from what a run can actually ask for,
 // and a typo cannot become a model name no provider serves.
-import type { AgentStatusRow } from '../api';
+import type { AgentStatusRow, LoopSettings } from '../api';
+import { LoopLimitControl } from './LoopLimitControl';
 
 /**
  * The fixed render order: alphabetical by employee title. Writer is not first for any reason;
@@ -120,6 +121,17 @@ export interface AgentsPanelProps {
     onSelectAgent?: (kind: string) => void;
     /** The employee whose thread surface is open, so the tile reads as the active one. */
     selectedAgent?: string | null;
+    /**
+     * S-5 — the loop's fan-out ceiling, printed and edited beside the roster's name. It belongs here
+     * because it is the count of THREADS these five employees may run at once, across every Story:
+     * the rail is the only global place in the shell, and a Story pane would imply a per-book ceiling
+     * that does not exist. See `LoopLimitControl` for why it is a dropdown and why the live count is
+     * hover-only. Absent means the shell has no loop to configure and the header stays the roster's
+     * name alone.
+     */
+    loop?: LoopSettings | null;
+    /** The ceiling's one write. Absent renders the dropdown read-only, as every other picker here. */
+    onSetLoopLimit?: (limit: number) => void | Promise<unknown>;
 }
 
 export function AgentsPanel({
@@ -128,7 +140,9 @@ export function AgentsPanel({
     loading = false,
     onSetModel,
     onSelectAgent,
-    selectedAgent = null
+    selectedAgent = null,
+    loop,
+    onSetLoopLimit
 }: AgentsPanelProps) {
     const rows = ordered(agents);
 
@@ -140,11 +154,15 @@ export function AgentsPanel({
 
     return (
         <aside className="sv-pane sv-agents" data-testid="agents-panel" aria-label="Employees">
-            {/* The header names the roster and nothing else: each tile's own badge already says
-                whether that employee is idle or how many threads it is running, so a panel-wide
-                "N threads running" line is a second answer to a question already on screen. */}
+            {/* The header names the roster, and carries the one setting that governs all five of them
+                at once (S-5's ceiling, to the right of the title). What it deliberately does NOT carry
+                is a panel-wide "N threads running" line: each tile's own badge already says whether
+                that employee is idle or how many threads it is running, so the line would be a second
+                answer to a question already on screen — which is also why the ceiling's live count
+                lives in its hover text, not beside it. */}
             <header className="sv-pane-head">
                 <h3 className="sv-pane-title">Employee</h3>
+                {loop === undefined ? null : <LoopLimitControl loop={loop} onSetLimit={onSetLoopLimit} />}
             </header>
 
             {loading && agents.length === 0 ? <p className="sv-agents-empty">reading the agent roster…</p> : null}

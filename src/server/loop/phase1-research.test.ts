@@ -359,9 +359,9 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
             // The counts are per SAMPLE, across ALL its screening passes (§6.5): two passes each, so
             // the critical on sample 1 is counted twice and the high on sample 3 twice.
             samples: [
-                { revision_id: 'revision_1', critical: 2, high: 0, valid: true },
-                { revision_id: 'revision_2', critical: 0, high: 0, valid: true },
-                { revision_id: 'revision_3', critical: 0, high: 2, valid: true }
+                { revision_id: 'revision_1', critical: 2, high: 0, valid: true, unresolved_fixes: [] },
+                { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                { revision_id: 'revision_3', critical: 0, high: 2, valid: true, unresolved_fixes: [] }
             ],
             selected: 'revision_2'
         });

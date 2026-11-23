@@ -22,8 +22,16 @@
 import { createHash } from 'node:crypto';
 
 import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME } from '../../shared/schemas';
-import type { KnowledgeEntry, Revision, SeedBrief, Story, Task } from '../../shared/types';
+// G-2: the criterion's `fix_hint` is the definition of done a fix task must carry, and the built-in
+// roster is the only place it exists. Plain data, no library, so the server-only compiler can read it.
+import { criterionById } from '../../shared/criteria';
+import type { Criterion, Finding, KnowledgeEntry, Revision, SeedBrief, Story, Task } from '../../shared/types';
 import type { Store } from '../store';
+// T-10 / the G-9 fix: the fix block a Writer is graded on must contain ONLY rows the Writer can
+// settle. `loop/records.ts:isWriterActionableFix` is the same predicate the sampler gate, the work
+// queue and the round closure use, so the prompt, the offer and the certificate cannot drift apart.
+// Server-only module, and `loop/records` has no run-layer imports — this adds no cycle.
+import { isWriterActionableFix } from '../loop/records';
 
 /** One compiled prompt: the two turns a no-tool run is given, and the hash that names them. */
 export interface CompiledPrompt {
@@ -56,12 +64,62 @@ const importanceRank = (importance: KnowledgeEntry['importance']): number => {
  * quotes, `C-14`/`C-15`/`seed` as the criteria, and an empty list as a legitimate answer. The
  * schema caps `severity` at the transport (T-11); this text is what tells the model what the two
  * words MEAN, which no schema can.
+ *
+ * H1/R6 — the words are CALIBRATED TO THE PHASE. A Summary is a contract of facts and consequences;
+ * its prose does not exist yet (phase ③ writes it). Before this calibration a screening Reader could
+ * cost a comma or a preferred phrasing `high`, the round then resampled for a taste, and a second
+ * Reader disliked the new phrasing — a hill that never converges because there is no top (the loop
+ * the Author reported). Phrasing is now named as explicitly non-reportable, and the two severities
+ * are defined over consistency, causality, timeline, world rules, motive and the Seed's own goal.
  */
 const SCREEN_INSTRUCTION =
-    'Report ONLY critical and high issues: a critical contradicts the Seed Brief or a critical Knowledge entry; ' +
-    'a high fails to deliver something the Seed Brief promises. Quote the offending field verbatim in `quote`, ' +
-    'name the field in `location`, cite `C-14`, `C-15` or `seed` in `criterion`. Minor and taste notes are not ' +
-    'reported. Return {"issues":[]} when the draft holds.';
+    'Report ONLY critical and high issues, and reserve those two words for what a Summary has to get RIGHT: ' +
+    'a critical contradicts the Seed Brief or a critical Knowledge entry — a causal chain that does not cause, ' +
+    'a timeline that cannot happen, a world rule the draft states and then breaks, a motive that does not explain ' +
+    'the acts it grounds, or an ending that fails the Seed\u2019s goal. A high fails to deliver something the Seed ' +
+    'Brief promises. Word choice, sentence structure, grammar, register and a preference for another phrasing of ' +
+    'the same commitment are NOT issues at this phase — they are minor, nothing here ranks them, and the prose ' +
+    'that carries them is written and judged in phase \u2462. Quote the offending field verbatim in `quote`, ' +
+    'name the field in `location`, cite `C-14`, `C-15` or `seed` in `criterion`. Return {"issues":[]} when the ' +
+    'draft holds.';
+
+/**
+ * H1/R2 — the fix-verification contract, stated where the fix list is: in the TARGET DRAFT section,
+ * so the whole screening batch still shares one system turn (§5's cache argument covers screens too).
+ *
+ * WHY THIS TEXT HAS TO BE THIS PRECISE: the array it produces is what the selection is gated on
+ * (`sample-select.ts:scoreSample`), so a Reader that marks a fix `resolved` because the sentence
+ * reads better has bought the round a candidate that did not fix anything. `resolved` therefore
+ * demands a quotation of the draft that shows the fix, `unknown` is the honest third answer, and a
+ * rephrasing is named as NOT an answer.
+ */
+const FIX_VERIFICATION_INSTRUCTION =
+    'The FIX TASKS section above names the changes this draft was asked to make. Answer with one ' +
+    '`fix_verifications` entry for EVERY task it lists, and none for anything else: `fix_ref` is the task id ' +
+    'inside the brackets, and `status` is `resolved` only when the draft now does what the task asks \u2014 quote ' +
+    'the words of the draft that show it in `evidence` \u2014 `unresolved` when the defect the task describes is ' +
+    'still there, and `unknown` when the draft neither shows the fix nor contradicts it. A different phrasing of ' +
+    'the same commitment is not a resolved fix: judge the fact the task named, not the sentence that carries it. ' +
+    'An `evidence` line you cannot fill from the draft is not a verdict \u2014 answer `unknown`.';
+
+/**
+ * H1/R1 — the revision contract a refinement round is held to, stated next to the base draft.
+ *
+ * This is the defect the Author named: a refinement sample that rewrote the Summary from scratch
+ * discarded the parts the previous round had already settled, so the next round found (different)
+ * defects and the loop could not converge. The rule is now explicit and it is stated in the same
+ * prompt that carries the base draft, where the model is looking at it.
+ */
+const REVISION_CONTRACT =
+    '- Change only what the FIX TASKS require, and only the coordinated minimum: the passages whose facts, ' +
+    'causal links, timeline or consequences the fix actually touches.\n' +
+    '- Keep the base draft\u2019s other commitments, fields and sentences as they are. A rewrite from scratch ' +
+    'discards what the previous round already settled and starts the loop again \u2014 that is the round this ' +
+    'pipeline exists to save.\n' +
+    '- A fix is answered by the draft\u2019s CONTENT. Restating the same commitment in other words answers none of ' +
+    'the tasks and will be marked `unresolved`.\n' +
+    '- Nothing here is judged on style: wording and sentence shape are settled in phase \u2462, when the chapters ' +
+    'are written.';
 
 /** The template slug whose `writer` role prompt is the sampler's system turn (§8). */
 export const SAMPLE_TEMPLATE_SLUG = 'writer-summary-sampler';
@@ -144,11 +202,25 @@ export function selectedSummaryRevision(store: Store, storyId: string, round: nu
         .sort((left, right) => left.id.localeCompare(right.id))[0];
 }
 
-/** The OPEN `fix` tasks §5 puts in front of a refinement sample, ordered priority DESC then id. */
+/**
+ * The OPEN `fix` tasks §5 puts in front of a refinement sample, ordered priority DESC then id.
+ *
+ * T-10 / the G-9 fix — WRITER-owned rows only. A `fix` task whose `owner_role` names someone else
+ * is not something a draft can settle, and grading a draft against it is what made a round
+ * unsamplable: story_16's round 2 demanded `task_187 (unresolved on revision_102)`, a row opened
+ * `owner_role: 'researcher'` for the plotline G-9 flagged as "a reference I cannot resolve", and the
+ * Reader panels correctly answered `unknown` — "the draft names no research finding it grounded
+ * this in" — which sank both drafts and, with them, the wave. A Researcher prerequisite is settled
+ * by recorded Knowledge (`work.ts:phase1FixPrerequisites`, `engine.ts:settleFixPrerequisites`); an
+ * Author-owned row is a question, not a target. Filtering here — rather than relaxing the fix
+ * certificate — is what keeps a draft from taking a certificate for a sentence that never resolved
+ * anything.
+ */
 export function openFixTasks(store: Store, storyId: string): Task[] {
     return store.tasks
         .list()
         .filter((task) => task.story_id === storyId && task.kind === 'fix' && task.state === 'open')
+        .filter(isWriterActionableFix)
         .sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id));
 }
 
@@ -261,12 +333,93 @@ export function renderSummaryBody(body: unknown): string {
     return lines.length === 0 ? '(the revision body names no Summary field)' : lines.join('\n');
 }
 
-/** One fix-task line: `[id · priority n] title: detail` plus `criterion_ref` when it has one. */
-export function renderFixTask(task: Task): string {
-    const criterion = task.criterion_ref !== undefined && task.criterion_ref.length > 0 ? ` [criterion ${task.criterion_ref}]` : '';
-    const detail = task.detail !== undefined && task.detail.trim().length > 0 ? `: ${task.detail}` : '';
+/**
+ * One fix-task line, WITH the evidence behind it (H1/R1).
+ *
+ * The one-liner this replaces (`[id · priority n] title: detail`) was the whole of what a refinement
+ * sample got, and it is why a resample could "answer" a fix by rewriting the paragraph it named: a
+ * title says what to change, the FINDING's detail and evidence say what was actually wrong and where
+ * the proof is, and the criterion's `fix_hint` says what done looks like (G-2). A Writer holding only
+ * a title re-drafts; a Writer holding the evidence makes the smallest change that removes the defect.
+ *
+ * Every line below is optional except the header, and the order is FIXED (header, defect, evidence,
+ * criterion question, hint) so two compiles over the same rows are byte-identical (§5's cache rule).
+ */
+export function renderFixTask(task: Task, finding?: Finding, criterion?: Criterion): string {
+    const lines: string[] = [
+        `[${task.id} · priority ${task.priority}${task.finding_ref === undefined ? '' : ` · ${task.finding_ref}`}] ${task.title}`
+    ];
 
-    return `[${task.id} · priority ${task.priority}] ${task.title}${detail}${criterion}`;
+    // The task's own detail is the Editor's reading of the work (D-34 rewrote it into the Author's
+    // surface); the finding's detail is the defect as the Reader saw it. Both travel: one says what
+    // to do, the other says why, and a sample that only knows the first rewrites the wrong thing.
+    if (task.detail !== undefined && task.detail.trim().length > 0) lines.push(`  work: ${task.detail.trim()}`);
+    if (finding?.detail !== undefined && finding.detail.trim().length > 0)
+        lines.push(`  defect: ${finding.detail.trim()}`);
+    // D-15/T-11: the evidence line is the citable proof the defect exists. Without it the Writer is
+    // being told "something is wrong here" and answers by redrafting the section.
+    if (finding?.evidence !== undefined && finding.evidence.trim().length > 0)
+        lines.push(`  evidence: ${finding.evidence.trim()}`);
+    if (finding?.criterion_ref !== undefined && finding.criterion_ref.length > 0)
+        lines.push(`  criterion: ${finding.criterion_ref}`);
+    // G-2: the smallest change that would satisfy the criterion — the fix's definition of done.
+    if (criterion?.fix_hint !== undefined && criterion.fix_hint.trim().length > 0)
+        lines.push(`  done looks like: ${criterion.fix_hint.trim()}`);
+
+    return lines.join('\n');
+}
+
+/** The fix tasks a refinement prompt carries, in §5's stable order: priority DESC, then id. */
+const sortFixTasks = (tasks: readonly Task[]): Task[] =>
+    [...tasks].sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id));
+
+/**
+ * The fix tasks ONE compiled prompt carries.
+ *
+ * `fixRefs` (the Work Item's `fixRefs`, H1) wins when the caller names it: the job recorded the list
+ * when it was queued, so every sample of a round renders the SAME block even if a task is confirmed
+ * mid-round, and the screening verdict is graded against exactly the list the Reader was handed
+ * (`records.ts:sampleFixDemand`). Without it the caller means "whatever is open now" — the Story's
+ * open `fix` tasks, which is what `brief.ts` renders for a tool run.
+ */
+export function promptFixTasks(store: Store, storyId: string, fixRefs?: string[]): Task[] {
+    if (fixRefs === undefined) return sortFixTasks(openFixTasks(store, storyId));
+
+    const wanted = new Set(fixRefs);
+
+    // Rows are read from the store rather than trusted from the job: a task the Editor closed while
+    // the job waited renders its stored truth, and a ref that no longer resolves simply drops out.
+    // The OWNER filter is the same one `openFixTasks` applies: an explicitly named row that a
+    // Researcher or the Author owns still cannot be graded against a draft, so a stale `fix_refs`
+    // list (a Work Item armed before the split, or a resumed round) reads as absent here instead of
+    // pulling an unanswerable target into the Writer's contract and the Reader's panel.
+    return sortFixTasks(
+        store.tasks
+            .list()
+            .filter((task) => task.story_id === storyId && task.kind === 'fix' && wanted.has(task.id))
+            .filter(isWriterActionableFix)
+    );
+}
+
+/** The criterion a fix answers, resolved for its `fix_hint` (G-2) — undefined for a custom id. */
+const criterionOf = (criterionRef: string | undefined): Criterion | undefined =>
+    criterionRef === undefined || criterionRef.length === 0 ? undefined : criterionById(criterionRef);
+
+/**
+ * The fix-task block both prompts share (§6.8): every task with its finding's detail and evidence and
+ * the criterion's definition of done. `''` when the round carries no fixes, so the caller can omit the
+ * section instead of rendering an empty heading.
+ */
+export function renderFixTaskBlock(store: Store, storyId: string, fixRefs?: string[]): string {
+    return promptFixTasks(store, storyId, fixRefs)
+        .map((task) =>
+            renderFixTask(
+                task,
+                task.finding_ref === undefined ? undefined : store.findings.get(task.finding_ref),
+                criterionOf(task.criterion_ref)
+            )
+        )
+        .join('\n');
 }
 
 /**
@@ -315,13 +468,21 @@ const joinSections = (sections: Array<{ heading: string; body: string }>): strin
 /**
  * The Writer's first prompt for one sampling round (§5).
  *
- * Round 1 carries the Seed Brief + the critical/high Knowledge. From round 2 it additionally
- * carries the previous round's SELECTED draft and the Story's open fix tasks — the refinement
- * is an instruction to improve a concrete draft, not a fresh attempt (the request's whole point).
+ * Round 1 carries the Seed Brief + the critical/high Knowledge. From round 2 it additionally carries
+ * the previous round's SELECTED draft, the contract that keeps the round a REVISION of it, and the
+ * open fix tasks with their evidence — the refinement is an instruction to change specific facts in a
+ * concrete draft, not to have another go (H1/R1, and the endless-rewrite loop the Author reported).
  * The `system` turn is identical for every round: the round number must never enter the cacheable
  * prefix (§5).
+ *
+ * `opts.fixRefs` (H1) pins the fix list to the one the sampling JOB carried, so every sample of a
+ * round sends the same bytes even if the Editor confirms another finding mid-round.
  */
-export function compileSamplePrompt(store: Store, storyId: string, opts: { round: number }): CompiledPrompt {
+export function compileSamplePrompt(
+    store: Store,
+    storyId: string,
+    opts: { round: number; fixRefs?: string[] }
+): CompiledPrompt {
     const round = Number.isFinite(opts.round) && opts.round > 0 ? Math.floor(opts.round) : 1;
 
     const system = `${rolePromptOf(store, SAMPLE_TEMPLATE_SLUG, 'writer')}\n\n${outputContract(SUMMARY_SAMPLE_SCHEMA_NAME)}`;
@@ -336,18 +497,20 @@ export function compileSamplePrompt(store: Store, storyId: string, opts: { round
         const base = selectedSummaryRevision(store, storyId, round - 1);
 
         sections.push({
-            heading: '## BASE REVISION (the selected draft of the previous round — improve it, do not abandon it)',
+            heading: '## BASE REVISION (the selected draft of the previous round — revise it, do not rewrite it)',
             body:
                 base === undefined
                     ? '(no selected Summary revision was found for the previous round — write the best draft the brief allows and treat its absence as a sweep defect)'
                     : renderSummaryBody(base.body)
         });
 
-        const tasks = openFixTasks(store, storyId);
+        sections.push({ heading: '## REVISION CONTRACT (what this round changes, and what it keeps)', body: REVISION_CONTRACT });
+
+        const fixes = renderFixTaskBlock(store, storyId, opts.fixRefs);
 
         sections.push({
-            heading: '## FIX TASKS (every one must be visible in the new draft)',
-            body: tasks.length === 0 ? '(none open)' : tasks.map(renderFixTask).join('\n')
+            heading: '## FIX TASKS (every one must be visible in the new draft, by content, and each is judged by its id)',
+            body: fixes === '' ? '(none open)' : fixes
         });
     }
 
@@ -363,8 +526,20 @@ export function compileSamplePrompt(store: Store, storyId: string, opts: { round
  * (never its revision id — ids are volatile and the prompt must be reproducible). The closing
  * instruction is the screening contract: critical/high only, verbatim quotes, `C-14`/`C-15`/`seed`
  * as the criteria, and an empty list as a legitimate answer.
+ *
+ * H1/R2 — when the candidate REPLACES a selected draft (its round carries fix tasks), the Reader is
+ * also handed the draft it replaces and the fixes that were asked of it, and must answer for every
+ * fix by id (`fix_verifications`). This is the same run that ranks the round, not a second pipeline:
+ * the Reader that compares the two texts is the one entitled to say whether the gap closed, and the
+ * engine gates the selection on its answer (`sample-select.ts:scoreSample`). A round-1 screen carries
+ * no such section, so a clean first round costs exactly what it used to.
  */
-export function compileScreenPrompt(store: Store, storyId: string, revisionId: string): CompiledPrompt {
+export function compileScreenPrompt(
+    store: Store,
+    storyId: string,
+    revisionId: string,
+    opts: { fixRefs?: string[] } = {}
+): CompiledPrompt {
     const system = `${rolePromptOf(store, SCREEN_TEMPLATE_SLUG, 'reader')}\n\n${outputContract(ISSUE_LIST_SCHEMA_NAME)}`;
 
     const sections: Array<{ heading: string; body: string }> = [seedSection(store, storyId)];
@@ -374,6 +549,28 @@ export function compileScreenPrompt(store: Store, storyId: string, revisionId: s
     if (knowledge !== undefined) sections.push(knowledge);
 
     const revision = revisionOf(store, revisionId);
+    const fixes = renderFixTaskBlock(store, storyId, opts.fixRefs);
+
+    // The sections that make a round-N screen a VERIFICATION rather than an opinion all sit before
+    // TARGET DRAFT: every sample of the round shares those bytes, so the screening batch still reads
+    // one cache prefix, and only the candidate differs (§5's argument applies to screens too).
+    if (fixes !== '') {
+        const base = selectedSummaryRevision(store, storyId, Math.max(1, (revision?.round ?? 1) - 1));
+
+        sections.push({
+            heading: '## SELECTED DRAFT (the text the target draft below replaces — judge whether it was actually revised)',
+            body:
+                base === undefined
+                    ? '(no selected Summary revision was found for the previous round — judge the target draft against the Seed, and mark every fix `unknown`)'
+                    : renderSummaryBody(base.body)
+        });
+
+        sections.push({
+            heading: '## FIX TASKS (verify every one against the target draft, by its id)',
+            body: fixes
+        });
+    }
+
     const draft =
         revision === undefined
             ? '(no target draft was found for this screen — a screening run with no draft can judge nothing; answer with {"issues":[]})'
@@ -384,7 +581,7 @@ export function compileScreenPrompt(store: Store, storyId: string, revisionId: s
     // screening batch (§5's cache argument applies to screens too — they share one prefix).
     sections.push({
         heading: '## TARGET DRAFT',
-        body: `${draft}\n\n${SCREEN_INSTRUCTION}`
+        body: `${draft}\n\n${SCREEN_INSTRUCTION}${fixes === '' ? '' : `\n\n${FIX_VERIFICATION_INSTRUCTION}`}`
     });
 
     const user = joinSections(sections);

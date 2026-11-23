@@ -8,7 +8,7 @@
 // the design's whole point (§4.3) is that the cap is enforced by the TRANSPORT, not by a prompt
 // the model can forget. `critical`/`high` are the two words shared with `FINDING_COSTS` so the
 // selector can rank the two counts without a mapping table (§6.5).
-import type { SampledIssue } from '../types';
+import type { SampledFixVerification, SampledIssue } from '../types';
 
 /** The `response_format.json_schema.name` every IssueList answer is labelled with. */
 export const ISSUE_LIST_SCHEMA_NAME = 'IssueList';
@@ -16,9 +16,18 @@ export const ISSUE_LIST_SCHEMA_NAME = 'IssueList';
 /**
  * The TypeScript mirror of {@link IssueListSchema}. `SampledIssue` lives in `../types` because
  * `sample_reviews.issues` stores these rows; reusing it here keeps one wire shape, not two.
+ *
+ * H1: `fix_verifications` is the candidate-side fix audit (§6.4 step 4, R2). It sits NEXT TO
+ * `issues`, not inside them, because the two answer different questions — "what is wrong with this
+ * draft" and "did this draft actually do the work the Author approved" — and a screening pass that
+ * reports no issues still has to say, fix by fix, whether each requested fix is in the draft. An
+ * absent array reads as "this pass graded issues only" (a legacy row, or a round that was handed no
+ * fixes); the selector then refuses to CLOSE a fix rather than refusing to select, so round 1 is
+ * unaffected.
  */
 export type IssueList = {
     issues: SampledIssue[];
+    fix_verifications?: SampledFixVerification[];
 };
 
 /**
@@ -46,6 +55,24 @@ export const IssueListSchema = {
                     fix_hint: { type: 'string' }
                 },
                 required: ['severity', 'criterion', 'location', 'quote', 'detail'],
+                additionalProperties: false
+            }
+        },
+        // H1 (R2) — the per-fix verdicts. OPTIONAL at the top level on the same transport argument
+        // `fix_hint` uses: a round with nothing to verify must not be forced to invent entries. Each
+        // item is closed and requires a non-empty `evidence` line, because an unevidenced "resolved"
+        // is exactly the unchecked claim this array exists to remove (D-15).
+        fix_verifications: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    fix_ref: { type: 'string', minLength: 1 },
+                    status: { type: 'string', enum: ['resolved', 'unresolved', 'unknown'] },
+                    evidence: { type: 'string', minLength: 1 },
+                    note: { type: 'string' }
+                },
+                required: ['fix_ref', 'status', 'evidence'],
                 additionalProperties: false
             }
         }

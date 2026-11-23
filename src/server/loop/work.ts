@@ -49,17 +49,41 @@ import {
     isClaimed,
     isDeepReviewSelection,
     isFindingVerifyExhausted,
+    isFullyScreened,
     isLiveRun,
     isSupersededSummaryDraft,
     last,
     liveRuns,
     maxConcurrentOf,
     openEscalationTask,
+    openFixTaskIds,
+    // T-10 / the G-9 fix: the phase-① queue's third fix owner. These reads answer "which open `fix`
+    // rows does a RESEARCHER own, how many grounding passes has it spent, is that budget gone, has
+    // anything been recorded about it, and what has the crew actually recorded" — all journal-derived,
+    // so they survive a server restart the same way the sampling cap does.
+    isWriterActionableFix,
+    openPrerequisiteFixTasks,
+    openResearchFixPrerequisites,
+    openUnserviceableFixTasks,
+    RESEARCH_PREREQUISITE_CAP,
+    researchPrerequisiteAnswered,
+    researchPrerequisiteAttempts,
+    researchPrerequisiteEvidence,
+    researchPrerequisiteExhausted,
+    researchPrerequisiteKeyOf,
+    researchPrerequisiteLive,
+    stalledResearchPrerequisites,
     openTasks,
+    // H1: the queue has to ask the sweep's "is this round still gathering evidence?" question, and a
+    // second copy of the run-family pattern is how two call sites start disagreeing.
+    PHASE1_PIPELINE_RUN,
     researchGate,
     researchKeyOf,
     researchQuestionsOf,
+    roundHasEligibleCandidate,
     roundRevisions,
+    roundRequiresCertification,
+    roundSampleScores,
     runsForItem,
     SAMPLING_RETRY_ALLOWANCE,
     sampleAttempts,
@@ -486,10 +510,18 @@ export const DEEP_REVIEW_TEMPLATES = [
 
 /**
  * Is the in-flight round out of retries with nothing to show? That is the one phase-① failure the
- * loop cannot work around: the provider is not returning valid `SummarySample` JSON, so no sample
- * exists, there is nothing to screen and nothing to select. The engine turns this into the Author's
- * escalation (`openSamplingFailureTask`); generation itself simply stops offering samples because
- * the retry cap is spent.
+ * loop cannot work around, and H1 gives it a second shape:
+ *
+ *   (a) the provider is not returning valid `SummarySample` JSON, so no sample exists, there is
+ *       nothing to screen and nothing to select; or
+ *   (b) H1/R3 — samples exist, but the round CANNOT select one: it was armed with fix tasks and every
+ *       draft failed certification (its fixes unresolved, or a blocking screening issue). Selecting
+ *       the least-bad of those would install text the round's own Readers rejected and close the fix
+ *       tasks on the strength of that installation, which is the loop running backwards.
+ *
+ * Both shapes are bounded by the SAME attempt cap and recover the SAME way: the Author clears the
+ * escalation and the sweep re-arms a fresh wave (`engine.ts:rearmSamplingWave`). Generation simply
+ * stops offering samples once the cap is spent, because the retry allowance IS the bound.
  */
 export function samplingExhausted(store: Store, story: Story): boolean {
     if (story.phase !== 'summary') return false;
@@ -500,12 +532,24 @@ export function samplingExhausted(store: Store, story: Story): boolean {
 
     const round = samplingRoundOf(story);
 
-    return (
-        roundRevisions(store, story.id, round).length === 0 &&
-        // The CURRENT WAVE's attempts: a re-armed wave starts at zero, which is exactly what makes
-        // the Author's clear recover the round instead of re-opening the same escalation forever.
-        sampleAttempts(store, summaryRef, round, samplingWaveOf(story)) >= samplingCapOf(story)
-    );
+    // The CURRENT WAVE's attempts: a re-armed wave starts at zero, which is exactly what makes the
+    // Author's clear recover the round instead of re-opening the same escalation forever.
+    if (sampleAttempts(store, summaryRef, round, samplingWaveOf(story)) < samplingCapOf(story)) return false;
+
+    const drafted = roundRevisions(store, story.id, round).filter((revision) => revision.state === 'drafted');
+
+    // (a) no draft at all — the provider failure this escalation was written for.
+    if (drafted.length === 0) return true;
+
+    // The round is still gathering evidence (a screening pass running or owed, T12/C): nothing has
+    // failed yet, so the sweep must not ask the Author about a round that could still certify.
+    if (liveRuns(store, story.id).some((run) => PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? ''))) return false;
+    if (drafted.some((revision) => !isFullyScreened(store, story, revision.id))) return false;
+
+    // (b) H1 — the round is complete and holds no certifiable draft. A round with nothing to certify
+    // (round 1, or one whose screening rows predate fix verification) is NOT exhausted: §6.5's least
+    // -bad path still installs the best draft the round produced, exactly as it did before (R5).
+    return roundRequiresCertification(store, story.id, round) && !roundHasEligibleCandidate(store, story, round);
 }
 
 /**
@@ -516,11 +560,105 @@ export function samplingExhausted(store: Store, story: Story): boolean {
  * `stories.sampling_wave` when a cleared row's recorded wave still equals the Story's, so the
  * recorded-wave guard is what makes the bump happen once per cleared escalation rather than on
  * every sweep.
+ *
+ * H1 — the two exhaustion shapes share this row, and so share the wave recovery above, but they ask
+ * different questions of the Author: a provider that cannot produce JSON is fixed by changing the
+ * model, and a round whose drafts were all rejected is fixed by settling the fix tasks, discarding
+ * them, or widening the sampling. The title says which one happened, because the reuse key only
+ * matches the opening and the detail would otherwise be the only truth in the row.
  */
 export function openSamplingFailureTask(store: Store, story: Story): Task {
     const cap = samplingCapOf(story);
     const round = samplingRoundOf(story);
     const wave = samplingWaveOf(story);
+    const scored = roundSampleScores(store, story.id, round);
+    const rejected =
+        scored.length > 0 &&
+        roundRequiresCertification(store, story.id, round) &&
+        !roundHasEligibleCandidate(store, story, round);
+
+    if (rejected) {
+        // N-1 — the row has to say WHICH axis exhausted the round. A candidate is eligible only when
+        // BOTH are clean, so an exhausted certifying round is exactly "no draft was clean on both", and
+        // each candidate's score says which one it failed:
+        //
+        //   * the FIX axis — `fixesUnresolved` (a demanded task the Readers marked unresolved, or a
+        //     draft whose screening leg produced no verdict at all); or
+        //   * the SCREENING axis — a `critical`/`high` issue count (minors are taste and never appear
+        //     here: the schema closes severity at critical/high and the Summary prompts cost wording
+        //     notes as minor, T-11/R6, so they are never described as blockers).
+        //
+        // Before this, a round whose drafts had ALL answered the work list and were refused for a
+        // blocking screening issue was reported as "no draft answered the fixes … the screening leg never
+        // answered, so nothing was certified" — the opposite of what its own ledger said. The title tail
+        // is free to tell the truth: both `openEscalationTask`'s reuse key and
+        // `engine.ts:rearmSamplingWave` match only `SAMPLING_FAILURE_PREFIX` (and the detail's `wave:`),
+        // so the recovery semantics are untouched.
+        const outstanding = scored
+            .flatMap((sample) =>
+                sample.fixesUnresolved.map((ref) => ({
+                    ref,
+                    revision: sample.revision.id,
+                    // A draft whose screening leg produced no valid verdict never ANSWERED `unresolved` —
+                    // it was never graded (H1-C1/F2's ungradeable shape). The Author's lever is the
+                    // provider in that case, not the draft, so the row names which of the two it is.
+                    verdict: sample.legacyScreening ? 'never screened' : 'unresolved'
+                }))
+            )
+            .sort(
+                (left, right) => left.ref.localeCompare(right.ref) || left.revision.localeCompare(right.revision)
+            );
+        const listed = outstanding.map((entry) => `${entry.ref} (${entry.verdict} on ${entry.revision})`).join('; ');
+        // The drafts that DID clear everything they were handed. `fixRefs.length > 0` keeps an
+        // H1-C1/F1-settled (empty) demand from reading as a certification.
+        const certified = scored.filter((sample) => sample.fixRefs.length > 0 && sample.fixesUnresolved.length === 0);
+        const certifiedIds = certified.map((sample) => sample.revision.id).join(', ');
+        // The counts behind the rejection, per draft — the context the Author needs to judge whether the
+        // WRITER is the problem (widen the sampling) or the TASKS are (re-cost them).
+        const blocked = scored
+            .filter((sample) => sample.critical + sample.high > 0)
+            .map((sample) => `${sample.revision.id} (${sample.critical} critical, ${sample.high} high)`)
+            .sort((left, right) => left.localeCompare(right));
+        const drafts = `${scored.length} Summary ${scored.length === 1 ? 'draft' : 'drafts'}`;
+        // Three truthful shapes, and the mixed one never claims nothing was certified when something was.
+        const title =
+            certified.length === 0
+                ? `${SAMPLING_FAILURE_PREFIX} ${cap} attempts — no draft answered the fixes this round was armed with`
+                : `${SAMPLING_FAILURE_PREFIX} ${cap} attempts — no draft was both fixed and free of critical/high screening issues`;
+        const head =
+            certified.length === 0
+                ? `round ${round} drafted ${drafts} and no screening pass certified them (wave: ${wave}). `
+                : `round ${round} drafted ${drafts} and none was selectable (wave: ${wave}): ${certifiedIds} cleared every fix it was handed, with evidence, and was rejected for its screening issues` +
+                  `${listed.length > 0 ? ', while the rest left fixes unresolved' : ''}. `;
+        const fixes =
+            listed.length > 0
+                ? `Outstanding: ${listed}. `
+                : 'Every fix this round was armed with was certified with evidence — nothing is outstanding. ';
+        const screening = blocked.length > 0 ? `Rejected on screening issues: ${blocked.join('; ')}. ` : '';
+        // The recovery levers, named by the axis that actually failed. Nothing here changes what the loop
+        // does: the base draft is untouched, the tasks stay open, and clearing the row re-arms a wave.
+        const lever =
+            certified.length === 0
+                ? 'Discard or re-cost the fix tasks if they are what is wrong, widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).'
+                : listed.length === 0
+                  ? 'The work list is ANSWERED, so this is the drafts failing their Readers rather than the tasks being wrong: widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).'
+                  : 'Re-cost the outstanding fix tasks if they are what is wrong, widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).';
+
+        return openEscalationTask(store, story.id, {
+            title,
+            detail:
+                head +
+                fixes +
+                screening +
+                'The selected Summary is unchanged and every fix task is still open — nothing was closed on a draft that failed (§6.8, R4). ' +
+                lever,
+            reusePrefix: SAMPLING_FAILURE_PREFIX,
+            why:
+                certified.length === 0
+                    ? `sampling round ${round} spent its retry allowance with no draft that answered its fix tasks; whether the drafts or the tasks are wrong is the Author's call (§6.5, §6.8)`
+                    : `sampling round ${round} spent its retry allowance with no draft that was BOTH certified and free of critical/high screening issues; the screening counts, not the work list, are what blocked it (§6.5, §6.8)`
+        });
+    }
 
     return openEscalationTask(store, story.id, {
         title: `${SAMPLING_FAILURE_PREFIX} ${cap} attempts — the provider is not returning valid SummarySample JSON`,
@@ -602,6 +740,146 @@ export function openScreeningExhaustionTask(
     });
 }
 
+// ---------------------------------------------------------------------------
+// T-10 / the G-9 fix — the RESEARCHER half of a round's fix demand
+// ---------------------------------------------------------------------------
+
+/**
+ * The Author question for a Researcher-owned prerequisite the loop can no longer ground: its
+ * `FIX_PREREQUISITE_CAP` passes are spent and none of them recorded a fact.
+ *
+ * WHY THIS IS AN AUTHOR ROW AND NOT ANOTHER PASS: the round cannot arm (a prerequisite is its input,
+ * `records.ts:samplingArmed`), a draft cannot answer it (no draft settles a research question), and
+ * the crew cannot retry it (budget spent). Only the Author can break that — supply the fact, drop
+ * the requirement, or re-open the budget with a new finding — so it becomes the one thing that stops
+ * the Story reading `ready` with nothing to dispatch (H2/R2).
+ */
+export const FIX_PREREQUISITE_STALL_PREFIX = 'Phase ① research prerequisite exhausted on';
+
+/**
+ * The Author question for a `fix` row whose `owner_role` names a role no phase-① job serves. A
+ * placeholder row from another subsystem — `seed_review`, a directive, an intake probe — lands in the
+ * same queue with an owner that has no phase-① work. Naming it is the honest answer; running a
+ * Writer at it or quietly closing it would be the loop's fiction.
+ */
+export const FIX_TASK_OWNER_PREFIX = 'Phase ① fix task has no crew that can work it';
+
+/** One row per task, forever: `<prefix> <task id> —` (the dash keeps ids out of each other's prefix). */
+const fixTaskEscalationKeyOf = (prefix: string, taskId: string): string => `${prefix} ${taskId} —`;
+
+/** The finding a task names, if any — this ledger carries ONE `finding_ref` per row. */
+const taskFindingRefs = (task: Task): string[] => (task.finding_ref === undefined ? [] : [task.finding_ref]);
+
+/** The Knowledge rows a task's research passes wrote, as ids — the evidence a settlement cites. */
+const taskEvidenceIds = (store: Store, storyId: string, taskId: string): string[] =>
+    researchPrerequisiteEvidence(store, storyId, taskId).map((event) => event.id);
+
+/** Open (or reuse) the exhausted-prerequisite question. `openEscalationTask` keeps one row per task. */
+export function openFixPrerequisiteStallEscalation(store: Store, story: Story, task: Task): Task {
+    const cap = RESEARCH_PREREQUISITE_CAP;
+    const evidenceIds = taskEvidenceIds(store, story.id, task.id);
+    const findingRefs = taskFindingRefs(task);
+
+    return openEscalationTask(store, story.id, {
+        title: fixTaskEscalationKeyOf(FIX_PREREQUISITE_STALL_PREFIX, task.id) + (task.title ?? ''),
+        detail:
+            `${task.id} is a fix task owned by ${task.owner_role ?? 'a researcher'} — grounding an external fact, not writing a line — and its ${cap} research passes produced no recorded fact (${evidenceIds.length} Knowledge entries${evidenceIds.length > 0 ? `: ${evidenceIds.join(', ')}` : ''}).`,
+        state: 'open',
+        reusePrefix: fixTaskEscalationKeyOf(FIX_PREREQUISITE_STALL_PREFIX, task.id),
+        why: `the round was armed to close ${task.id} and phase ① has no way to ground it (T-10); the sampling cap is spent on it, so the choice is yours (P7)`,
+        ...(findingRefs.length === 0 ? {} : { findingRef: findingRefs[0] })
+    });
+}
+
+/** Open (or reuse) the "this owner has no phase-① job" question. */
+export function openFixTaskOwnerEscalation(store: Store, story: Story, task: Task): Task {
+    const owner = (task.owner_role ?? '').trim() || 'nobody';
+    const findingRefs = taskFindingRefs(task);
+
+    return openEscalationTask(store, story.id, {
+        title: fixTaskEscalationKeyOf(FIX_TASK_OWNER_PREFIX, task.id) + (task.title ?? ''),
+        detail: `${task.id} is open and owned by ${owner}. Phase ① offers Writer work, Researcher grounding, Editor structure/review, and a Chapter Writer — none of them is ${owner}, and a draft cannot be graded against work it cannot do.`,
+        state: 'open',
+        reusePrefix: fixTaskEscalationKeyOf(FIX_TASK_OWNER_PREFIX, task.id),
+        why: `${owner} has no phase-① job that can work ${task.id}: it is yours to re-own, restate, or close (P7)`,
+        ...(findingRefs.length === 0 ? {} : { findingRef: findingRefs[0] })
+    });
+}
+
+/**
+ * The one phase-① job a Researcher-owned `fix` task turns into: a grounding pass on the SAME
+ * `summary` anchor the samples use, kind `research`, priority 0.
+ *
+ * WHY A JOB AT ALL (H2/R1): the alternative — excluding such a row from the round's demand — strands
+ * it. The row stays open forever, `roundRequiresCertification` still wants every fix closed, and the
+ * next round arms onto the same mixed demand. This is the architecture's own answer: the fix names a
+ * fact nobody has grounded, so the crew that grounds facts (D-37's `research` pass, with
+ * `writeKnowledge`) is dispatched, told WHICH task and finding and what its done condition is, and
+ * its evidence is what closes the row (`engine.ts:settleFixPrerequisites`) — never the run ending.
+ *
+ * It rides the existing `research` kind and the existing `wi_research_fix_<task>_a<n>` family, so the
+ * sampler gate's `PHASE1_PIPELINE_RUN` test, the run family, and every existing read behave exactly
+ * as they already do. `taskRefs`/`findingRefs` are what `brief.ts` renders into the dispatched job,
+ * which is how a no-tool Researcher sees the question it is being asked.
+ */
+function phase1FixPrerequisites(store: Store, story: Story, summaryRef: string): WorkCandidate[] {
+    const out: WorkCandidate[] = [];
+
+    // A prerequisite the budget has spent is NOT re-offered here — it becomes the Author question
+    // below, and re-offering it would buy a fifth and sixth pass with no budget left to spend.
+    for (const task of openResearchFixPrerequisites(store, story.id)) {
+        const attempts = researchPrerequisiteAttempts(store, task.id);
+
+        if (researchPrerequisiteExhausted(store, task)) {
+            openFixPrerequisiteStallEscalation(store, story, task);
+            continue;
+        }
+
+        const findingRefs = taskFindingRefs(task);
+        const evidenceIds = taskEvidenceIds(store, story.id, task.id);
+
+        const built = candidate(
+            store,
+            story,
+            'research',
+            'researcher',
+            // F1 — the unit is a WorkUnitRef, not the bare artifact id: `brief.ts` branches on
+            // `item.unit.kind` to render ARTIFACT UNDER REVIEW, so a string here produced a brief with
+            // an empty artifact section and a Researcher grounding the fact without ever seeing the
+            // Summary it is a fact about. Same `{ kind: 'summary', ref }` anchor the samples and the
+            // screening passes carry (`phase1PipelineCandidates`'s sample and screen jobs);
+            // `undefined` only when the Story has no Summary row at all.
+            summaryRef === '' ? undefined : { kind: 'summary', ref: summaryRef },
+            // The attempt number is IN the key — the family's anti-repeat discipline (§6.4 step 2).
+            researchPrerequisiteKeyOf(task.id, attempts + 1),
+            `ground the external fact ${task.id} asks for (§6.4 step 2, T-10)`,
+            0,
+            {
+                // D-17b: pinned like every other phase-① job, so this pass can never be routed to a
+                // Writer template by the pool pick.
+                templateRef: 'researcher-story',
+                roleName: 'researcher',
+                // `taskRefs` + `findingRefs` are rendered by `brief.ts:renderJob` as the task's title
+                // and the finding's detail; `note` carries the done condition and the answer the
+                // Researcher must NOT choose.
+                taskRefs: [task.id],
+                findingRefs,
+                note:
+                    `Fix task ${task.id} (${(task.title ?? '').trim() || 'no title'}) is a RESEARCH prerequisite, not a line to rewrite${findingRefs.length > 0 ? ` — it names ${findingRefs.join(', ')}` : ''}.${evidenceIds.length > 0 ? ` ${evidenceIds.length} Knowledge entr${evidenceIds.length === 1 ? 'y is' : 'ies are'} already recorded for the earlier pass${evidenceIds.length > 0 ? ` (${evidenceIds.slice(0, 3).join(', ')})` : ''} — re-cite them with the source that grounds this claim rather than starting cold.` : ''} Attempt ${attempts + 1} of ${RESEARCH_PREREQUISITE_CAP}. Call writeKnowledge with the fact and its source; that record IS the completion evidence that closes the task. Do NOT call reportNoResearch: it settles nothing here, and the row stays open.`
+            }
+        );
+
+        if (built !== undefined) out.push(built);
+    }
+
+    // A row whose owner has no phase-① job at all: the question is the work. It holds the drain, and
+    // the Author's answer (re-own it, restate it, close it) clears it the moment the row leaves the
+    // set this reads (`engine.ts:settleFixPrerequisites` closes the row on the same condition).
+    for (const task of openUnserviceableFixTasks(store, story.id)) openFixTaskOwnerEscalation(store, story, task);
+
+    return out;
+}
+
 /**
  * Phase ①'s jobs, in the pipeline's own order (§6.4 steps 1-6):
  *
@@ -624,6 +902,14 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     const summaryRef = summary?.id ?? '';
     const brief = currentSeedBrief(store, story);
     const seedHash = seedHashOf(story.idea);
+
+    // -- 0. Ground the round's RESEARCHER-owned fixes (T-10 / the G-9 fix) ------------------------
+    // FIRST, ahead of the Seed job: these rows are what the round was armed with, and until the fact
+    // is recorded no refinement sample can answer them — the round is already spent, so the cheapest
+    // useful thread the sweep can open is the grounding pass. It rides priority 0 and its own
+    // `wi_research_fix_*` family, so one pass per task per sweep and the directive rule below still
+    // outranks it.
+    out.push(...phase1FixPrerequisites(store, story, summaryRef));
 
     // -- 1. Structure the Seed (§6.4 step 1, P5) --------------------------------------------------
     // One thread per Seed hash: an Author edit changes the hash, re-arms this job, and every later
@@ -728,10 +1014,33 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
         const live = liveRuns(store, story.id).some((run) =>
             (run.work_item_ref ?? '').startsWith(samplePrefixOf(summaryRef, round, wave))
         );
+        // H1/R3/R5 — the hill-climbing retry. `have < size` is the round the Author asked for; the
+        // second half is what makes a round whose candidates ALL failed fix verification (or all carry
+        // a blocking screening issue) draft AGAINST the same base instead of selecting the least-bad
+        // text and calling the defect fixed. It stays inside the SAME bound the pipeline already had:
+        // `samplingCapOf` = size + `SAMPLING_RETRY_ALLOWANCE` attempts per wave, and when that is
+        // spent the round escalates to the Author (`samplingExhausted` below) rather than looping —
+        // there is no retry loop here, only one more sample per sweep.
+        //
+        // `stalled` is deliberately as narrow as the selection gate it mirrors
+        // (`engine.ts:trySelectSample`): the round must have its full set of drafts, EVERY draft must
+        // be screened (T12/C), and no screening pass may still be running. Without those clauses the
+        // queue would buy a fourth sample while the third was still being read, and the retry would
+        // cost attempts it did not need.
+        const drafted = roundRevisions(store, story.id, round).filter((revision) => revision.state === 'drafted');
+        const pipelineLive = liveRuns(store, story.id).some((run) =>
+            PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? '')
+        );
+        const stalled =
+            drafted.length > 0 &&
+            !pipelineLive &&
+            drafted.every((revision) => isFullyScreened(store, story, revision.id)) &&
+            roundRequiresCertification(store, story.id, round) &&
+            !roundHasEligibleCandidate(store, story, round);
 
         // The attempt counter (not the revision count) is what makes a FAILED sample retryable:
         // an invalid answer produces no row, so the next sweep buys the next claim key (N+3 cap).
-        if (have < size && attempts < samplingCapOf(story) && !live) {
+        if ((have < size || stalled) && attempts < samplingCapOf(story) && !live) {
             const built = candidate(
                 store,
                 story,
@@ -748,6 +1057,10 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                     // round's ONLY diversity knob (§5 — no temperature, byte-identical prompt).
                     sampleIndex: have + 1,
                     round,
+                    // H1/R1 — the fix tasks this round must answer, frozen onto the job so the Writer
+                    // reads their evidence (not just their titles) and every sample of the round reads
+                    // the same list. Round 1 is the first draft: it is handed nothing to revise.
+                    fixRefs: round > 1 ? openFixTaskIds(store, story.id) : [],
                     templateRef: 'writer-summary-sampler',
                     roleName: 'writer'
                 }
@@ -768,6 +1081,19 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // of a wave the Editor has already chosen past is never screened (that was the job that could
     // never be answered), while a draft of the round in flight always is.
     const revisionRounds = summaryRevisionRounds(store, story.id);
+    // H1/R2 — the fixes each screening pass is handed, frozen onto the job (`WorkItem.fixRefs`). The
+    // screener is the run that compares the candidate with the draft it replaces, so it is also the
+    // run that certifies the fixes; a first-round draft is handed none, which is what keeps round 1
+    // costing what it used to (R5).
+    //
+    // A screen dispatched after the Editor confirms a new finding mid-round carries the WIDER list,
+    // which can reject a draft its Writer never saw that task in. That asymmetry is deliberate and it
+    // fails closed: the round is not allowed to call a defect answered that its own Reader is looking
+    // at, the rejected candidate simply costs one more attempt of the existing allowance, and the
+    // retry's sampling job carries the wider list too (`fixRefs` above). Freezing the screen list to
+    // each draft's own sample job would instead let a late-confirmed defect ride past the round
+    // unclosed.
+    const fixTaskIds = openFixTaskIds(store, story.id);
 
     for (const revision of summaryRevisions(store, story.id)) {
         if (revision.state !== 'drafted') continue;
@@ -804,6 +1130,11 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                 toolMode: 'none',
                 responseSchema: { name: ISSUE_LIST_SCHEMA_NAME, schema: IssueListSchema },
                 revisionRef: revision.id,
+                // H1/R2: a REFINED draft (round ≥ 2) is screened against the fixes its round was armed
+                // with; a first-round draft is handed an explicit empty list, which is a DECLARATION
+                // that nothing was asked (`records.ts:sampleFixDemand`) and keeps the round-1 screen
+                // byte-identical to what it was before fix verification existed.
+                fixRefs: (revision.round ?? 1) > 1 || revision.origin === 'refined' ? fixTaskIds : [],
                 templateRef: 'reader-screening',
                 roleName: 'reader'
             }
@@ -845,7 +1176,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                     revisionRef: selected.id,
                     templateRef: template,
                     roleName: 'reader',
-                    note: `Reader pass ${pass} of ${readers} on the selected Summary draft ${selected.id}. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview. Rate the draft with submitVerdict against ${selected.unit_ref}, and never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                    note: `Reader pass ${pass} of ${readers} on the selected Summary draft ${selected.id}. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview. THIS IS THE OVERVIEW, NOT PROSE: cost critical or major only for a defect the Summary can actually carry — a contradiction of the Seed or of critical Knowledge, a causal chain that does not cause, a timeline that cannot happen, a world rule the Summary states and then breaks, a motive that does not ground the acts it explains, or an ending that fails the Seed\u2019s goal. Word choice, sentence structure, grammar, register and a preference for another phrasing of the same commitment are taste or minor: they must not cost a sampling round, because the sentences were never written — phase ③ writes them, and a round restarted over a rewording has no best answer to converge on. Rate the draft with submitVerdict against ${selected.unit_ref}, and never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
                 },
                 pass - 1
             );

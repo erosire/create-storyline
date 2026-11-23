@@ -191,9 +191,9 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
             {
                 round: 1,
                 samples: [
-                    { revision_id: 'revision_1', critical: 0, high: 0, valid: true },
-                    { revision_id: 'revision_2', critical: 0, high: 0, valid: true },
-                    { revision_id: 'revision_3', critical: 0, high: 0, valid: true }
+                    { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                    { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                    { revision_id: 'revision_3', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
                 ],
                 selected: 'revision_1'
             }

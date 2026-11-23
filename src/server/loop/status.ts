@@ -42,6 +42,14 @@ import {
     samplingSizeOf,
     samplingWaveOf,
     screensFor,
+    // T-10 / the G-9 fix: the drain probe has to name the stage the round is actually waiting on. A
+    // Researcher-owned `fix` row is invisible to the Writer-side reads (it is not in the prompt, the
+    // demand or the certificate), so without this line the Story can read `drained` while the work
+    // that would arm the round is still in front of it — the same contradiction D-27 removed for
+    // unverified Ideas.
+    openResearchFixPrerequisites,
+    RESEARCH_PREREQUISITE_CAP,
+    researchPrerequisiteAttempts,
     screeningSizeOf,
     selectedSummaryRevision,
     storyIdeas,
@@ -219,6 +227,22 @@ function phase1Unmet(store: Store, story: Story): string[] {
         unmet.push(
             `${owed} sample${owed === 1 ? '' : 's'} still owe screening passes (${screeningSizeOf(story)} per sample, §6.4 step 4)`
         );
+
+    // H2/R1 — the round's RESEARCHER-owned targets. They are not in `phase1Unmet`'s writer reads (no
+    // draft is asked to resolve them, and `run/phase1-prompt.ts` keeps them out of the Writer's block),
+    // so the only way the drain probe can tell the truth about a round held behind one is to read the
+    // prerequisite set itself. The cap is named too: at the cap the row is no longer work the crew can
+    // do, and the Author question the queue opens is what the decision machine then reads (H2/R2).
+    const prerequisites = openResearchFixPrerequisites(store, story.id);
+
+    if (prerequisites.length > 0) {
+        unmet.push(
+            `${prerequisites.length} open fix task${prerequisites.length === 1 ? '' : 's'} a Researcher must ground (${prerequisites
+                .slice(0, 3)
+                .map((task) => `${task.id}, pass ${researchPrerequisiteAttempts(store, task.id)}/${RESEARCH_PREREQUISITE_CAP}`)
+                .join(', ')}): a draft cannot resolve an external fact, so the round waits for the pass (§6.4 step 2, T-10)`
+        );
+    }
 
     const round = samplingRoundOf(story);
     const have = roundRevisions(store, story.id, round).length;
@@ -643,7 +667,29 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
         // "question" kind and L-37's condition 1 does not count a `blocked` task as work, so the
         // honest reading is `drained` with the question named: the loop is out of authorised work and
         // only the Author can give it more.
-        const question = store.tasks.list().find((task) => task.story_id === story.id && task.state === 'blocked');
+        //
+        // Two row shapes reach that reading, and BOTH need to be found here. A crew escalation is
+        // `blocked` (an Editor or Writer genuinely needs an answer). A phase-① SAMPLING escalation —
+        // the cap row `work.ts:phase1SamplingEscalation` and its stall/ownership siblings — is opened
+        // `open` on purpose: it asks the Author to change a setting or answer an option, it does not
+        // block a crew job, and it must stay readable by `engine.ts:rearmSamplingWave` and
+        // `work.ts:phase1SamplingEscalation` after the Author answers (reuse, drain-hold,
+        // clear-on-pass), which a `blocked` row would break. Reading only `blocked` rows is what made
+        // a story whose round ended on an open question claim `ready` — the Working pill in the
+        // dashboard's TopBar — while nothing could be dispatched. So: the `blocked` row first, then an
+        // OPEN row owned by the Author, and only when no run is live (`liveRuns` empty) so an answer
+        // arriving between the candidate count and the sweep is never cut in front of.
+        const question =
+            store.tasks.list().find((task) => task.story_id === story.id && task.state === 'blocked') ??
+            (input.dispatchable === 0 && liveRuns(store, story.id).length === 0
+                ? store.tasks.list().find(
+                      (task) =>
+                          task.story_id === story.id &&
+                          task.kind === 'escalation' &&
+                          task.state === 'open' &&
+                          (task.owner_role ?? '').trim().toLowerCase() === 'author',
+                  )
+                : undefined);
 
         if (question !== undefined) {
             return {

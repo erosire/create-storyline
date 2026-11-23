@@ -161,12 +161,19 @@ export interface SamplingSample {
 /**
  * One completed sampling round's P11 audit line (`Story.sampling_history`, shared/types.ts §3.6).
  * The losing samples are hard-deleted by the selection commit (P13/D-22), so this row — ids, issue
- * counts, validity and the selected id — is the only surviving record of what competed (§2 item 5).
+ * counts, validity, the fixes each one left outstanding, and the selected id — is the only surviving
+ * record of what competed (§2 item 5).
+ *
+ * `unresolved_fixes` is H1's half of that record (H1-C1/F3): the round's rejection is not a count, it
+ * is the `fix` task the candidate failed, and the task rows themselves may already be `wontfix` by the
+ * time the Author reads this pane. The projection sends it as a list on EVERY row — `[]` means "this
+ * candidate owed nothing, or cleared everything it owed", and a history line written before the field
+ * existed is normalised to `[]` rather than sent as absent, so a consumer never branches on the build.
  */
 export interface SamplingHistoryRow {
     round: number;
     at: string;
-    samples: Array<SamplingSample & { valid: boolean }>;
+    samples: Array<SamplingSample & { valid: boolean; unresolved_fixes: string[] }>;
     selected: string;
 }
 
@@ -424,6 +431,22 @@ export interface AgentModelCatalog {
     models: string[];
 }
 
+/**
+ * S-5 — the loop's live fan-out ceiling, read from `GET /loop`. ONE number across EVERY Story: the
+ * sweep fills up to it and no further, so it is the throttle on how many threads the crew may run at
+ * once (the per-template `max_concurrent` on a template card is a second, smaller ceiling under it).
+ *
+ * It is host configuration, not a Story record — remembered with the roster's model choices, and pinned
+ * at boot by `STORYLINE_GLOBAL_MAX_CONCURRENT` when an operator set one (`server/loop/ceiling.ts` states
+ * the precedence) — which is why the control that edits it sits on the GLOBAL employee rail rather than
+ * on a Story pane.
+ */
+export interface LoopSettings {
+    global_max_concurrent: number;
+    /** Threads live right now, counted from the durable run rows (S-5, L-2). */
+    live_runs: number;
+}
+
 /** One closed run row, kept on a tile so a failed thread does not vanish into `idle` (S-3, U-8). */
 export interface AgentRecentRun {
     run_id: string;
@@ -584,6 +607,17 @@ export interface ApiClient {
      * whole refreshed projection, because every tile's model line is server-owned.
      */
     setAgentModel(kind: string, model: string | null): Promise<AgentStatusRow[]>;
+    /**
+     * S-5 — the loop's live fan-out ceiling and the threads occupying it right now. Global: it belongs
+     * to the process, not to any Story, so it has no Story row to read it off.
+     */
+    getLoopSettings(): Promise<LoopSettings>;
+    /**
+     * S-5 — moving that ceiling while the loop runs. The next sweep fills the new capacity; lowering it
+     * cancels no thread already in flight. Answers the same projection `getLoopSettings` does, so the
+     * control re-renders from the server's number rather than from what was typed.
+     */
+    setGlobalMaxConcurrent(limit: number): Promise<LoopSettings>;
     patchStory(storyId: string, patch: StoryPatch): Promise<StoryRow>;
     stop(storyId: string): Promise<StoryRow>;
     resume(storyId: string): Promise<StoryRow>;
@@ -818,6 +852,10 @@ export const api: ApiClient = {
     listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
     listAgentThreads: (kind) => request<AgentThreadList>(`/agents/${encodeURIComponent(kind)}/threads`),
     setAgentModel: (kind, model) => patch<AgentStatusRow[]>(`/agents/${encodeURIComponent(kind)}`, { model }),
+    // S-5 — the loop's ceiling. One global pair of routes, because the number is the process's and no
+    // Story owns it; the PATCH answers the fresh projection, never what the Author typed.
+    getLoopSettings: () => request<LoopSettings>('/loop'),
+    setGlobalMaxConcurrent: (limit) => patch<LoopSettings>('/loop', { global_max_concurrent: limit }),
     patchStory: (storyId, body) => patch<StoryRow>(storyPath(storyId), body),
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),
     resume: (storyId) => post<StoryRow>(storyPath(storyId, '/resume')),

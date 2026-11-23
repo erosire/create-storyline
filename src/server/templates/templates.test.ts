@@ -198,6 +198,14 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(sampler.roles[0].prompt).toContain('SummarySample');
         expect(sampler.roles[0].prompt).toContain('chapter_count');
         expect(sampler.roles[0].prompt).toContain('knowledge_used');
+        // H1/R1 — the sampler is also the REVISER, and the role prompt is the only place a tool-less
+        // run can learn that a refinement round edits the base draft instead of redrawing it. The
+        // compiled prompt says it again next to the draft; this is the half that survives a template
+        // swap, because an Author's custom sampler replaces the compiled system turn entirely.
+        expect(sampler.roles[0].prompt).toContain('BASE REVISION and FIX TASKS');
+        expect(sampler.roles[0].prompt).toContain('this is a refinement round');
+        expect(sampler.roles[0].prompt).toContain('A rewrite from scratch throws away');
+        expect(sampler.roles[0].prompt).toContain('restating the same commitment in different words');
         expect(sampler.done_definition).toBe('A schema-valid SummarySample delivered in one turn with no tool calls.');
         // A tool-less run holds nothing that could escalate, so no escalation rule is claimed.
         expect(sampler.escalation_rule).toBeUndefined();
@@ -219,8 +227,35 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(screening.roles[0].prompt).toContain('{"issues":[]}');
         expect(screening.roles[0].prompt).toContain('C-14');
         expect(screening.roles[0].prompt).toContain('C-15');
+        // H1/R2 — the same pass now also certifies the repair, by task id, with a quotation.
+        expect(screening.roles[0].prompt).toContain('fix_verifications');
+        expect(screening.roles[0].prompt).toContain('SELECTED DRAFT');
+        expect(screening.roles[0].prompt).toContain('A different phrasing of the same commitment is not a resolved fix');
+        // H1/R6 — the calibration lives HERE, in the Summary-phase role prompt, because the schema
+        // cannot say what `critical` means at this phase. Wording is named as non-reportable, which
+        // is what stops a round being spent on a comma (and resampling forever over a taste).
+        expect(screening.roles[0].prompt).toContain('Word choice, sentence structure, grammar');
+        expect(screening.roles[0].prompt).toContain('are NOT issues at this phase');
         expect(screening.done_definition).toBe('A schema-valid IssueList delivered in one turn with no tool calls.');
         expect(screening.escalation_rule).toBeUndefined();
+    });
+
+    it('H1/R6 — the calibration is Summary-only: the deep review keeps the minor/taste ladder', () => {
+        // The screening Reader is phase ①'s one-turn judge. The tool-using Readers rate artifacts in
+        // every phase (§6.4 step 6, phase ② and ③), and there minor and taste notes ARE part of the
+        // answer — re-calibrating them would silently stop the prose review from reporting prose
+        // problems, which is the opposite of what H1 asked for.
+        for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
+            // Each of the four states its own minor/taste line in its own words; what the assertion
+            // pins is that the ladder is still there, and that phase ①'s wording rule did not leak
+            // into a template that serves the prose phases.
+            expect(byName(name).roles[0].prompt).toMatch(/minor/i);
+            expect(byName(name).roles[0].prompt).not.toContain('are NOT issues at this phase');
+        }
+
+        // Phase ③'s prose checker is the other half: wording is somebody's job, and it is not the
+        // screening pass's (C-13).
+        expect(byName('checker-prose').roles[0].prompt).not.toContain('are NOT issues at this phase');
     });
 
     it('D-17d / E-4 / §14 item 9: divergence is the sampler count, and the later Writers keep theirs', () => {

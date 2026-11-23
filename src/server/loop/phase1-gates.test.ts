@@ -147,7 +147,7 @@ describe('T12/C — a round whose screening attempts are spent selects on the pa
         expect(rig.story().sampling_round).toBe(1);
         // §6.5's audit is still honest about what the reviews were: none, so `valid: false`.
         expect(rig.store.stories.require(rig.storyId).sampling_history?.[0]?.samples).toEqual([
-            { revision_id: 'revision_1', critical: 0, high: 0, valid: false }
+            { revision_id: 'revision_1', critical: 0, high: 0, valid: false, unresolved_fixes: [] }
         ]);
 
         // ONE escalation, for the Author, naming the round and the partial screening.
@@ -229,7 +229,7 @@ describe('T12/D — a round selects only when its sample set exists or sampling 
             'revision_1:selected'
         ]);
         expect(rig.store.stories.require(rig.storyId).sampling_history?.map((entry) => entry.samples)).toEqual([
-            [{ revision_id: 'revision_1', critical: 0, high: 0, valid: true }]
+            [{ revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] }]
         ]);
         expect(rig.story().sampling_round).toBe(1);
 

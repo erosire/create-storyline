@@ -46,7 +46,7 @@ import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
 import type { IssueList, SummarySample } from '../../shared/schemas';
-import type { Cost, Finding, Story } from '../../shared/types';
+import type { Cost, Finding, SampledFixVerification, Story } from '../../shared/types';
 import type { LoopEngineConfig, SweepReport } from './types';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,20 @@ export interface CrewBehaviour {
      * critical issue while its siblings stay clean (`selectSample`'s ranking, §6.5).
      */
     screenAnswer?: (input: { item: WorkItem; revisionId: string; prompt: string }) => IssueList | string;
+    /**
+     * H1/R2 — the certificate a `screen_samples` run returns for the fix tasks its job carried
+     * (`WorkItem.fixRefs`). The default marks every one `resolved` with a quotation, because the rig
+     * is a cooperative model: what a loop test exercises is the ENGINE's reaction to a certificate —
+     * the hill-climb retry, the rejected candidate, the closure gate — not the model's ability to
+     * write one. Return `[]` for a pass that ignored the FIX TASKS section, or an `unresolved` entry
+     * to throw one candidate off the round (`loop/sample-select.ts:scoreSample`).
+     */
+    screenFixes?: (input: {
+        item: WorkItem;
+        revisionId: string;
+        prompt: string;
+        fixIds: string[];
+    }) => SampledFixVerification[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,7 +1017,39 @@ function structuredAnswer(
             ? crew.screenAnswer({ item: chosen, revisionId, prompt })
             : { issues: [] as IssueList['issues'] };
 
-    return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    // H1/R2 — a screening job that carried fix tasks owes a certificate for every one of them, or the
+    // round it belongs to has no certifiable candidate and never selects (the hill-climb, R3). The
+    // ids come from the WORK ITEM, which is the list the prompt rendered, so the mock cannot certify
+    // a fix the Reader was never handed. `src/server/integration/harness.ts` carries the same default
+    // for the full-server tests; the two mocks stay separate so neither imports the other's world.
+    const fixIds = chosen.fixRefs ?? [];
+    const certified =
+        typeof answer === 'string' || answer.fix_verifications !== undefined || fixIds.length === 0
+            ? answer
+            : {
+                  ...answer,
+                  fix_verifications:
+                      crew.screenFixes?.({ item: chosen, revisionId, prompt, fixIds }) ??
+                      fixIds.map((fix_ref) => ({
+                          fix_ref,
+                          status: 'resolved' as const,
+                          evidence: targetDraftLineOf(prompt) ?? `${fix_ref} is answered by the target draft`
+                      }))
+              };
+
+    return typeof certified === 'string' ? certified : JSON.stringify(certified);
+}
+
+/**
+ * The first line of the screen prompt's `## TARGET DRAFT` section — the quotation the default
+ * certificate answers with. `undefined` when the prompt carries no draft, and the caller then says so
+ * in words rather than inventing a quote (D-15: an evidence line has to come from the text).
+ */
+function targetDraftLineOf(prompt: string): string | undefined {
+    const draft = prompt.split('## TARGET DRAFT\n')[1] ?? '';
+    const line = /^[a-z_]+: .*/m.exec(draft)?.[0];
+
+    return line === undefined ? undefined : line.trim();
 }
 
 

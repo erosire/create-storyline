@@ -113,9 +113,11 @@ defined in code at server boot; changing them is a code change and a restart:
 | `STORYLINE_PROVIDER_API_KEY`  | its key; empty means the provider is unauthenticated                                                                                             |
 
 Loop knobs, for an operator who needs them and for nobody else: `STORYLINE_GLOBAL_MAX_CONCURRENT`
-(a hard cap on simultaneous runs), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes;
-`0` means the Author drives it by hand), `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease
-is stealable).
+(a hard cap on simultaneous runs — and the one of these the Author may also move on screen, as the
+**Max threads** dropdown beside the employee roster's name: the rail's choice is remembered with the
+book and rules when this variable is unset, and when the variable IS set it outranks the rail on every
+boot), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes; `0` means the Author drives it by hand),
+`STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease is stealable).
 
 ### Employees, agents, harnesses, sessions and threads
 

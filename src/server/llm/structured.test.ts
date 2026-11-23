@@ -5,6 +5,9 @@
 // the JSON path. These strings are product surface — a vague message is a wasted repair turn.
 import { describe, expect, it } from 'vitest';
 import { parseStructuredContent, validateStructured } from './structured';
+// H1/R2 — the SHIPPED screening schema, not a stand-in: the sample selection is gated on the
+// `fix_verifications` array (`loop/sample-select.ts:scoreSample`), so its shape is product surface.
+import { IssueListSchema } from '../../shared/schemas';
 
 // A SummarySample-shaped schema: closed object, two strings, one string array (§4.3).
 const summarySchema: Record<string, unknown> = {
@@ -162,6 +165,97 @@ describe('parseStructuredContent', () => {
         expect(parseStructuredContent('   ', summarySchema)).toEqual({
             ok: false,
             error: 'assistant content is missing (the provider returned no text to parse)'
+        });
+    });
+});
+
+// H1/R2 — the fix certificate, over the schema the screening Reader is actually answered against.
+//
+// WHY THESE CASES ARE HERE AND NOT IN A SCHEMA FILE: the selection is gated on this array
+// (`loop/sample-select.ts:scoreSample`), and the gate is only as strong as the transport that
+// enforces it. A verdict the model may leave unevidenced, a status it may invent, or a score it may
+// attach are each a way a fix "closes" without anyone checking the draft — so the shape is product
+// surface, and the strings below are the repair text that goes back to the model.
+const verification = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    fix_ref: 'task_1',
+    status: 'resolved',
+    evidence: 'ending: she floods it, and the flood is why the map reconciles.',
+    ...overrides
+});
+
+describe('IssueListSchema — the fix certificate H1/R2 gates selection on', () => {
+    it('accepts a certificate beside the issues, and a bare issues answer for a round with no fixes', () => {
+        const certified = { issues: [], fix_verifications: [verification()] };
+
+        expect(validateStructured(IssueListSchema, certified)).toEqual({ ok: true, value: certified });
+
+        // A round-1 screen is handed no fix list, and must not be forced to invent entries (the
+        // optionality argument §4.3 makes for `fix_hint`).
+        const bare = { issues: [] };
+
+        expect(validateStructured(IssueListSchema, bare)).toEqual({ ok: true, value: bare });
+    });
+
+    it('refuses a verdict with no evidence line — D-15 over the wire, not in a prompt', () => {
+        expect(
+            validateStructured(IssueListSchema, { issues: [], fix_verifications: [verification({ evidence: '' })] })
+        ).toEqual({
+            ok: false,
+            error: 'fix_verifications[0].evidence: expected a string with minLength 1, received ""',
+            path: 'fix_verifications[0].evidence'
+        });
+        expect(
+            validateStructured(IssueListSchema, {
+                issues: [],
+                fix_verifications: [{ fix_ref: 'task_1', status: 'unknown' }]
+            })
+        ).toEqual({
+            ok: false,
+            error: 'fix_verifications[0].evidence: required property is missing',
+            path: 'fix_verifications[0].evidence'
+        });
+    });
+
+    it('closes the status vocabulary, so an invented word cannot buy a pass', () => {
+        expect(
+            validateStructured(IssueListSchema, {
+                issues: [],
+                fix_verifications: [verification({ status: 'probably' })]
+            })
+        ).toEqual({
+            ok: false,
+            error: 'fix_verifications[0].status: expected one of ["resolved","unresolved","unknown"], received "probably"',
+            path: 'fix_verifications[0].status'
+        });
+    });
+
+    it('refuses a verdict that names no task, and one that smuggles a score (P6)', () => {
+        expect(
+            validateStructured(IssueListSchema, {
+                issues: [],
+                fix_verifications: [{ status: 'resolved', evidence: 'ending: she floods it.' }]
+            })
+        ).toEqual({
+            ok: false,
+            error: 'fix_verifications[0].fix_ref: required property is missing',
+            path: 'fix_verifications[0].fix_ref'
+        });
+        // The loop ranks by counts, never by a model's number, and `additionalProperties: false` is
+        // where that is decided — a prompt cannot hold a model to it.
+        expect(
+            validateStructured(IssueListSchema, { issues: [], fix_verifications: [verification({ score: 9 })] })
+        ).toEqual({
+            ok: false,
+            error: 'fix_verifications[0].score: unexpected property (additionalProperties is false)',
+            path: 'fix_verifications[0].score'
+        });
+    });
+
+    it('keeps `issues` required, so a certificate is never the whole answer by accident', () => {
+        expect(validateStructured(IssueListSchema, { fix_verifications: [verification()] })).toEqual({
+            ok: false,
+            error: 'issues: required property is missing',
+            path: 'issues'
         });
     });
 });

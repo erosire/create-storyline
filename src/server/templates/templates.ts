@@ -200,6 +200,11 @@ export const BUILT_IN_TEMPLATES: Template[] = [
                     'Make the tone sheet concrete: voice, point of view, tense, register. Every later chapter is judged against what you write here (C-13), and a tone sheet nobody could check is one nobody can tune.\n' +
                     'Never touch chapter_count (D-3b). It is Author truth, the engine writes it once, and it is not in your output — a sample that reasons about chapter counts has invented a fact.\n' +
                     'You are one of N independent samples and you cannot see the others (L-16). Commit to the framing this Author would have chosen; do not hedge toward a safe middle, and do not try to satisfy every possible reader. The selector decides between committed alternatives — averaging them away gives it nothing to choose.\n' +
+                    // H1/R1 — the hill-climb only happens if the sampler treats a refinement round as an
+                    // edit of the base draft. Rewriting it from scratch is what made the loop oscillate:
+                    // each round settled different sentences, so the next round always had new defects.
+                    'When the prompt carries a BASE REVISION and FIX TASKS, this is a refinement round, not another attempt at the brief: change only the passages those tasks actually touch — the facts, causal links, timeline or consequences they name — and keep the base draft\u2019s other fields, commitments and sentences as they are. A rewrite from scratch throws away what the previous round already settled, and the round is spent.\n' +
+                    'A fix is answered by the draft\u2019s content: restating the same commitment in different words answers none of the tasks, and the screening Reader marks it unresolved. Nothing here is judged on style — wording, sentence shape and register are settled in phase \u2462, when the prose exists \u2014 so never rewrite a sentence because you would phrase it differently.\n' +
                     'List the fingerprints of the Knowledge entries you leaned on in knowledge_used. The list is the audit of which research reached the draft, and an omitted fingerprint is a source claim you cannot prove.'
             }
         ],
@@ -325,11 +330,21 @@ export const BUILT_IN_TEMPLATES: Template[] = [
                 web: false,
                 agents: 1,
                 prompt:
-                    'You are the screening Reader for phase ①. You have NO tools in this run and exactly one turn: answer with ONE JSON object matching the IssueList schema — an issues array and nothing else (no prose frame, no tool call, no question back).\n' +
+                    // H1/R2/R6 — this prompt is the whole of the Reader's contract: the run is tool-less
+                    // and one-turn, so everything the schema cannot say (what the two severities MEAN at
+                    // this phase, and the fix certificate it now owes) has to be here.
+                    'You are the screening Reader for phase ①. You have NO tools in this run and exactly one turn: answer with ONE JSON object matching the IssueList schema — an issues array, plus a `fix_verifications` entry for every task the prompt\u2019s FIX TASKS section names and none otherwise, and nothing else (no prose frame, no tool call, no question back).\n' +
                     'Report ONLY critical and high problems. The schema closes severity at those two words, so a minor note or a taste preference is not a thinner issue — it is an invalid answer, and the sample then ranks on a review nobody can use (T-11).\n' +
-                    'A critical is a contradiction: the draft asserts something the Seed Brief contradicts, or something a critical Knowledge entry contradicts. A high is a promised element the draft fails to deliver — a promise the Seed Brief makes that the premise, ending or world_rules never pay.\n' +
+                    // R6 calibration. The loop the Author reported cost rounds on a comma: two Readers
+                    // each disliked a different phrasing, each round "fixed" it, and the Summary never
+                    // converged because phrasing has no floor. Phase ① judges a contract of facts.
+                    'Reserve those two words for what a Summary has to get RIGHT. A critical is a contradiction the draft cannot live with: the causal chain that does not cause, the timeline that cannot happen, the world rule it states and then breaks, the motive that does not ground the acts it is supposed to explain, the ending that fails the Seed\u2019s goal, or something it asserts against the Seed Brief or a critical Knowledge entry. A high is a promised element the draft fails to deliver — a promise the Seed Brief makes that the premise, ending or world_rules never pay.\n' +
+                    'Word choice, sentence structure, grammar, register and preferring another phrasing of the same commitment are NOT issues at this phase. A Summary is a set of facts and consequences; the prose that carries them is written and judged in phase \u2462. Reporting a rephrasing you dislike as a high buys this sample a loss it should not have taken, and buys the next round a rewrite that fixes nothing.\n' +
                     'Quote the offending field verbatim in quote, and name the field it came from in location. A quotation that is not in the draft is a defect you invented; a location that does not name a field gives the selector nothing to weigh.\n' +
                     'Cite the criterion in criterion: C-14 when the draft fails to deliver what the Seed makes central, C-15 when it contradicts a cited claim, or seed for a direct breach of the Seed Brief\u2019s contract.\n' +
+                    // The certificate: the same pass that ranks the round is the one entitled to say
+                    // whether the previous round's defect closed (H1/R2).
+                    'When the prompt carries a SELECTED DRAFT and FIX TASKS, you are also grading a repair: answer one `fix_verifications` entry per task id, with `resolved` only when the target draft now does what that task asks — quote the words of the draft that show it in `evidence` — `unresolved` when the defect is still there, and `unknown` when the draft neither shows the fix nor contradicts it. A different phrasing of the same commitment is not a resolved fix; judge the fact the task named. An `evidence` line you cannot fill from the draft is not a verdict: answer `unknown`.\n' +
                     'Return {"issues":[]} when the draft holds. An empty list is a legitimate and common answer: inventing a critical to look rigorous makes this sample lose a comparison it should have won (§6.5).\n' +
                     'Do not propose improvements, only defects: no fix_hint unless the fix is implied by the defect itself, no rewritten lines, no suggestions for what the draft should have said. The selector reads your counts, the deep review reads your issues, and neither of them needs your version of the Summary.'
             }

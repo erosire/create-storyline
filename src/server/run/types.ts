@@ -74,6 +74,23 @@ export interface WorkItem {
     unit?: WorkUnitRef;
     /** Open tasks this job must clear (S-2: "the open tasks that job must clear"). */
     taskRefs?: string[];
+    /**
+     * H1 (R1/R2) — the OPEN `fix` task ids this job's compiled prompt carries, captured when the job
+     * was queued. Set on phase ①'s `sample_unit` (the Writer must see the fixes with their evidence,
+     * not just their titles) and `screen_samples` (the Reader grades the candidate against them).
+     *
+     * WHY THE JOB CARRIES THE LIST INSTEAD OF EVERY RUN READING THE STORE: two reasons, both load
+     * -bearing. (1) §5's cache rule wants every sample of one round to send a byte-identical prompt,
+     * and a list re-read at dispatch time can grow mid-round; (2) the screening verdict is only
+     * gradeable against the fixes the Reader was actually handed, so the engine persists this list
+     * onto the `sample_reviews` row (`fix_refs`) and a fix task that opened after the round's screens
+     * were dispatched cannot retroactively disqualify the round.
+     *
+     * It is NOT `taskRefs`: that field is work the run must CLOSE (`settleJob` marks each one `done`
+     * when the run completes), and a sampling round closes nothing — closure waits for the
+     * verification evidence (R4).
+     */
+    fixRefs?: string[];
     /** Findings to verify (D-33) or to fix (D-34). */
     findingRefs?: string[];
     /** Ideas this job must absorb or verify (D-29, D-27). */

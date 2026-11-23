@@ -13,7 +13,7 @@
 // Opening one revision from the rail shows exactly that revision and the findings filed against it,
 // parked drafts included, and that is where a discard reason is read — and, T4, where a candidate the
 // contract still offers (`story-nav.summaryRevisionUnit`) carries the review's recommendation and the
-// Author's "Use this revision" (U-13, D-24), because R1 leaves the overview holding only the accepted row.
+// Author's "Use Revision" (U-13, D-24), because R1 leaves the overview holding only the accepted row.
 import { useEffect, useState } from 'react';
 import { ConfirmButton } from './story-phase-controls';
 import {
@@ -22,6 +22,7 @@ import {
     SUMMARY_REVIEW_LIMIT,
     type Finding,
     type Revision,
+    type RevisionState,
     type Story,
     type StoryPhase,
     type Summary
@@ -225,6 +226,12 @@ function RevisionFields({ revision, summary }: { revision: Revision; summary?: S
 }
 
 /**
+ * What a disabled control calls a row it cannot take: the row's own §4.15 state, spelt as a word — the same
+ * fact its `title` spells out in a sentence. Parked states never reach it; they print as plain text.
+ */
+const stateLabel = (state: RevisionState): string => state.charAt(0).toUpperCase() + state.slice(1);
+
+/**
  * The Author's override on ONE Summary revision (U-13, D-24) — `POST /stories/:id/revisions/:revisionId/select`.
  *
  * One component serves both surfaces so the label, the reason a row cannot be taken, and the
@@ -238,7 +245,8 @@ function RevisionFields({ revision, summary }: { revision: Revision; summary?: S
  * `offered` is the CALLER's authority (see `SummaryPaneProps.focusSelectable`), and the row's own state is
  * the second gate: §4.15 says only a reviewable draft may be taken. A `pending` block is still being
  * written — a Shortcut that installed half a Summary would blank the blocks it has not reached — and the
- * accepted row and parked history are settled facts, so each keeps its disabled, explanatory button.
+ * accepted row is a settled fact, so each keeps its disabled button, labelled with the state it is. Parked
+ * history is not a control at all: it returns before the button, as plain text naming the state.
  */
 function RevisionSelectAction({
     entry,
@@ -255,6 +263,14 @@ function RevisionSelectAction({
     const { revision } = entry;
     const selectable = offered && isReviewableRevision(revision);
 
+    // A parked row is a settled fact, never a move the Author still has: `discarded`/`merged_into` print the
+    // state as plain red TEXT, not as a dead-looking control — the header shows a button only where clicking
+    // it would write something. Its real detail, the reason it was parked, is printed above it in the
+    // focused view.
+    if (revision.state === 'discarded' || revision.state === 'merged_into') {
+        return <span className="sv-summary-draft-parked">Discarded</span>;
+    }
+
     return (
         <button
             type="button"
@@ -267,15 +283,7 @@ function RevisionSelectAction({
             }
             onClick={() => summary && onSelectRevision?.(summary.id, revision.id)}
         >
-            {selectable
-                ? 'Use this revision'
-                : revision.state === 'selected'
-                  ? 'Selected'
-                  : revision.state === 'pending'
-                    ? 'Pending'
-                    : // The defensive label for a parked row: its real detail — the reason it was parked — is
-                      // printed above it, in the focused view.
-                      'Discarded'}
+            {selectable ? 'Use Revision' : stateLabel(revision.state)}
         </button>
     );
 }

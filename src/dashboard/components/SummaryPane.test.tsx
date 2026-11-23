@@ -252,7 +252,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         // The field appears once on the Summary on record and once on the revision card — exactly twice also
         // proves the competing draft printed no card, since its body carries the same sentence.
         expect(screen.getAllByText('A flooded city keeps its memory in a sealed cathedral of data.').length).toBe(2);
-        expect(screen.queryByRole('button', { name: 'Use this revision' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Use Revision' })).toBeNull();
 
         const button = document.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
 
@@ -414,7 +414,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         const pane = screen.getByRole('region', { name: 'Summary — Revision 3' });
         const button = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
 
-        expect(button.textContent).toBe('Use this revision');
+        expect(button.textContent).toBe('Use Revision');
         expect(button.disabled).toBe(false);
         expect(button.getAttribute('title')).toBe(
             'Make this revision the Summary. The other drafts stay as discarded history.'
@@ -450,17 +450,27 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
 
         expect([button().textContent, button().disabled]).toEqual(['Pending', true]);
 
-        // A parked draft: opened for its detail and its reason, never for a write.
+        // A parked draft: opened for its detail and its reason, never for a write — so it prints no control
+        // at all, only the state named as plain text where the button would sit.
         rerender(
             <SummaryPane story={story} summary={summary} focus={PARKED} focusSelectable onSelectRevision={() => undefined} />
         );
 
-        expect([button().textContent, button().disabled]).toEqual(['Discarded', true]);
+        expect(document.querySelector('.sv-summary-draft-select')).toBeNull();
+        expect(document.querySelector('.sv-summary-draft-parked')?.textContent).toBe('Discarded');
+
+        // The other parked spelling (`merged_into`, §4.17) reads exactly the same.
+        rerender(
+            <SummaryPane story={story} summary={summary} focus={MERGED} focusSelectable onSelectRevision={() => undefined} />
+        );
+
+        expect(document.querySelector('.sv-summary-draft-select')).toBeNull();
+        expect(document.querySelector('.sv-summary-draft-parked')?.textContent).toBe('Discarded');
 
         // A shell without the route keeps the control honest: labelled what it would do, and disabled.
         rerender(<SummaryPane story={story} summary={summary} focus={ENTRY} focusSelectable />);
 
-        expect([button().textContent, button().disabled]).toEqual(['Use this revision', true]);
+        expect([button().textContent, button().disabled]).toEqual(['Use Revision', true]);
     });
 
     // -----------------------------------------------------------------------
@@ -584,7 +594,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(screen.getByText('Revisions · 1')).toBeTruthy();
         // Nothing else the record holds reaches the overview: no offer for a live draft, no parked row, and no
         // recommendation mark — the recommended draft is a candidate, and a candidate has no card here.
-        expect(document.body.textContent).not.toContain('Use this revision');
+        expect(document.body.textContent).not.toContain('Use Revision');
         expect(document.body.textContent).not.toContain('Pending');
         expect(document.body.textContent).not.toContain('Discard reason');
         expect(document.querySelector('.sv-summary-draft-pick')).toBeNull();
@@ -609,7 +619,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(document.querySelector('.sv-summary-drafts')).toBeNull();
         expect(screen.getByText('Revisions · 0')).toBeTruthy();
         expect(screen.getByText('No current Summary revision.')).toBeTruthy();
-        expect(document.body.textContent).not.toContain('Use this revision');
+        expect(document.body.textContent).not.toContain('Use Revision');
         expect(document.body.textContent).not.toContain('Pending');
     });
 

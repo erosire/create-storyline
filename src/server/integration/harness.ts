@@ -39,7 +39,7 @@ import { Store } from '../store/store';
 import { seedHashOf } from '../../shared/seed-hash';
 import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME } from '../../shared/schemas';
 import type { IssueList, SummarySample } from '../../shared/schemas';
-import type { Chapter, Cost, Idea, Plotline, Revision, Story, Summary, Verdict } from '../../shared/types';
+import type { Chapter, Cost, Idea, Plotline, Revision, SampledFixVerification, Story, Summary, Verdict } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // The provider triple, so a test process never reaches the network
@@ -146,6 +146,15 @@ export interface CrewOptions {
      * selector pick a known winner (`src/server/loop/sample-select.ts`).
      */
     screenAnswer?: (turn: ScreenTurn) => IssueList | string;
+    /**
+     * H1/R2 — the certificate this screening pass returns for the fix tasks its prompt named. The
+     * default marks every demanded task `resolved` with the target draft's own premise line as the
+     * evidence, because the mock crew is a cooperative model: what a test wants to exercise is the
+     * ENGINE's reaction to a certificate, not the model's ability to write one. Return `[]` to
+     * simulate a pass that ignored the fix section, or a `status: 'unresolved'` entry to reject a
+     * candidate (`src/server/loop/sample-select.ts:scoreSample`).
+     */
+    screenFixes?: (turn: ScreenTurn) => SampledFixVerification[];
 }
 
 /** The compiled prompt a no-tool sampling run receives (§5); no brief exists in this mode. */
@@ -165,6 +174,12 @@ export interface ScreenTurn {
     revisionId: string;
     /** The `## TARGET DRAFT` block, verbatim. */
     draft: string;
+    /**
+     * H1 — the fix task ids this pass's `## FIX TASKS` section names, in prompt order. Empty for a
+     * round-1 screen. A scripted `screenAnswer`/`screenFixes` uses these to build a certificate, and
+     * the engine grades the candidate against exactly this list (`WorkItem.fixRefs`).
+     */
+    fixIds: string[];
     system: string;
     user: string;
     prompt: string;
@@ -1092,17 +1107,30 @@ function structuredAnswer(request: ChatRequest, store: Store, options: CrewOptio
         const draft = prompt.split('## TARGET DRAFT\n')[1] ?? '';
         const fields = draftFieldsOf(draft);
         const sampleIndex = Number(/^sample (\d+):/.exec(fields.premise ?? '')?.[1] ?? '0');
+        const fixIds = fixTaskIdsOf(prompt);
         const turn: ScreenTurn = {
             sampleIndex,
             revisionId: revisionIdOf(store, fields),
             draft,
+            fixIds,
             system,
             user,
             prompt
         };
         const answer = options.screenAnswer !== undefined ? options.screenAnswer(turn) : { issues: [] };
 
-        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+        // H1/R2 — a pass whose prompt named FIX TASKS owes a certificate for every id it was handed.
+        // A scripted answer that spells its own `fix_verifications` wins; otherwise `screenFixes`
+        // decides, and the default certifies the lot. Without that default every existing test that
+        // scripts a `screenAnswer` would silently lose its certificate and stall the round, and a
+        // round-1 screen (no FIX TASKS) keeps answering the bare `{"issues":[…]}` it always did.
+        const certificate = options.screenFixes?.(turn) ?? defaultFixVerifications(fixIds, fields.premise);
+        const certified =
+            typeof answer === 'string' || answer.fix_verifications !== undefined || certificate.length === 0
+                ? answer
+                : { ...answer, fix_verifications: certificate };
+
+        return typeof certified === 'string' ? certified : JSON.stringify(certified);
     }
 
     // An unknown schema is answered with `{}` on purpose: it fails validation the same way a real
@@ -1135,6 +1163,34 @@ export const defaultSampleAnswer = (
     world_rules: `sample ${sampleIndex} world rules`,
     knowledge_used: knowledgeUsed
 });
+
+/**
+ * H1/R2 — the fix task ids this screening pass's prompt named, in prompt order. `renderFixTaskBlock`
+ * renders one line per task as `[task_7 · priority 20 · finding_3] …` (`run/phase1-prompt.ts`), and
+ * the id inside the brackets is the key the certificate answers with. A round-1 screen has no FIX
+ * TASKS section, so this is `[]` and the pass certifies nothing.
+ */
+function fixTaskIdsOf(prompt: string): string[] {
+    const section = /## FIX TASKS[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(prompt)?.[1] ?? '';
+
+    return [...section.matchAll(/^\[([^\s·]+) · priority /gm)].map((match) => match[1]);
+}
+
+/**
+ * The certificate the mock crew returns by default: every task the prompt named, `resolved`, with the
+ * target draft's own premise line as the quotation. The mock is a cooperative model — a test that
+ * wants a rejected repair says so through `MockCrewOptions.screenFixes` or by spelling
+ * `fix_verifications` in its own `screenAnswer`.
+ */
+export const defaultFixVerifications = (
+    fixIds: readonly string[],
+    quote?: string
+): SampledFixVerification[] =>
+    fixIds.map((fix_ref) => ({
+        fix_ref,
+        status: 'resolved',
+        evidence: quote === undefined || quote.trim() === '' ? `${fix_ref} is answered by the target draft` : quote.trim()
+    }));
 
 /** The `key: value` lines of a screen's `## TARGET DRAFT` block (the six Summary prose fields). */
 function draftFieldsOf(draft: string): Record<string, string> {

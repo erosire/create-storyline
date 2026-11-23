@@ -43,6 +43,10 @@ import type {
 } from '../../shared/types';
 import type { CommitEvent } from '../store';
 import type { Store } from '../store';
+// H1: the round's screening evidence becomes numbers in ONE place, and `./sample-select` owns that
+// rule. The direction matters — `sample-select` imports only `shared/types`, so this import cannot
+// cycle, and the selector stays readable without a store in it.
+import { requiresFixCertification, scoreSample, type ScoredSample } from './sample-select';
 
 // ---------------------------------------------------------------------------
 // Attribution for the engine's own writes (P11, T-5)
@@ -159,6 +163,28 @@ export function dispatchableTasks(store: Store, storyId: string): Task[] {
 
 export const taskById = (store: Store, taskId: string): Task | undefined => store.tasks.get(taskId);
 
+// ---------------------------------------------------------------------------
+// Who owns a task (§4.7 `owner_role`, H2/R1)
+// ---------------------------------------------------------------------------
+
+/**
+ * §4.7's `owner_role` is free text on purpose (P15), so ownership is compared as a trimmed,
+ * lower-cased role kind. Absent or blank is the D-34 shape: `tools/editor.ts:approveFinding` opens an
+ * approved finding's fix row with `owner_role: 'writer'`, and a row the loop opened without an owner is
+ * the same Writer's work. `Task.owner_role`'s own doc names the five kinds this reads.
+ */
+export const taskOwnerRole = (task: Task): string => (task.owner_role ?? '').trim().toLowerCase();
+
+/** The owners whose work a candidate Summary can actually be graded against (H2/R1). */
+export const WRITER_FIX_OWNERS: readonly string[] = ['', 'writer'];
+
+/**
+ * The one non-Writer owner phase ① can EXECUTE. §6.4 step 2 already runs this role with the web tools
+ * and `writeKnowledge`, so an external-fact prerequisite owned by it becomes a real Work Item instead
+ * of a question a no-tool Reader is blamed for not answering.
+ */
+export const RESEARCH_FIX_OWNER = 'researcher';
+
 /** Tasks whose `finding_ref` points at one finding — how an approved finding's fix work is found again. */
 export function tasksForFinding(store: Store, storyId: string, findingId: string): Task[] {
     return store.tasks
@@ -168,6 +194,49 @@ export function tasksForFinding(store: Store, storyId: string, findingId: string
                 task.story_id === storyId && task.finding_ref === findingId && OPEN_TASK_STATES.includes(task.state)
         );
 }
+
+/**
+ * F3 — the `fix` rows that STILL owe one finding, excluding the row that just settled.
+ *
+ * WHY THIS EXISTS: a finding's fix work can be split across owners — the live story_16 shape is
+ * `finding_332` carrying a Researcher-owned grounding row (`task_187`) AND a Writer-owned repair row
+ * on the same finding. Marking the finding `fixed` when only the research row settled removed a major
+ * from the blocking set while the prose repair was still owed, and wrote a `fixed` row into the
+ * closed-fingerprint history that the trend reads forever (L-16a: a re-raised fingerprint reads as a
+ * regression, so a wrong `fixed` is not undoable by a later sweep).
+ *
+ * The invariant: a finding with N fix rows reaches `fixed` only when its LAST open row has settled.
+ * `OPEN_TASK_STATES` (`open`/`claimed`) is the unfinished set — `done`/`wontfix` are settled, and a
+ * `blocked` row is the crew asking the Author something, which is the Author's hold rather than
+ * unfinished fix work (L-37's condition 1 reads it the same way). `settledTaskId` is excluded because
+ * the caller updates its own row inside the same transaction; the compare-and-set ordering makes the
+ * caller pass it explicitly rather than trusting store visibility.
+ */
+export function remainingOpenFixTasksForFinding(
+    store: Store,
+    storyId: string,
+    findingRef: string,
+    settledTaskId?: string
+): Task[] {
+    return store.tasks
+        .list()
+        .filter(
+            (task) =>
+                task.story_id === storyId &&
+                task.kind === 'fix' &&
+                task.finding_ref === findingRef &&
+                task.id !== settledTaskId &&
+                OPEN_TASK_STATES.includes(task.state)
+        );
+}
+
+/** F3 — is this finding's fix work fully settled? Only when no OTHER open fix row still names it. */
+export const findingFixWorkSettled = (
+    store: Store,
+    storyId: string,
+    findingRef: string,
+    settledTaskId?: string
+): boolean => remainingOpenFixTasksForFinding(store, storyId, findingRef, settledTaskId).length === 0;
 
 /** Tasks naming one unit as their subject, matched on the title/detail refs the loop writes. */
 export function tasksForUnit(store: Store, storyId: string, unitRef: string): Task[] {
@@ -1171,14 +1240,136 @@ export function researchGate(store: Store, story: Story, brief: SeedBrief): Rese
 export const researchQuestionsOf = (brief: SeedBrief): string[] =>
     Array.isArray(brief.research_questions) ? brief.research_questions : [];
 
+// ---------------------------------------------------------------------------
+// H2/R1 — a fix task whose work is a prerequisite (owner ≠ Writer), and its evidence
+// ---------------------------------------------------------------------------
+
+/**
+ * The claim-key family of one fix task's research passes — trailing `_` included.
+ *
+ * A phase-① `fix` row owned by the Researcher (§4.7's free-text `owner_role`) asks for an EXTERNAL
+ * FACT, not a Summary edit: the live story's `task_187` demanded sourced public-housing pet-law
+ * research. Phase ① has exactly one crew job that can produce one — `research` (§6.4 step 2) — so this
+ * is the same Work Item kind, in its OWN family so it cannot be confused with the brief's opening
+ * pass: `wi_research_<brief.rev>` has no `_a<n>` tail, and a family counted by this prefix can never
+ * borrow the opening pass's closed run (or the task would read as already answered before it started).
+ *
+ * The `_` anchor is load-bearing exactly as it is in `screenPrefixOf`: `task_18` is a text prefix of
+ * `task_187`, and ids come from one counter, so an unanchored prefix would spend one task's passes
+ * against another task's cap.
+ */
+export const researchPrerequisitePrefixOf = (taskId: string): string => `wi_research_fix_${taskId}_`;
+
+/** One research pass for one prerequisite task: the claim key carries the attempt, like every family here. */
+export const researchPrerequisiteKeyOf = (taskId: string, attempt: number): string =>
+    `${researchPrerequisitePrefixOf(taskId)}a${attempt}`;
+
+/** How many research passes this task has already bought — live and closed, the same counter as every family. */
+export function researchPrerequisiteAttempts(store: Store, taskId: string): number {
+    const prefix = researchPrerequisitePrefixOf(taskId);
+
+    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+}
+
+/** The run rows of one task's research family, oldest first. */
+export function researchPrerequisiteRuns(store: Store, taskId: string): Run[] {
+    const prefix = researchPrerequisitePrefixOf(taskId);
+
+    return store.runs
+        .list()
+        .filter((run) => (run.work_item_ref ?? '').startsWith(prefix))
+        .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/** Is a research pass for this task still in flight? (the queue must not buy a second one — L-2) */
+export const researchPrerequisiteLive = (store: Store, taskId: string): boolean =>
+    researchPrerequisiteRuns(store, taskId).some(isLiveRun);
+
+/**
+ * The pass budget for one research prerequisite — the loop's universal allowance, not a new knob:
+ * the first pass plus `SAMPLING_RETRY_ALLOWANCE` retries, which is what `FINDING_VERIFY_CAP` already
+ * bounds the verify queue with. Reusing the number is what keeps a prerequisite from being the one
+ * place in phase ① with an unbounded retry loop.
+ */
+export const RESEARCH_PREREQUISITE_CAP = FINDING_VERIFY_CAP;
+
+/** Has this task spent its whole research pass budget? (H2/R1 — the bound; past it, the Author is asked.) */
+export const researchPrerequisiteExhausted = (store: Store, task: Task): boolean =>
+    researchPrerequisiteAttempts(store, task.id) >= RESEARCH_PREREQUISITE_CAP;
+
+/**
+ * The completion EVIDENCE one research pass produced: the journal's `knowledge` writes attributed to a
+ * run in this task's family.
+ *
+ * WHY THE JOURNAL AND NOT THE LEDGER: the settlement question is "did THIS pass establish the fact?",
+ * and `writeKnowledge` stamps its `run_ref` on every entry it creates or bumps (`tools/knowledge.ts`
+ * through `buildAttribution`). A Knowledge row from the brief's opening pass is not an answer to a
+ * question raised three rounds later, and a closed run that called nothing — the `reportNoResearch`
+ * shape, or a run that simply ended — is not an answer either. H2/R1's rule, "a research prerequisite
+ * settles on concrete completion evidence, never because a run finished", is this query; the engine's
+ * settle step (`engine.ts:settleFixPrerequisites`) is its only writer-side reader.
+ *
+ * Updates count as well as creates, because a re-cited entry IS the pass's answer when the fact was
+ * already on the ledger: D-16's dedupe merges the new sources and re-triages the importance, which is a
+ * sourced answer to the task, not silence.
+ */
+export function researchPrerequisiteEvidence(store: Store, storyId: string, taskId: string): CommitEvent[] {
+    // The run rows are story-scoped (§4.13), so restricting the ledger reads to this family's runs
+    // already restricts them to this Story; the `story_id` clause is a belt for a hand-edited store.
+    const runIds = new Set(
+        researchPrerequisiteRuns(store, taskId)
+            .filter((run) => run.story_id === storyId)
+            .map((run) => run.id)
+    );
+
+    if (runIds.size === 0) return [];
+
+    return store.journal.filter(
+        (event) =>
+            event.collection === 'knowledge' &&
+            (event.op === 'create' || event.op === 'update') &&
+            event.attribution?.run_ref !== undefined &&
+            event.attribution.run_ref !== null &&
+            runIds.has(event.attribution.run_ref)
+    );
+}
+
+/**
+ * Has this prerequisite task been ANSWERED on the ledger? True the moment one of its research passes
+ * wrote Knowledge; the task row itself only changes when the engine's settle step commits it, so the
+ * queue, the sampling gate and the settlement read the same fact rather than two halves of it.
+ */
+export function researchPrerequisiteAnswered(store: Store, storyId: string, task: Task): boolean {
+    return researchPrerequisiteEvidence(store, storyId, task.id).length > 0;
+}
+
+/**
+ * H2/R1/R2 — is the round held behind a prerequisite that cannot run (spent its pass budget) and has no
+ * evidence? That is the one prerequisite state the Author has to break, and it has to be visible to the
+ * queue (stop buying passes), the drain probe (name the unmet stage) and the decision machine (the
+ * Author's turn rather than `ready`), or the Story reads `ready` with nothing to dispatch.
+ */
+export function stalledResearchPrerequisites(store: Store, storyId: string): Task[] {
+    return openPrerequisiteFixTasks(store, storyId)
+        .filter(isResearchPrerequisiteFix)
+        .filter((task) => !researchPrerequisiteAnswered(store, storyId, task))
+        .filter((task) => researchPrerequisiteExhausted(store, task));
+}
+
 /**
  * Round 1 samples as soon as structure and research are closed; a REFINEMENT round (§6.4 step 7)
  * waits until the deep review has finished defining the issues it must answer —
  *
- *   * at least one OPEN `fix` task exists (the approved work the next prompt carries), AND
+ *   * at least one OPEN, WRITER-OWNED `fix` task exists (the approved work the next prompt carries), AND
  *   * no critical/major suspicion is still `unconfirmed` (an unverified complaint is not an
  *     instruction: compiling it into a Writer prompt would spend a round on a claim the Editor
- *     has not accepted, D-33).
+ *     has not accepted, D-33), AND
+ *   * H2/R1 — no Researcher-owned `fix` prerequisite is still unanswered. A prerequisite is the round's
+ *     INPUT, not one of its deliverables: the Knowledge it establishes belongs in the Writer's prompt
+ *     (§5's KNOWLEDGE block), so the round waits for the pass, then samples with the Writer tasks that
+ *     remain. Gating here rather than in `work.ts` is what keeps the queue, the drain probe (§6.7) and
+ *     `samplingLegClosed` reading one answer — and an ANSWERED prerequisite (Knowledge on the ledger,
+ *     task row not yet flipped by the settle step) never holds the round.
  *
  * `round` is passed in so the same predicate serves work generation, the drain preconditions and
  * the selection sweep (the caller always knows which round it is asking about).
@@ -1186,7 +1377,11 @@ export const researchQuestionsOf = (brief: SeedBrief): string[] =>
 export function samplingArmed(store: Store, story: Story, round: number): boolean {
     if (round <= 1) return true;
 
-    return openFixTasks(store, story.id).length > 0 && unconfirmedBlockingFindings(store, story).length === 0;
+    return (
+        openWriterFixTasks(store, story.id).length > 0 &&
+        unconfirmedBlockingFindings(store, story).length === 0 &&
+        openResearchFixPrerequisites(store, story.id).length === 0
+    );
 }
 
 /** Every Summary revision of the Story, oldest first (all rounds; losers are deleted by selection). */
@@ -1212,6 +1407,16 @@ export function screensFor(store: Store, revisionId: string): SampleReview[] {
         .filter((review) => review.revision_ref === revisionId)
         .sort(recency);
 }
+
+/**
+ * The sampling/screening run families, as one test (`wi_sample_…` / `wi_screen_…`).
+ *
+ * H1 exported it (it was engine- and status-local): `work.ts` now has to ask the same question —
+ * "is this round still gathering evidence?" — before it calls a round exhausted, and a queue and a
+ * sweep that disagree about which runs count would open an Author escalation over a round that was
+ * still being screened (T12/C's argument, applied to the new certification stall).
+ */
+export const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
 
 /**
  * The claim key's PREFIX for one draft's screening family — trailing `_` included.
@@ -1276,12 +1481,216 @@ export const isFullyScreened = (store: Store, story: Story, revisionId: string):
     screeningExhaustedFor(store, story, revisionId);
 
 /**
- * The OPEN `fix` tasks (§4.7) — D-34's approved work, and the list the next sampling round's
- * prompt compiles (§6.8). A `claimed` row is a fix pass in flight, which phase ① no longer runs;
- * the arming gate reads only what is waiting, so the round cannot be spent on work already moving.
+ * Every OPEN `fix` row (§4.7), whatever role owns it — the queue's own accounting, and the set the
+ * H2 prerequisite scan walks. `openTasks` is `open`/`claimed` in queue order; the `state` filter here
+ * keeps the `claimed` shape out, exactly as it always has been.
  */
-export function openFixTasks(store: Store, storyId: string): Task[] {
+export function openFixTasksAll(store: Store, storyId: string): Task[] {
     return openTasks(store, storyId).filter((task) => task.kind === 'fix' && task.state === 'open');
+}
+
+/**
+ * H2/R1 — an open `fix` row a candidate Summary CAN be graded against.
+ *
+ * §4.7's `owner_role` is free text on purpose (P15), and phase ① had exactly one reading of it: every
+ * open `fix` row was treated as work the next Writer draft would answer. That is only true when the row
+ * IS the Writer's. `approveFinding` opens approved findings as `owner_role: 'writer'`
+ * (`tools/editor.ts`), and an unowned row is the same D-34 shape, so blank/`writer` is the Writer's.
+ * Anything else — the live story's `task_187`, an Editor's `createTask` naming `researcher` for
+ * "source the public-housing pet rule this Summary asserts" — is a PREREQUISITE: no candidate Summary
+ * can satisfy it, and a no-tool screening Reader, which has neither the web tools nor the Knowledge
+ * ledger in front of it, cannot grade it either. Grading it as if a draft could answer it made every
+ * candidate ineligible (`unknown` is not a pass, `sample-select.ts:certifiesFix`) and the round
+ * exhausted with nothing the Author could clear except discarding real work.
+ *
+ * The row is NOT hidden: `openPrerequisiteFixTasks` below turns it into role-appropriate Work, and the
+ * queue keeps counting it as unmet work until it settles.
+ *
+ * WHY A PREFIX TEST AS WELL AS THE LIST: §4.7's doc names the five ROLE KINDS, but the assignment
+ * layer writes TEMPLATE ids into the same field — a Writer job's owner reads `writer-prose` or
+ * `writer-style` (`templates.ts:DEFAULT_ASSIGNMENT`, and `run/mock.ts:seedTask`'s default) — and phase
+ * ①'s own Researcher template is `researcher-story`. A closed list would read those rows as somebody
+ * else's work and strand them in the prerequisite queue, which is the opposite bug in the other
+ * direction. Every `writer*` name is the role the draft is graded against; the prefix is the field's
+ * real alphabet, not a widening of the rule.
+ */
+export const isWriterActionableFix = (task: Task): boolean =>
+    WRITER_FIX_OWNERS.includes(taskOwnerRole(task)) || taskOwnerRole(task).startsWith('writer');
+
+/**
+ * H2/R1 — an open `fix` row whose work is an external fact, not a prose repair. Phase ① HAS a crew job
+ * for this owner (`research` → `writeKnowledge`, §6.4 step 2), which is why it gets real Work rather
+ * than a filter. The same role-kind/template tolerance applies (`researcher`, or the `researcher-story`
+ * template id that names it).
+ */
+export const isResearchPrerequisiteFix = (task: Task): boolean =>
+    task.kind === 'fix' &&
+    (taskOwnerRole(task) === RESEARCH_FIX_OWNER || taskOwnerRole(task).startsWith(`${RESEARCH_FIX_OWNER}-`));
+
+/**
+ * The OPEN `fix` tasks a Writer round is armed and graded against (§6.8) — D-34's approved work, and
+ * the list the next sampling round's prompt compiles. A `claimed` row is a fix pass in flight, which
+ * phase ① no longer runs; the arming gate reads only what is waiting, so the round cannot be spent on
+ * work already moving. H2/R1 narrowed this to `isWriterActionableFix` rows: the Writer's prompt, the
+ * screening certificate and the arming rule all read THIS set, so a researcher-owned prerequisite can
+ * be neither demanded nor vetoed.
+ */
+export function openWriterFixTasks(store: Store, storyId: string): Task[] {
+    return openFixTasksAll(store, storyId).filter(isWriterActionableFix);
+}
+
+/**
+ * H2/R1 — the OPEN `fix` rows whose owner is NOT the Writer: prerequisites that must be executed by
+ * their own role before a Summary round can answer the rest of the work list. Queue order (priority,
+ * then id) so a sweep's dispatch order is reproducible (L-2).
+ */
+export function openPrerequisiteFixTasks(store: Store, storyId: string): Task[] {
+    return openFixTasksAll(store, storyId).filter((task) => !isWriterActionableFix(task));
+}
+
+/**
+ * H2/R1 — the Researcher-owned prerequisites phase ① can actually run, minus the ones that are already
+ * ANSWERED. `researchPrerequisiteEvidence` is the settlement gate: a pass that recorded Knowledge has
+ * settled the question on the ledger even if the sweep has not flipped the task row yet, so a round
+ * waits for the WORK, not for the bookkeeping.
+ */
+export function openResearchFixPrerequisites(store: Store, storyId: string): Task[] {
+    return openPrerequisiteFixTasks(store, storyId)
+        .filter(isResearchPrerequisiteFix)
+        .filter((task) => !researchPrerequisiteAnswered(store, storyId, task));
+}
+
+/**
+ * H2/R1 — the open `fix` rows phase ① has NO crew job for: an owner that is neither the Writer nor the
+ * Researcher (an `editor`/`reader`/`checker` "fix" row in a phase with no Editor fix pass). They are
+ * neither Writer work nor researchable prerequisites, so the only honest move is the Author's
+ * (`work.ts:openFixOwnershipTask`) — filtering them out of every set while nothing ran for them is the
+ * silent ready-with-nothing-to-do state H2 exists to remove.
+ */
+export function openUnserviceableFixTasks(store: Store, storyId: string): Task[] {
+    return openPrerequisiteFixTasks(store, storyId).filter((task) => !isResearchPrerequisiteFix(task));
+}
+
+/** The open WRITER-owned fix task ids, ascending — the order a prompt renders and a certificate compares in. */
+export const openFixTaskIds = (store: Store, storyId: string): string[] =>
+    openWriterFixTasks(store, storyId)
+        .map((task) => task.id)
+        .sort((left, right) => left.localeCompare(right));
+
+/**
+ * H1 (R2/R4) — the fix ids one draft's screening passes were ASKED to certify, of the ones STILL OPEN.
+ *
+ * The still-open filter is not a tidy-up (H1-C1/F1): a demand is a PROMISE the round made, and a task
+ * the Author discarded (`wontfix`) or closed (`done`) between the escalation and the selection is no
+ * longer outstanding. Grading a candidate against it anyway made every draft ineligible, while
+ * `samplingArmed` refused to buy another sample (it requires an OPEN fix task) and the attempt cap was
+ * not spent — so the round had no eligible winner, no new work, and no escalation: a deadlock the
+ * Author could reach by following the escalation's own advice ("discard the fix tasks"). One rule,
+ * three readers: this is the same `openFixTaskIds` set the Writer's prompt is compiled from
+ * (`work.ts:dispatchSamples`) and the arming rule counts, so the queue, the prompt and the certificate
+ * cannot disagree about what is owed.
+ *
+ * Normally the demand is the union of the `fix_refs` its screening rows carry: every screening job
+ * records the list its own prompt rendered, so each candidate is graded against exactly what ITS
+ * screeners were handed and nothing else. A fix confirmed after one draft's screens went out burdens
+ * only the drafts whose later pass carried it — and that pass alone has to certify it, since a pass
+ * that was never handed a task cannot be blamed for not answering it
+ * (`sample-select.ts:scoreSample` filters to the passes that carry each id).
+ *
+ * Three fallbacks, in order, for rows that declare nothing:
+ *   * verdicts without a per-report list — `IssueListSchema` keeps `fix_refs` optional so pre-H1 rows
+ *     parse, and lets a reviewer echo the id on each verdict instead. Those ids ARE the demand;
+ *     ignoring them would let a certification-shaped report dodge the gate over a formatting choice.
+ *   * a REFINED draft (round ≥ 2) whose screening leg answered nothing — the provider broke, or the
+ *     rows predate fix verification. The Story's OPEN fix tasks are then the demand, because the
+ *     arming rule (`samplingArmed`) only let the round run at all when those tasks existed: a draft
+ *     nobody graded against them is not certified, and selecting it would be the least-bad path this
+ *     change removes (R3). Being ungradeable is INELIGIBILITY, not a clean certificate (H1-C1/F2) —
+ *     see `sample-select.ts:scoreSample`.
+ *   * a FIRST-round draft (`origin: 'sampled'`): its prompt carried no fixes at all, so it is
+ *     demanded nothing. That is what keeps a clean round 1 — including the T12/C partial-screening
+ *     degrade — behaving exactly as it did before (R5).
+ */
+export function sampleFixDemand(store: Store, storyId: string, revision: Revision): string[] {
+    // `openFixTaskIds` is `state: 'open'` only: a `claimed` row is a fix pass in flight (phase ① does
+    // not run them), and `done`/`wontfix` are settled. `openFixTasks` is the same set the arming rule
+    // and the Writer's prompt read, so a task can never be "owed" to one of them and not the others.
+    const outstanding = new Set(openFixTaskIds(store, storyId));
+    const stillOwed = (ids: Iterable<string>): string[] =>
+        [...new Set([...ids])].filter((ref) => outstanding.has(ref)).sort((left, right) => left.localeCompare(right));
+    const screens = screensFor(store, revision.id);
+    const declaring = screens.filter((review) => review.fix_refs !== undefined);
+
+    // A declared list is the answer even when the intersection comes out EMPTY — the round owed these
+    // ids and the Author has since settled them, which is "nothing outstanding", NOT an invitation to
+    // fall through and demand some other open task this draft was never handed.
+    if (declaring.length > 0) return stillOwed(declaring.flatMap((review) => review.fix_refs ?? []));
+
+    // The schema lets a reviewer echo the demand PER VERDICT (`fix_verifications[].fix_ref`) while
+    // leaving the per-report `fix_refs` out — that field is optional precisely so pre-H1 rows still
+    // parse. Such a report is still a demand: reading it as "nothing asked" would let a
+    // certification-shaped row slip past the gate on a formatting choice the model made.
+    const carried = screens
+        .flatMap((review) => review.fix_verifications ?? [])
+        .map((verification) => verification.fix_ref)
+        .filter((ref) => typeof ref === 'string' && ref.length > 0);
+
+    if (carried.length > 0) return stillOwed(carried);
+
+    return (revision.round ?? 1) > 1 || revision.origin === 'refined' ? [...outstanding] : [];
+}
+
+/**
+ * H1 — every candidate of one sampling round, scored (R3/R5).
+ *
+ * The single place the round's screening evidence becomes numbers: `engine.ts:trySelectSample` ranks
+ * these, `work.ts` reads them to decide whether the round still owes samples, and
+ * `roundHasEligibleCandidate` answers, from the queue, the same question the selection answers at the
+ * commit. One predicate, three readers — which is how generation and selection cannot disagree about
+ * what "fixed" means, and neither can buy work the other one would refuse.
+ */
+export function roundSampleScores(store: Store, storyId: string, round: number): ScoredSample[] {
+    return roundRevisions(store, storyId, round)
+        .filter((revision) => revision.state === 'drafted')
+        .map((revision) =>
+            scoreSample({
+                revision,
+                reviews: screensFor(store, revision.id),
+                fixRefs: sampleFixDemand(store, storyId, revision)
+            })
+        );
+}
+
+/**
+ * H1 (R3) — does this round have to CERTIFY fixes before it may select anything?
+ *
+ * True as soon as one candidate was handed a fix list that is STILL OPEN, which after the arming rule
+ * (`samplingArmed`) means every round from 2 on that still owes a repair. A round with nothing to
+ * certify keeps §6.5's least-bad path, so a clean round 1 — including the T12/C partial-screening
+ * degrade — is unchanged (R5), and so is a refinement whose fix tasks the Author settled after the
+ * escalation (H1-C1/F1: the promise is gone, so there is nothing left to veto the round).
+ *
+ * What changed in H1-C1/F2 is the OTHER half: a round that DOES owe fixes gets no help from an
+ * ungradeable screening set. `requiresFixCertification` true and every candidate `legacyScreening`
+ * means `eligibleSamples` is empty — the round retries inside the attempt cap and escalates, rather
+ * than installing a refined draft nobody verified over the incumbent.
+ */
+export function roundRequiresCertification(store: Store, storyId: string, round: number): boolean {
+    return requiresFixCertification(roundSampleScores(store, storyId, round));
+}
+
+/**
+ * H1 (R3/R5) — does the in-flight round already hold a draft it is ALLOWED to select?
+ *
+ * The sampling queue asks this before buying another sample: a round whose fixes were answered by
+ * nothing keeps climbing (the Writer drafts again, inside the attempt cap), and a round that already
+ * holds a certified draft must not spend another sample on it. Only a draft whose screening is
+ * COMPLETE (`isFullyScreened`, T12/C) counts, so a screen still in flight is never read as a failure.
+ */
+export function roundHasEligibleCandidate(store: Store, story: Story, round: number): boolean {
+    return roundSampleScores(store, story.id, round)
+        .filter((scored) => isFullyScreened(store, story, scored.revision.id))
+        .some((scored) => scored.eligible);
 }
 
 /**

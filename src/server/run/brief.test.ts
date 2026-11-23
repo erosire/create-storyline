@@ -630,4 +630,45 @@ describe('brief — the Seed Brief, the Knowledge, and the new Phase-1 kinds', (
         expect(structure.text).toContain('`[]` is a complete answer, not a shortcut');
         expect(structure.text).toContain('Do not invent a research hook to fill the list');
     });
+
+    // F1 — a phase-① RESEARCH PREREQUISITE pass is Summary-scoped. `work.ts:phase1FixPrerequisites`
+    // hands the job `{ kind: 'summary', ref: summaryRef }`: `brief.ts:renderArtifact` branches on
+    // `item.unit.kind` and `renderSelectedIdeas` scopes on `item.unit?.ref`, so a bare artifact id (the
+    // first cut of this fix) matched no branch and the Researcher was dispatched with an EMPTY
+    // ARTIFACT UNDER REVIEW section — asked to ground a fact about the Summary without ever being shown
+    // the Summary — and its Ideas scoping silently widened to the whole Story.
+    it('hands a Summary-scoped research pass the artifact it is grounding the fact about (F1)', () => {
+        const { store, story } = seedStore();
+
+        seedTemplate(store, {
+            name: 'researcher-story',
+            roles: [{ name: 'researcher', kind: 'researcher', prompt: 'You research.' }],
+            serves_phase: ['summary']
+        });
+        const task = seedTask(store, story.id, {
+            kind: 'fix',
+            title: 'source the public-housing pet rule this Summary asserts',
+            owner_role: 'researcher'
+        });
+
+        const prereq = itemFor({
+            id: 'wi_research_fix_task_2_a1',
+            templateRef: 'researcher-story',
+            roleName: 'researcher',
+            kind: 'research',
+            unit: { kind: 'summary', ref: 'summary_1' },
+            taskRefs: [task.id]
+        });
+
+        const brief = buildBrief(store, prereq, resolveHarness(store, prereq));
+
+        // The heading a research pass carries, and the BODY the Summary unit is what unlocks.
+        expect(brief.sections).toContain('ARTIFACT UNDER REVIEW — the Story\'s knowledge (research pass)');
+        expect(brief.text).toContain('Summary:');
+        expect(brief.text).toContain('A return to a mapped valley that no longer matches the map.');
+        expect(brief.text).toContain('She floods the valley on purpose.');
+        // The task the pass must settle is rendered into THE JOB (S-2), so the run knows the exact
+        // question and its done condition.
+        expect(brief.text).toContain('source the public-housing pet rule this Summary asserts');
+    });
 });

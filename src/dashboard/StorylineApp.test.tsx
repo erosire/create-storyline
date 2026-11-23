@@ -3,7 +3,7 @@
 // the store lifecycle — none of which is the panels' business, and none of which should depend
 // on their fixtures. The stubs keep this hermetic even while the story view is mid-write.
 import { describe, expect, it, vi } from 'vitest';
-import { act, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { StorylineApp } from './StorylineApp';
 import { click, fakeHarness, renderWithStore, storyRow } from './testing/shell-fakes';
 import type { DashboardStore } from './state';
@@ -241,5 +241,32 @@ describe('StorylineApp — the four regions (§10.1)', () => {
 
         expect(store.getSnapshot().selectedAgent).toBeNull();
         expect(screen.queryByTestId('agent-threads')).toBeNull();
+    });
+
+    it('edits the loop’s ceiling from the employee rail, and re-renders what the server now holds (S-5)', async () => {
+        const { client, store } = harness();
+
+        await store.reload();
+        await mount(store);
+
+        const ceiling = () =>
+            screen.getByRole('combobox', { name: /maximum threads the loop runs at once/i }) as HTMLSelectElement;
+
+        // The rail shows the ceiling it read from `GET /loop` — the shipped default, not a guess.
+        expect(client.getLoopSettings).toHaveBeenCalled();
+        expect(ceiling().value).toBe('4');
+
+        // The dropdown's change IS the write (no save button), and the store's refetch chain is longer
+        // than the `type` helper settles, so this awaits the whole chain rather than one tick.
+        await act(async () => {
+            fireEvent.change(ceiling(), { target: { value: '12' } });
+            for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+        });
+
+        expect(client.setGlobalMaxConcurrent).toHaveBeenCalledWith(12);
+        // The number that renders afterwards is the one `GET /loop` re-reads: a write that had been
+        // refused would show the old ceiling, because nothing here is an optimistic local edit.
+        expect(store.getSnapshot().loop).toEqual({ global_max_concurrent: 12, live_runs: 0 });
+        expect(ceiling().value).toBe('12');
     });
 });

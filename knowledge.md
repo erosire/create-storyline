@@ -337,6 +337,16 @@ global employee roster. Both are projections, and neither is a second source of 
   (`{STORYLINE_PROVIDER_BASE_URL}/models`, default `http://localhost:8800/providers/private/v1/models`)
   and the tile's model editor is a dropdown over that catalog, so a name the harness cannot ask for
   cannot be selected.
+- **The loop's thread ceiling is one host setting, and the employee rail edits it.** `GET /loop` answers
+  `{ global_max_concurrent, live_runs }`; `PATCH /loop` moves the number and the next sweep fills to it
+  (`loop/engine.ts:dispatch` reads `engine.config.globalMaxConcurrent` fresh on every dispatch, so a write
+  needs no restart), and lowering it cancels no run already in flight (L-10). S-5 makes it ONE cap across
+  every Story, so the control is a dropdown in the roster header (`components/LoopLimitControl.tsx`,
+  rendered by `AgentsPanel`) and not on a Story pane — a per-book ceiling does not exist. It is written
+  through `store.setSetting` under `loop_global_max_concurrent` (`loop/ceiling.ts`): host configuration
+  beside the roster's models, never journaled, so it cannot reach the Digest's derivation (D-12a).
+  Precedence at boot is `STORYLINE_GLOBAL_MAX_CONCURRENT` (an operator's pin) → the Author's stored
+  choice → `DEFAULT_GLOBAL_MAX_CONCURRENT` (4).
 - **One harness per Story, one session per phase, one thread per Run.** `StoryHarnessManager`
   owns a lazily-built engine `harness()` per Story, so tool registries, transcripts and threads
   are isolated by book. The Story's phase is Storyline's session record (the engine has no session
@@ -711,10 +721,13 @@ sweep after the budget is spent, with neither exclusion holding,
 keeps it at ONE per finding matches the row's `finding_ref`, not just the title, and the title prefix it
 matches on is anchored with the ` —` separator: ids come from one counter, so a bare `finding_1` prefix is
 also a prefix of `finding_10`, and one finding's question would otherwise be handed to another finding's
-sweep. The row is
-`blocked`, not `open`: `decideStory`'s step 4 renders a `blocked` row as the Author question, while an
-`open` row is dispatchable work that would leave the Story `ready` with nothing to run
-(`loop/records.ts:OPEN_TASK_STATES` counts `open` and `claimed` only).
+sweep. The row is `blocked`, not `open`, because a `blocked` row is not dispatchable work: it is the
+shape `tools/checker.ts:requestAuthor` already uses, and `decideStory`'s step 4 renders it as the Author
+question. This is a convention for THAT family, not a rule about escalation rows in general — a phase-①
+sampling/prerequisite escalation is deliberately opened `open` (its reuse lookup, drain-hold and
+`rearmSamplingWave`'s clear-and-rearm all key on the open row), and step 4 reads an `open` row that is
+`owner_role: 'author'` as the same question when `dispatchable === 0` and no run is live (H2/R2); see
+"Fix ownership and the two Author questions" below.
 `records.ts:findingsVerifyStalled` is the one list both halves read, so generation and escalation cannot
 disagree about which findings stalled — and that is also why the OPENING of the row is phase-scoped while the
 CLOSING is not: outside phase ① the list is empty by definition, so `engine.escalateVerifyStall` still runs
@@ -733,14 +746,65 @@ are closed. Round N+1 is armed only when a `fix` task is `open` AND no `critical
 still `unconfirmed` (`records.ts:samplingArmed`). Its compiled prompt carries the previous round's
 selected draft and those tasks, and its own selection consumes them. If the dial does not cover the
 confirmed costs, no task exists and the Story waits at `pending`/`finding_approval` until the Author
-approves one.
+approves one. A refinement round is additionally held while a Researcher prerequisite is unanswered
+(H2/R1, below).
+
+**Fix ownership, and the two Author questions phase ① can ask (H2/R1, H2/R2).** A `fix` task's
+`owner_role` (§4.7) decides which crew, if any, can settle it, and every phase-① read uses one
+predicate — `records.ts:isWriterActionableFix` (`''`/`writer`, or a `writer-*` template id such as the
+`writer-prose` the assignment layer writes). Only those rows are the round's demand: they are what
+`run/phase1-prompt.ts` puts in the Writer's block and the screening Reader is asked to grade, what the
+`fix_refs` of a Work Item carries, what `sampleFixDemand` certifies, and what a certified selection
+closes (`engine.trySelectSample`). Grading a draft against a row no draft can settle is what made every
+candidate ineligible at once (a Reader's honest `unknown` is not a pass, `sample-select.ts:certifiesFix`)
+while the round spent its cap.
+
+* A `researcher`-owned row is an external fact, and phase ① already runs that role: it becomes a real
+  `research` job, key `wi_research_fix_<task>_a<n>` (attempt-scoped like every family here), priority 0,
+  `researcher-story`, unit `{ kind: 'summary', ref }` (F1 — `brief.ts` renders ARTIFACT UNDER REVIEW and
+  scopes Ideas from `item.unit`, so the unit must be a `WorkUnitRef` or the pass is dispatched with an
+  empty artifact section), `taskRefs`/`findingRefs` carrying the task and finding it must settle. The
+  budget is the loop's existing allowance — `records.ts:RESEARCH_PREREQUISITE_CAP` =
+  `FINDING_VERIFY_CAP` (4) — and the pass counter is journal-derived, so it survives a restart.
+* It settles only on EVIDENCE: `records.ts:researchPrerequisiteEvidence` is the `knowledge`
+  create/update events attributed to a run in that task's family, and `engine.settleFixPrerequisites`
+  (beside `escalateVerifyStall`) is its only writer. A run that ends without writing — `reportNoResearch`
+  — spends the attempt and changes nothing; the note on the job says so, because the two answers look the
+  same to the crew that was asked to make them.
+* Budget spent with no evidence opens `Phase ① research prerequisite exhausted on <task> — …`, and a row
+  whose owner has no phase-① job at all opens `Phase ① fix task has no crew that can work it <task> — …`.
+  Both are `owner_role: 'author'`, `state: 'open'`, ONE per task (the reuse key is the anchored
+  `<prefix> <task.id> —`), and `settleFixPrerequisites` closes the row the moment the task leaves the set
+  that opened it — the Author's answer, not a second question, is what retires it.
+* **A finding is retired only by its last open fix row** (`records.ts:findingFixWorkSettled`, F3). One
+  finding can carry rows for several owners — the live shape was a Researcher grounding row and a Writer
+  repair row on the same finding — so settling one marks that row `done` and leaves the finding
+  `confirmed`/`approved` while any other open row names it. Both writes are gated the same way: the
+  prerequisite settlement and the certified-selection closure. A finding with no remaining rows closes
+  exactly as it did before; a `wontfix`/`discarded` row is settled, not successful, and closes nothing.
+* With nothing dispatchable and no run live, `status.ts:decideStory` step 4 reads an OPEN Author-owned
+  escalation as `pending`/`drained` + `the crew asked you: "<title>"`, and the row keeps its `open` state
+  (the fix is in the read, never in rewriting the row). A `blocked` crew row still wins. The row also
+  counts as a queued task (`records.ts:dispatchableTasks` admits any row with an `owner_role`), so the
+  drain's own preconditions stay unmet and the clean-drain sentence cannot be reported over a question
+  that is still unanswered — while `decideStory`'s `dispatchable` input is the CANDIDATE count, which is
+  why the same row holds the drain and still leaves the sweep with nothing to run. `drain.test.ts` pins
+  both halves: the question read on a drained fixture, and a pending directive review (crew work) keeping
+  the question out of the reading.
+
+Pinned by `loop/phase1-hill-climb.test.ts` (the `H2/R1-R2` describe: routing, the evidence rule and its
+negative half, the cap and its question, the shared-finding lifecycle, and the sweep's own
+`pending`/`drained` read), `loop/drain.test.ts`, `run/brief.test.ts` (F1's artifact section) and
+`integration/summary-sampling.test.ts` (the settled row after a spent sampling cap).
 
 **Sign-off and drain.** `phase_signoff` needs the Goal (C-14/C-15) passed plus no competing draft, no
 `pending` draft, no sourced Idea awaiting verification, no unconfirmed blocking finding, no
 phase-① `fix`/`rewrite`/`merge` task, no `critical`/`major` finding open on the selected revision,
 every deep-review pass closed, and an empty tray. The lock itself is unchanged. The drain adds the
 pipeline's stages to L-37's four (`loop/status.ts:phase1Unmet`): an accepted brief for the current
-Seed, a closed research pass, no live sample/screen, the in-flight round complete (selected) or
+Seed, a closed research pass, no live sample/screen, no open Researcher-owned `fix` prerequisite (the
+round cannot answer an external fact a draft was never asked to ground — `openResearchFixPrerequisites`
+names it with its pass count, H2/R1), the in-flight round complete (selected) or
 deliberately not owed, and the deep review closed. Both resets are explicit: `editSeed` and a
 backtrack to `summary` set `sampling_round` to 0, `sampling_history` to empty and `sampling_wave` to
 0, because both scrap the revisions and samples those fields describe.
@@ -762,6 +826,7 @@ The job keys, which are the whole ledger:
 | --- | --- | --- |
 | `structure_seed` | `wi_structure_seed_<seedHash>` | one per Seed hash; priority 0; binds `editor-seed-structure` explicitly |
 | `research` | `wi_research_<brief.rev>` | one per accepted brief revision; priority 0; `researcher-story`; **skipped entirely when the brief's `research_questions` is `[]` (D-51)** — a legacy brief without the field keeps the pass |
+| `research` (fix prerequisite) | `wi_research_fix_<task>_a<n>` | one per Researcher-owned `fix` row (H2/R1); priority 0; `researcher-story`; unit `{ kind: 'summary', ref }`; family = the budget, at most `RESEARCH_PREREQUISITE_CAP` (= `FINDING_VERIFY_CAP`) passes, then ONE `open` Author escalation; settles only on Knowledge attributed to the family |
 | `sample_unit` | `wi_sample_<summary>_<round>_<attempt>`, or `wi_sample_<summary>_<round>_w<wave>_<attempt>` after a re-armed wave | `<attempt>` is 1-based and store-derived; ONE per sweep per round while no sampler is live |
 | `screen_samples` | `wi_screen_<revision>_<attempt>` | one owed pass per drafted sample; per-revision family |
 | `check_unit` (deep review) | `wi_review_<selected>_a<pass>` | one per pass, rotating the four Reader angles; tools ON |

@@ -110,6 +110,8 @@ tags:
     description: Recorded ephemeral harnesses spawn-to-teardown.
   - name: Queue
     description: The cross-Story Author queue (the home desk).
+  - name: Loop
+    description: The loop's own settings - the one ceiling its threads run under (S-5).
   - name: Stream
     description: The Server-Sent Events change feed.
 paths:
@@ -1193,6 +1195,60 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/QueueItem'
+  /v1/storyline/loop:
+    get:
+      tags: [Loop]
+      operationId: getLoopSettings
+      summary: Read the loop's fan-out ceiling
+      description: >-
+        S-5's one global ceiling: how many threads the sweep may have live at once across EVERY Story,
+        and how many are live right now, counted from the durable run rows (L-2). It is host
+        configuration rather than a §4 record - remembered in the store's non-journaled `settings`
+        section beside the roster's model choices, and pinned at boot by
+        `STORYLINE_GLOBAL_MAX_CONCURRENT` when an operator exported one - so it has no Story row to read
+        it off and no Story pane owns the control. The workstation shows it on the global employee rail,
+        where a thread belongs.
+      responses:
+        '200':
+          description: The live ceiling and its occupancy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoopSettings'
+    patch:
+      tags: [Loop]
+      operationId: setLoopSettings
+      summary: Move the loop's fan-out ceiling
+      description: >-
+        The Author's throttle on simultaneous threads (S-5, E-0a). One whole number at least 1; a
+        non-integer or a `0` is a 400 naming the field, because a ceiling of zero leaves the sweep with
+        nothing to dispatch and no way to say why. The next sweep fills the new capacity, and LOWERING
+        it cancels no thread already in flight - the runs finish their pass and the loop stops claiming
+        new ones until the live count falls under the ceiling, the same courtesy a Story stop pays
+        (L-10). Answers the same projection `GET /loop` gives, so the control renders the server's
+        number rather than the one that was typed. The ceiling is then remembered as host configuration
+        - the store's non-journaled `settings` section, never the journal - so the Author's number is
+        still in force after a restart; `STORYLINE_GLOBAL_MAX_CONCURRENT` outranks it at boot when an
+        operator exported one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoopSettingsPatch'
+            examples:
+              widen:
+                value:
+                  global_max_concurrent: 8
+      responses:
+        '200':
+          description: The ceiling as the engine now runs it, with its live count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoopSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
   /v1/storyline/stream:
     get:
       tags: [Stream]
@@ -2775,6 +2831,25 @@ components:
           type: array
           items:
             type: string
+    LoopSettings:
+      type: object
+      required: [global_max_concurrent, live_runs]
+      additionalProperties: false
+      properties:
+        global_max_concurrent:
+          type: integer
+          minimum: 1
+        live_runs:
+          type: integer
+          minimum: 0
+    LoopSettingsPatch:
+      type: object
+      required: [global_max_concurrent]
+      additionalProperties: false
+      properties:
+        global_max_concurrent:
+          type: integer
+          minimum: 1
     AgentRecentRun:
       type: object
       required:

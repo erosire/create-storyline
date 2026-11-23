@@ -52,6 +52,37 @@ describe('api — the pinned REST surface', () => {
         expect(lastFetch()).toEqual({ url: `${API_ROOT}/agents/models`, method: 'GET' });
     });
 
+    it('reads the loop’s fan-out ceiling from /loop — the one global setting the rail edits (S-5)', async () => {
+        const settings = { global_max_concurrent: 8, live_runs: 6 };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => settings }))
+        );
+
+        expect(await api.getLoopSettings()).toEqual(settings);
+        expect(lastFetch()).toEqual({ url: `${API_ROOT}/loop`, method: 'GET' });
+    });
+
+    it('moves the ceiling with PATCH /loop and the field the route requires (S-5)', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => ({ global_max_concurrent: 12, live_runs: 0 })
+            }))
+        );
+
+        expect(await api.setGlobalMaxConcurrent(12)).toEqual({ global_max_concurrent: 12, live_runs: 0 });
+        // The wire is the field name the route validates; a renamed body would 400 on its own sentence.
+        expect(lastFetch()).toEqual({
+            url: `${API_ROOT}/loop`,
+            method: 'PATCH',
+            body: JSON.stringify({ global_max_concurrent: 12 })
+        });
+    });
+
     it('deletes a Story with DELETE and answers the id the server removed (P1)', async () => {
         vi.stubGlobal(
             'fetch',

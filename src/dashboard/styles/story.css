@@ -31,6 +31,18 @@
     min-width: 0;
 }
 
+/* U1 — the MAIN Summary item's column: the Summary pane plus the phase-① controls that belong to it
+   (accept/lock, the gate's reasons, request-another-round, backtrack). Deliberately the SAME flex column
+   and gap as `.sv-story-main` above, so grouping the pair into one child keeps the spacing, wrapping and
+   widths the view had while they were two siblings — this wrapper scopes the controls, it does not restyle
+   them. A Revision opened from the rail never renders it (StoryView.tsx), so no Revision gets the block. */
+.sv-summary-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    min-width: 0;
+}
+
 /* ------------------------------------------------------------------ the Seed (U-4) */
 
 /* Pinned: "it never scrolls away, because it is the thing the book is measured against" (C-14). */
@@ -2089,6 +2101,47 @@
     font-size: 0.7rem;
 }
 
+/* S-5 — the loop's ceiling, printed and edited in the roster's own header. `margin-left: auto` puts it
+   at the right end of that row, the way a pane header's one write always takes the right edge (see the
+   draft-override select above), so "Employee" keeps the left edge and the number it governs keeps the
+   right. The native caret stays: the row is a header, not a button, and a drawn arrow would outrank the
+   digits. */
+.sv-loop-limit {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.34rem;
+    margin-left: auto;
+}
+
+.sv-loop-limit__label {
+    color: var(--dim);
+    font-size: 0.64rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.sv-loop-limit__select {
+    padding: 1px 0.5rem 1px 0.34rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.sv-loop-limit__select:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--surface);
+}
+
+.sv-loop-limit__select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .sv-agent-tile__threads {
     display: flex;
     flex-direction: column;
@@ -2868,6 +2921,24 @@
 .sv-summary-draft-select:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* A parked draft is a settled fact, not a move the Author has left, so it reads as plain red text where an
+   open row wears the button — nothing to click, and the hue says the draft is out. */
+.sv-summary-draft-parked {
+    align-self: flex-start;
+    margin-top: 0.1rem;
+    color: var(--urgent);
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+/* The revision the rail opens prints the Author's override in its pane header, where the title and the
+   state badge own the left edge — so the one write sits at the right end of that row, and the parked
+   row's marker keeps the same spot so the two rows line up. */
+.sv-pane-head .sv-summary-draft-select,
+.sv-pane-head .sv-summary-draft-parked {
+    margin-left: auto;
 }
 
 /* Phase ①'s flat history and its "another round" veto. */

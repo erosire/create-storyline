@@ -119,7 +119,13 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                 {active.panel === 'seed' ? <SeedPane view={view} /> : null}
 
                 {active.panel === 'summary' ? (
-                    <>
+                    // U1 — the MAIN Summary item's own column: the stalled screen, the Summary pane, and the
+                    // phase-level controls that belong to that surface. The wrapper is what makes "on the
+                    // main Summary item" a DOM fact rather than a reading: `.sv-summary-column` is the scope
+                    // the acceptance tests count the phase controls inside. It is a flex column with the same
+                    // gap as `.sv-story-main` (styles/story.css), so nesting the pair changes the spacing not
+                    // at all — the reported defect is about WHICH surface renders the block, not where it sits.
+                    <div className="sv-summary-column">
                         {story.status === 'pending' && story.pending_kind === 'stalled' ? (
                             <StalledReview view={view} actions={actions} />
                         ) : null}
@@ -151,8 +157,23 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                             }
                         />
 
-                        {story.phase === 'summary' ? <PhaseControls view={view} actions={actions} lock={lock} /> : null}
-                    </>
+                        {/* U1 (the reported defect) — these controls are PHASE-① SUMMARY-level: accepting the
+                            final Summary, the lock gate and its failing Goal/revision/finding reasons, "Request
+                            another revision round", and the backtrack/lock information. They describe the whole
+                            phase, so they render on the main Summary item and on NO Revision. The gate is the
+                            selection, not a new flag: `revisionFocus === undefined` IS "this is the main Summary
+                            item", because `story-nav.summaryRevisionFocus` returns an entry exactly when the rail
+                            carries a `revision:<id>` ref (and a stale ref already falls back to the overview via
+                            `selectionExists` above, so a deleted draft can never hide the Author's controls).
+                            `SummaryPane`'s focus branch (`SummaryRevisionPane`) is therefore the Revision surface
+                            the report describes: the draft's fields, its Findings, its verdict rows, and its own
+                            override — nothing else. `story.phase === 'summary'` and the wiring (`lock`, `actions`)
+                            are untouched, so the main item keeps the same commands, disabled reasons and pending
+                            states, and later phases' `PhaseControls` (Plotlines/Chapters) are unaffected. */}
+                        {story.phase === 'summary' && revisionFocus === undefined ? (
+                            <PhaseControls view={view} actions={actions} lock={lock} />
+                        ) : null}
+                    </div>
                 ) : null}
 
                 {active.panel === 'characters' ? (

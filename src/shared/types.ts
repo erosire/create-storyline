@@ -311,7 +311,22 @@ export interface Story extends StoredRecord {
     sampling_history?: Array<{
         round: number;
         at: string;
-        samples: Array<{ revision_id: string; critical: number; high: number; valid: boolean }>;
+        samples: Array<{
+            revision_id: string;
+            critical: number;
+            high: number;
+            valid: boolean;
+            /**
+             * H1, ADDED (additive): the fix task ids this candidate did NOT clear — its blocking
+             * screening issues plus the requested fixes a Reader marked `unresolved`/`unknown`/absent.
+             *
+             * WHY IT MUST SURVIVE THE COMMIT: the selection truncates every losing draft AND its
+             * screening reviews (§6.6, P13/D-22), so without this line the reason a candidate was
+             * rejected — the evidence, not a score — is deleted with it. A rejected candidate's
+             * unresolved fixes are the audit of a hill that was not climbed (R4).
+             */
+            unresolved_fixes?: string[];
+        }>;
         selected: string;
     }>;
 }
@@ -1015,6 +1030,32 @@ export interface SampledIssue {
 }
 
 /**
+ * H1 — one screening Reader's verdict on ONE requested fix, for ONE candidate draft.
+ *
+ * WHY THIS EXISTS AT ALL: before this row existed, an open `fix` task was closed because a
+ * selection happened (`engine.ts:trySelectSample`'s §6.8 branch), not because anything proved the
+ * defect was gone. Hill climbing needs the proof BEFORE the climb: the candidate that replaces the
+ * selected Summary must be certified fix-by-fix, and a candidate that fails keeps the old fixes open.
+ *
+ * `fix_ref` is the OPEN FIX TASK id the screen was asked about (its `finding_ref` is the defect the
+ * Author approved, D-34) — the task, because that is what the prompt numbers and what closure acts
+ * on. `evidence` follows D-15's rule: a verdict with no citable line about the draft is not a
+ * verdict, so an empty/absent evidence line is what makes `unknown` the honest answer.
+ *
+ * `status` is deliberately three-valued: `unknown` covers a Reader that could not tell (the draft
+ * neither shows nor contradicts the fix). It is NOT a pass — `sample-select.ts:isEligibleSample`
+ * treats anything but `resolved` as unresolved, because an unverifiable fix is a fix the round has
+ * not earned yet.
+ */
+export interface SampledFixVerification {
+    fix_ref: string;
+    status: 'resolved' | 'unresolved' | 'unknown';
+    /** Verbatim line(s) of the CANDIDATE draft that prove the reading (D-15). */
+    evidence: string;
+    note?: string;
+}
+
+/**
  * §3.4 — the screening Reader's one-turn answer, persisted by the engine from the run's
  * validated structured output (§2 decision 2 — the same named exception D-12a makes for the
  * Digest; the Reader never calls a tool in this mode).
@@ -1030,6 +1071,23 @@ export interface SampleReview extends StoredRecord {
     issues: SampledIssue[];
     /** false = the one repair retry still failed schema validation. */
     valid: boolean;
+    /**
+     * H1, ADDED (additive: §4 allows adding fields, forbids renaming or dropping them): the fix
+     * task ids this pass was ASKED to verify, captured when the screening job was queued.
+     *
+     * This is the anchor that makes the verification gradeable: a candidate is only ever judged
+     * against the fixes its own prompt carried, so a fix task that opened after the round's screens
+     * were dispatched cannot retroactively disqualify the round, and a Reader that skips a fix it
+     * was handed counts against the candidate (silence is not a pass). A legacy row carries none,
+     * which reads as "this pass graded issues only" — the round then falls back to the Story's
+     * open fix list rather than trusting an empty set (`records.ts:sampleFixDemand`).
+     */
+    fix_refs?: string[];
+    /**
+     * H1, ADDED: the per-fix verdicts this pass returned. Absent on a legacy row, and `[]` on a
+     * round-1 screen that was handed no fixes.
+     */
+    fix_verifications?: SampledFixVerification[];
 }
 
 // ---------------------------------------------------------------------------

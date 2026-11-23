@@ -112,6 +112,11 @@ export function storyView(row: StoryRow): StoryView {
  * never hangs a test.
  */
 export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
+    // S-5 — the fake keeps the ceiling the way the engine does: the PATCH sets it and `GET /loop`
+    // reports it, so a test that writes through `setLoopLimit` can assert the control re-renders from
+    // the value the server now holds rather than from the value that was typed.
+    let globalMaxConcurrent = 4;
+
     const base: ApiClient = {
         listStories: vi.fn(async () => [] as StoryRow[]),
         createStory: vi.fn(async (input) => storyRow('story_new', { title: input.title })),
@@ -203,6 +208,14 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 recent: []
             }
         ]),
+        // S-5 — the loop's ceiling: the PATCH sets the number, and both reads report it. `live_runs`
+        // stays 0 because the thread fixtures live on the agent rows, not on run rows.
+        getLoopSettings: vi.fn(async () => ({ global_max_concurrent: globalMaxConcurrent, live_runs: 0 })),
+        setGlobalMaxConcurrent: vi.fn(async (limit: number) => {
+            globalMaxConcurrent = limit;
+
+            return { global_max_concurrent: limit, live_runs: 0 };
+        }),
         patchStory: vi.fn(async (storyId) => storyRow(storyId)),
         stop: vi.fn(async (storyId) => storyRow(storyId, { status: 'stopped' })),
         resume: vi.fn(async (storyId) => storyRow(storyId, { status: 'ready' })),

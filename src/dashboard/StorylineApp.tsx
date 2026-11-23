@@ -53,7 +53,7 @@ export function StorylineApp(props: { store?: DashboardStore }) {
 /** The regions themselves, split out so the store injection above stays one line. */
 function Shell() {
     const store = useDashboardStore();
-    const { activeStoryId, stories, storyViews, templates, agents, selectedAgent, agentThreads, agentModels } =
+    const { activeStoryId, stories, storyViews, templates, agents, selectedAgent, agentThreads, agentModels, loop } =
         useDashboard();
 
     // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
@@ -202,6 +202,13 @@ function Shell() {
                             onSetModel={(kind, model) => store.setAgentModel(kind, model)}
                             onSelectAgent={openAgent}
                             selectedAgent={selectedAgent}
+                            /* S-5 — the ceiling these employees' threads run under, edited beside the
+                               roster's name. It rides the rail rather than a Story pane because it is
+                               one number across every Story, and the rail is the shell's only global
+                               column. The store re-reads `loop` after the write, so what shows is the
+                               ceiling the engine is running. */
+                            loop={loop}
+                            onSetLoopLimit={(limit) => store.setLoopLimit(limit)}
                         />
                     </div>
                 </aside>

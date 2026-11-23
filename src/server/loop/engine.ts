@@ -26,8 +26,11 @@ import {
     confirmedOpenFingerprints,
     dispatchableTasks,
     findingsVerifyStalled,
+    // F3 — the shared-finding gate: a finding is only retired when its LAST open fix row settles.
+    findingFixWorkSettled,
     isFullyScreened,
     isLiveRun,
+    isResearchPrerequisiteFix,
     isReviewableDraft,
     lapsedRuns,
     last,
@@ -36,14 +39,20 @@ import {
     loopChapter,
     loopStory,
     loopAttr,
-    openFixTasks,
+    // H2/R1: the round's closure closes the fix rows the WRITER owns. `openFixTasks` used to mean
+    // "every open fix row", which is what let a Researcher prerequisite be closed by a passing draft.
+    openPrerequisiteFixTasks,
+    openUnserviceableFixTasks,
+    openWriterFixTasks,
     pendingProposals,
     openTasks,
+    researchPrerequisiteAnswered,
     requireStory,
     roleNameOf,
     roundRevisions,
     runsForItem,
     sampleAttempts,
+    sampleFixDemand,
     samplingCapOf,
     samplingLegClosed,
     samplingRoundOf,
@@ -51,6 +60,9 @@ import {
     samplingWaveOf,
     screensFor,
     screeningSizeOf,
+    // H2/R1: the stall predicate the settlement re-derives inside its commit (a prerequisite whose
+    // passes are spent and which recorded nothing) — the same read the queue and the drain probe use.
+    stalledResearchPrerequisites,
     storyChapters,
     storyFindings,
     storyPlotlines,
@@ -80,10 +92,22 @@ import {
     openScreeningExhaustionTask,
     openFindingVerifyStallTask,
     FINDING_VERIFY_STALL_PREFIX,
+    // H2/R1: the two Author questions `settleFixPrerequisites` opens and closes (prefixes live in
+    // work.ts, like every other escalation title here, so the reuse key and the row share one source).
+    FIX_PREREQUISITE_STALL_PREFIX,
+    FIX_TASK_OWNER_PREFIX,
     SAMPLING_FAILURE_PREFIX,
     samplingExhausted
 } from './work';
-import { selectSample, type ScoredSample } from './sample-select';
+// H1: selection is not a plain least-bad ranking any more — `scoreSample` also grades the fix
+// certificate, and `eligibleSamples` is the pool the hill-climb may pick from.
+import {
+    eligibleSamples,
+    requiresFixCertification,
+    scoreSample,
+    selectSample,
+    type ScoredSample,
+} from './sample-select';
 import { carriedDelta, levelPairs, measureRound, recordRound, renderPairs } from './trend';
 import { completeDirective, createDirectiveFallbackTasks, pendingDirectives, recordDirective } from './directives';
 import {
@@ -130,7 +154,6 @@ import type {
     Chapter,
     Cost,
     Finding,
-    SampledIssue,
     SampleReview,
     Story,
     StoryPhase,
@@ -228,6 +251,35 @@ export class LoopEngine implements EngineApi {
     /** True while the loop schedules work (L-1). */
     get started(): boolean {
         return this.running;
+    }
+
+    // -----------------------------------------------------------------------
+    // S-5's ceiling
+    // -----------------------------------------------------------------------
+
+    /**
+     * S-5's global fan-out ceiling, moved while the loop runs. The sweep reads it fresh on every
+     * dispatch (`dispatch` counts `liveRuns` against `config.globalMaxConcurrent`), so the NEXT sweep
+     * after this call already fills the new capacity — and raising it does not need a Story to be
+     * stopped, because the ceiling was never a per-Story setting (S-5: it is one number across all of
+     * them).
+     *
+     * LOWERING it cancels nothing: the runs already in flight finish their pass, and the loop simply
+     * stops claiming new ones until the live count falls under the new ceiling. That is the same
+     * behaviour a Story stop has (L-10: the Author's cut never mid-cuts a run), and it is why a
+     * too-small value is safe to type.
+     *
+     * This is a PROCESS setting, not a §4 record, and the route that calls this also remembers it in
+     * the store's `settings` section (`loop/ceiling.ts`), so the Author's number is still there after a
+     * restart — the same seam the roster's model choices use (U-8). `STORYLINE_GLOBAL_MAX_CONCURRENT`
+     * outranks it at boot when an operator set one (`api/server.ts`), and an explicit injected
+     * `engineConfig` outranks it for a test or an embed.
+     *
+     * The CALLER validates (the route answers 400 with the product sentence, as every other route
+     * does); this setter trusts a whole number at least 1.
+     */
+    setGlobalMaxConcurrent(limit: number): void {
+        this.config.globalMaxConcurrent = limit;
     }
 
     // -----------------------------------------------------------------------
@@ -565,6 +617,13 @@ export class LoopEngine implements EngineApi {
         // The same pass closes the row when the finding is decided (the Author's approve/dispute, or
         // the Editor finally answering), because a question must not outlive its answer.
         await this.escalateVerifyStall(story.id);
+
+        // H2/R1 — the settlement half of the phase-① fix owners. A Researcher-owned `fix` task closes
+        // when the Knowledge its grounding pass wrote lands on the ledger, and an exhausted one (or a
+        // row whose owner has no phase-① job) becomes an Author question here. The opening half lives
+        // in `work.ts:phase1FixPrerequisites`, which generation calls; this is the sweep's half, so a
+        // late journal write or an Author edit closes the row without waiting for a job.
+        await this.settleFixPrerequisites(story.id);
 
         // L-1 steps 1 and 6: the levels, the trend, and the round. The measurement runs before the
         // decision because L-37a's precedence requires the stall to be computable, and the stall needs
@@ -1020,6 +1079,14 @@ export class LoopEngine implements EngineApi {
         const store = this.store;
         const closed = result.ended === 'completed';
         const isFixPass = item.kind === 'write_unit' && (item.findingRefs ?? []).length > 0;
+        // H2/R1 — is this a grounding pass for a Researcher-owned `fix` task? Its product is Knowledge,
+        // not an artifact, so completing it must NOT close the row it names: the row closes on the
+        // EVIDENCE its run left on the journal (`settleFixPrerequisites`, and the answer check
+        // `researchPrerequisiteAnswered` that gates it). A crew rule the live round proved the
+        // difference with: when a run closing was the settlement, an exhausted prerequisite was
+        // marked done by a pass that recorded nothing, and the round reported a fix it never made.
+        // The attempt is still counted below, so the pass budget stays honest.
+        const isGroundingPass = item.kind === 'research';
         // §6.4 steps 3-4: a no-tool run's product is its VALIDATED structured answer, and the engine
         // is what persists it (§2 decision 2 — the named exception D-12a makes for the Digest; the
         // Writer authored it, no tool wrote it). A failed run persists nothing, which is exactly
@@ -1037,14 +1104,24 @@ export class LoopEngine implements EngineApi {
 
                 if (task === undefined) continue;
 
+                // H2/R1: a grounding pass spends its attempt and leaves the row `open`. The
+                // prerequisite settles on the Knowledge its pass recorded — `settleFixPrerequisites`
+                // below, gated by `researchPrerequisiteAnswered` — never because a run completed. The
+                // row's own `attempts` is only the mirror of the journal-derived pass counter.
+                const settledByEvidence = isGroundingPass && isResearchPrerequisiteFix(task);
+
                 store.tasks.update(
                     task.id,
-                    { state: closed ? 'done' : 'open', attempts: (task.attempts ?? 0) + 1 },
+                    settledByEvidence
+                        ? { attempts: (task.attempts ?? 0) + 1 }
+                        : { state: closed ? 'done' : 'open', attempts: (task.attempts ?? 0) + 1 },
                     {
                         run_ref: item.id,
-                        why: closed
-                            ? `run ${item.id} finished the work this task named; the queue consumed it (D-11, L-2)`
-                            : `run ${item.id} ended ${result.ended}; the task is open again with one more attempt (L-15, L-3)`
+                        why: settledByEvidence
+                            ? `run ${item.id} spent a grounding pass on ${task.id}; the row stays open until a pass records the fact (T-10, H2/R1)`
+                            : closed
+                              ? `run ${item.id} finished the work this task named; the queue consumed it (D-11, L-2)`
+                              : `run ${item.id} ended ${result.ended}; the task is open again with one more attempt (L-15, L-3)`
                     },
                     [{ id: task.id, rev: task.rev }]
                 );
@@ -1137,13 +1214,23 @@ export class LoopEngine implements EngineApi {
             // findings (they never enter D-33/D-34 and cannot block a Writer): they rank the round's
             // samples and seed the deep review's brief.
             if (persistedScreens !== undefined && item.revisionRef !== undefined) {
+                // H1: the row also carries the fix certificate — the ids this Worker was handed
+                // (`fix_refs`, from the Work Item rather than from the answer, so a partial answer
+                // cannot silently drop a demand) and the per-fix statuses it actually answered.
+                // `sampleFixDemand` uses the first to tell "no pass carried this fix" from "this pass
+                // carried it and said nothing", and grades an incomplete answer as `unknown`.
+                // Pre-H1 rows carry neither field, which grades as legacy (unverified).
                 store.sampleReviews.create(
                     {
                         story_id: item.storyId,
                         revision_ref: item.revisionRef,
                         reader: item.roleName,
                         issues: persistedScreens.issues ?? [],
-                        valid: true
+                        valid: true,
+                        fix_refs: [...(item.fixRefs ?? [])],
+                        ...(persistedScreens.fix_verifications === undefined
+                            ? {}
+                            : { fix_verifications: persistedScreens.fix_verifications })
                     },
                     loopAttr(
                         `run ${result.runId} answered with a schema-valid IssueList for ${item.revisionRef}; the engine persisted it as a screening review (§2 decision 2, §6.4 step 4)`
@@ -1247,24 +1334,35 @@ export class LoopEngine implements EngineApi {
             .filter((revision) => (reviewsOf.get(revision.id) ?? []).length < readers)
             .map((revision) => revision.id);
 
-        // §6.5's counts: every issue of every review of this revision, split by severity. The
-        // `valid` flag is per REVIEW, so a sample is `valid` only when each of its passes was.
-        const scored: ScoredSample[] = drafted.map((revision) => {
-            const reviews = reviewsOf.get(revision.id) ?? [];
-            const issues = reviews.reduce<SampledIssue[]>(
-                (all, review) => all.concat(review.issues),
-                [] as SampledIssue[]
-            );
-
-            return {
+        // §6.5's counts plus H1's certificate: every issue of every review of this revision split by
+        // severity, and the fix tasks its screening passes were asked to certify. `scoreSample` is the
+        // one implementation (`records.ts:roundSampleScores` scores the same way for the queue and for
+        // the exhaustion check), so a candidate cannot be "eligible" to the queue and rejected here.
+        const scored: ScoredSample[] = drafted.map((revision) =>
+            scoreSample({
                 revision,
-                critical: issues.filter((issue) => issue.severity === 'critical').length,
-                high: issues.filter((issue) => issue.severity === 'high').length,
-                total: issues.length
-            };
-        });
+                reviews: reviewsOf.get(revision.id) ?? [],
+                fixRefs: sampleFixDemand(store, story.id, revision)
+            })
+        );
 
-        const winner = selectSample(scored);
+        // H1/R3/R5 — the hill. A round that was handed fixes selects ONLY from candidates that cleared
+        // them with no blocking screening issue; a round that was handed nothing (round 1, or a
+        // refinement whose fix tasks the Author has since settled — H1-C1/F1) keeps §6.5's least-bad path.
+        //
+        // H1-C1/F2 — and an ungradeable screening set is NOT "handed nothing". When the round owes open
+        // fixes and its screening leg answered nothing (every attempt failed the schema, or the rows
+        // predate fix verification), `scoreSample` reports `legacyScreening` and leaves the candidate
+        // INELIGIBLE: the incumbent keeps the Summary and the round retries or escalates below. Before
+        // this, that shape installed a refined draft on zero verification — the strict contract the
+        // Author asked for is "if it isn't verified, discard the draft and try again".
+        //
+        // NOTHING IS SELECTED when the round holds no eligible candidate. That is not a stall: the
+        // screening rows stay, the fix tasks stay open, `work.ts` offers another sample inside the
+        // attempt cap, and a spent cap opens the Author escalation (`samplingExhausted`, shape (b)).
+        // Selecting the least-bad candidate here would install a draft the round's own Readers rejected
+        // and, until this change, close the very tasks it failed — the ratchet the Author reported.
+        const winner = selectSample(requiresFixCertification(scored) ? eligibleSamples(scored) : scored);
 
         if (winner === undefined) return;
 
@@ -1317,6 +1415,11 @@ export class LoopEngine implements EngineApi {
             );
 
             // §6.6's audit line, built BEFORE the losers are deleted so it can name them.
+            //
+            // H1/R4 adds `unresolved_fixes` to every sample line: the losers' `sample_reviews` rows are
+            // deleted by this very commit, so without this the ONLY trace of why a candidate was thrown
+            // out — which fix it failed, and on which draft — would be gone. The line is the audit of a
+            // hill that was not climbed, and it is what the Author reads when the round escalates.
             const history = [
                 ...(fresh.sampling_history ?? []),
                 {
@@ -1329,7 +1432,8 @@ export class LoopEngine implements EngineApi {
                             revision_id: sample.revision.id,
                             critical: sample.critical,
                             high: sample.high,
-                            valid: reviews.length > 0 && reviews.every((review) => review.valid)
+                            valid: reviews.length > 0 && reviews.every((review) => review.valid),
+                            unresolved_fixes: sample.fixesUnresolved
                         };
                     }),
                     selected: current.id
@@ -1417,17 +1521,38 @@ export class LoopEngine implements EngineApi {
                 );
             }
 
-            // §6.8: the round's prompt CARRIED these fix tasks, so the resample is their answer.
-            // They are `done`, not `wontfix` — the work happened, as a new round. The FINDING closes
-            // with its task (the rule `settleJob` applies to a classic fix pass): leaving it
-            // `approved` would hold `summaryBlockingFindings` — and therefore the phase sign-off —
-            // forever. A resample that did NOT fix the defect re-files the same fingerprint on the
-            // new draft, which L-16a reads as a regression rather than trusting this write.
-            for (const task of openFixTasks(store, fresh.id)) {
+            // §6.8, as H1 changed it: the round's prompt CARRIED these fix tasks, and the winner is now
+            // chosen FROM THE CANDIDATES THAT PROVED THEM ANSWERED. Closure is per task and evidence
+            // gated (R4):
+            //
+            //   * `fixesCleared` = the tasks every screening pass that was handed them marked `resolved`
+            //     with a quotation from THIS winner (`sample-select.ts:scoreSample`). Those tasks go
+            //     `done`, and the finding they carry closes, exactly as a classic fix pass closes its
+            //     findings (`settleJob`'s D-34 branch).
+            //   * every other open fix task stays OPEN with its finding untouched. Before H1 this loop
+            //     closed whatever the prompt had listed, so a selection was its own proof and a round
+            //     could "fix" a defect by rewriting past it. A task the winner was never screened
+            //     against (confirmed after the round's screens went out) is likewise still open, and it
+            //     is what arms the next round (`records.ts:samplingArmed`) — the climb continues.
+            //
+            // `verified` is read from the WINNER's own certificate, which was computed above from rows
+            // this commit does not touch: the screening rows are only ever deleted for the LOSERS, and
+            // the compare-and-set below is what makes the writes an honest transaction if a run moved a
+            // task while this commit was being built.
+            const verified = new Set(winner.fixesCleared);
+
+            // H2/R1: WRITER-owned rows only. A Researcher prerequisite is closed by the Knowledge its
+            // own pass recorded (`settleFixPrerequisites`), never as a side effect of a draft winning;
+            // an Author-owned row is a question, not a target the winner settled.
+            for (const task of openWriterFixTasks(store, fresh.id)) {
+                if (!verified.has(task.id)) continue;
+
                 store.tasks.update(
                     task.id,
                     { state: 'done' },
-                    loopAttr(`consumed by sampling round ${round}'s prompt — resampled, not hand-fixed (§6.8, D-34)`),
+                    loopAttr(
+                        `certified by sampling round ${round}'s ${current.id} — every screening pass handed ${task.id} marked it resolved with evidence, so the resample answered it rather than hand-fixing it (§6.8, D-34, H1/R4)`
+                    ),
                     [{ id: task.id, rev: task.rev }]
                 );
 
@@ -1437,11 +1562,18 @@ export class LoopEngine implements EngineApi {
                 if (finding === undefined) continue;
                 if (finding.state !== 'confirmed' && finding.state !== 'approved') continue;
 
+                // F3 — the same last-open-row invariant as `settleFixPrerequisites`: selection certifies
+                // the tasks it was handed, and one certified Writer row does NOT retire a finding another
+                // open fix row still owns (a Researcher prerequisite, or an owner phase ① cannot serve).
+                // Without this gate, store ordering let the winner close a shared finding out from under
+                // work that was still owed.
+                if (!findingFixWorkSettled(store, fresh.id, finding.id, task.id)) continue;
+
                 store.findings.update(
                     finding.id,
                     { state: 'fixed' },
                     loopAttr(
-                        `sampling round ${round} resampled in answer to ${finding.id}; the task it named is done (D-34, §6.8). A re-raised fingerprint reads as a regression (L-16a)`
+                        `sampling round ${round} resampled in answer to ${finding.id}, and ${current.id} was certified against the last open task naming it; a re-raised fingerprint reads as a regression (D-34, §6.8, H1/R4, F3)`
                     ),
                     [{ id: finding.id, rev: finding.rev }]
                 );
@@ -1519,6 +1651,109 @@ export class LoopEngine implements EngineApi {
                 ),
                 [{ id: fresh.id, rev: fresh.rev }]
             );
+        });
+    }
+
+    /**
+     * H2/R1 — the settlement half of the phase-① fix owners (`work.ts:phase1FixPrerequisites` is the
+     * opening half, which generation calls).
+     *
+     * A `fix` task owned by a RESEARCHER is a grounding job, and its done condition is a recorded
+     * fact. So the row closes the moment one of its passes writes Knowledge
+     * (`records.ts:researchPrerequisiteAnswered` — a journal read of that family's runs, which is why
+     * it survives a restart and why `reportNoResearch`, which writes nothing, can never settle it).
+     * The finding it names goes `fixed` with it, exactly as the sampler's certified closure does: the
+     * complaint was "a reference I cannot resolve", and the crew has now resolved it.
+     *
+     * The two Author questions this family opens — an exhausted prerequisite, and a row whose owner
+     * has no phase-① job — CLOSE here when the task leaves the set that opened them (the Author
+     * re-owned it, restated it, closed it, or a late pass answered it). Opening is generation's job,
+     * so outside that condition this sweep only ever writes `done`, and a question never outlives its
+     * answer.
+     */
+    private async settleFixPrerequisites(storyId: string): Promise<void> {
+        const store = this.store;
+        const story = requireStory(store, storyId);
+
+        // The common case — no prerequisite and no open question — costs two list scans and no commit.
+        const prereqs = openPrerequisiteFixTasks(store, story.id);
+        const rows = store.tasks
+            .list()
+            .filter(
+                (task) =>
+                    task.story_id === story.id &&
+                    task.kind === 'escalation' &&
+                    task.state !== 'done' &&
+                    ((task.title ?? '').startsWith(FIX_PREREQUISITE_STALL_PREFIX) ||
+                        (task.title ?? '').startsWith(FIX_TASK_OWNER_PREFIX))
+            );
+
+        if (prereqs.length === 0 && rows.length === 0) return;
+
+        await store.commit('loop_fix_prerequisites', () => {
+            const fresh = requireStory(store, story.id);
+            // Re-derived INSIDE the commit: the opened and closed sets must reflect the rows this
+            // transaction sees, not the ones the pre-read saw (T-4's compare-and-set discipline).
+            const stillStalled = new Set(stalledResearchPrerequisites(store, fresh.id).map((task) => task.id));
+            const stillUnserviceable = new Set(
+                openUnserviceableFixTasks(store, fresh.id).map((task) => task.id)
+            );
+
+            for (const task of openPrerequisiteFixTasks(store, fresh.id)) {
+                if (!isResearchPrerequisiteFix(task)) continue;
+                if (!researchPrerequisiteAnswered(store, fresh.id, task)) continue;
+
+                store.tasks.update(
+                    task.id,
+                    { state: 'done' },
+                    loopAttr(
+                        `a grounding pass recorded the fact ${task.id} asked for — Knowledge attributed to its own run family is the completion evidence, never the run ending (T-10, H2/R1)`
+                    ),
+                    [{ id: task.id, rev: task.rev }]
+                );
+
+                const findingRef = task.finding_ref;
+                const finding = findingRef === undefined ? undefined : store.findings.get(findingRef);
+
+                if (finding === undefined) continue;
+                if (finding.state !== 'confirmed' && finding.state !== 'approved') continue;
+
+                // F3 — a finding's fix work can be split across owners (`finding_332` carried BOTH the
+                // Researcher's grounding row and the Writer's repair row). The grounding pass settles
+                // the FACT; the prose repair may still be owed, so the finding stays in its prior
+                // state until the LAST open row naming it settles. Marking it `fixed` early dropped a
+                // major out of the blocking set and wrote an unrecoverable entry into the closed-
+                // fingerprint history the trend reads (L-16a).
+                if (!findingFixWorkSettled(store, fresh.id, finding.id, task.id)) continue;
+
+                store.findings.update(
+                    finding.id,
+                    { state: 'fixed' },
+                    loopAttr(
+                        `the Researcher pass for ${task.id} grounded it, and no other open fix row names ${finding.id}: the reference the finding could not resolve is now a recorded fact and its fix work is settled (D-34, H2/R1, F3)`
+                    ),
+                    [{ id: finding.id, rev: finding.rev }]
+                );
+            }
+
+            for (const row of rows) {
+                // The task the question names is the id between the prefix and the ` — ` separator the
+                // reuse key puts there (anchored so `task_18` can never match `task_187`).
+                const stalled = (row.title ?? '').startsWith(FIX_PREREQUISITE_STALL_PREFIX);
+                const prefix = stalled ? FIX_PREREQUISITE_STALL_PREFIX : FIX_TASK_OWNER_PREFIX;
+                const taskId = (row.title ?? '').slice(prefix.length).trim().split(' ')[0] ?? '';
+
+                if (stalled ? stillStalled.has(taskId) : stillUnserviceable.has(taskId)) continue;
+
+                store.tasks.update(
+                    row.id,
+                    { state: 'done' },
+                    loopAttr(
+                        `${taskId} is no longer a prerequisite the loop cannot ground (T-10, P7) — the row closed with its question, so the round can arm again`
+                    ),
+                    [{ id: row.id, rev: row.rev }]
+                );
+            }
         });
     }
 

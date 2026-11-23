@@ -38,6 +38,7 @@ import {
     type RevisionMergeRequest,
     type AgentStatusRow,
     type AgentThreadRecord,
+    type LoopSettings,
     type StoryKnowledgeTree
 } from './api';
 import type { Cost, Run, Template } from '../shared/types';
@@ -72,6 +73,12 @@ export interface DashboardSnapshot {
      * these ids; an empty list means the catalog has not answered yet, never that typing is allowed.
      */
     agentModels: string[];
+    /**
+     * S-5 — the loop's fan-out ceiling and its live count (`GET /loop`). `null` until the first read
+     * lands: the control renders no number rather than the engine's default, because a default the
+     * server never reported is a guess about a setting the Author is about to change.
+     */
+    loop: LoopSettings | null;
     /** U-1c — "work the leftovers" jumps the queue to one Story without leaving the panel. */
     queueStoryFilter: string | null;
     /** U-11 / L-13 — the last refusal, shown as the server wrote it, never swallowed. */
@@ -92,6 +99,7 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     selectedAgent: null,
     agentThreads: {},
     agentModels: [],
+    loop: null,
     queueStoryFilter: null,
     error: null,
     loading: true
@@ -172,6 +180,14 @@ export function createDashboardStore(client: ApiClient = api) {
     /** U-8 — the provider's catalog. Read once per page; a provider restart is a later reload's job. */
     const refreshAgentModels = (): Promise<void> =>
         refresh('agentModels', async () => ({ agentModels: (await client.listAgentModels()).models }));
+
+    /**
+     * S-5 — the loop's ceiling, with the live count that gives it meaning. Read at first paint and
+     * after the one write that changes it; NOT on the `runs` event, because a thread closing does not
+     * move the ceiling and the rail's own tile badges already show what is live (the panel-wide
+     * running count is deliberately absent from the employee header).
+     */
+    const refreshLoop = (): Promise<void> => refresh('loop', async () => ({ loop: await client.getLoopSettings() }));
 
     const refreshKnowledge = (storyId: string): Promise<void> =>
         refresh(`knowledge:${storyId}`, async () => {
@@ -257,6 +273,7 @@ export function createDashboardStore(client: ApiClient = api) {
             void refreshTemplates();
             void refreshAgents();
             void refreshAgentModels();
+            void refreshLoop();
             void refreshRuns();
             // The callback captures `snapshot` lazily, so a `runs` event after a story
             // switch lists the NEW active Story's runs rather than the previous one's.
@@ -322,6 +339,7 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshTemplates(),
                 refreshAgents(),
                 refreshAgentModels(),
+                refreshLoop(),
                 refreshRuns(),
                 ...(snapshot.selectedAgent ? [refreshAgentThreads(snapshot.selectedAgent)] : [])
             ]).then(() => undefined);
@@ -435,6 +453,17 @@ export function createDashboardStore(client: ApiClient = api) {
          * tile can never keep showing the model it had before the Author's click.
          */
         setAgentModel: (kind: string, model: string | null) => mutate(() => client.setAgentModel(kind, model)),
+        /**
+         * S-5 — the ceiling the employee rail edits. `mutate`'s choreography re-reads stories, queue
+         * and runs, none of which owns this number, so the action re-reads `loop` itself: the value the
+         * control shows afterwards is the one the engine is running, never the one that was typed.
+         */
+        setLoopLimit: (limit: number) =>
+            mutate(async () => {
+                const settings = await client.setGlobalMaxConcurrent(limit);
+                await refreshLoop();
+                return settings;
+            }),
         killRun: (runId: string) =>
             mutate(async () => {
                 const run = await client.killRun(runId);

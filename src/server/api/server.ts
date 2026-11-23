@@ -28,6 +28,7 @@ import { CriteriaEngine } from '../criteria/engine';
 import { DigestBuilder } from '../digest/digest';
 import { RunExecutor } from '../run/executor';
 import { LoopEngine } from '../loop/engine';
+import { storedGlobalMaxConcurrent } from '../loop/ceiling';
 import { StoryKnowledge } from '../knowledge';
 import { Store } from '../store/store';
 import { StoryThreadLog } from '../run/thread-log';
@@ -53,7 +54,14 @@ export const DEFAULT_PROVIDER_BASE_URL = 'http://localhost:8800/providers/privat
 /** Any OpenAI-compatible relay name; the local dev relay serves a single default model. */
 export const DEFAULT_PROVIDER_MODEL = 'local/basalt';
 
-/** Loop-level env overrides for the sweep (S-5's ceiling, L-1's cadence, S-4a's lease). */
+/**
+ * Loop-level env overrides for the sweep (S-5's ceiling, L-1's cadence, S-4a's lease).
+ *
+ * `STORYLINE_GLOBAL_MAX_CONCURRENT` is also the one number of the three the Author may move from the
+ * workstation (the employee rail's "Max threads", `PATCH /loop`). The env var therefore means something
+ * specific: it is the OPERATOR's pin, and it outranks the stored choice on every boot — an unset env var
+ * (the usual case) is what lets the Author's choice persist. `loop/ceiling.ts` states that precedence.
+ */
 export const GLOBAL_MAX_CONCURRENT_ENVIRONMENT = 'STORYLINE_GLOBAL_MAX_CONCURRENT';
 export const SWEEP_INTERVAL_MS_ENVIRONMENT = 'STORYLINE_SWEEP_INTERVAL_MS';
 export const LEASE_IDLE_MS_ENVIRONMENT = 'STORYLINE_LEASE_IDLE_MS';
@@ -219,7 +227,14 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
     // dashboard that never moves. Tests inject `autoSweep: false` and become the clock.
     const config: LoopEngineConfig = { autoSweep: true, ...options.engineConfig };
 
-    config.globalMaxConcurrent = positiveInt(env[GLOBAL_MAX_CONCURRENT_ENVIRONMENT]) ?? config.globalMaxConcurrent;
+    // S-5's ceiling, in the precedence `loop/ceiling.ts` states: the operator's env pin, then a config
+    // the caller injected (a test or an embed), then the number the Author last chose in the employee
+    // rail, and otherwise nothing — which leaves the engine on `DEFAULT_GLOBAL_MAX_CONCURRENT`. The
+    // sweep reads the resolved value on every dispatch, so a rail write needs no restart.
+    config.globalMaxConcurrent =
+        positiveInt(env[GLOBAL_MAX_CONCURRENT_ENVIRONMENT]) ??
+        config.globalMaxConcurrent ??
+        storedGlobalMaxConcurrent(store);
     config.sweepIntervalMs = positiveInt(env[SWEEP_INTERVAL_MS_ENVIRONMENT]) ?? config.sweepIntervalMs;
     config.leaseIdleMs = positiveInt(env[LEASE_IDLE_MS_ENVIRONMENT]) ?? config.leaseIdleMs;
 

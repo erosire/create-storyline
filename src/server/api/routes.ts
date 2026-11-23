@@ -43,7 +43,8 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { duplicateTemplate, validateTemplate } from '../templates/templates';
-import { authorAttr, competingRevisions, requireStory, undecidedIdeas } from '../loop/records';
+import { authorAttr, competingRevisions, liveRuns, requireStory, undecidedIdeas } from '../loop/records';
+import { rememberGlobalMaxConcurrent } from '../loop/ceiling';
 import { isAgentKind, setAgentModel } from '../run/agent-models';
 import { listProviderModels } from '../run/provider-models';
 // U-13's two routes install and queue drafts, so they use the tool layer's own §4.15 body codec and
@@ -208,6 +209,15 @@ interface AssistantBody {
 /** U-8 — one employee's model on the global roster. `null` clears the choice (template role → process default). */
 interface AgentModelBody {
     model?: unknown;
+}
+
+/**
+ * S-5 — the loop's fan-out ceiling, the one engine setting the workstation may move. Unknown here
+ * rather than `number`: the route answers 400 with its own sentence for a value that is not a whole
+ * number of threads, and a body the client mis-shaped must not become a 500.
+ */
+interface LoopSettingsBody {
+    global_max_concurrent?: unknown;
 }
 
 /**
@@ -1845,6 +1855,68 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** U-10 — the cross-Story desk, the dashboard's home screen. */
     app.get('/queue', (c) => c.json(queueItems(store), 200));
+
+    // -------------------------------------------------------------------------
+    // The loop's own ceiling (S-5)
+    // -------------------------------------------------------------------------
+
+    /**
+     * S-5 — the loop's live fan-out ceiling, and how many of those slots a thread occupies right now.
+     * This is the one engine setting the Author may move from the workstation: it is not a §4 record
+     * (the ceiling belongs to the process, not to a Story), so it has no Story row to PATCH and the
+     * projection here is the only read of it.
+     */
+    const loopSettings = () => ({
+        global_max_concurrent: engine.config.globalMaxConcurrent,
+        live_runs: liveRuns(store).length
+    });
+
+    app.get('/loop', (c) => c.json(loopSettings(), 200));
+
+    /**
+     * S-5 — moving the ceiling. One field, so one 400 sentence: the value has to be a whole number of
+     * threads, and `0` is not one (a ceiling of zero would leave the sweep with nothing to dispatch and
+     * no way to say why). Lowering it cancels no run: the runs in flight finish and the loop stops
+     * claiming new ones until the live count falls under it, which is the same courtesy a Story stop
+     * pays (L-10).
+     */
+    app.patch('/loop', async (c) => {
+        const parsed = await readBody<LoopSettingsBody>(c);
+
+        if (!parsed.ok) return parsed.response;
+
+        if (!('global_max_concurrent' in parsed.body)) {
+            return errorResponse(
+                c,
+                400,
+                '`global_max_concurrent` is required — send the number of threads the loop may run at once (S-5).'
+            );
+        }
+
+        const limit = parsed.body.global_max_concurrent;
+
+        if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+            return errorResponse(
+                c,
+                400,
+                '`global_max_concurrent` must be a whole number of threads, at least 1 — it is the hard cap on simultaneous runs (S-5).'
+            );
+        }
+
+        try {
+            engine.setGlobalMaxConcurrent(limit);
+            // And remembered, so the ceiling survives the restart the Author will eventually cause:
+            // this is host configuration, not a fact about the book, so it rides the store's `settings`
+            // section and never the journal — the same seam the roster's model choices use (U-8).
+            rememberGlobalMaxConcurrent(store, limit);
+        } catch (error) {
+            return refusal(c, error);
+        }
+
+        // The SAME projection GET /loop answers, so the control re-renders from the server's number
+        // rather than from what the Author typed (P1: the server is the memory).
+        return c.json(loopSettings(), 200);
+    });
 
     // -------------------------------------------------------------------------
     // §10 — the SSE channel

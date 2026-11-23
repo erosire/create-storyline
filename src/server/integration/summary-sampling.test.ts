@@ -4,7 +4,12 @@
 //   structure_seed → research → N × sample_unit → M × screen_samples per sample
 //     → the engine's deterministic selection (§6.5) → deep review on the selected revision
 //     → an approved fix task arms round 2 (whose prompt carries the base revision + the tasks)
-//     → round 2's selection consumes the task → a clean deep review signs the phase off.
+//     → round 2's screening passes CERTIFY the repair by task id → only a certified candidate may
+//       win, and only then does the task close → a clean deep review signs the phase off.
+//
+// H1 (the hill-climb) is what the last two `describe` blocks pin: an uncertified draft is ineligible,
+// the round drafts again inside the attempt cap, a spent cap asks the Author instead of installing the
+// least-bad text, and the fix task stays open on every draft that failed.
 //
 // Everything asserted here is a store row, a run row or an HTTP projection: the crew is scripted
 // from its brief (harness.ts) and the clock is the test's explicit sweep/settle. The sampler's
@@ -196,9 +201,9 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
                 {
                     round: 1,
                     samples: [
-                        { revision_id: 'revision_1', critical: 0, high: 0, valid: true },
-                        { revision_id: 'revision_2', critical: 0, high: 0, valid: true },
-                        { revision_id: 'revision_3', critical: 0, high: 0, valid: true }
+                        { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                        { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                        { revision_id: 'revision_3', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
                     ],
                     selected: 'revision_1'
                 }
@@ -293,9 +298,9 @@ describe('§6.5/§6.6: the deterministic selection', () => {
                     {
                         round: 1,
                         samples: [
-                            { revision_id: 'revision_1', critical: 0, high: 0, valid: true },
-                            { revision_id: 'revision_2', critical: 1, high: 0, valid: true },
-                            { revision_id: 'revision_3', critical: 1, high: 0, valid: true }
+                            { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
+                            { revision_id: 'revision_2', critical: 1, high: 0, valid: true, unresolved_fixes: [] },
+                            { revision_id: 'revision_3', critical: 1, high: 0, valid: true, unresolved_fixes: [] }
                         ],
                         selected: 'revision_1'
                     }
@@ -451,6 +456,201 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
     });
 });
 
+// H1 — the two rows that make phase ① a HILL rather than a re-draw. Both start from the same state
+// the test above reaches: round 1 is installed, the deep review filed one major defect, the Author's
+// dial approved it, and its fix task armed round 2. What differs is only what round 2's screening
+// passes say about the repair, because that answer — not the prose — is what the selection reads.
+describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
+    it('refuses the draft its own Readers refused, installs the one that certified the fix, then closes the task', async () => {
+        /** Every refinement prompt the sampler compiled, to prove the contract travelled with the fix. */
+        const refinedPrompts: string[] = [];
+        /** How many deep-review passes have already filed their defect (the first one only). */
+        let filed = 0;
+
+        const fixture = await bootStoryline({
+            readerIdeas: 0,
+            readerFinds: (ctx) => {
+                if (ctx.draftIds[0] !== 'revision_1') return undefined;
+
+                filed += 1;
+
+                return filed === 1 ? 'major' : undefined;
+            },
+            sampleAnswer: (turn) => {
+                if (turn.prompt.includes('## BASE REVISION')) refinedPrompts.push(turn.prompt);
+
+                return defaultSampleAnswer(turn.sampleIndex, SLICE_SEED);
+            },
+            // Two refinement drafts and one question between them: sample 1 kept the ending it was
+            // given, sample 2 paid the promise. The Readers answer by TASK ID, and that answer — not
+            // their issue counts, which are 0/0 for both — decides the round (H1/R2).
+            screenFixes: ({ fixIds, sampleIndex }) =>
+                fixIds.map((fix_ref) => ({
+                    fix_ref,
+                    status: sampleIndex === 1 ? 'unresolved' : 'resolved',
+                    evidence: `ending: sample ${sampleIndex} ending`
+                }))
+        });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 2, readers: 1 });
+
+        try {
+            await openDial(fixture, storyId);
+            await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 100);
+
+            // Sample 1 was drafted first, so it is `revision_3` — and it is gone. An uncertified draft
+            // is not the round's answer, even though it tied on every §6.5 count, and §6.6's
+            // truncation deleted it with its screening reviews.
+            expect(
+                fixture.store.revisions
+                    .list()
+                    .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
+            ).toEqual(['revision_1:r1:sampled:selected', 'revision_4:r2:refined:selected']);
+            // The Summary now reads the CERTIFIED draft, not merely the earliest one.
+            expect(fixture.store.summaries.require('summary_1').premise).toBe(`sample 2: ${SLICE_SEED}`);
+
+            // R4: the task and its finding close on the winner's certificate. Neither moved when the
+            // failed draft was screened, and neither would have moved had the round selected it.
+            expect(fixture.store.tasks.list().map((task) => `${task.id}:${task.state}`)).toEqual(['task_1:done']);
+            expect(fixture.store.findings.list().map((finding) => `${finding.id}:${finding.state}`)).toEqual([
+                'finding_1:fixed'
+            ]);
+
+            // R4's audit: the loser's `sample_reviews` rows are deleted by the selection commit, so the
+            // history line is the only surviving record of which fix it failed.
+            const story = fixture.store.stories.require(storyId);
+
+            expect(story.sampling_round).toBe(2);
+            expect(
+                (story.sampling_history ?? []).map(({ round, samples, selected }) => ({
+                    round,
+                    samples: samples.map(
+                        (sample) => `${sample.revision_id}:${sample.critical}:${((sample.unresolved_fixes ?? []).join('+')) || 'clear'}`
+                    ),
+                    selected
+                }))
+            ).toEqual([
+                { round: 1, samples: ['revision_1:0:clear', 'revision_2:0:clear'], selected: 'revision_1' },
+                { round: 2, samples: ['revision_3:0:task_1', 'revision_4:0:clear'], selected: 'revision_4' }
+            ]);
+
+            // No retry was bought: the round held a certifiable draft, so the hill-climb never had to
+            // reach for its allowance (R3: the retry is for a stalled round, not a decided one).
+            const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
+
+            expect(refs.filter((ref) => ref.startsWith('wi_sample_'))).toEqual([
+                'wi_sample_summary_1_1_1',
+                'wi_sample_summary_1_1_2',
+                'wi_sample_summary_1_2_1',
+                'wi_sample_summary_1_2_2'
+            ]);
+            expect(refs.filter((ref) => ref.startsWith('wi_escalation'))).toEqual([]);
+
+            // H1/R1, seen from the Writer: the fix travelled with its evidence AND with the contract
+            // that keeps the round a revision of the draft it replaces.
+            expect(refinedPrompts).toHaveLength(2);
+            expect(refinedPrompts[0]).toContain('## BASE REVISION');
+            expect(refinedPrompts[0]).toContain('## REVISION CONTRACT');
+            expect(refinedPrompts[0]).toContain('## FIX TASKS');
+            expect(refinedPrompts[0]).toContain('defect:');
+            expect(refinedPrompts[0]).toContain('evidence:');
+        } finally {
+            await fixture.close();
+        }
+    });
+
+    it('drafts again while nothing can certify the fix, then asks the Author without closing anything', async () => {
+        /** Every refinement prompt, so the retry count is read from what the Writer was actually sent. */
+        const refinedPrompts: string[] = [];
+        let filed = 0;
+
+        const fixture = await bootStoryline({
+            readerIdeas: 0,
+            readerFinds: (ctx) => {
+                if (ctx.draftIds[0] !== 'revision_1') return undefined;
+
+                filed += 1;
+
+                return filed === 1 ? 'major' : undefined;
+            },
+            sampleAnswer: (turn) => {
+                if (!turn.prompt.includes('## BASE REVISION')) return defaultSampleAnswer(turn.sampleIndex, SLICE_SEED);
+
+                refinedPrompts.push(turn.prompt);
+
+                // Four attempts at the same text: the sampler keeps its word, and the Readers keep
+                // theirs. This is the case the old pipeline got wrong — the prose is clean, so the
+                // counts are clean, and only the certificate says the defect is still there.
+                return screenedSample('refined: the same ending again');
+            },
+            screenFixes: ({ fixIds }) =>
+                fixIds.map((fix_ref) => ({
+                    fix_ref,
+                    status: 'unresolved' as const,
+                    evidence: 'ending: refined: the same ending again — the promise is still not paid'
+                }))
+        });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 1, readers: 1 });
+
+        try {
+            await openDial(fixture, storyId);
+            await fixture.settle(async () => fixture.store.tasks.list().some((task) => task.kind === 'escalation'), 80);
+
+            // One sample the Author asked for, plus `SAMPLING_RETRY_ALLOWANCE` (3) retries: the extra
+            // drafts are the hill-climb, and the cap is what bounds it (R3). Each retry is a fresh
+            // prompt over the same base draft, so the Writer is asked to revise, never to start over.
+            expect(refinedPrompts).toHaveLength(4);
+            const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
+
+            expect(refs.filter((ref) => ref.startsWith('wi_sample_'))).toEqual([
+                'wi_sample_summary_1_1_1',
+                'wi_sample_summary_1_2_1',
+                'wi_sample_summary_1_2_2',
+                'wi_sample_summary_1_2_3',
+                'wi_sample_summary_1_2_4'
+            ]);
+
+            const story = fixture.store.stories.require(storyId);
+
+            // Nothing was installed and nothing was closed: round 1's text is still the Summary, the
+            // round never advanced, and the fix task and its finding are exactly where the deep review
+            // left them (R4 — the old behaviour closed them on a selection that had not earned it).
+            expect(story.sampling_round).toBe(1);
+            expect(story.sampling_history?.map((line) => line.round)).toEqual([1]);
+            expect(fixture.store.summaries.require('summary_1').premise).toBe(`sample 1: ${SLICE_SEED}`);
+            expect(
+                fixture.store.revisions
+                    .list()
+                    .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
+            ).toEqual([
+                'revision_1:r1:sampled:selected',
+                'revision_2:r2:refined:drafted',
+                'revision_3:r2:refined:drafted',
+                'revision_4:r2:refined:drafted',
+                'revision_5:r2:refined:drafted'
+            ]);
+            expect(
+                fixture.store.tasks.list().map((task) => `${task.id}:${task.kind}:${task.state}`)
+            ).toEqual(['task_1:fix:open', 'task_2:escalation:open']);
+            expect(fixture.store.findings.list().map((finding) => `${finding.id}:${finding.state}`)).toEqual([
+                'finding_1:approved'
+            ]);
+
+            // The escalation is the OTHER sampling failure — not the provider one — and it names the
+            // fix it could not certify, on the drafts that were tried (R3: surfaced, not hidden).
+            const escalation = fixture.store.tasks.list().find((task) => task.kind === 'escalation');
+
+            expect(escalation?.title).toBe(
+                'Phase ① sampling failed after 4 attempts — no draft answered the fixes this round was armed with'
+            );
+            expect(escalation?.detail).toContain('task_1 (unresolved on revision_2)');
+            expect(escalation?.detail).toContain('wave: 0');
+            expect(escalation?.detail).toContain('every fix task is still open');
+        } finally {
+            await fixture.close();
+        }
+    });
+});
+
 describe('§6.4 step 3: a sampler that never validates costs attempts, then escalates', () => {
     it('retries the schema once per attempt, spends the retry allowance, and opens the Author escalation', async () => {
         /** Every structured provider call, counted so the repair retry is observable. */
@@ -522,7 +722,23 @@ describe('§6.4 step 3: a sampler that never validates costs attempts, then esca
             expect(
                 (await crewRows(fixture, storyId)).filter((row) => String(row.work_item_ref).startsWith('wi_sample_'))
             ).toHaveLength(4);
-            expect(await storyRow(fixture, storyId)).toMatchObject({ status: 'ready', levels: { summary: '1/2 · failing: C-14' } });
+            // H2/R2 — the settled row reads as the AUTHOR's wait, not `ready`: the sampling escalation
+            // it just opened is an open, Author-owned question, and with no sample left to buy and no
+            // run live there is nothing for the crew to dispatch. Before this fix the decision machine
+            // read only `blocked` escalation rows as a question, so a phase-① failure row (which is
+            // deliberately `open`, because the rearm/reuse/clear reads key on that shape) walked past
+            // step 4 and the Story claimed `ready` — the Working pill — while nothing could run.
+            const settled = await storyRow(fixture, storyId);
+
+            expect(settled).toMatchObject({
+                status: 'pending',
+                pending_kind: 'drained',
+                blocked_on: 'the Author: an open question',
+                active_runs: 0,
+                levels: { summary: '1/2 · failing: C-14' }
+            });
+            expect(String(settled.status_reason)).toContain('the crew asked you');
+            expect(String(settled.status_reason)).toContain('Phase ① sampling failed after');
         } finally {
             await fixture.close();
         }

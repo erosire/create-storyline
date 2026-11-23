@@ -94,6 +94,35 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(within(editor).queryByText(/no thread right now/)).toBeNull();
     });
 
+    it('carries the loop’s ceiling in the header, to the right of the roster’s name (S-5)', () => {
+        render(<AgentsPanel agents={idle} loop={{ global_max_concurrent: 8, live_runs: 6 }} onSetLoopLimit={vi.fn()} />);
+
+        const panel = screen.getByTestId('agents-panel');
+        const header = panel.querySelector<HTMLElement>('.sv-pane-head')!;
+        const limit = within(header).getByRole('combobox', { name: /maximum threads the loop runs at once/i });
+
+        // The number in effect, next to the title — not on a Story pane, because S-5's ceiling is one
+        // value across every Story and this rail is the shell's only global column.
+        expect(limit.textContent).toContain('8');
+        expect(header.textContent).toContain('Max threads');
+        // "To the right of it": the title keeps the left edge and the control is the header's last
+        // child, which is where story.css's `margin-left: auto` puts it.
+        expect(header.lastElementChild?.contains(limit)).toBe(true);
+        // The live count stays in the hover sentence: the header still prints no running line of its
+        // own, because every tile's badge already answers that question.
+        expect(within(header).queryByText(/threads? running/i)).toBeNull();
+        expect(limit.getAttribute('title')).toContain('6 live now');
+    });
+
+    it('leaves the header the roster’s name alone when the shell has no loop to configure', () => {
+        render(<AgentsPanel agents={idle} />);
+
+        const header = screen.getByTestId('agents-panel').querySelector<HTMLElement>('.sv-pane-head')!;
+
+        expect(within(header).queryByRole('combobox')).toBeNull();
+        expect(within(header).queryByText(/max threads/i)).toBeNull();
+    });
+
     it('says "1 thread running" — singular — for the single run the server reconciles (R2, R4)', () => {
         // This is exactly what `GET /agents` now answers for a structured Writer run: one live
         // journaled row, no engine thread, so the tile has one working entry (R1).

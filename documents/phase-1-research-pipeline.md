@@ -878,3 +878,162 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   the required `research_questions`; the catalogue is 52 tools, and per-kind totals are unchanged because
   the new tool is researcher-only. Pinned by `src/server/loop/phase1-research-waiver.test.ts` and the
   D-51 cases in `src/server/tools/runtime.test.ts`.
+- **H1: phase ① hill-climbs — selection is gated on a fix certificate, not on the counts (2026-11-23).**
+  §6.5's ranking now runs INSIDE an eligibility floor (`loop/sample-select.ts:scoreSample`): a candidate
+  is selectable only with ZERO `critical`/`high` screening issues AND every fix task its own screening
+  passes were handed marked `resolved` with a non-empty `evidence` line by EVERY pass that carried it
+  (`carryingFix`, `certifiesFix`). Unanimity rather than a majority is deliberate: with
+  `summary_readers` = 5, one Reader marking the fix `unresolved` is a live disagreement the loop resolves
+  by resampling, not by averaging (P6). `unknown` is the Reader admitting it cannot tell, which is not a
+  pass (R2); an unevidenced `resolved` is not a verdict (D-15); a pass that failed schema validation can
+  disqualify a draft but cannot certify a fix; and silence from a pass that was never handed the task (a
+  finding confirmed after its prompt was compiled) is not a failure. Minors never hold a round — the
+  screening schema closes severity at critical/high (T-11) and the Summary prompts cost wording and
+  sentence-shape notes as minor/taste (R6), while chapter prose keeps the §9 wording.
+- **H1-C1/F2 — an ungradeable round that OWES fixes is refused, not accepted (2026-11-23).** The one
+  eligibility exemption is "nothing is outstanding". A candidate whose screening set cannot hold a
+  certificate at all — no `fix_refs` and no verdict on any row (`ScoredSample.legacyScreening`), which is
+  also the shape of a screening leg whose every attempt failed the schema and of a row written before H1 —
+  is INELIGIBLE in a round that still owes an open fix task, so it never replaces the incumbent prose:
+  "nobody checked" is not a clean certificate. `legacyScreening` is therefore a REPORT on the score (it
+  explains an empty `fixesCleared`, and the closure gate still closes only `fixesCleared`), never a
+  waiver. The no-winner path is the existing bounded one — another sample inside `samplingCapOf`, then the
+  rejection escalation — never a silent round of competing drafts. Round 1 keeps the T12/C degrade
+  untouched (it owed no certificate), which is pinned on both sides: the round-1 row in
+  `src/server/loop/phase1-gates.test.ts` and the new round-2 row in `phase1-hill-climb.test.ts`.
+- **The fix demand is a record, not a query — and only of what is STILL open (H1-C1/F1).** Each screening
+  Work Item freezes the open fix ids at dispatch (`run/types.ts:WorkItem.fixRefs` — deliberately its own
+  field, not `taskRefs`, which `settleJob` marks done) and the engine copies them onto the
+  `sample_reviews` row it persists (`fix_refs`) beside the verdicts the Reader actually answered
+  (`fix_verifications`). `loop/records.ts:sampleFixDemand` reads the demand back off those rows, so every
+  candidate is graded against exactly what ITS screeners held and nothing else; a row that declares nothing
+  falls back first to the ids its verdicts echo (the schema keeps `fix_refs` optional so a pre-H1 row still
+  parses, §11's additive rule), then to the Story's open fix tasks for a REFINED draft nobody graded, then
+  to NOTHING for a round-1 draft. EVERY rung is then intersected with `openFixTaskIds` — the same set the
+  Writer's prompt compiles and the arming rule counts — so a task the Author settled (`wontfix`, or `done`
+  out of band) stops demanding: an Author who follows the escalation's own advice ("discard the fix tasks")
+  resolves the round instead of deadlocking it. Before that intersection the round sat with no eligible
+  candidate, no armed sample (`samplingArmed` needs an OPEN fix task), no spent cap and no escalation, and
+  the round-1 Summary stayed in place under a drain that could not clear; the settled rows also stay
+  settled — the selection does not relabel them `done`/`fixed`. Freezing per job also keeps the round's
+  prompts byte-identical (P1), and it means a task confirmed mid-round burdens only the drafts whose later
+  pass carried it — the hill-climb re-aiming at the outstanding work, not a rule that moves the goalposts
+  under a draft already screened. `engine.ts:rearmSamplingWave` does not burn a wave on such a round: its
+  `samplingExhausted` guard is false once the demand empties, so the round simply selects (wave 0, no new
+  sample needed).
+- **A stalled round climbs instead of installing the least-bad draft (R3).** `loop/work.ts` offers one
+  extra sample per sweep while the round is selection-ready but holds no eligible candidate, bounded by
+  the existing `records.ts:samplingCapOf` allowance (stage size + `SAMPLING_RETRY_ALLOWANCE` = 3, so 8
+  attempts at the 5/5 product standards and the 1-sample loop rig's 4) — an allowance, not a new round
+  cap, and no new trend rule. Exhaustion reuses `work.ts:SAMPLING_FAILURE_PREFIX` with a second title
+  (`Phase ① sampling failed after <cap> attempts — no draft answered the fixes this round was armed
+  with`, its detail naming the wave and each outstanding `task_n (unresolved on revision_n)`) so the wave
+  re-arm in `engine.ts` recovers it through the existing Author path. Only the PREFIX is a contract —
+  `openEscalationTask`'s reuse key and `engine.ts:rearmSamplingWave` match `SAMPLING_FAILURE_PREFIX` plus
+  the detail's `wave: n`, so the title tail is free to state the truth (H1-C2/N-1 below). §6.5's least-bad
+  pick survives exactly where nothing is outstanding: round 1, and a refinement whose fix tasks the
+  Author has settled. A refined round that still owes an open fix task does NOT fall back to it — not
+  when its screening rows predate the certificate, and not when the screening leg answered nothing
+  (H1-C1/F2 above).
+- **H1-C2/N-1 — the rejection escalation names the axis that actually failed (2026-11-23).** Eligibility
+  has two axes, so exhaustion has two honest explanations, and the row now reads from each candidate's
+  score (`roundSampleScores`) instead of assuming the fix axis: with NO certified candidate it keeps the
+  H1 wording ("no draft answered the fixes this round was armed with" / "no screening pass certified
+  them"); with at least one candidate that cleared every fix it was handed, the title becomes
+  `… — no draft was both fixed and free of critical/high screening issues` and the detail names those
+  candidates, states that every fix was certified with evidence, and lists the counts that refused each
+  draft (`revision_n (0 critical, 1 high)`). A mixed round says which drafts cleared and which left fixes
+  unresolved rather than claiming nothing was certified. The recovery lever is axis-specific too: a round
+  whose work list is answered is not invited to discard the tasks it already satisfied. `unresolved` and
+  `never screened` are kept apart — a draft whose screening leg produced no valid verdict was not graded,
+  so its lever is the provider, not the draft. Minors are never described as a blocker, and they cannot
+  be: severity closes at critical/high (T-11) and the Summary prompts cost wording notes as minor (R6).
+- **A selection is proof, not an event (R4).** `engine.ts:trySelectSample` closes a `fix` task and moves
+  its finding to `fixed` only for the ids in the WINNER's `fixesCleared`. Before H1 the commit closed
+  whatever the prompt had listed, so a rewrite that discarded the draft could "fix" a defect by
+  forgetting it, close the task, and start the next round from a worse book. A rejected draft leaves its
+  tasks `open` and its finding `approved`, which is what arms the next round
+  (`records.ts:samplingArmed`) — the climb continues, and the failure is auditable.
+- **The audit line records the rejection — and the wire carries it (H1-C1/F3).**
+  `stories.sampling_history[].samples[]` gains `unresolved_fixes` on EVERY sample line, not only on failed
+  runs: §6.6's hard truncate deletes the losers and their `sample_reviews` rows in the same commit, so
+  without it the certificate — and the reason a round was refused — would vanish with them. The phase-①
+  Story view now projects it (`api/projections.ts:samplingView` → `dashboard/api.ts:SamplingHistoryRow`),
+  normalised to `[]` on a line written before the field existed, so an API consumer reads one shape and
+  never has to know which build wrote the row. Note what the line records: the demand as it stood at the
+  SELECTION, so a round whose task the Author settled before it selected reads `[]` — the refusal itself
+  lives on in the escalation row's detail, which outlives the task it names (P11).
+- **The crew doubles certify by default.** `loop/mock.ts:CrewBehaviour.screenFixes` and
+  `integration/harness.ts` mark demanded fixes `resolved` with evidence unless a row overrides it, so the
+  existing pipeline rows keep exercising the ENGINE's reaction to a certificate rather than a model's
+  wording; the failure rows name the override they need.
+- **H2 — a `fix` row's owner decides what phase ① does with it (2026-11-24).** §6.8's demand assumed every
+  open `fix` task is prose work. The live Story disproved it: `finding_332` carried a Researcher-owned
+  grounding row AND a Writer-owned repair row, and the round was armed and graded against BOTH — a draft
+  cannot pass "is the pet rule sourced?", a Reader's honest `unknown` is not a pass
+  (`sample-select.ts:certifiesFix`), and the round spent its cap with nothing eligible. Three rules follow,
+  all keyed on the task's `owner_role` through ONE predicate (`records.ts:isWriterActionableFix`: `''`,
+  `writer`, or a `writer-*` template id — the assignment layer writes `writer-prose`):
+  1. **Writer rows are the demand.** `openFixTaskIds` filters to them, so they alone reach the Writer's
+     prompt block (`run/phase1-prompt.ts`), the screening `fix_refs`, `sampleFixDemand`, and the closure
+     list in `engine.ts:trySelectSample`.
+  2. **A Researcher row becomes the phase-① job that already exists**: a `research` pass, key
+     `wi_research_fix_<task>_a<n>`, priority 0, `researcher-story`, unit
+     `{ kind: 'summary', ref }` (F1 — `run/brief.ts` renders ARTIFACT UNDER REVIEW from `item.unit.kind`
+     and scopes Ideas from `item.unit?.ref`, so a bare artifact id dispatches the pass with an EMPTY
+     artifact section, asked to ground a fact about a Summary it was never shown), `taskRefs`/`findingRefs`
+     naming what it settles. It is offered as stage 0, ahead of the round's own jobs. The budget reuses the
+     loop's existing allowance — `records.ts:RESEARCH_PREREQUISITE_CAP` = `FINDING_VERIFY_CAP` (4) — and
+     counts runs in the family from the journal, so a restart cannot buy five more passes.
+  3. **Any other owner is a question, not silence**: `Phase ① fix task has no crew that can work it
+     <task> — …`, `owner_role: 'author'`.
+  The prerequisite settles only on EVIDENCE — `records.ts:researchPrerequisiteEvidence` is the `knowledge`
+  create/update events attributed to a run in that task's family, and `engine.settleFixPrerequisites`
+  (beside `escalateVerifyStall`) is its only writer. A run that ends with `reportNoResearch` (D-51) spent
+  the attempt and answered nothing, so it must not settle the row; the job's note says so, because the two
+  answers look identical to a crew asked to make them. Budget spent with no evidence opens
+  `Phase ① research prerequisite exhausted on <task> — …`. Both rows are ONE per task (anchored reuse key
+  `<prefix> <task.id> —`) and close the moment the task leaves the set that opened it — the Author's
+  answer retires them, not a second question. A refinement round is additionally HELD while a
+  prerequisite is unanswered: `status.ts:phase1Unmet` names it, so the sweep cannot report a clean drain
+  over an external fact the loop still owes.
+- **H2/F3 — a finding is retired by its LAST open fix row.** One finding can carry rows for several
+  owners, so settling one marks THAT row `done` and leaves the finding `confirmed`/`approved` while any
+  other open `fix` row names it (`records.ts:findingFixWorkSettled`; `OPEN_TASK_STATES` is the unfinished
+  set). Both writes are gated identically — the prerequisite settlement and the certified-selection
+  closure, §15's R4 proof rule — because store ordering otherwise let either one retire the shared finding
+  out from under work still owed. A premature `fixed` is not cosmetic: it drops a major from the blocking
+  set and writes a line into the closed-fingerprint history the trend reads forever, where a re-raised
+  fingerprint then reads as a regression (L-16a). A finding whose rows are all settled closes exactly as
+  before; a `wontfix`/`discarded` row is settled, not successful, and closes nothing new.
+- **H2/R2 — an OPEN Author question is the wait it describes.** Phase ① escalations are opened `open`
+  with `owner_role: 'author'`, not `blocked`: the reuse lookup, the drain-hold and
+  `engine.ts:rearmSamplingWave`'s clear-and-rearm all key on the OPEN row, so a row's STATE cannot be what
+  makes it a wait. `status.ts:decideStory` step 4 read only `blocked` rows, so the sampling-cap state fell
+  through to `ready` — the dashboard's Working pill — with no candidate to dispatch and no run live. Step 4
+  now reads an open, Author-owned escalation as `pending`/`drained` +
+  `blocked_on: 'the Author: an open question'` + `the crew asked you: "<title>"`, and only at
+  `dispatchable === 0` (the CANDIDATE count `engine.ts` hands it, L-36) with zero live runs. The row keeps
+  its `open` state — the fix is in the read, never in rewriting the row — and because
+  `records.ts:dispatchableTasks` admits any row carrying an `owner_role`, it also holds L-37's condition 1,
+  so the clean-drain sentence can never be reported over an unanswered question.
+- Pinned by `src/server/loop/phase1-hill-climb.test.ts` (cap-bounded retry → escalation with nothing
+  closed → wave re-arm closing on the certificate; the R5 least-bad round; the demand ladder including the
+  `wontfix`/`done` intersection and the verdict-echo rung; the F1 Author-discard run that used to deadlock,
+  drain clauses included; the F2 row whose screening leg never answered, which now reads
+  `task_n (never screened on revision_n)`; and the N-1 row whose drafts all certify the fixes and are
+  refused on a high issue, asserting the screening-axis title, the per-draft counts, the axis-specific
+  lever, and the wave-1 recovery), the certificate cases in
+  `src/server/loop/sample-select.test.ts` (ungradeable-but-owing is ineligible; a round that demands
+  nothing is judged on its counts), the prompt bytes in `src/server/run/phase1-prompt.test.ts`,
+  `src/shared/schemas`' certificate cases in `src/server/llm/structured.test.ts`, the
+  `unresolved_fixes` wire rows (pass-through and pre-H1 normalisation) in
+  `src/server/api/phase1-view.test.ts`, and the two multi-round enforcement rows in
+  `src/server/integration/summary-sampling.test.ts`. The H2 block above is pinned by the `H2/R1-R2` describe
+  in the same file (the Writer-only demand and the two routed owners; the prerequisite job's payload, unit
+  included; the evidence rule and its `reportNoResearch` negative half; the 4-pass cap and the question it
+  opens; the shared-finding lifecycle through the certified selection; and the settled sweep's own
+  `pending`/`drained` read), plus `src/server/loop/drain.test.ts` (the question read on a drained Story,
+  and a pending directive review keeping it out of the reading), `src/server/run/brief.test.ts` (F1's
+  Summary-scoped artifact section), and the settled row of
+  `src/server/integration/summary-sampling.test.ts`.

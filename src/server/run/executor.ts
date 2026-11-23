@@ -24,7 +24,24 @@
 // lease is `runs.updated_at`, refreshed after every tool call by {@link heartbeat}. A four-hour
 // run is fine while it keeps calling tools; a hung run stops refreshing and lapses (L-2), and
 // the sweep re-adopts or abandons it (L-3).
-import { LlmError, type ChatClient, type ChatMessage, type ToolSchema } from '../llm';
+//
+// THE TWO CLOCKS (the bug this file carried, and the contract that closes it): a
+// `toolMode: 'none'` run answers in ONE structured turn and never calls a tool, so between the
+// row's `working` write and the provider's first byte NOTHING refreshed `updated_at`. A healthy
+// local model composing a 120.4s turn was therefore indistinguishable from a dead worker, and the
+// sweep abandoned it at 120000ms of silence (observed: 4 of 6 Summary samples + 2 screens, each
+// `tokens=0`, against a bounded sampling allowance). Liveness now covers the wait itself:
+//   1. IDLE EXECUTION LEASE — unchanged, owned by the sweep (`DEFAULT_LEASE_IDLE_MS`,
+//      server/loop/types.ts:307; checked by `lapsedRuns`, server/loop/records.ts:1599). It answers
+//      "is anyone home?", and {@link completeStructured} keeps it fed while a request is in flight,
+//      exactly as the engine's stream adapter already does for a tool run
+//      (server/run/story-engine.ts:714-750). Silence is what kills a run, never slowness.
+//   2. REQUEST-LIVENESS CEILING — added here, `STRUCTURED_REQUEST_MAX_MS`. It answers "how long may
+//      an answer that never arrives go on being believed?", because a heartbeat that beats for an
+//      unresolved request forever would keep a hung provider Promise alive indefinitely and turn
+//      S-4a's lease into no guard at all. It is one finite window per provider request, so a run is
+//      bounded at STRUCTURED_ATTEMPTS x the ceiling and cannot recurse or spin.
+import { LlmError, type ChatClient, type ChatMessage, type ChatRequest, type ChatResponse, type ToolSchema } from '../llm';
 import { parseStructuredContent } from '../llm/structured';
 import { type RoleAggregation, type RoleKind, type Run, type RunDelegation, type Story } from '../../shared/types';
 import { type Store, type UpdatePatch } from '../store';
@@ -55,7 +72,12 @@ interface RunScope {
     item: WorkItem;
     harness: ResolvedHarness;
     model: string;
-    /** The executor-owned signal: aborted by `kill`, or linked to the caller's (lease expiry, Story stop). */
+    /**
+     * The executor-owned signal: aborted by `kill`, by the request-liveness ceiling
+     * ({@link stopAtRequestCeiling}), or linked to the caller's (lease expiry, Story stop). Every
+     * structured provider request is handed THIS signal, so a kill, a stop and a ceiling all reach the
+     * transport instead of only the run's own bookkeeping.
+     */
     controller: AbortController;
     tally: RunTally;
     /** The run's own tool context — the identity every executed write is attributed to (P11, D-38). */
@@ -97,13 +119,51 @@ const END_STRUCTURED = 'completed — one structured turn, validated against the
 const STRUCTURED_ATTEMPTS = 2;
 
 /**
+ * How often an in-flight provider request refreshes the lease (S-4a). Deliberately the same
+ * cadence the engine's stream adapter uses while a TOOL run waits on its model turn
+ * (`STREAM_HEARTBEAT_MS`, server/run/story-engine.ts:173), so the sweep sees one liveness rhythm
+ * from both execution modes. A third of the 120s idle lease, so a run survives one lost store
+ * write (see {@link heartbeat}) rather than lapsing on a bookkeeping fault.
+ */
+const RUN_HEARTBEAT_MS = 30_000;
+
+/**
+ * The liveness ceiling of ONE structured provider request — the finite half of S-4a's guard
+ * (header note "THE TWO CLOCKS"). Why a number is legal here while E-0 forbids a run timeout:
+ * E-0/S-4a ban a clock on the RUN ("a run that takes four hours is fine"), and this puts no bound
+ * on how many turns or attempts a run may take. It bounds one promise: the window inside which a
+ * request that has produced nothing is still believed to be a live worker rather than a hung
+ * socket. 10 minutes is ~5x the slowest legitimate turn observed on a local provider (120.4s for a
+ * full sampling turn) while staying finite, so the pathological case — a provider Promise that
+ * never settles — ends the run at a known time instead of leaving the crew panel holding a
+ * `working` row until the process restarts (L-3).
+ *
+ * NOT an environment knob on purpose: `RunExecutorDeps` (./types) carries no config bag, and the
+ * sweep's `leaseIdleMs` is the dial the operator already owns. This ceiling is a property of the
+ * transport contract, not a deployment preference.
+ */
+const STRUCTURED_REQUEST_MAX_MS = 600_000;
+
+/**
+ * The journal `why` for a beat fired while a provider request is pending. It differs from the
+ * tool-call sentence only so an Author reading the audit can tell "waiting on the model" from
+ * "running a tool"; both are lease beats and neither is a story fact (P3 — run-row events are
+ * excluded from briefs by `eventBelongsToStory`, server/run/brief.ts:330).
+ */
+const BEAT_REQUEST = 'lease heartbeat — provider request in flight (S-4a)';
+
+/**
  * Why a live run was aborted. The Author's cord is only ONE of the ways a run stops being its
  * own (P8): the sweep also kills a Story's crew when the Story is stopped or paused (D-37), a
- * directive that changes the book out from under a run (L-24), a Story delete (P1), and a lease
- * that lapsed (S-4a). Naming the cause is what stops the UI from telling the Author that they
- * pulled a cord they never touched.
+ * directive that changes the book out from under a run (L-24), a Story delete (P1), a lease
+ * that lapsed (S-4a), and a provider request that outlived its liveness ceiling (see
+ * `STRUCTURED_REQUEST_MAX_MS`). Naming the cause is what stops the UI from telling the Author that
+ * they pulled a cord they never touched — and it is the WORKER-HEALTH DISTINCTION the two clocks
+ * need: `lease` says "nobody was home", `deadline` says "somebody was home and stopped answering".
+ * A run abandoned for either reason returns its Work Item to the queue; only the sentence the
+ * Author reads differs.
  */
-type RunKillReason = 'author' | 'lease' | 'stop' | 'directive' | 'delete';
+type RunKillReason = 'author' | 'lease' | 'deadline' | 'stop' | 'directive' | 'delete';
 
 /** The abort sentence and the closed row's `end_reason`, one per cause. */
 const ABORT_TEXT: Record<RunKillReason, { abort: string; end: string }> = {
@@ -114,6 +174,10 @@ const ABORT_TEXT: Record<RunKillReason, { abort: string; end: string }> = {
     lease: {
         abort: 'abandoned — the lease lapsed (S-4a, D-36)',
         end: 'abandoned — the lease lapsed (S-4a, D-36)'
+    },
+    deadline: {
+        abort: 'abandoned — its provider request outlived the request-liveness ceiling (S-4a)',
+        end: 'abandoned — its provider request outlived the request-liveness ceiling (S-4a)'
     },
     stop: {
         abort: 'abandoned — the Story was stopped (P8, D-37)',
@@ -142,6 +206,30 @@ const requestTitleOf = (item: WorkItem): string => {
     const unit = item.unit === undefined ? '' : ` ${item.unit.kind} ${item.unit.ref}`;
 
     return `${item.kind}${unit}`;
+};
+
+/**
+ * The VALUE a cancellation carries, for paths that must reject rather than throw. The mirror of
+ * {@link RunExecutor.abortIfStopped} and of `abortReason` in server/llm/client.ts:173: the signal's
+ * own reason when the host set one (so an Author cord, a stopped Story or a lapsed lease keeps its
+ * own sentence all the way to the row), and a synthesised `AbortError` when it did not.
+ */
+const signalReason = (signal: AbortSignal): Error => {
+    const reason = signal.reason;
+
+    if (reason instanceof Error) return reason;
+
+    if (reason !== undefined) {
+        const wrapped = new Error(String(reason));
+        wrapped.name = 'AbortError';
+
+        return wrapped;
+    }
+
+    const synthesised = new Error('run aborted');
+    synthesised.name = 'AbortError';
+
+    return synthesised;
 };
 
 export class RunExecutor {
@@ -587,12 +675,16 @@ export class RunExecutor {
                 throw new Error('a screen_samples item must name the draft it judges in revisionRef (§6.4 step 4)');
             }
 
-            return compileScreenPrompt(this.store, item.storyId, item.revisionRef);
+            // H1/R2 — the fix list travels on the ITEM, not on a store read: the queue recorded it when
+            // it queued the pass, so (a) every pass of one round renders the same bytes (§5's cache
+            // argument), and (b) the verdict the engine persists is graded against exactly the fixes
+            // this Reader was handed (`WorkItem.fixRefs`).
+            return compileScreenPrompt(this.store, item.storyId, item.revisionRef, { fixRefs: item.fixRefs });
         }
 
         // The round is on the item because it is not derivable from the store (§6.8): round 2+
         // must read the PREVIOUS round's selected revision, and only the sweep knows the round.
-        return compileSamplePrompt(this.store, item.storyId, { round: item.round ?? 1 });
+        return compileSamplePrompt(this.store, item.storyId, { round: item.round ?? 1, fixRefs: item.fixRefs });
     }
 
     /**
@@ -613,9 +705,10 @@ export class RunExecutor {
      * created/updated/closed exactly like a normal run (D-18, S-3 — `spawning` → `working` →
      * `torn_down`) and appears in every store-derived surface — including the employee tile's live
      * `working` list, which counts it from the row (R1) while no engine thread exists for it. A
-     * one-turn sampling call is seconds long and cannot host tools, so it earns no engine thread
-     * surface of its own; the retained thread log below keeps the request/answer history complete
-     * (U-8).
+     * one-turn sampling call can be MINUTES long on a local provider, and because no engine thread
+     * exists for this mode, nothing beats for it: {@link completeStructured} owns the lease liveness
+     * of its own request (S-4a). The run cannot host tools, but it is still working, and the retained
+     * thread log below keeps the request/answer history complete (U-8).
      *
      * Tokens are added to the run's tally per call (S-6/E-0), including the repair attempt — a
      * failed answer still cost the provider call.
@@ -647,8 +740,9 @@ export class RunExecutor {
             this.abortIfStopped(scope.controller.signal);
 
             // NO `tools` key at all: §2 decision 3 is an execution mode, so the request carries no
-            // tool surface and no `temperature` (§5's diversity is the `seed`, nothing else).
-            const response = await this.chat.complete({
+            // tool surface and no `temperature` (§5's diversity is the `seed`, nothing else). The
+            // call goes through `completeStructured`, which owns its lease liveness (S-4a).
+            const response = await this.completeStructured(scope, {
                 model: scope.model,
                 messages,
                 responseFormat: schema,
@@ -688,6 +782,143 @@ export class RunExecutor {
         throw new Error(
             `structured answer failed schema validation after ${STRUCTURED_ATTEMPTS} attempts: ${lastError}`
         );
+    }
+
+    /**
+     * One structured provider request, wrapped in the run's lease liveness (S-4a).
+     *
+     * THE BUG THIS CLOSES: a `toolMode: 'none'` run never enters the engine, and before this method
+     * nothing between the row's `working` write and the provider's answer touched `updated_at`. The
+     * sweep reads that column as the lease (`lapsedRuns`, server/loop/records.ts:1599; the 120s
+     * default is `DEFAULT_LEASE_IDLE_MS`, server/loop/types.ts:307, applied at
+     * server/loop/engine.ts:385), so a healthy model composing one long turn was killed as a dead
+     * worker mid-request. The engine's stream adapter had already learned this lesson for tool runs
+     * (server/run/story-engine.ts:714-750 beats around `chat.complete` and clears the interval in
+     * `finally`); this is the same contract for the direct transport path.
+     *
+     * THE CONTRACT, in the order it happens:
+     *   1. beat BEFORE dispatching, so the lease clock starts at the request rather than at the last
+     *      row write — a request that takes 0ms and one that takes 600s start equally fresh;
+     *   2. beat every RUN_HEARTBEAT_MS while the promise is pending, so the row is never silent for
+     *      more than one cadence while work is genuinely in flight — slowness is never a fault;
+     *   3. stop beating the MOMENT the request is over, by whichever ending arrives first: the
+     *      provider answer, a provider fault, a cancellation (the Author's cord, a stopped Story, a
+     *      caller-side lease expiry — the `abort` listener, because a signal is a request and an
+     *      adapter may ignore it), or the ceiling;
+     *   4. at STRUCTURED_REQUEST_MAX_MS of waiting, stop beating AND stop the run: the beat count is
+     *      finite, and the deadline both aborts the request (releases the socket; the pinned client
+     *      rethrows the cancellation, server/llm/client.ts:416) and settles this `await` through the
+     *      race, so even a provider Promise that ignores its signal cannot keep the run — or the
+     *      interval — alive forever.
+     *
+     * WHY A RACE AND NOT ONLY AN ABORT: `signal` asks, it does not command. Racing the ceiling is
+     * what makes step 4 a finite guard rather than a polite suggestion, and it is the only place in
+     * this file where a clock touches a run — E-0's "no timeout on a run" still holds, because this
+     * caps ONE REQUEST, not the run's life and not its attempt count (which stays
+     * STRUCTURED_ATTEMPTS, ./§4.2).
+     */
+    private async completeStructured(scope: RunScope, request: ChatRequest): Promise<ChatResponse> {
+        this.heartbeat(scope, BEAT_REQUEST);
+
+        // The tick budget IS the ceiling: 600_000 / 30_000 = 20 ticks, so the final beat lands at
+        // t=570s and the ceiling fires at t=600s. Counting ticks instead of wall-clock elapsed keeps
+        // the window exact under a test's fake clock — no `Date.now()` arithmetic, no drift, and no
+        // minutes of real sleeping (the suites are deterministic by rule).
+        let beatsLeft = Math.ceil(STRUCTURED_REQUEST_MAX_MS / RUN_HEARTBEAT_MS);
+        let beating: ReturnType<typeof setInterval> | undefined;
+        let settleCeiling!: (error: Error) => void;
+
+        const ceiling = new Promise<never>((_resolve, reject) => {
+            settleCeiling = reject;
+        });
+
+        beating = setInterval(() => {
+            beatsLeft -= 1;
+
+            if (beatsLeft > 0) {
+                this.heartbeat(scope, BEAT_REQUEST);
+
+                return;
+            }
+
+            // Step 4. Cleared here as well as in `finally`, so a beat can never fire after the run
+            // has been told to stop.
+            if (beating !== undefined) {
+                clearInterval(beating);
+                beating = undefined;
+            }
+
+            // `stopAtRequestCeiling` aborts, which fires `onStop` below; that listener settles the
+            // ceiling with the very same error, so this second settle is a no-op by design.
+            settleCeiling(this.stopAtRequestCeiling(scope));
+        }, RUN_HEARTBEAT_MS);
+
+        // Step 3's cancellation leg. The pinned client rejects when its signal aborts, so the race
+        // would settle anyway — but a beat spent AFTER a kill is a lie to the sweep ("this run is
+        // waiting on work"), and an adapter that ignored the signal would keep a stopped run looking
+        // alive until the ceiling. Stopping on the abort tick is what makes "the heartbeat lives as
+        // long as the request, and no longer" true for every transport, not only for ours.
+        const onStop = (): void => {
+            if (beating !== undefined) {
+                clearInterval(beating);
+                beating = undefined;
+            }
+
+            settleCeiling(signalReason(scope.controller.signal));
+        };
+
+        scope.controller.signal.addEventListener('abort', onStop, { once: true });
+
+        try {
+            // Dispatched INSIDE the try: `complete` returns a promise (a synchronous throw from an
+            // adapter still becomes a rejection), and the `finally` below is the only thing allowed to
+            // end the beating.
+            const pending = this.chat.complete(request);
+
+            // The race's loser must not become an unhandled rejection: once the ceiling has fired this
+            // run is closing, and a provider that faults minutes later is a fault against a closed row.
+            // Its tokens are lost by design — the row's total is written once, at teardown (S-3, S-6) —
+            // which is the same accounting the abandoned rows carry today.
+            pending.catch(() => undefined);
+
+            return await Promise.race([pending, ceiling]);
+        } finally {
+            // R1's stop condition: completion, provider error, abort, Author stop and the ceiling all
+            // pass through here, so neither the listener nor the interval outlives its own request (no
+            // handle leak, and no beat landing in the gap before a schema-repair turn).
+            scope.controller.signal.removeEventListener('abort', onStop);
+
+            if (beating !== undefined) clearInterval(beating);
+        }
+    }
+
+    /**
+     * The ceiling fired: stop believing an unanswered request is a live worker, and name why the run
+     * stopped (S-4a's worker-health distinction — `deadline`, not `lease`).
+     *
+     * ORDER MATTERS. The cause goes into `this.killed` while the signal is still clean, so
+     * `execute`'s catch reaches `ABORT_TEXT.deadline` and the Author reads "its provider request
+     * outlived the request-liveness ceiling" rather than "the lease lapsed". A stop that arrived
+     * FIRST owns the row: an Author cord, a stopped Story, a directive, or a caller-side lease expiry
+     * already recorded (or implied) its own reason, and the ceiling then only releases the request
+     * (P8, S-3).
+     */
+    private stopAtRequestCeiling(scope: RunScope): Error {
+        const error = new Error(
+            `run ${scope.runId} ${ABORT_TEXT.deadline.abort}: ${scope.item.kind} waited ${STRUCTURED_REQUEST_MAX_MS}ms on model ${scope.model} for the ${scope.item.responseSchema?.name ?? 'structured'} answer`
+        );
+
+        // `name === 'AbortError'` is the portable discriminator for this codebase
+        // (`isAbortError`, server/llm/client.ts:169) — `wasAborted` (./loop.ts:259) would also read
+        // the aborted signal, but the error stays honest on its own.
+        error.name = 'AbortError';
+
+        if (scope.controller.signal.aborted) return error;
+
+        this.killed.set(scope.runId, 'deadline');
+        scope.controller.abort(error);
+
+        return error;
     }
 
     /**
@@ -783,19 +1014,20 @@ export class RunExecutor {
     }
 
     /**
-     * S-4a: the lease heartbeat. Every tool call refreshes `updated_at` — nothing else, because
-     * the loop engine reads that column as the lease and a run that keeps calling tools is
-     * working however long it takes (E-0). A heartbeat write that fails is swallowed on purpose:
-     * losing one row update must not kill a run that is otherwise fine, and the symptom of a
-     * persistently failing heartbeat is a lapsed lease, which is the loop's own recovery path.
+     * S-4a: the lease heartbeat. It refreshes `updated_at` and nothing else, because the loop engine
+     * reads that column as the lease — so a run that keeps working is fine however long it takes
+     * (E-0). Two things fire it: every tool call (./loop.ts:228, ./panel.ts and the engine's tool
+     * execution), and — since the structured-run fix — the pending provider request itself
+     * ({@link completeStructured}). The `why` only labels the audit; the row write is the lease.
+     *
+     * A heartbeat write that fails is swallowed on purpose: losing one row update must not kill a run
+     * that is otherwise fine, and the symptom of a persistently failing heartbeat is a lapsed lease,
+     * which is the loop's own recovery path. That tolerance is also why the beat cadence is a third
+     * of the idle lease rather than the whole of it.
      */
-    private heartbeat(scope: RunScope): void {
+    private heartbeat(scope: RunScope, why = 'lease heartbeat — tool call (S-4a)'): void {
         try {
-            this.store.runs.update(
-                scope.runId,
-                {},
-                { run_ref: scope.runId, why: 'lease heartbeat — tool call (S-4a)' }
-            );
+            this.store.runs.update(scope.runId, {}, { run_ref: scope.runId, why });
         } catch {
             // Swallowed — see the note above.
         }

@@ -20,6 +20,11 @@ import type { ChatRequest, ChatResponse } from '../llm';
 import { LlmError } from '../llm';
 import { calls, msg } from '../llm/mock';
 import { MockChatClient, type MockHandler } from '../llm/mock';
+// The sweep's OWN lease machinery, imported rather than paraphrased: `lapsedRuns` is the exact
+// predicate `LoopEngine.scanStory` runs against (server/loop/engine.ts:385), so "the sweep would
+// not have abandoned this run" is asserted with the sweep's own query.
+import { lapsedRuns } from '../loop/records';
+import { DEFAULT_LEASE_IDLE_MS } from '../loop/types';
 import { Store } from '../store';
 import { setAgentModel } from './agent-models';
 import { buildBrief } from './brief';
@@ -1338,5 +1343,378 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
             answer: JSON.stringify(SAMPLE_ANSWER),
             retained: true
         });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-4a / D-36 — the lease across a SLOW structured turn (B2)
+//
+// WHY THIS SUITE EXISTS: on a fresh A Dog Tale four of six Summary samples and two screens
+// closed as `the lease lapsed after 120000ms of silence (S-4a, D-36)` with `tokens=0`, while a
+// FIFTH sample completed in 120.36s. A `toolMode: 'none'` run owns its provider call directly
+// (./executor's `runStructuredTurn`) and never enters the engine, so nothing in the loop that
+// beats the lease for a tool run was beating it here — a healthy model composing one long turn
+// was indistinguishable from a dead worker, and the sweep's lease killed it mid-request and ate
+// the round's bounded sampling allowance. Every case below pins one clause of the fix:
+//   R1 liveness starts before the request and stops on its first ending, with no handle left;
+//   R2 a pending request that crosses the old 120s idle threshold still completes;
+//   R3 a request that NEVER answers is bounded by the ceiling, with its own cause on the row.
+// They run on a fake clock: the assertions are exact tick counts, not sleeps, so the suite stays
+// deterministic and a millisecond of real waiting never enters it.
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider whose answer is a PROMISE the test settles by hand — the only way to hold one
+ * structured request open across the lease window without sleeping for minutes.
+ *
+ * It also IGNORES its `signal`, which is the worst-case transport the request ceiling exists to
+ * bound (R3): with no rejection on abort, nothing but the executor's own finite guard can end the
+ * run, and these tests prove one exists. `release` is the happy path; leaving it uncalled is the
+ * hung path.
+ */
+function heldProvider() {
+    const requests: ChatRequest[] = [];
+    let release!: (response: ChatResponse) => void;
+
+    // ONE promise for every call this client receives: a second attempt would see the same pending
+    // answer, so a "how many requests did the run make" assertion stays meaningful.
+    const pending = new Promise<ChatResponse>((resolve) => {
+        release = resolve;
+    });
+
+    const client = new MockChatClient((request) => {
+        // Snapshot like `record` above — the live `messages` array is mutated between attempts, so a
+        // bare push would record the final transcript rather than this request.
+        requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })) });
+
+        return pending;
+    });
+
+    return { client, requests, release };
+}
+
+/** The idle lease these cases are written against — the very default that abandoned the samples. */
+const LEASE_IDLE_MS = 120_000;
+
+/** The structured request ceiling, restated from ./executor as the contract (S-4a's finite leg). */
+const REQUEST_MAX_MS = 600_000;
+
+/** The `why` the row carries when the ceiling, not the sweep, stopped the run. */
+const END_DEADLINE = 'abandoned — its provider request outlived the request-liveness ceiling (S-4a)';
+
+/**
+ * A structured run on a held provider: the fixture, the request count, and the fake clock, with the
+ * environment's own timer baseline captured so "no handle leaked" is an exact relative assertion
+ * rather than an absolute count of whatever else the environment happens to have armed.
+ */
+function livenessRig(options: { threadLog?: boolean } = {}) {
+    const rig = samplingRig();
+    const held = heldProvider();
+    const executor = new RunExecutor({
+        store: rig.store,
+        runtime: rig.runtime,
+        chat: held.client,
+        defaultModel: 'gpt-5'
+    });
+
+    return { ...rig, ...held, executor, timers: vi.getTimerCount() };
+}
+
+describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)', () => {
+    it('beats the lease through a turn slower than the idle window, so a slow sample still completes (S-4a)', async () => {
+        vi.useFakeTimers();
+
+        try {
+            const { store, story, runtime, sampleItem, executor, requests, release, timers } = livenessRig();
+            const compiled = compileSamplePrompt(store, story.id, { round: 1 });
+
+            expect(DEFAULT_LEASE_IDLE_MS).toBe(LEASE_IDLE_MS);
+
+            const running = executor.execute(sampleItem);
+
+            // R1, first clause: `execute` dispatches synchronously up to its first `await`, so the
+            // request has already left and the lease has already been beaten — the clock starts at
+            // the REQUEST, not at the `working` write. The fake clock is frozen until advanced, which
+            // makes "the beat just happened" an exact string comparison.
+            expect(requests.length).toBe(1);
+            expect(store.runs.require('run_1').updated_at).toBe(new Date(Date.now()).toISOString());
+            // One interval armed for the request, and nothing else.
+            expect(vi.getTimerCount()).toBe(timers + 1);
+
+            // 130s of waiting — past the 120s that killed the samples — sampled once per minute and
+            // once again 10s on. `lapsedRuns` is the sweep's OWN predicate (loop/records.ts:1599: a
+            // live row whose `updated_at` is older than `leaseIdleMs`), so this is the real claim
+            // "the sweep would not have touched this run", not a paraphrase of it.
+            const silences: number[] = [];
+
+            for (let minute = 0; minute < 3; minute += 1) {
+                await vi.advanceTimersByTimeAsync(30_000);
+                silences.push(Date.now() - Date.parse(store.runs.require('run_1').updated_at));
+                expect(lapsedRuns(store, Date.now(), DEFAULT_LEASE_IDLE_MS)).toEqual([]);
+            }
+
+            await vi.advanceTimersByTimeAsync(40_000);
+            silences.push(Date.now() - Date.parse(store.runs.require('run_1').updated_at));
+
+            // The row is never silent for more than one beat cadence (30s). Before the fix every
+            // entry reads [30000, 60000, 90000, 130000] — the last one over the lease, which is
+            // exactly the abandonment the Author watched.
+            expect(silences).toEqual([0, 0, 0, 10_000]);
+            expect(store.runs.require('run_1').updated_at).toBe(new Date(Date.now() - 10_000).toISOString());
+            expect(store.runs.require('run_1').state).toBe('working');
+
+            // R2: the request that crossed the threshold is still eligible to finish, and it finishes
+            // with the same exact result a fast turn produces.
+            release({
+                message: msg({ content: JSON.stringify(SAMPLE_ANSWER) }),
+                usage: { input: 40, output: 10, cached_input: 5 }
+            });
+
+            const result = await running;
+
+            expect(result).toEqual({
+                runId: 'run_1',
+                ended: 'completed',
+                no_op: false,
+                tokens: 50,
+                toolsCalled: [],
+                structured: SAMPLE_ANSWER,
+                promptHash: compiled.hash,
+                usage: { input: 40, output: 10, cached_input: 5 }
+            });
+
+            // The journal says the whole story: spawn, work, ONE beat per cadence (t=0 plus the four
+            // 30s ticks inside 130s), then teardown. No write is missing and none is extra.
+            expect(stateSteps(store)).toEqual([
+                'create:spawning',
+                'update:working',
+                'update:',
+                'update:',
+                'update:',
+                'update:',
+                'update:',
+                'update:torn_down'
+            ]);
+            // R1, second clause: completion cleared the interval — nothing is armed for a run that
+            // already has its answer.
+            expect(vi.getTimerCount()).toBe(timers);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('bounds a provider request that never answers, and abandons the run with its own cause (S-4a, R3)', async () => {
+        vi.useFakeTimers();
+
+        try {
+            const { store, runtime, sampleItem, executor, requests, timers } = livenessRig();
+
+            const running = executor.execute(sampleItem);
+            const t0 = Date.now();
+
+            // 599s in: still believed alive. The last beat landed at 570s, so the row is 29s old —
+            // inside the lease right up to the ceiling, which is the point of the beat.
+            await vi.advanceTimersByTimeAsync(599_000);
+
+            expect(Date.now() - Date.parse(store.runs.require('run_1').updated_at)).toBe(29_000);
+            expect(lapsedRuns(store, Date.now(), DEFAULT_LEASE_IDLE_MS)).toEqual([]);
+            expect(store.runs.require('run_1').state).toBe('working');
+
+            // The 600s tick: the ceiling, not the sweep, stops the run.
+            await vi.advanceTimersByTimeAsync(1_000);
+
+            const result = await running;
+
+            // The RunResult the sweep reads: a stopped run, not a provider fault — the request never
+            // answered, so nothing was spent and nothing was produced.
+            expect(result).toEqual({ runId: 'run_1', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
+
+            const row = store.runs.require('run_1');
+
+            expect({
+                state: row.state,
+                ended_at: row.ended_at,
+                end_reason: row.end_reason,
+                tokens: row.tokens,
+                no_op: row.no_op
+            }).toEqual({
+                state: 'abandoned',
+                // The fake clock is frozen at the ceiling instant once that tick has run, so this is
+                // the exact time the request was given up on: t0 + 600000ms, no drift.
+                ended_at: new Date(t0 + REQUEST_MAX_MS).toISOString(),
+                // The worker-health distinction: NOT the sweep's "lease lapsed" sentence. A reader can
+                // tell "the row went silent" from "the answer never came".
+                end_reason: END_DEADLINE,
+                tokens: 0,
+                no_op: true
+            });
+
+            // The transport is released, even for an adapter that ignores it: the request's own signal
+            // is aborted, so the pinned client's `fetch` is cancelled and the socket is not leaked.
+            expect(requests[0].signal?.aborted).toBe(true);
+            // Bounded, twice over: ONE provider request (the ceiling ends the run, so the schema-repair
+            // turn is never spent), and a beat count capped at REQUEST_MAX_MS / 30s.
+            expect(requests.length).toBe(1);
+            expect(stateSteps(store)).toEqual([
+                'create:spawning',
+                'update:working',
+                // t=0 plus the nineteen beats that fit before the ceiling tick — 20 empty patches, and
+                // the 21st beat never happens.
+                ...Array.from({ length: 20 }, () => 'update:'),
+                'update:abandoned'
+            ]);
+            // The interval is gone: a hung provider Promise cannot keep beating the lease forever.
+            expect(vi.getTimerCount()).toBe(timers);
+
+            // And a closed run stays closed: two more ceiling windows of dead air change nothing.
+            await vi.advanceTimersByTimeAsync(REQUEST_MAX_MS * 2);
+
+            expect(stateSteps(store).filter((step) => step !== 'update:')).toEqual([
+                'create:spawning',
+                'update:working',
+                'update:abandoned'
+            ]);
+            expect(vi.getTimerCount()).toBe(timers);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('stops beating on the tick the Author pulls the cord, and keeps the Author’s cause (P8, S-3, R1)', async () => {
+        vi.useFakeTimers();
+
+        try {
+            const { store, runtime, sampleItem, executor, requests, timers } = livenessRig();
+
+            const running = executor.execute(sampleItem);
+
+            // Two beats in: t=0 and t=30s.
+            await vi.advanceTimersByTimeAsync(45_000);
+            expect(store.runs.require('run_1').state).toBe('working');
+
+            executor.kill('run_1');
+
+            // The abort settles the run on the spot — the provider promise never answers at all, and
+            // the executor does not wait for the ceiling to notice the stop.
+            const result = await running;
+
+            expect(result).toEqual({ runId: 'run_1', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
+
+            const row = store.runs.require('run_1');
+
+            expect({ state: row.state, end_reason: row.end_reason }).toEqual({
+                state: 'abandoned',
+                // The Author's sentence, never the deadline's: a stop that arrived first owns the row,
+                // so the UI cannot blame a timeout for a cord the Author pulled (P8).
+                end_reason: 'killed — the Author pulled the cord (P8, U-7)'
+            });
+            expect(requests[0].signal?.aborted).toBe(true);
+            // Nothing left armed, and no beat spent after the cord.
+            expect(vi.getTimerCount()).toBe(timers);
+            expect(stateSteps(store)).toEqual([
+                'create:spawning',
+                'update:working',
+                'update:',
+                'update:',
+                'update:abandoned'
+            ]);
+
+            await vi.advanceTimersByTimeAsync(REQUEST_MAX_MS);
+
+            // The ceiling cannot re-open a closed row or overwrite its cause.
+            expect(store.runs.require('run_1').end_reason).toBe('killed — the Author pulled the cord (P8, U-7)');
+            expect(vi.getTimerCount()).toBe(timers);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('leaves exactly one beat and no armed timer when the answer is immediate (mock fast path unchanged, R2)', async () => {
+        vi.useFakeTimers();
+
+        try {
+            // The fast path the whole suite already relies on: a mock that answers at once must not
+            // grow a second write, a second request or a live interval just because liveness was added.
+            const ok = livenessRig();
+            const compiled = compileSamplePrompt(ok.store, ok.story.id, { round: 1 });
+
+            const fastRunning = ok.executor.execute(ok.sampleItem);
+
+            expect(ok.requests.length).toBe(1);
+            expect(vi.getTimerCount()).toBe(ok.timers + 1);
+
+            ok.release({
+                message: msg({ content: JSON.stringify(SAMPLE_ANSWER) }),
+                usage: { input: 40, output: 10, cached_input: 5 }
+            });
+
+            const fast = await fastRunning;
+
+            expect(fast).toEqual({
+                runId: 'run_1',
+                ended: 'completed',
+                no_op: false,
+                tokens: 50,
+                toolsCalled: [],
+                structured: SAMPLE_ANSWER,
+                promptHash: compiled.hash,
+                usage: { input: 40, output: 10, cached_input: 5 }
+            });
+            // ONE beat — the pre-request one — and no interval survives an immediate answer.
+            expect(stateSteps(ok.store)).toEqual([
+                'create:spawning',
+                'update:working',
+                'update:',
+                'update:torn_down'
+            ]);
+            expect(vi.getTimerCount()).toBe(ok.timers);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps a provider fault a provider fault through the liveness wrapper (S-3, R5)', async () => {
+        vi.useFakeTimers();
+
+        try {
+            const timers = vi.getTimerCount();
+            const { store, runtime, sampleItem } = samplingRig();
+            const { client, requests } = record(() => {
+                throw new LlmError(503, 'upstream asleep', 'the provider returned 503');
+            });
+
+            const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(
+                sampleItem
+            );
+
+            // The same sentences the tool-run fault case asserts, and the same one request: the wrapper
+            // changed WHEN the lease is beaten, never what an error means.
+            expect(result).toEqual({
+                runId: 'run_1',
+                ended: 'failed',
+                no_op: true,
+                tokens: 0,
+                toolsCalled: [],
+                error: 'LlmError: the provider returned 503'
+            });
+            expect({
+                state: store.runs.require('run_1').state,
+                end_reason: store.runs.require('run_1').end_reason
+            }).toEqual({
+                state: 'failed',
+                end_reason: 'failed — LLM provider fault: LlmError: the provider returned 503'
+            });
+            expect(requests.length).toBe(1);
+            expect(stateSteps(store)).toEqual([
+                'create:spawning',
+                'update:working',
+                'update:',
+                'update:failed'
+            ]);
+            // The fault cleared the interval too: an error is an ending (R1).
+            expect(vi.getTimerCount()).toBe(timers);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

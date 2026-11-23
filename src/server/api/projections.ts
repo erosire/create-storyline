@@ -439,7 +439,13 @@ function samplingView(story: Story): SamplingView {
                 revision_id: sample.revision_id,
                 critical: sample.critical,
                 high: sample.high,
-                valid: sample.valid
+                valid: sample.valid,
+                // H1-C1/F3 — the fixes this candidate left outstanding, which is the ONLY surviving
+                // record of why a round was refused: the selection commit hard-deletes the losers and
+                // their `sample_reviews` rows (P13/§6.6), so without this line the Author's pane shows
+                // counts and no reason. The `?? []` is the pre-H1 history line, normalised rather than
+                // optional: a consumer reads one shape and never has to ask which build wrote the row.
+                unresolved_fixes: sample.unresolved_fixes ?? []
             })),
             selected: row.selected
         }));

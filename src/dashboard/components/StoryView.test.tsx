@@ -291,7 +291,7 @@ describe('StoryView — the Summary pane prints ONE card, and the override lives
         ]) {
             expect(document.body.textContent).not.toContain(hidden);
         }
-        expect(document.body.textContent).not.toContain('Use this revision');
+        expect(document.body.textContent).not.toContain('Use Revision');
         expect(document.body.textContent).not.toContain('Discard reason');
         // T4: the review recommends the LIVE draft (Revision 4) and R1 keeps that draft off the overview, so
         // the advisory rides with the hidden row instead of being painted on a card it cannot describe.
@@ -327,11 +327,10 @@ describe('StoryView — the Summary pane prints ONE card, and the override lives
         expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe('discarded · 0 findings');
         expect(screen.getByText('Round two, first cut: the index speaks first.')).toBeTruthy();
         expect(screen.getByText('Discard reason: the kept draft names its price in the first paragraph')).toBeTruthy();
-        // T4: the row is opened for its DETAIL, not for a write — the override is printed but disabled, and
-        // no advisory claims a row the review never advanced.
-        const parkedAction = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
-
-        expect([parkedAction.textContent, parkedAction.disabled]).toEqual(['Discarded', true]);
+        // T4: the row is opened for its DETAIL, not for a write — parked history prints no control at all,
+        // just the state named as plain text, and no advisory claims a row the review never advanced.
+        expect(pane.querySelector('.sv-summary-draft-select')).toBeNull();
+        expect(pane.querySelector('.sv-summary-draft-parked')?.textContent).toBe('Discarded');
         expect(pane.querySelector('.sv-summary-draft-pick')).toBeNull();
         // The ordinary list is gone while one revision is open, exactly as before.
         expect(document.querySelector('.sv-summary-drafts')).toBeNull();
@@ -366,7 +365,7 @@ describe('StoryView — the Summary pane prints ONE card, and the override lives
 
         const action = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
 
-        expect([action.textContent, action.disabled]).toEqual(['Use this revision', false]);
+        expect([action.textContent, action.disabled]).toEqual(['Use Revision', false]);
 
         await click(action);
 
@@ -438,10 +437,12 @@ describe('StoryView — the Summary pane prints ONE card, and the override lives
         const pane = screen.getByRole('region', { name: 'Summary — Revision 2' });
         const action = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
 
-        // The row reads as what it is, and the button explains why it cannot be taken. (The label itself is
-        // the card's pre-existing bucket for any state the Author cannot select — nothing widened here.)
+        // The row reads as what it is, and the button explains why it cannot be taken. A row the loop moved
+        // past is still an OPEN draft, so it keeps the control, disabled and labelled with its own state —
+        // only parked history (`discarded`/`merged_into`) gives the control up and prints its state as text.
         expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe('drafted · 0 findings');
         expect(screen.getByText('Round one, the cut nobody kept.')).toBeTruthy();
+        expect(action.textContent).toBe('Drafted');
         expect(action.disabled).toBe(true);
         expect(action.getAttribute('title')).toBe('This revision is drafted.');
         expect(pane.querySelector('.sv-summary-draft-pick')).toBeNull();
@@ -507,18 +508,39 @@ describe('StoryView — the Accept blocker is never invisible on the revision it
         seen_count: 1
     };
 
-    it('shows on the open Revision the finding that disables Accept, in the engine\u2019s words', () => {
-        render(
+    // U1 moved the gate. These three cases pinned BOTH halves — the blocker's wording, and the row it sits
+    // on — so each now asserts the row half on the Revision the rail opened and the wording half on the
+    // surface the control actually lives on: the main Summary item. Same view, same strings, one rerender
+    // apart; nothing about the engine's wording changed.
+    it('lists the blocker on the open Revision and gates Accept from the main Summary item (T5, T11, U1)', () => {
+        const view = cleanSummaryPhase(WHOLE_ARTIFACT);
+        const harness = fixtureActions();
+        const { rerender } = render(
             <StoryView
-                view={cleanSummaryPhase(WHOLE_ARTIFACT)}
-                actions={fixtureActions().actions}
+                view={view}
+                actions={harness.actions}
                 now={NOW}
                 selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
             />
         );
 
-        // 1. The gate: disabled, and its reason names the finding — never an Editor choice phase ① lacks.
+        // 1. THE REVISION THE RAIL OPENED. The same row is listed here, so "No Reader findings on this
+        //    revision yet" cannot sit beside the blocker (the reported contradiction) — and the phase gate
+        //    is NOT printed on it (R2): a Revision shows its draft and its findings, nothing else.
+        expect(document.querySelector('.sv-summary-focus-empty')).toBeNull();
+        expect((document.querySelector('.find-title') as HTMLElement).textContent).toBe(
+            'The Summary keeps one voice too many'
+        );
+        expect((document.querySelector('.sv-summary-current-title') as HTMLElement).textContent).toBe('Findings \u00b7 1');
+        expect(document.querySelectorAll('.sv-phase-controls')).toHaveLength(0);
+        expect(document.querySelector('.sv-lock-button')).toBeNull();
+
+        // 2. THE MAIN SUMMARY ITEM. Disabled, and its reason names the finding — never an Editor choice
+        //    phase ① lacks.
+        rerender(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
+
         const lock = document.querySelector('.sv-lock-button') as HTMLButtonElement;
+
         expect(lock.disabled).toBe(true);
         expect(Array.from(document.querySelectorAll('.sv-lock-reasons li')).map((line) => line.textContent)).toEqual([
             '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
@@ -526,44 +548,44 @@ describe('StoryView — the Accept blocker is never invisible on the revision it
         expect(lock.getAttribute('title')).toBe(
             'Not yet: 1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
         );
-
-        // 2. The pane open on THAT revision: the same row is listed, so "No Reader findings on this
-        //    revision yet" cannot sit beside the blocker (the reported contradiction).
-        expect(document.querySelector('.sv-summary-focus-empty')).toBeNull();
-        expect((document.querySelector('.find-title') as HTMLElement).textContent).toBe(
-            'The Summary keeps one voice too many'
-        );
-        expect((document.querySelector('.sv-summary-current-title') as HTMLElement).textContent).toBe('Findings · 1');
     });
 
-    it('leaves a clean selected revision enabled, with no reason list at all (no invented blocker)', () => {
-        const { container } = render(
+    it('leaves a clean round enabled on the main Summary item, with no reason list at all (no invented blocker)', () => {
+        const view = cleanSummaryPhase();
+        const harness = fixtureActions();
+        const { container, rerender } = render(
             <StoryView
-                view={cleanSummaryPhase()}
-                actions={fixtureActions().actions}
+                view={view}
+                actions={harness.actions}
                 now={NOW}
                 selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
             />
         );
 
+        // The Revision keeps its own empty-findings line and carries no phase control (R2).
+        expect(container.querySelector('.sv-summary-focus-empty')?.textContent).toBe(
+            'No Reader findings on this revision yet.'
+        );
+        expect(container.querySelector('.sv-phase-controls')).toBeNull();
+
+        rerender(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
+
         // T11/F1: this is enabled because the projection PROVES the review finished — five closed passes
         // for the winner of the round `sampling.round` reports. A projection without them is not clean.
         expect((document.querySelector('.sv-lock-button') as HTMLButtonElement).disabled).toBe(false);
         expect(container.querySelector('.sv-lock-reasons')).toBeNull();
-        expect(container.querySelector('.sv-summary-focus-empty')?.textContent).toBe(
-            'No Reader findings on this revision yet.'
-        );
     });
 
     it('holds Accept over a settled round the deep review has not read yet (T11/F1)', () => {
         // Everything the Author controls is done — Goal passing, tray empty, the round settled on its
         // winner — and the review family has dispatched no pass. Accept must stay shut, naming the wait.
+        // Accept is a phase-① Summary control (U1), so this case reads it on the main Summary item.
         render(
             <StoryView
                 view={{ ...cleanSummaryPhase(), runs: [] }}
                 actions={fixtureActions().actions}
                 now={NOW}
-                selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
+                selection={{ panel: 'summary' }}
             />
         );
 
@@ -573,6 +595,266 @@ describe('StoryView — the Accept blocker is never invisible on the revision it
         expect(Array.from(document.querySelectorAll('.sv-lock-reasons li')).map((line) => line.textContent)).toEqual([
             "5 deep-review passes still owed on the selected Summary revision — the round's evidence is not complete (§6.4 step 6)"
         ]);
+    });
+});
+
+describe('StoryView — the phase-① controls live on the main Summary item, never on a Revision (U1)', () => {
+    /**
+     * Phase ① the way the screenshot had it: the Summary on record, THREE revisions in the rail, an open
+     * critical finding on the winner, and a Goal that has not passed. Every line of the reported block
+     * therefore has content — a disabled `Accept final Summary → Phrase 2`, the failing-Goal bullet, the
+     * still-in-this-round bullet, the awaiting-approval bullet, `Request another revision round`, and
+     * L-31's "Nothing is locked yet…" sentence — so "the block is not on the Revision" can never be an
+     * artifact of a gate that had nothing to say.
+     *
+     * `f-r2` names ONE draft in `related_refs`, so the three revisions carry different Findings counts
+     * (1 · 2 · 1). That is what separates R2's two halves: the phase block is gone from a Revision while
+     * the findings that intrinsically belong to that Revision stay on it.
+     */
+    function screenshotView() {
+        const base = summaryPhaseView();
+
+        const row = (
+            id: string,
+            state: Revision['state'],
+            at: string,
+            premise: string,
+            extra: Partial<Revision> = {}
+        ): Revision => ({
+            id,
+            rev: 1,
+            created_at: at,
+            updated_at: at,
+            story_id: 's1',
+            unit_kind: 'summary',
+            unit_ref: 'sum1',
+            body: { fields: { premise } },
+            run_ref: 'r-pick',
+            template_ref: 't-builtin',
+            state,
+            verdict_refs: [],
+            ...extra
+        });
+
+        // Whole-artifact: no `related_refs` names a draft, so it is every revision of this Summary's
+        // business (T11/F4) — which is also why the screenshot showed the gate on every one of them.
+        const blocker: Finding = {
+            id: 'f-block',
+            rev: 1,
+            created_at: '2026-11-11T10:31:00.000Z',
+            updated_at: '2026-11-11T10:31:00.000Z',
+            story_id: 's1',
+            target_ref: 'sum1',
+            criterion_ref: 'C-14',
+            title: 'The Summary promises a voice it never uses',
+            evidence: 'round 1, \u00b61 — the promise is unmentioned after the opening.',
+            cost: 'critical',
+            fingerprint: 'fp-block',
+            state: 'confirmed',
+            seen_count: 1
+        };
+        const onSecond: Finding = {
+            ...blocker,
+            id: 'f-r2',
+            created_at: '2026-11-11T10:36:00.000Z',
+            updated_at: '2026-11-11T10:36:00.000Z',
+            title: 'Revision 2 drops the citation line',
+            evidence: 'round 1, \u00b64 — the refusal is narrated instead of quoted.',
+            fingerprint: 'fp-r2',
+            // A draft the round already parked: scope `superseded`, so it holds neither the gate (T11/F4)
+            // nor any other revision's list.
+            related_refs: ['rv-shot-2']
+        };
+
+        return {
+            ...base,
+            // The dial is OFF, so a `confirmed` critical sits on the Author's desk (D-34) — the state the
+            // screenshot was in.
+            story: { ...base.story, auto_approve: [] },
+            // The tray is decided, so the gate's bullets are exactly the three the report showed: the Goal,
+            // the unsettled round, and the finding.
+            ideas: [],
+            revisions: [
+                ...base.revisions.filter((revision) => revision.unit_kind !== 'summary'),
+                row('rv-shot-1', 'selected', '2026-11-11T10:30:00.000Z', 'Round one: the city remembers by drowning.', {
+                    round: 1
+                }),
+                row('rv-shot-2', 'discarded', '2026-11-11T10:35:00.000Z', 'Round one, the cut nobody kept.', {
+                    round: 1,
+                    discard_reason: 'the kept draft quotes the refusal'
+                }),
+                // The live draft of the same round: not superseded, so it IS the round still in flight, and
+                // it is the row the rail opens as Revision 3.
+                row('rv-shot-3', 'drafted', '2026-11-11T10:40:00.000Z', 'Round two, still being written.', { round: 1 })
+            ],
+            findings: [blocker, onSecond],
+            // The winner's deep review is complete (T11/F1), so the gate owes no passes and the bullet list
+            // stays the three above — a clean claim this test can pin exactly.
+            runs: [...base.runs, ...fixtureReviewRuns('rv-shot-1')]
+        };
+    }
+
+    /**
+     * Every node of the reported block, counted per root. Pinning the same map on `document` and on
+     * `.sv-summary-column` is what proves "exactly once, under the main Summary item"; the zero map on a
+     * Revision render proves "zero times under every Revision", and a stray control fails naming its class.
+     */
+    function phaseMarkers(root: HTMLElement | Document): Record<string, number> {
+        return {
+            'sv-phase-controls': root.querySelectorAll('.sv-phase-controls').length,
+            'sv-lock-button': root.querySelectorAll('.sv-lock-button').length,
+            'sv-lock-statement': root.querySelectorAll('.sv-lock-statement').length,
+            'sv-lock-reasons li': root.querySelectorAll('.sv-lock-reasons li').length,
+            'sv-summary-revise-button': root.querySelectorAll('.sv-summary-revise-button').length,
+            'sv-backtrack-block': root.querySelectorAll('.sv-backtrack-block').length,
+            'sv-backtrack-none': root.querySelectorAll('.sv-backtrack-none').length
+        };
+    }
+
+    /** The zero map, spelled out so a leaked control names the class that leaked. */
+    const NO_PHASE_CONTROLS = {
+        'sv-phase-controls': 0,
+        'sv-lock-button': 0,
+        'sv-lock-statement': 0,
+        'sv-lock-reasons li': 0,
+        'sv-summary-revise-button': 0,
+        'sv-backtrack-block': 0,
+        'sv-backtrack-none': 0
+    };
+
+    it('renders the phase block exactly once, inside the main Summary item, over three revisions (R1, R4)', () => {
+        const { container } = render(
+            <StoryView
+                view={screenshotView()}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'summary' }}
+            />
+        );
+
+        const column = container.querySelector('.sv-summary-column') as HTMLElement;
+
+        // The Summary pane and its controls are one surface, and the block exists once inside it (R4).
+        expect(column.querySelector('.sv-summary')).toBeTruthy();
+        expect(phaseMarkers(document)).toEqual({
+            'sv-phase-controls': 1,
+            'sv-lock-button': 1,
+            'sv-lock-statement': 1,
+            'sv-lock-reasons li': 3,
+            'sv-summary-revise-button': 1,
+            'sv-backtrack-block': 1,
+            'sv-backtrack-none': 1
+        });
+        expect(phaseMarkers(column)).toEqual(phaseMarkers(document));
+
+        // The block's words, verbatim, with the gate's three bullets — the content the report named.
+        const lock = container.querySelector('.sv-lock-button') as HTMLButtonElement;
+
+        expect(lock.textContent).toBe('Accept final Summary → Phrase 2');
+        expect(lock.disabled).toBe(true);
+        expect(Array.from(container.querySelectorAll('.sv-lock-reasons li')).map((line) => line.textContent)).toEqual([
+            'the Goal has not passed: C-8, C-11 still failing (4/7 \u00b7 failing: C-8, C-11)',
+            '1 Summary revision still in this round — the engine selects the winner once every draft has its screening reviews (§16.6)',
+            '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        ]);
+        expect(lock.getAttribute('title')).toBe(
+            'Not yet: the Goal has not passed: C-8, C-11 still failing (4/7 \u00b7 failing: C-8, C-11) · ' +
+                '1 Summary revision still in this round — the engine selects the winner once every draft has its screening reviews (§16.6) · ' +
+                '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        );
+        expect((container.querySelector('.sv-lock-statement') as HTMLElement).textContent).toBe(
+            'Locking the Summary makes it read-only for every agent (P5, L-30) and deletes this phase\u2019s Ideas tray in the same commit (D-36).'
+        );
+        expect((container.querySelector('.sv-backtrack-none') as HTMLElement).textContent).toBe(
+            'Nothing is locked yet, so there is nothing to backtrack to (L-31).'
+        );
+    });
+
+    it('keeps the Author wiring on the main Summary item: request-another-round writes its route (R3)', async () => {
+        const view = screenshotView();
+        const harness = fixtureActions();
+
+        render(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
+
+        // "Not final yet" is still one queue entry on the same route, from the main item.
+        await click(screen.getByRole('button', { name: 'Request another revision round' }));
+
+        expect(harness.calls.requestSummaryRevision).toEqual([['s1']]);
+    });
+
+    it('shows no phase control on any Revision, and keeps that Revision and its Findings (R2, R4)', () => {
+        const view = screenshotView();
+        const harness = fixtureActions();
+        const { container, rerender } = render(
+            <StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />
+        );
+
+        // Baseline, so a zero below cannot mean "the Summary panel vanished".
+        expect(container.querySelectorAll('.sv-phase-controls')).toHaveLength(1);
+
+        for (const revision of [
+            {
+                ref: 'revision:rv-shot-1',
+                title: 'Summary — Revision 1',
+                badge: 'selected \u00b7 1 finding',
+                premise: 'Round one: the city remembers by drowning.',
+                titles: ['The Summary promises a voice it never uses']
+            },
+            {
+                ref: 'revision:rv-shot-2',
+                title: 'Summary — Revision 2',
+                badge: 'discarded \u00b7 2 findings',
+                premise: 'Round one, the cut nobody kept.',
+                titles: ['The Summary promises a voice it never uses', 'Revision 2 drops the citation line']
+            },
+            {
+                ref: 'revision:rv-shot-3',
+                title: 'Summary — Revision 3',
+                badge: 'drafted \u00b7 1 finding',
+                premise: 'Round two, still being written.',
+                titles: ['The Summary promises a voice it never uses']
+            }
+        ]) {
+            rerender(
+                <StoryView
+                    view={view}
+                    actions={harness.actions}
+                    now={NOW}
+                    selection={{ panel: 'summary', ref: revision.ref }}
+                />
+            );
+
+            const pane = screen.getByRole('region', { name: revision.title });
+
+            // R2 — the whole phase block is gone, document-wide: this view has no other host for it. The
+            // Revision column is still mounted, so the zeros are the fix, not a missing panel.
+            expect(container.querySelector('.sv-summary-column')).toBeTruthy();
+            expect(phaseMarkers(document)).toEqual(NO_PHASE_CONTROLS);
+            expect(document.body.textContent).not.toContain('Accept final Summary');
+            expect(document.body.textContent).not.toContain('Request another revision round');
+            expect(document.body.textContent).not.toContain('Nothing is locked yet');
+
+            // And the Revision itself is intact: its own state badge, its own prose, and exactly the
+            // Findings that belong to it (the whole-Summary critique plus, for Revision 2, its own row).
+            expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe(revision.badge);
+            expect(within(pane).getByText(revision.premise)).toBeTruthy();
+            expect(Array.from(pane.querySelectorAll('.find-title')).map((row) => row.textContent)).toEqual(
+                revision.titles
+            );
+        }
+
+        // The Author's controls are not lost, only relocated: back on the main item the block is there again.
+        rerender(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
+
+        expect(phaseMarkers(document)).toEqual({
+            'sv-phase-controls': 1,
+            'sv-lock-button': 1,
+            'sv-lock-statement': 1,
+            'sv-lock-reasons li': 3,
+            'sv-summary-revise-button': 1,
+            'sv-backtrack-block': 1,
+            'sv-backtrack-none': 1
+        });
     });
 });
 
