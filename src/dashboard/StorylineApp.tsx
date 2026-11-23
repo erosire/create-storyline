@@ -119,7 +119,11 @@ function Shell() {
                     {selectedAgent ? (
                         <>
                             <div className="region__head">
-                                <h2 className="region__title">{selectedAgentTitle} — threads</h2>
+                                {/* R7 — the centre is the selected employee's thread surface: the region's
+                                    own accessible name already says "Writer threads" (above) and the tile
+                                    is lit in the rail, so the heading printing "Writer — threads" again
+                                    only repeats it. One word for the content, one sentence for the region. */}
+                                <h2 className="region__title">Threads</h2>
                                 <button
                                     type="button"
                                     className="button button--ghost"
@@ -132,8 +136,12 @@ function Shell() {
                                 {/* U-8: every thread the employee ran, across every Story and every
                                     phrase session, oldest first. A closed bar's detail is its request
                                     and its answer; a running bar adds the live steps below the
-                                    collapsed request, so the Author sees what is happening now. */}
+                                    collapsed request, so the Author sees what is happening now.
+                                    The `key` is the employee kind: it remounts the surface when the
+                                    Author clicks a different tile, so one employee's expanded bars
+                                    and explicit Archived choice never leak into the next one (R7). */}
                                 <AgentThreadsView
+                                    key={selectedAgent}
                                     kind={selectedAgent}
                                     threads={agentThreads[selectedAgent] ?? []}
                                     now={now}

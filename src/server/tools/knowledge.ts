@@ -1,11 +1,11 @@
 /**
- * The Phase-1 research surface: `structureSeed`, `writeKnowledge`, `readKnowledge` and
- * `retireKnowledge` (documents/phase-1-research-pipeline.md §7.1).
+ * The Phase-1 research surface: `structureSeed`, `writeKnowledge`, `readKnowledge`,
+ * `retireKnowledge` and `reportNoResearch` (documents/phase-1-research-pipeline.md §7.1).
  *
  * WHY THIS IS A GROUP OF ITS OWN AND NOT PART OF §8: the pipeline added three collections
- * (`knowledge`, `seed_briefs`, `sample_reviews`) and four tools, and it added them WITHOUT an
+ * (`knowledge`, `seed_briefs`, `sample_reviews`) and five tools, and it added them WITHOUT an
  * §8 section — §8's five tables are the pinned pre-pipeline catalogue, and registry.ts keeps
- * that surface separable so the conformance test can still diff it against the spec. These four
+ * that surface separable so the conformance test can still diff it against the spec. These five
  * are still registered on every session (T-6a: "kind selects the brief and the permission row,
  * not the tool list"), and §7.2's three new rows are what decides who may call them.
  *
@@ -21,6 +21,11 @@
  * P10/§7.2: the Researcher writes `knowledge` and nothing else in the story. Every other kind
  * reads it. `structureSeed` is the Editor's, and it writes a DERIVED `seed_briefs` row — never
  * `stories.idea`, which stays the Author's and C-14's reference (P5).
+ *
+ * D-51, the research waiver, lives in this file's two ends: `structureSeed` REQUIRES
+ * `research_questions` (so "no research" is always a stated Editor decision, never an omission),
+ * and `reportNoResearch` lets a Researcher that was dispatched anyway close the pass with a real
+ * report and zero writes — which is what keeps that run out of S-4's no-op count.
  */
 import {
     KNOWLEDGE_IMPORTANCE,
@@ -101,6 +106,92 @@ function cleanList(value: unknown): string[] {
     return seen;
 }
 
+/**
+ * D-51: does this brief WAIVE phase ①'s research leg? An ABSENT field is not a waiver — a
+ * `seed_briefs` row written before the field existed still needs its research pass. Only a stored,
+ * empty list means "the Editor decided: no research".
+ *
+ * T10/F8: the reading is `Array.isArray(...) && length === 0`, character-for-character the loop's
+ * (`loop/records.ts:researchWaived`). The earlier `!== undefined && length === 0` spelling agreed on
+ * `undefined` but not on MALFORMED persisted data: a stored `''` or `0` has `length === 0` and would
+ * read as a waiver HERE while the loop still owed the pass — the tool would tell the run "waived"
+ * next to a Story the loop was still gating on research. Same predicate, same answer, no drift.
+ *
+ * This copy exists because the tool layer must not import the loop; the loop's dispatch/waiver gate
+ * is the authority (§16.9.1 "One predicate"), and this mirror must stay byte-equal to it — change one,
+ * change the other.
+ */
+function waivesResearch(brief: Pick<SeedBrief, 'research_questions'>): boolean {
+    return Array.isArray(brief.research_questions) && brief.research_questions.length === 0;
+}
+
+/**
+ * The stored `research_questions` value as the payload reports it: the list when the record HAS one,
+ * and `null` when it does not (a row written before the field existed, or a malformed value the store
+ * somehow carries). `null` is the payload's spelling of "this record states nothing", which is what
+ * keeps a legacy row from being echoed back as `[]` and read as the Editor's waiver (T10/F1).
+ */
+function storedQuestions(brief: Pick<SeedBrief, 'research_questions'> | undefined): string[] | null {
+    return brief !== undefined && Array.isArray(brief.research_questions) ? brief.research_questions : null;
+}
+
+/**
+ * T-11/D-51 (T10/F9): read the Editor's research decision WITHOUT turning a blank into a waiver.
+ *
+ * `cleanList` is the right normalisation for the brief's descriptive lists — a stray blank entry there
+ * costs nothing. It is the WRONG one here: `['']` cleaned to `[]` is a silent WAIVER, and
+ * `['question', '   ']` cleaned to `['question']` silently changes the Researcher's scope. Both are
+ * answers the Editor never gave, and D-51 exists so that phase ①'s whole research leg rests on a
+ * stated decision. So a blank entry is a refusal naming the index and the fix, and legitimate
+ * whitespace trimming and first-seen dedup stay (they change no decision).
+ */
+function researchQuestionsArg(ctx: ToolExecutionContext): string[] {
+    const raw = ctx.args.research_questions;
+
+    // The schema already refuses a non-array (T-11); this is the defence for a caller that reaches the
+    // body another way, and it refuses rather than guessing `[]`, which would be a waiver.
+    if (!Array.isArray(raw))
+        throw new ToolRefusal('T-11', 'research_questions must be an array of question strings, or [].', {
+            field: 'research_questions',
+            expected: 'an array of string',
+            received: raw,
+            rule: 'D-51',
+            fix: 'send the questions, or [] to state that the premise needs no fact from outside itself'
+        });
+
+    const questions: string[] = [];
+
+    for (const [index, entry] of raw.entries()) {
+        if (typeof entry !== 'string')
+            throw new ToolRefusal('T-11', `research_questions[${index}] must be a string.`, {
+                field: 'research_questions',
+                index,
+                received: entry,
+                rule: 'D-51',
+                fix: 'one question per entry, as a string'
+            });
+
+        const text = entry.trim();
+
+        if (!text)
+            throw new ToolRefusal(
+                'T-11',
+                `research_questions[${index}] is blank: a blank entry is neither a question nor the waiver, so the research decision on this brief is not stated`,
+                {
+                    field: 'research_questions',
+                    index,
+                    received: raw,
+                    rule: 'D-51',
+                    fix: 'drop the blank entry and send [] if no research is needed, or write the question it was meant to hold'
+                }
+            );
+
+        if (!questions.includes(text)) questions.push(text);
+    }
+
+    return questions;
+}
+
 /** Reads one required string arg, trimmed. The schema already refused a missing one (T-11). */
 function textArg(ctx: ToolExecutionContext, name: string): string {
     const raw = ctx.args[name];
@@ -123,11 +214,24 @@ function textArg(ctx: ToolExecutionContext, name: string): string {
  * re-dispatched after a lost answer must converge on the row it already wrote instead of
  * multiplying the briefs. A DIFFERENT hash supersedes: the old row becomes `draft` and the new
  * one is `accepted`, in the SAME commit (T-4's "one decision, one commit").
+ *
+ * D-51, the research decision: `research_questions` is a REQUIRED arg and is ALWAYS stored (as `[]`
+ * when the premise needs no world facts outside itself). Requiring it is the whole point — phase ①'s
+ * research leg is dispatched or waived by a decision the Editor made on the record, not inferred from
+ * the title or the genre, and an omitted arg is a T-11 refusal rather than a silent waiver. Only a
+ * PERSISTED brief can lack the field (a row written before D-51), and `loop/records.ts:researchGate`
+ * reads that absence as `needed`, never as waived, so an upgrade cannot quietly drop a research pass.
+ *
+ * T10/F9 puts the other half of "stated, never inferred" on the ARG CONTENT: a blank entry (`['']`,
+ * `['   ']`, or a blank among real questions) is a T-11 refusal naming the index, not something to
+ * clean away. Cleaning it would manufacture a waiver the Editor never wrote (`['']` → `[]`) or quietly
+ * narrow the Researcher's scope (`['q', '  ']` → `['q']`), and the loop's whole gate would move on an
+ * entry that said nothing.
  */
 const structureSeed: ToolDefinition = {
     name: 'structureSeed',
     description:
-        "Write the Seed Brief: the Editor's derived, machine-readable projection of the Author's Seed (logline, protagonist, want/need, obstacle, stakes, setting, world rules, promise, tone, constraints, open questions). Refuses a brief derived from a Seed that has moved (P5) and returns the existing brief instead of duplicating one for the same seed_hash. The Seed itself is never edited.",
+        "Write the Seed Brief: the Editor's derived, machine-readable projection of the Author's Seed (logline, protagonist, want/need, obstacle, stakes, setting, world rules, promise, tone, constraints, open questions) TOGETHER WITH the research decision — research_questions, the list the Researcher must work through, or [] to waive the research leg for this brief (D-51). Refuses a brief derived from a Seed that has moved (P5) and returns the existing brief instead of duplicating one for the same seed_hash. The Seed itself is never edited.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -152,6 +256,14 @@ const structureSeed: ToolDefinition = {
                 'What the Seed leaves silent. A gap is a legitimate answer; an invented fact is not (§1 step 2).',
                 str('One open question.')
             ),
+            // D-51: the research decision is the Editor's, and it is a REQUIRED arg so "no research"
+            // can only ever be a choice made on the record — an omitted field is a T-11 refusal, never
+            // a silent waiver. `[]` waives phase ①'s research leg; a non-empty list dispatches the
+            // Researcher with exactly these questions (§16.1's research gate).
+            research_questions: arr(
+                "What the Researcher must establish BEFORE any sample is drawn — [] when the premise needs no world facts outside itself (this WAIVES the research leg, D-51); ['question', ...] to dispatch it. An empty list is an answer, not an omission: never leave this out to dodge the decision, and never invent a question to fill it.",
+                str('One research question.')
+            ),
             expects: EXPECTS_ARG,
             why: whyArg('One-line reason this brief is the faithful reading of the Seed (T-5).')
         },
@@ -167,6 +279,9 @@ const structureSeed: ToolDefinition = {
             'promise',
             'constraints',
             'open_questions',
+            // D-51: required so the research decision is always stated; `[]` is a valid value (the
+            // schema refuses `undefined`/`null`, not an empty array — T-11).
+            'research_questions',
             'why'
         ]
     },
@@ -217,6 +332,12 @@ const structureSeed: ToolDefinition = {
             );
         }
 
+        // T10/F9: the research decision is validated BEFORE the idempotence read below, so a call that
+        // does not actually state one (a blank entry) can never be absorbed by a `repeat` of the row
+        // that is already on the record — the Editor learns its call was malformed, and the stored
+        // decision stays exactly what the earlier accepted call wrote.
+        const questions = researchQuestionsArg(ctx);
+
         // D-16-style idempotence: an accepted brief for this exact Seed is the answer, not a
         // reason to write a second one. A re-dispatched Editor (or a run that lost its answer)
         // must converge on the same row.
@@ -234,6 +355,13 @@ const structureSeed: ToolDefinition = {
                     id: accepted.id,
                     seed_hash: accepted.seed_hash,
                     status: accepted.status,
+                    // D-51: the repeat answers WITH the research decision it already recorded, so a
+                    // re-dispatched Editor cannot "re-decide" the waiver in a second call. A row that
+                    // predates the field reports `null` — the gate reads that as `needed`, not waived
+                    // (T10/F8: `storedQuestions` is the payload's one reading, so a malformed stored
+                    // value is echoed as "the record states nothing" instead of as an empty waiver).
+                    research_questions: storedQuestions(accepted),
+                    research_waived: waivesResearch(accepted),
                     current_rev: accepted.rev
                 },
                 { seed_brief_id: accepted.id }
@@ -254,6 +382,12 @@ const structureSeed: ToolDefinition = {
             promise: textArg(ctx, 'promise'),
             constraints: cleanList(ctx.args.constraints),
             open_questions: cleanList(ctx.args.open_questions),
+            // D-51: ALWAYS written, even when empty — the absence of this field on a persisted brief
+            // means "written before the field existed" (research still needed), so an empty list must
+            // be stored as `[]` to read as a waiver. It is therefore NOT part of the "omit optional
+            // fields" convention below, and it is NOT run through `cleanList`: `researchQuestionsArg`
+            // (T10/F9) already refused any blank entry rather than cleaning `['']` into this waiver.
+            research_questions: questions,
             status: 'accepted',
             // Optional fields are OMITTED rather than stored empty, so a record that never had a
             // tone hint looks exactly like one written before the field existed (§4's convention).
@@ -304,11 +438,19 @@ const structureSeed: ToolDefinition = {
                     promise: written.promise,
                     tone_hints: written.tone_hints ?? null,
                     constraints: written.constraints,
-                    open_questions: written.open_questions
+                    open_questions: written.open_questions,
+                    // D-51: the run must see the decision it just made, because the loop's next step
+                    // differs — an empty list means no Researcher is coming, and the run should say so.
+                    research_questions: written.research_questions ?? [],
+                    // D-40/D-51: `research_waived` is the machine-readable form of the same line.
+                    research_waived: waivesResearch(written)
                 },
                 // The gate the loop reads (§6.4 step 1): `sample_unit` is refused until an
                 // accepted brief exists, and this line is how the run learns it just satisfied it.
-                next: 'the pipeline may now dispatch research against this brief; a Seed edit re-arms the structuring',
+                next: waivesResearch(written)
+                    ? // D-51: the waiver is on the record, so phase ① moves straight to sampling.
+                      'the pipeline may now sample: this brief waives the research leg (D-51), so no Researcher is dispatched for it — a Seed edit re-arms the structuring'
+                    : 'the pipeline may now dispatch research against this brief, one pass over the research_questions you listed; a Seed edit re-arms the structuring',
                 current_rev: written.rev
             },
             written.rev,
@@ -724,8 +866,122 @@ const retireKnowledge: ToolDefinition = {
     }
 };
 
+// ── 5. reportNoResearch (§7.1, D-51) ────────────────────────────────────────
+
+/**
+ * `reportNoResearch` — the Researcher's answer when a research pass finds NOTHING to record (D-51).
+ *
+ * WHY THIS EXISTS: D-51 lets the Editor waive the research leg by sending `research_questions: []`,
+ * so a Researcher is normally not dispatched at all. But the waiver cannot be decided in advance of
+ * the reading: a run that WAS dispatched (the Editor listed questions, and the pass then read the
+ * brief, read `readKnowledge`, and concluded the premise needs no facts outside itself) has no write
+ * to report with. Without this tool that run ends with no intentional result at all: S-4 counts the
+ * silent close as a no-op turn against the Story, and the pass that ran records nothing about what it
+ * decided. T10/§12 note: the closed run DOES close the gate as built (`records.ts:researchClosed` reads
+ * any closed run for the brief's key), so the loop does not re-dispatch the question forever — what the
+ * silence loses is the answer, not the gate. The tool gives the run a report to end with.
+ *
+ * ZERO WRITES, ON PURPOSE: the answer is a REPORT, not an artifact. It is deliberately not a
+ * `Knowledge` row — `writeKnowledge` demands a citation (T-10) and an invented fact would be worse
+ * than none (P7) — and it is not a task or a finding. The record of the decision is the run itself
+ * plus the `rationale` this call carries in the run log.
+ *
+ * CLASSIFICATION (run/catalogue.ts): `level: 'read'` + `mutating: false`, and the name is listed in
+ * `READ_TOOLS` so a D-38 panel agent answers it for real instead of proposing a write that does not
+ * exist. It is ALSO in `REPORT_TOOLS`, which is what makes the run's `no_op === false` (S-4). Those
+ * two sets are not contradictory: one answers "did this touch the store", the other "did this run
+ * report".
+ */
+const reportNoResearch: ToolDefinition = {
+    name: 'reportNoResearch',
+    description:
+        "Close a research pass with NOTHING to record: the premise needs no facts outside itself, or the questions this brief listed are already answered in the knowledge you read. This is a report, not a failure — it writes nothing (no Knowledge row, no task, no invented fact) and it is the only way a Researcher run ends without writeKnowledge. Name, in one line, what makes the premise self-contained or where the existing knowledge already answers the question.",
+    inputSchema: {
+        type: 'object',
+        properties: {
+            // Required, because "nothing needs research" is only a decision when it is stated: an
+            // empty pass that cannot say why is the silence this tool exists to replace (D-51).
+            rationale: str(
+                'One line on WHY no outside fact is needed — what makes the premise self-contained, or which existing knowledge entry already answers the question. Never a fact you did not read (P7).'
+            ),
+            why: whyArg('One-line reason this pass is complete rather than merely empty (T-5).')
+        },
+        // The Seed Brief is NOT an arg: the server reads it from the record, so a run cannot answer a
+        // brief that does not exist (the same "compare, never trust" rule structureSeed's seed_hash uses).
+        required: ['rationale']
+    },
+    writes: 'knowledge',
+    level: 'read',
+    mutating: false,
+    // §7.2 gives EVERY kind `read` on `knowledge`, so the row alone would let a Writer "answer" its
+    // own research question; `onlyKinds` keeps this report the Researcher's alone (§8's narrowing).
+    onlyKinds: ['researcher'],
+    primaryArg: 'rationale',
+    async execute(ctx): Promise<ToolResult> {
+        const rationale = textArg(ctx, 'rationale');
+
+        // The brief this pass answers, read from the record. `structureSeed` keeps at most ONE
+        // accepted row per Story, so the last accepted row is the live one.
+        const accepted = ctx.store.seedBriefs
+            .list()
+            .filter((row) => row.story_id === ctx.storyId && row.status === 'accepted');
+        const brief = accepted[accepted.length - 1];
+
+        // T10/F1 — the payload must not LIE about the waiver. `brief?.research_questions ?? []` made a
+        // legacy row (no field) and a missing brief both look like a stored empty list, so the tool
+        // answered `research_waived: true` with waiver prose for a Story the loop still OWES a research
+        // pass to. D-51: absence is never a waiver. `storedQuestions` reports "the record states
+        // nothing" as `null`, and `waivesResearch` (the loop's reading, `records.ts:researchWaived`)
+        // says waived only for a stored, EMPTY array.
+        const questions = storedQuestions(brief);
+        const research_waived = brief !== undefined && waivesResearch(brief);
+        const knowledge_rows = ctx.store.knowledge.list().filter((row) => row.story_id === ctx.storyId).length;
+
+        return ok(
+            {
+                research: 'none',
+                // What is being closed, stated from the record rather than from the call's args.
+                seed_brief_id: brief?.id ?? null,
+                seed_hash: brief?.seed_hash ?? null,
+                research_questions: questions,
+                research_waived,
+                knowledge_rows,
+                rationale,
+                // D-51: the pass is closed by the run itself, so phase ①'s research gate is satisfied
+                // and the loop's next generated work is sampling — not a second research dispatch.
+                next: 'this research pass is closed with no Knowledge written; the loop may now sample the Seed Brief (D-51)'
+            },
+            undefined,
+            `Research pass closed with nothing to record${brief ? ` (Seed Brief ${brief.id})` : ''}`,
+            {
+                notes: [
+                    questions !== null && questions.length > 0
+                        ? // The Editor's questions are answered by the reading itself: the loop records
+                          // the pass as closed, so the same questions are never re-asked.
+                          'The questions this brief listed are answered by the pass itself — no Knowledge row is expected, and the loop will not re-dispatch them.'
+                        : questions !== null
+                          ? // The waiver was already on the record; this report confirms it from the crew side.
+                            'This brief waives the research leg (D-51): the report confirms the waiver from the Researcher side.'
+                          : // T10/F1: no waiver is on the record, so what is being reported is the pass's OWN
+                            // empty result — the loop closes the gate from the closed run, never from a decision
+                            // the Editor did not make.
+                            'No research waiver is on this record, so none is claimed: the empty result is this pass\'s own, and the loop closes the research gate from this closed run (D-51).',
+                    'Nothing was written: this is a report, not a Knowledge row (T-10 needs a citation) and not a task.'
+                ]
+            }
+        );
+    }
+};
+
 /**
  * The Phase-1 research surface, in the order §7.1's table lists it — the group `registry.ts`
- * registers on every session (T-6a).
+ * registers on every session (T-6a). `reportNoResearch` is last because it is the pass's closing
+ * report, not another way to write (D-51).
  */
-export const knowledgeTools: ToolDefinition[] = [structureSeed, writeKnowledge, readKnowledge, retireKnowledge];
+export const knowledgeTools: ToolDefinition[] = [
+    structureSeed,
+    writeKnowledge,
+    readKnowledge,
+    retireKnowledge,
+    reportNoResearch
+];

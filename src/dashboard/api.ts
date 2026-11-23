@@ -171,12 +171,31 @@ export interface SamplingHistoryRow {
 }
 
 /**
- * §10 / §6.5-§6.6 — phase ①'s sampling state: the round the loop is on, the sample the last
- * selection installed (with the counts that won it), and the bounded audit history.
+ * §10 / §6.5-§6.6 — phase ①'s sampling state: the last COMPLETED round, the round the loop is
+ * working, the sample the last selection installed (with the counts that won it), and the bounded
+ * audit history.
+ *
+ * WHY `round` AND `active_round` ARE BOTH ON THE WIRE (T12/P1) — they are two different questions,
+ * and one number cannot answer both:
+ *   - `round` is the round whose SELECTION the Story carries (`story.sampling_round ?? 1`, exactly
+ *     `records.ts:deepReviewRoundOf`). It is what §10's pane prints and what the deep review is
+ *     dispatched for, and it is 0 on a Story whose counter an Author reset (§16.7's backtrack).
+ *   - `active_round` is the round the loop is WRITING now (`records.ts:samplingRoundOf`, i.e.
+ *     `(sampling_round ?? 0) + 1`). It is what decides whether a `drafted` Summary row is live work
+ *     or a loser the loop set aside (`records.ts:isSupersededSummaryDraft`), and a payload that only
+ *     carries `round` cannot tell "round 1 never completed" from "round 1 completed" — both say 1.
+ * The dashboard is forbidden from recomputing either one (L-14/W3), so the projection sends both.
  */
 export interface SamplingView {
-    /** Last COMPLETED round (`sampling_round ?? 1`); the in-flight round is one higher (§6.6). */
+    /** Last COMPLETED round (`sampling_round ?? 1`); the round the deep review is owed for (§6.6). */
     round: number;
+    /**
+     * The round IN FLIGHT (`(sampling_round ?? 0) + 1`, `records.ts:samplingRoundOf`): round 1 before
+     * the first selection, R + 1 while nothing of round R + 1 has been written yet. Required whenever
+     * `sampling` is present — the shipped server always sends it; a payload without the slice at all
+     * is the older-build case `story-contract.ts:summaryScopeContext` documents.
+     */
+    active_round: number;
     /** The last round's chosen sample and its issue counts. Absent until a selection has happened. */
     selected?: SamplingSample;
     /** The Story's `sampling_history` rows, capped at the last 5, newest first. */

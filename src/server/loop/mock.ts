@@ -70,10 +70,33 @@ export interface CrewBehaviour {
         | ((round: number) => { cost: Cost; title: string; criterion?: string } | undefined);
     /** The Editor's verdict on each finding it verifies (W4e: the disputed false positive). */
     verdictFor?: FindingVerdict;
+    /**
+     * T6/R2d: does the scripted Editor's `verify_findings` run REPORT at all? `'report'` (default) is
+     * the normal thread: one `verifyFinding` call per finding. `'silent'` closes the run with NO tool
+     * call — the no-decision/no-report answer a real provider produces when the model answers prose —
+     * which is the only input that exercises the loop's bound on repeated verification.
+     */
+    verifyReports?: 'report' | 'silent';
     /** The Reader's independent confirmation of an Editor-approved finding (default `confirm`). */
     readerConfirm?: 'confirm' | 'dispute';
     /** Ideas the verify-ideas job confirms or refutes; default `verified`. */
     ideaVerdict?: 'verified' | 'refuted';
+    /**
+     * D-51: the research decision the scripted EDITOR writes into the Seed Brief. It drives both
+     * paths, so a test cannot get one and not the other: `seedPhase1Structure` (the seeded state) and
+     * the live `structure_seed` tool call. The three states are the tool's three states —
+     * `undefined` OMITS the field (the pre-D-51 shape, which still needs research), `[]` WAIVES the
+     * research leg, and a non-empty list dispatches the Researcher with exactly these questions.
+     */
+    researchQuestions?: string[];
+    /**
+     * D-51: what the scripted RESEARCHER does on a `research` job. `'knowledge'` (the default) records
+     * the two scripted entries, which is what every existing phase-① fixture expects. `'report'` answers
+     * `reportNoResearch` with ZERO writes — the pass that concludes the premise needs no facts outside
+     * itself — so a test can pin the loop's reaction to a closed-but-empty research run (the run must
+     * still count as a report, S-4's `no_op: false`).
+     */
+    researchCalls?: 'knowledge' | 'report';
     /**
      * Findings the CHECKER files every pass (W4d and the drain rows). Absent means the book is clean,
      * which is what lets a Story drain at all in a test that is about something else.
@@ -182,8 +205,12 @@ export const seedPlotlineSet = (store: Store, storyId: string, count: number) =>
  * The values are deliberately generic placeholders — the rig is a clock, not a prose generator — but
  * they claim nothing the Seed does not (`logline` IS the Seed's first line), so a test asserting
  * `sample 1: <logline>` proves the sampler's prompt carried this brief.
+ *
+ * D-51's three states for `researchQuestions`: `undefined` (the default) OMITS the field, which is
+ * the shape every pre-D-51 fixture had and which `records.ts:researchGate` reads as `needed`; `[]` is
+ * the Editor's WAIVER; a non-empty list is the dispatch decision, with the questions on the record.
  */
-const scriptedBriefFields = (seed: string) => ({
+const scriptedBriefFields = (seed: string, researchQuestions?: string[]) => ({
     logline: seed.split('\n')[0]?.trim() ?? seed,
     protagonist: 'the protagonist the Seed names',
     want: 'what the Seed says they pursue',
@@ -194,8 +221,16 @@ const scriptedBriefFields = (seed: string) => ({
     promise: 'the book pays the promise the Seed makes',
     tone_hints: 'as the Seed tells it',
     constraints: [] as string[],
-    open_questions: [] as string[]
+    open_questions: [] as string[],
+    ...(researchQuestions === undefined ? {} : { research_questions: researchQuestions })
 });
+
+/**
+ * D-51: does this scripted decision WAIVE the research leg? Only an explicit empty list does —
+ * `undefined` keeps the legacy "field predates D-51" shape, which still needs the pass.
+ */
+const waivesScriptedResearch = (researchQuestions?: string[]): boolean =>
+    researchQuestions !== undefined && researchQuestions.length === 0;
 
 /**
  * The state a finished `structure_seed` + `research` pass leaves behind (§6.4 steps 1-2): an
@@ -206,8 +241,12 @@ const scriptedBriefFields = (seed: string) => ({
  * sampler's prompt carried THIS brief (`premise: sample 1: <logline>` comes back through the mock's
  * default sample answer). No `knowledge` row is seeded: the compiled prompt's KNOWLEDGE block is
  * optional by design (§5 omits an empty section), and a test that wants one can seed it.
+ *
+ * D-51: pass `researchQuestions: []` for a brief that WAIVES the research leg — then NO research run
+ * is seeded, because a waived brief never has a research Work Item to close. The default (`undefined`)
+ * keeps the pre-D-51 shape exactly: a brief without the field plus a closed research run.
  */
-export const seedPhase1Structure = (store: Store, storyId: string): void => {
+export const seedPhase1Structure = (store: Store, storyId: string, researchQuestions?: string[]): void => {
     const story = store.stories.require(storyId);
     const at = new Date().toISOString();
 
@@ -215,11 +254,15 @@ export const seedPhase1Structure = (store: Store, storyId: string): void => {
         {
             story_id: storyId,
             seed_hash: seedHashOf(story.idea),
-            ...scriptedBriefFields(story.idea),
+            ...scriptedBriefFields(story.idea, researchQuestions),
             status: 'accepted'
         },
         { run_ref: null, why: 'seed: the Editor accepted a Seed Brief for the current Seed (§6.4 step 1)' }
     );
+
+    // The waiver means "no Researcher, ever, for this brief" — seeding a closed run for it would hide
+    // the very thing a D-51 test asserts (that no `wi_research_*` row is ever generated).
+    if (waivesScriptedResearch(researchQuestions)) return;
 
     store.runs.create(
         {
@@ -372,7 +415,12 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
     // sampling (or about phases ②/③, which walks through phase ①) starts where it means to;
     // `seedStructured: false` leaves both un-run and lets the sweep dispatch the Editor's
     // `structure_seed` and then the Researcher's `research` (§6.4 steps 1-2).
-    if (options.attach !== true && options.seedStructured !== false) seedPhase1Structure(store, storyId);
+    //
+    // D-51: `crew.researchQuestions` is the scripted Editor's research decision, and the SAME value
+    // drives the seeded state and the live tool call — `[]` seeds a WAIVED brief with no research run,
+    // so a waived Story starts straight at sampling.
+    if (options.attach !== true && options.seedStructured !== false)
+        seedPhase1Structure(store, storyId, options.crew?.researchQuestions);
 
     // L-1's switch is ON for every rig: `start()` with `autoSweep: false` means "the loop is running, and
     // the test is the clock". A stopped engine refuses every sweep (L-1), which is W5's stop test, not the
@@ -595,7 +643,9 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                     name: 'structureSeed',
                     args: {
                         seed_hash: seedHashOf(seed),
-                        ...scriptedBriefFields(seed),
+                        // D-51: the scripted Editor states its research decision with the brief, exactly
+                        // as the real tool requires; `undefined` keeps the pre-D-51 arg shape.
+                        ...scriptedBriefFields(seed, crew.researchQuestions),
                         why: 'the brief restates the Seed and invents nothing (P5, D-17c)'
                     }
                 }
@@ -605,7 +655,23 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
         // §6.4 step 2: the Researcher records the facts the brief depends on, with sources (T-10).
         // Two entries — one `critical`, one `high` — so the compiled prompt's KNOWLEDGE block has a
         // ranked list to render and a test can prove both importances reach the sampler.
+        //
+        // D-51's other answer: `researchCalls: 'report'` closes the same job with `reportNoResearch`
+        // and ZERO writes, which is the dispatched-pass-that-needs-nothing case. The run must still
+        // count as a report (S-4), and the gate must close so the next work is sampling.
         case 'research':
+            if (crew.researchCalls === 'report')
+                return [
+                    {
+                        name: 'reportNoResearch',
+                        args: {
+                            rationale:
+                                'the Seed states every fact this story depends on, and readKnowledge holds nothing that contradicts it',
+                            why: 'the pass read the brief and the knowledge and found no fact to establish (D-51)'
+                        }
+                    }
+                ];
+
             return [
                 {
                     name: 'writeKnowledge',
@@ -777,6 +843,10 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
 
         case 'verify_findings': {
             const refs = item.findingRefs ?? [];
+
+            // T6/R2d: the silent answer is the no-decision thread — the run closes, the finding stays
+            // `unconfirmed`, and the loop has to bound what it buys next rather than re-asking forever.
+            if (crew.verifyReports === 'silent') return [];
 
             return refs.map((findingId) => {
                 const finding = store.findings.get(findingId);

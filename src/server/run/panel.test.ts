@@ -178,7 +178,10 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
     it('names S-4’s eight report tools plus the outcomes §9 and §7.1 make first-class (S-4, L-18)', () => {
         // The closed list, in declaration order. `structureSeed`/`writeKnowledge` are §7.1's two
         // phase-1 writes that ARE the product of their run: an Editor structuring the Seed and a
-        // Researcher recording Knowledge must not be counted as no-op turns (S-4).
+        // Researcher recording Knowledge must not be counted as no-op turns (S-4). `reportNoResearch`
+        // is D-51's third: a dispatched research pass that concludes NOTHING needs an outside fact has
+        // no write to report with, and a run that reports nothing is a no-op turn counted against the
+        // Story — which would re-dispatch the same question forever.
         expect(REPORT_TOOLS).toEqual([
             'submitVerdict',
             'raiseFinding',
@@ -193,7 +196,8 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
             'requestMerge',
             'rejectAll',
             'structureSeed',
-            'writeKnowledge'
+            'writeKnowledge',
+            'reportNoResearch'
         ]);
 
         for (const name of REPORT_TOOLS) expect(isReportTool(name)).toBe(true);
@@ -234,6 +238,14 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
         // the store, so it must not be recorded as a proposal.
         expect(isReadOnlyTool('delegate')).toBe(true);
         expect(isMutatingTool('delegate')).toBe(false);
+
+        // D-51: `reportNoResearch` answers the two catalogue questions DIFFERENTLY on purpose. It
+        // touches nothing, so inside a panel it executes rather than being proposed (D-38); it is still
+        // a report, so the run that made it is not a no-op turn (S-4). The name-prefix heuristic cannot
+        // see it (`report*` is not a read prefix), so `READ_TOOLS` lists it — this pins the listing.
+        expect(isReadOnlyTool('reportNoResearch')).toBe(true);
+        expect(isMutatingTool('reportNoResearch')).toBe(false);
+        expect(isReportTool('reportNoResearch')).toBe(true);
 
         // The panel's write set: every one of these becomes a proposal.
         for (const name of [

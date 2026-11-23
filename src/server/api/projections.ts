@@ -17,6 +17,7 @@ import { DISCARDABLE_FINDING_STATES, DISCARDABLE_IDEA_STATES } from '../loop/sta
 import {
     findingsAwaitingAuthor,
     loopStory,
+    samplingRoundOf,
     storyChapters,
     storyFindings,
     storyIdeas,
@@ -307,7 +308,10 @@ export function goalSurface(deps: ProjectionDeps, story: Story): GoalSurface {
  *
  * The recovered row is presented as `discarded`, which is the truthful reading after a later
  * selection: it is no longer the installed or competing text, but its findings and the Editor's
- * note are still provenance. Chapter/plotline deletions are not resurrected; D-22's hard delete
+ * note are still provenance. Its `discard_reason` keeps the row's own reason when one was written
+ * before the delete, and otherwise quotes the delete event's `attribution.why` — the journal's
+ * record of the decision that removed it, which is why a phase ① truncation is never dressed up as
+ * an Editor's judgment. Chapter/plotline deletions are not resurrected; D-22's hard delete
  * still owns those surfaces.
  */
 function viewRevisions(store: Store, story: Story): Revision[] {
@@ -335,7 +339,22 @@ function viewRevisions(store: Store, story: Story): Revision[] {
             continue;
         }
 
-        archived.set(deleted.id, { ...deleted, state: 'discarded' });
+        // R1: a recovered row still has to say why it is `discarded`. The row's own
+        // `discard_reason` wins when it was written before the delete; otherwise the delete event's
+        // `attribution.why` is the journal's own sentence about the decision that removed it
+        // (T-5 makes it mandatory and non-blank, store.ts:188), so nothing is invented here — a
+        // phase ① truncation reads as a truncation, not as an Editor's judgment.
+        const persisted = typeof deleted.discard_reason === 'string' ? deleted.discard_reason.trim() : '';
+        const journaled = typeof event.attribution?.why === 'string' ? event.attribution.why.trim() : '';
+        const reason = persisted.length > 0 ? persisted : journaled;
+
+        archived.set(deleted.id, {
+            ...deleted,
+            state: 'discarded',
+            // Absent rather than empty: a row with no reason anywhere stays readable the way it was
+            // before the field existed, and the rail shows no reason instead of a blank one.
+            ...(reason.length > 0 ? { discard_reason: reason } : {})
+        });
     }
 
     return [...archived.values(), ...live].sort(
@@ -381,11 +400,23 @@ function seedBriefView(store: Store, story: Story): SeedBriefView | null {
 /**
  * §10 / §6.5-§6.6 — phase ①'s sampling state for the Story view.
  *
- * `round` is `sampling_round ?? 1` — the last COMPLETED round (the loop's own read of the in-flight
- * round is `sampling_round + 1`, records.ts:samplingRoundOf; §10 asks for the round the view reports,
- * so a Story that has never sampled says 1, never absent). A backtrack or a Seed edit resets the
- * counter to 0 (engine.ts's `scrapPhasesAfter` branches) so the reopened phase samples round 1; the
- * view reports that stored 0 as-is rather than re-deriving the in-flight round a second time.
+ * TWO ROUND NUMBERS, deliberately (`active_round` is T12/P1's addition, and both are read by the
+ * dashboard because the loop itself uses both — one for the review, one for supersession):
+ *
+ *   * `round` is `sampling_round ?? 1` — the LAST COMPLETED round, the round whose selection the
+ *     Story carries. It is `records.ts:deepReviewRoundOf` spelled exactly, which is what §10 asks the
+ *     view to report (the pane prints it, and the deep review is dispatched for THAT round). A
+ *     backtrack or a Seed edit resets the counter to 0 (engine.ts's `scrapPhasesAfter` branches) so
+ *     the reopened phase samples round 1 again; the view reports that stored 0 as-is rather than
+ *     re-deriving a second time.
+ *   * `active_round` is `records.ts:samplingRoundOf(story)` — the round IN FLIGHT, `(sampling_round ??
+ *     0) + 1`, the integer `records.ts:isSupersededSummaryDraft` compares a draft's round against. It
+ *     is sent because `round` alone is AMBIGUOUS at the boundary that matters: a Story that has never
+ *     selected says `round: 1` (in-flight round 1, its drafts are live work) and a Story whose round 1
+ *     just closed also says `round: 1` (in-flight round 2, round-1 leftovers are set aside). Guessing
+ *     the +1 on the client is the off-by-one that made the rail show a retired draft as live
+ *     competition while the engine had already moved past it, so the projection answers with the
+ *     loop's own read and the dashboard recomputes nothing (L-14/W3).
  *
  * `selected` is read off the NEWEST history row rather than the live `revisions` rows: the selection
  * commit hard-deletes the losers (P13/D-22) and bumps `sampling_round`, so the history line is the
@@ -417,7 +448,12 @@ function samplingView(story: Story): SamplingView {
     const chosen = latest?.samples.find((sample) => sample.revision_id === latest.selected);
 
     return {
+        // The last COMPLETED round, as stored (`0` on a Story an Author reset) — the deep review's
+        // round, and the number §10's pane prints.
         round: (story as LoopStory).sampling_round ?? 1,
+        // The round the loop is working, through the loop's OWN predicate — the value supersession is
+        // measured by (`records.ts:isSupersededSummaryDraft` ← `records.ts:samplingRoundOf`).
+        active_round: samplingRoundOf(story),
         ...(chosen === undefined
             ? {}
             : { selected: { revision_id: chosen.revision_id, critical: chosen.critical, high: chosen.high } }),

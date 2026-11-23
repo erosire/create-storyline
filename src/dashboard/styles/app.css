@@ -1631,6 +1631,20 @@
     color: var(--text-strong);
 }
 
+/* T4/R2, then R6 — a draft a round parked as history is struck out, on the row itself. The report is that
+   the `DISCARDED` pill made the rail harder to read: the word is an explanation the Author only needs once,
+   while WHICH row went is the thing to spot, so the marker is now the shape of the label — `line-through`
+   reads as "not this one" in greyscale, at high contrast, with the stylesheet off (the word still reaches a
+   screen reader from the row's `sr-only` span) and without a second string in the row. The colour reuses the
+   settled-grey `--halt` the run states already use for work that is done and parked, so a struck row also
+   reads as parked rather than merely deleted, and the line stays legible on the row's own `--muted` text.
+   `data-state` is the hook: it is the engine's word for the row (`StoryOutline.tsx`'s `DISCARDED_STATE`), so
+   the marker cannot drift from the state, and a `selected`/`pending`/`drafted`/`competing` row is untouched. */
+.outline-child[data-state='discarded'] .outline-name {
+    color: var(--halt);
+    text-decoration: line-through;
+}
+
 /* Phase ① files Findings and Revisions under each Overview, one rail level deeper. */
 .outline-grandchildren {
     display: flex;

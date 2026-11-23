@@ -1,5 +1,9 @@
 // The global employee tiles: the same five employees for every Story, with the rank they all hold,
 // the model each one asks for, and the content-area switch that opens that employee's threads.
+//
+// R4 — the running badge's FACE is the count alone; the sentence ("4 threads running") stays on the
+// badge's title/aria-label and inside the tile button's composed accessible name.
+// R10 — each kind carries a `data-agent` hook that story.css turns into one persistent colour.
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { AgentsPanel } from './AgentsPanel';
@@ -27,7 +31,7 @@ const idle: AgentStatusRow[] = [
 ];
 
 describe('AgentsPanel — the global employee roster', () => {
-    it('replaces the running badge with the number of threads the employee is running', () => {
+    it('shows the running badge as the bare count, with the sentence kept accessibly (R4)', () => {
         const working = idle.map((agent) =>
             agent.kind === 'writer'
                 ? {
@@ -50,8 +54,10 @@ describe('AgentsPanel — the global employee roster', () => {
 
         const panel = screen.getByTestId('agents-panel');
         expect(within(panel).getByText('Employee')).toBeTruthy();
-        // The header is the roster's name only: each tile's badge already answers "how many?".
-        expect(within(panel).queryByText(/threads? running/i)).toBeNull();
+        // The header stays the roster's name only: the count line lives on each tile, not above them.
+        // (R2 put the sentence ON the badge, so the check is scoped to the header.)
+        const header = panel.querySelector<HTMLElement>('.sv-pane-head')!;
+        expect(within(header).queryByText(/threads? running/i)).toBeNull();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
         // Alphabetical by title, five rows: the Researcher sorts between Reader and Writer.
@@ -66,9 +72,16 @@ describe('AgentsPanel — the global employee roster', () => {
         const writer = panel.querySelector<HTMLElement>('[data-agent="writer"]')!;
         expect(writer.dataset.status).toBe('running');
         const writerState = writer.querySelector<HTMLElement>('.sv-agent-tile__state')!;
-        // The badge IS the count: no "RUNNING" word beside a separate list of numbers.
+        // R4: the face is the count and nothing else — the pill's blue is the "running" signal, so a
+        // word would repeat what the colour already says. Exact, not a substring: no wording leaks in.
         expect(writerState.textContent).toBe('4');
+        // ...and the sentence the face dropped is still the one answer hover and a screen reader get.
         expect(writerState.getAttribute('title')).toBe('4 threads running');
+        expect(writerState.getAttribute('aria-label')).toBe('4 threads running');
+        // The button's own aria-label REPLACES its subtree's name, so it carries the count in context.
+        expect(within(writer).getByRole('button', { name: 'open Writer threads — 4 threads running' })).toBeTruthy();
+        // Nothing on the tile spells the count out any more, and no "RUNNING" word doubles up beside it.
+        expect(within(writer).queryByText(/threads? running/)).toBeNull();
         expect(within(writer).queryByText('running')).toBeNull();
         // The rail names the employee and counts its threads; Story/phase/work item stay in the centre.
         expect(within(writer).queryByText('Hollow Sea')).toBeNull();
@@ -79,6 +92,65 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(editor.querySelector<HTMLElement>('.sv-agent-tile__state')?.textContent).toBe('idle');
         // The IDLE badge already says it; an idle tile carries no second sentence.
         expect(within(editor).queryByText(/no thread right now/)).toBeNull();
+    });
+
+    it('says "1 thread running" — singular — for the single run the server reconciles (R2, R4)', () => {
+        // This is exactly what `GET /agents` now answers for a structured Writer run: one live
+        // journaled row, no engine thread, so the tile has one working entry (R1).
+        const oneThread = idle.map((agent) =>
+            agent.kind === 'writer'
+                ? {
+                      ...agent,
+                      status: 'running' as const,
+                      working: [
+                          {
+                              story_id: 'story_1',
+                              story_title: 'Hollow Sea',
+                              phase: 'chapters' as const,
+                              role_name: 'writer',
+                              work_item: 'wi_draft_chapter_1',
+                              thread_id: 'run_row:run_1',
+                              started_at: Date.parse('2026-11-23T10:00:00.000Z')
+                          }
+                      ]
+                  }
+                : agent
+        );
+
+        render(<AgentsPanel agents={oneThread} />);
+
+        const writer = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="writer"]')!;
+        const writerState = writer.querySelector<HTMLElement>('.sv-agent-tile__state')!;
+
+        expect(writer.dataset.status).toBe('running');
+        // R4 — the face is the singular count "1"; the sentence it dropped is singular too, and it is
+        // still what hover and the screen reader hear (no "1 threads").
+        expect(writerState.textContent).toBe('1');
+        expect(writerState.getAttribute('title')).toBe('1 thread running');
+        expect(writerState.getAttribute('aria-label')).toBe('1 thread running');
+        expect(within(writer).getByRole('button', { name: 'open Writer threads — 1 thread running' })).toBeTruthy();
+        expect(within(writer).queryByText(/threads? running/)).toBeNull();
+
+        // Every other employee keeps the idle face: a running count never leaks onto its peers (R3).
+        const titles: Record<string, string> = {
+            checker: 'Checker',
+            editor: 'Editor',
+            reader: 'Reader',
+            researcher: 'Researcher'
+        };
+
+        for (const [kind, title] of Object.entries(titles)) {
+            const tile = screen.getByTestId('agents-panel').querySelector<HTMLElement>(`[data-agent="${kind}"]`)!;
+            const state = tile.querySelector<HTMLElement>('.sv-agent-tile__state')!;
+
+            expect(tile.dataset.status).toBe('idle');
+            expect(state.textContent).toBe('idle');
+            expect(state.getAttribute('title')).toBe('idle — no thread right now');
+            expect(state.getAttribute('aria-label')).toBe(`${title} is idle`);
+            // R4 — an idle tile's button name is exactly what it always was: the count sentence is
+            // composed only for a running employee, so nothing is added where there is nothing to say.
+            expect(within(tile).getByRole('button', { name: `open ${title} threads` })).toBeTruthy();
+        }
     });
 
     it('opens that agent’s threads from anywhere on the tile except the model dropdown (U-8)', () => {
@@ -139,6 +211,68 @@ describe('AgentsPanel — the global employee roster', () => {
         const researcher = panel.querySelector<HTMLElement>('[data-agent="researcher"]')!;
         expect(within(researcher).getByText('Researcher')).toBeTruthy();
         expect(within(panel).queryByText(/the Editor is your channel/)).toBeNull();
+    });
+
+    it('gives every employee the data hooks its own colour hangs on, in every state (R10)', () => {
+        // The five hues are CSS-only: story.css keys `--agent-tint` (the left identity stripe and the
+        // name) off `data-agent`, while `data-status` and the state pill's modifier class stay the
+        // live/idle signal. jsdom cannot compute a colour, so what a test CAN pin is the contract the
+        // stylesheet reads — the three hooks, unchanged in idle, running and selected.
+        const stateClass = (kind: string): string =>
+            screen
+                .getByTestId('agents-panel')
+                .querySelector<HTMLElement>(`[data-agent="${kind}"]`)!
+                .querySelector<HTMLElement>('.sv-agent-tile__state')!.className;
+
+        const { rerender } = render(<AgentsPanel agents={idle} />);
+
+        // All five hooks exist while every employee is idle — the stripe has to show in the resting
+        // state too, or it would only appear on the one tile that happens to be running.
+        expect(
+            Array.from(document.querySelectorAll<HTMLElement>('.sv-agent-tile')).map((tile) => tile.dataset.agent)
+        ).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
+        for (const kind of ['checker', 'editor', 'reader', 'researcher', 'writer']) {
+            expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.status).toBe('idle');
+            expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.selected).toBe('false');
+            expect(stateClass(kind)).toBe('sv-agent-tile__state sv-agent-tile__state--idle');
+            // R10 — no colour is computed in React: nothing here overrides the stylesheet inline.
+            expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.hasAttribute('style')).toBe(false);
+        }
+
+        // Two live threads, so the badge counts 2 — enough to prove the state hooks switch while the
+        // identity hook and the pill's own modifier class keep their separate jobs.
+        const working = idle.map((row) =>
+            row.kind === 'writer'
+                ? {
+                      ...row,
+                      status: 'running' as const,
+                      working: [1, 2].map((index) => ({
+                          story_id: 'story_1',
+                          story_title: 'Hollow Sea',
+                          phase: 'chapters' as const,
+                          role_name: 'writer',
+                          work_item: `run_${index}`,
+                          thread_id: `thread-${index}`,
+                          started_at: index
+                      }))
+                  }
+                : row
+        );
+
+        rerender(<AgentsPanel agents={working} selectedAgent="writer" />);
+
+        // Running + selected: the identity hook survives both state changes (it never becomes the
+        // status hook), the status hooks answer as before, and only the open tile reads as selected.
+        expect(document.querySelector<HTMLElement>('[data-agent="writer"]')?.dataset.agent).toBe('writer');
+        expect(document.querySelector<HTMLElement>('[data-agent="writer"]')?.dataset.status).toBe('running');
+        expect(document.querySelector<HTMLElement>('[data-agent="writer"]')?.dataset.selected).toBe('true');
+        expect(stateClass('writer')).toBe('sv-agent-tile__state sv-agent-tile__state--running');
+
+        for (const kind of ['checker', 'editor', 'reader', 'researcher']) {
+            expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.status).toBe('idle');
+            expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.selected).toBe('false');
+            expect(stateClass(kind)).toBe('sv-agent-tile__state sv-agent-tile__state--idle');
+        }
     });
 
     it('states the model on the tile as plain text backed by the catalogue dropdown (U-8, T-6b)', () => {

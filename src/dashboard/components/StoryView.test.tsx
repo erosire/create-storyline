@@ -8,8 +8,8 @@ import { render, screen, within } from '@testing-library/react';
 import { StoryView } from './StoryView';
 import { click } from '../testing/shell-fakes';
 import { buildRevisionUnits } from './story-contract';
-import type { Revision, Verdict } from '../../shared/types';
-import { NOW, fixtureActions, fixtureCompletion, fixtureStory, fixtureView } from './story-fixtures';
+import type { Finding, Revision, Verdict } from '../../shared/types';
+import { NOW, fixtureActions, fixtureCompletion, fixtureReviewRuns, fixtureStory, fixtureView } from './story-fixtures';
 
 function renderView(props: Partial<Parameters<typeof StoryView>[0]> = {}) {
     const harness = fixtureActions();
@@ -38,7 +38,8 @@ describe('StoryView — one selected phrase in the content area', () => {
         const { container } = renderView();
 
         expect(container.querySelector('.sv-summary')).toBeTruthy();
-        expect(container.querySelector('.sv-summary-drafts')).toBeTruthy();
+        // The revision section renders; how many cards it may print is R1's, pinned below.
+        expect(container.querySelector('.sv-summary-revisions')).toBeTruthy();
         expect(container.querySelector('.sv-ideas')).toBeNull();
         expect(container.querySelector('.sv-chapters')).toBeNull();
         expect(container.querySelector('.sv-goal')).toBeNull();
@@ -101,7 +102,7 @@ describe('StoryView — one selected phrase in the content area', () => {
 });
 
 describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)', () => {
-    it('marks the recommended revision and lets the Author take it', async () => {
+    it('keeps a competing draft the review recommends out of the ordinary list (R1, U-13)', () => {
         const view = fixtureView();
         const unit = buildRevisionUnits(view).find((candidate) => candidate.unitKind === 'summary')!;
         const seed = unit.revisions[0]!;
@@ -135,13 +136,18 @@ describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)'
 
         render(<StoryView view={reviewed} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
 
-        const drafts = Array.from(document.querySelectorAll<HTMLElement>('.sv-summary-draft'));
-        expect(drafts.length).toBe(2);
-        expect(drafts[1].dataset.recommended).toBe('true');
-        expect(within(drafts[1]).getByText('Editor recommends')).toBeTruthy();
-
-        await click(within(drafts[1]).getByRole('button', { name: 'Use this revision' }));
-        expect(harness.calls.selectRevision).toEqual([['sum1', 'rv-sum-b']]);
+        // R1: nothing on this Story is `selected`, so the pane prints NO card. The draft whose newest verdict
+        // advances (`recommendedRevisionId`) is still a candidate, and a candidate has no card in the ordinary
+        // Summary list — its prose may not appear there at all.
+        expect(document.querySelectorAll('.sv-summary-draft')).toHaveLength(0);
+        expect(document.body.textContent).not.toContain('A drowned archive elects its next reader.');
+        expect(document.querySelector('.sv-summary-draft-pick')).toBeNull();
+        expect(document.body.textContent).not.toContain('Editor recommends');
+        expect(screen.getByText('No current Summary revision.')).toBeTruthy();
+        // U-13's Select was the only writer of the override route, so nothing offers it: the pane does not ask
+        // the Author to re-take a decision the round owns (D-24 stays a rail/legacy path, not this list's).
+        expect(document.querySelector('.sv-summary-draft-select')).toBeNull();
+        expect(harness.calls.selectRevision).toBeUndefined();
     });
 
     it('does not claim a recommendation when no verdict advanced a draft', () => {
@@ -171,6 +177,10 @@ describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)'
             revisions: view.revisions.map((revision) =>
                 revision.unit_kind === 'summary' ? { ...revision, state: 'selected' as const } : revision
             ),
+            // T11/F1: a clean phase-① projection is a REVIEWED one. The round settled on `rv-sum-a`, so
+            // the wire carries its five closed deep-review claims — without them the gate owes every pass,
+            // which is the honest reading of an unread Summary (the next case pins that).
+            runs: [...view.runs, ...fixtureReviewRuns('rv-sum-a')],
             ideas: view.ideas.map((idea) => ({ ...idea, state: 'selected' as const }))
         };
         render(<StoryView view={cleared} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
@@ -181,6 +191,388 @@ describe('StoryView — the Summary review and its tick (U-4, U-13, D-21, D-24)'
         await click(enabled);
         await click(screen.getByRole('button', { name: 'Confirm' }));
         expect(harness.calls.lockPhase).toEqual([['s1']]);
+    });
+});
+
+describe('StoryView — the Summary pane prints ONE card, and the override lives on the opened revision (R1, T4)', () => {
+    /**
+     * Phase ① several rounds deep, which is what the reported screenshot was. A settled round leaves its
+     * `selected` row on the record, so two rounds mean TWO `selected` rows (story-contract.ts:522-530); one
+     * loser is parked with its reason, and a third draft is still `drafted`. The rail's indexes follow
+     * creation order, so these are Revision 1…4 — and the pane may print only Revision 3.
+     *
+     * The one `advance` verdict is filed on the live draft, so `story-nav.recommendedRevisionId` names
+     * `rv-round-3`: in real wiring the recommended row is always a CANDIDATE (`summaryRevisionUnit` offers
+     * only those), which is exactly the row R1 keeps out of the overview (T4).
+     */
+    function multiRoundSummaryView() {
+        const base = summaryPhaseView();
+
+        const row = (
+            id: string,
+            state: Revision['state'],
+            at: string,
+            premise: string,
+            extra: Partial<Revision> = {}
+        ): Revision => ({
+            id,
+            rev: 1,
+            created_at: at,
+            updated_at: at,
+            story_id: 's1',
+            unit_kind: 'summary',
+            unit_ref: 'sum1',
+            body: { fields: { premise } },
+            run_ref: 'r-pick',
+            template_ref: 't-builtin',
+            state,
+            verdict_refs: [],
+            ...extra
+        });
+
+        const recommended: Verdict = {
+            id: 'v-round-3',
+            rev: 1,
+            created_at: '2026-11-11T10:47:00.000Z',
+            updated_at: '2026-11-11T10:47:00.000Z',
+            story_id: 's1',
+            target_ref: 'rv-round-3',
+            target_kind: 'summary',
+            round: 3,
+            // No `finding_ref`: the pass is the review's reading of the draft, not a claim that would
+            // renumber this revision's findings and pull this case off its own subject.
+            criteria_passed: [{ criterion: 'C-14', result: true, evidence: 'the draft speaks the Seed' }],
+            hard_pass: true,
+            soft_count: 0,
+            recommendation: 'advance'
+        };
+
+        return {
+            ...base,
+            // The fixture's own `competing` Summary draft is dropped: this view is the settled Story, and a
+            // second live draft would hold the readiness tick for a reason this case is not about.
+            revisions: [
+                ...base.revisions.filter((revision) => revision.unit_kind !== 'summary'),
+                row('rv-round-1', 'selected', '2026-11-11T10:30:00.000Z', 'Round one: the city remembers by drowning.'),
+                row('rv-round-2-loser', 'discarded', '2026-11-11T10:35:00.000Z', 'Round two, first cut: the index speaks first.', {
+                    discard_reason: 'the kept draft names its price in the first paragraph'
+                }),
+                row('rv-round-2', 'selected', '2026-11-11T10:40:00.000Z', 'Round two: the archive keeps what the water takes.'),
+                row('rv-round-3', 'drafted', '2026-11-11T10:45:00.000Z', 'Round three, still being written.')
+            ],
+            verdicts: [...(base.verdicts ?? []), recommended]
+        };
+    }
+
+    it('renders the newest accepted revision, never the older accepted row or the live draft', () => {
+        const view = multiRoundSummaryView();
+        const harness = fixtureActions();
+
+        render(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />);
+
+        // `selectedSummaryRevision` resolves Revision 3 (`rv-round-2`, newest `selected`), so that row is the
+        // only card. Asserted as the (state, label) pair, so neither the older accepted row nor a reshuffle
+        // can pass, and the pane's own heading agrees with the card count.
+        expect(
+            Array.from(document.querySelectorAll<HTMLElement>('.sv-summary-draft')).map((card) => [
+                card.dataset.state,
+                card.querySelector('.sv-summary-draft-label')?.textContent
+            ])
+        ).toEqual([['selected', 'Revision 3']]);
+        expect(screen.getByText('Revisions · 1')).toBeTruthy();
+        expect(screen.getByText('Round two: the archive keeps what the water takes.')).toBeTruthy();
+
+        // The three rows the record still holds — Revision 1's accepted text, Revision 2's parked text and
+        // Revision 3's live draft — print nothing here, and no card is offered back to the Author.
+        for (const hidden of [
+            'Round one: the city remembers by drowning.',
+            'Round two, first cut: the index speaks first.',
+            'Round three, still being written.'
+        ]) {
+            expect(document.body.textContent).not.toContain(hidden);
+        }
+        expect(document.body.textContent).not.toContain('Use this revision');
+        expect(document.body.textContent).not.toContain('Discard reason');
+        // T4: the review recommends the LIVE draft (Revision 4) and R1 keeps that draft off the overview, so
+        // the advisory rides with the hidden row instead of being painted on a card it cannot describe.
+        expect(document.querySelector('.sv-summary-draft-pick')).toBeNull();
+        expect(document.body.textContent).not.toContain('Review recommends');
+        const overviewAction = document.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
+
+        expect([overviewAction.textContent, overviewAction.disabled]).toEqual(['Selected', true]);
+        expect(harness.calls.selectRevision).toBeUndefined();
+    });
+
+    it('still opens any older revision the rail clicks, parked ones included', () => {
+        const view = multiRoundSummaryView();
+        const harness = fixtureActions();
+        const { rerender } = render(
+            <StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />
+        );
+
+        // The pane's cut is a DISPLAY cut. `story-nav.summaryRevisions` is unfiltered, so the rail still lists
+        // Revision 1…4 and a click lands on the row it names — here the parked loser, whose fields and
+        // recorded discard reason only ever render in the focused view (T4/R1).
+        rerender(
+            <StoryView
+                view={view}
+                actions={harness.actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-round-2-loser' }}
+            />
+        );
+
+        const pane = screen.getByRole('region', { name: 'Summary — Revision 2' });
+
+        expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe('discarded · 0 findings');
+        expect(screen.getByText('Round two, first cut: the index speaks first.')).toBeTruthy();
+        expect(screen.getByText('Discard reason: the kept draft names its price in the first paragraph')).toBeTruthy();
+        // T4: the row is opened for its DETAIL, not for a write — the override is printed but disabled, and
+        // no advisory claims a row the review never advanced.
+        const parkedAction = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
+
+        expect([parkedAction.textContent, parkedAction.disabled]).toEqual(['Discarded', true]);
+        expect(pane.querySelector('.sv-summary-draft-pick')).toBeNull();
+        // The ordinary list is gone while one revision is open, exactly as before.
+        expect(document.querySelector('.sv-summary-drafts')).toBeNull();
+        expect(document.body.textContent).not.toContain('Round two: the archive keeps what the water takes.');
+    });
+
+    it('offers the override and the advisory on the candidate the rail opens (T4, U-13, D-24)', async () => {
+        const view = multiRoundSummaryView();
+        const harness = fixtureActions();
+        const { rerender } = render(
+            <StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'summary' }} />
+        );
+
+        // The rail opens Revision 4 — the live `drafted` row R1 keeps off the overview. `StoryView` resolves
+        // it against `summaryRevisionUnit` (the contract's candidate list: reviewable, not superseded), so
+        // this is the surface where the Author's override still exists.
+        rerender(
+            <StoryView
+                view={view}
+                actions={harness.actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-round-3' }}
+            />
+        );
+
+        const pane = screen.getByRole('region', { name: 'Summary — Revision 4' });
+
+        expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe('drafted · 0 findings');
+        expect(screen.getByText('Round three, still being written.')).toBeTruthy();
+        // The advisory marks the row its verdict names, in phase ①'s own wording (T11/F5).
+        expect(pane.querySelector('.sv-summary-draft-pick')?.textContent).toBe('Review recommends');
+
+        const action = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
+
+        expect([action.textContent, action.disabled]).toEqual(['Use this revision', false]);
+
+        await click(action);
+
+        // The same callback with the same signature as before the redesign: the Summary's id, then the
+        // revision's (`POST /stories/s1/revisions/rv-round-3/select`, D-24).
+        expect(harness.calls.selectRevision).toEqual([['sum1', 'rv-round-3']]);
+
+        // The mark and the write do not follow the Author to a row nobody advanced: open the row ON RECORD
+        // and the pane shows the state, a disabled button, and no advisory.
+        rerender(
+            <StoryView
+                view={view}
+                actions={harness.actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-round-2' }}
+            />
+        );
+
+        const accepted = screen.getByRole('region', { name: 'Summary — Revision 3' });
+        const acceptedAction = accepted.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
+
+        expect(accepted.querySelector('.sv-pane-badge')?.textContent).toBe('selected · 0 findings');
+        expect(accepted.querySelector('.sv-summary-draft-pick')).toBeNull();
+        expect([acceptedAction.textContent, acceptedAction.disabled]).toEqual(['Selected', true]);
+        // Nothing else wrote the route either.
+        expect(harness.calls.selectRevision).toEqual([['sum1', 'rv-round-3']]);
+    });
+
+    it('keeps the override off a drafted row the loop has already moved past (T4 supersession)', () => {
+        // T11/F2's exclusion: a `drafted` row of an OLDER round is not an offer — the projection says the
+        // active round is 2 while this draft's `round` is 1, so `isSupersededSummaryDraft` drops it from
+        // `summaryRevisionUnit`, the same list `server/loop/phase1-round-parity.test.ts` pins as the
+        // Author's override. The rail can still open it; the write stays refused.
+        const base = summaryPhaseView();
+        const harness = fixtureActions();
+        const superseded: Revision = {
+            id: 'rv-round-1-live',
+            rev: 1,
+            created_at: '2026-11-11T10:50:00.000Z',
+            updated_at: '2026-11-11T10:50:00.000Z',
+            story_id: 's1',
+            unit_kind: 'summary',
+            unit_ref: 'sum1',
+            body: { fields: { premise: 'Round one, the cut nobody kept.' } },
+            run_ref: 'r-pick',
+            template_ref: 't-builtin',
+            state: 'drafted',
+            round: 1,
+            verdict_refs: []
+        };
+
+        render(
+            <StoryView
+                view={{
+                    ...base,
+                    revisions: [
+                        ...base.revisions.filter((revision) => revision.unit_kind !== 'summary'),
+                        { ...superseded, id: 'rv-keep', state: 'selected', round: 1, created_at: '2026-11-11T10:30:00.000Z', body: { fields: { premise: 'The kept first revision.' } } },
+                        superseded
+                    ],
+                    sampling: { round: 1, active_round: 2, history: [] }
+                }}
+                actions={harness.actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-round-1-live' }}
+            />
+        );
+
+        const pane = screen.getByRole('region', { name: 'Summary — Revision 2' });
+        const action = pane.querySelector<HTMLButtonElement>('.sv-summary-draft-select')!;
+
+        // The row reads as what it is, and the button explains why it cannot be taken. (The label itself is
+        // the card's pre-existing bucket for any state the Author cannot select — nothing widened here.)
+        expect(pane.querySelector('.sv-pane-badge')?.textContent).toBe('drafted · 0 findings');
+        expect(screen.getByText('Round one, the cut nobody kept.')).toBeTruthy();
+        expect(action.disabled).toBe(true);
+        expect(action.getAttribute('title')).toBe('This revision is drafted.');
+        expect(pane.querySelector('.sv-summary-draft-pick')).toBeNull();
+        expect(harness.calls.selectRevision).toBeUndefined();
+    });
+});
+
+describe('StoryView — the Accept blocker is never invisible on the revision it blocks (T5, T11)', () => {
+    /** The Summary on record: one `selected` draft, no round left competing, Goal and tray clean. */
+    function cleanSummaryPhase(finding?: Finding) {
+        const base = summaryPhaseView();
+        const winner: Revision = {
+            id: 'rv-picked',
+            rev: 1,
+            created_at: '2026-11-11T11:03:00.000Z',
+            updated_at: '2026-11-11T11:03:00.000Z',
+            story_id: 's1',
+            unit_kind: 'summary',
+            unit_ref: 'sum1',
+            body: { fields: { premise: 'A flooded city keeps its memory in a sealed cathedral of data.' } },
+            run_ref: 'r-pick',
+            template_ref: 't-builtin',
+            state: 'selected',
+            // The round the projection reports as in flight (T11/F1): the deep review of THIS draft is
+            // dispatchable, so its passes are work the round owes until they close.
+            round: 1,
+            verdict_refs: []
+        };
+
+        return {
+            ...base,
+            // The dial is OFF, so a `confirmed` critical is the Author's decision (D-34) — the state the
+            // reported screenshot was in, where the old copy promised "the next round".
+            story: { ...base.story, auto_approve: [] },
+            goal: { ...base.goal, failing: [] },
+            ideas: [],
+            revisions: [winner],
+            findings: finding === undefined ? [] : [finding],
+            // T11/F1: an honest clean baseline is a REVIEWED round — five closed `wi_review_rv-picked_aN`
+            // claims plus the sampling slice naming the round. `runs: []` alone would be an unread
+            // Summary, and the gate says so (the case below pins that).
+            runs: fixtureReviewRuns('rv-picked'),
+            // T12/P1: round 1 is the round that CLOSED on `rv-picked` (its deep review is owed for it) and
+            // round 2 is the one in flight; the pane's Accept gate reads the first, supersession the second.
+            sampling: { round: 1, active_round: 2, history: [] }
+        };
+    }
+
+    /** The whole-artifact spelling: `target_ref` is the Summary and no `related_refs` names a draft. */
+    const WHOLE_ARTIFACT: Finding = {
+        id: 'f-legacy',
+        rev: 1,
+        created_at: '2026-11-11T11:04:00.000Z',
+        updated_at: '2026-11-11T11:04:00.000Z',
+        story_id: 's1',
+        target_ref: 'sum1',
+        criterion_ref: 'C-14',
+        title: 'The Summary keeps one voice too many',
+        evidence: 'round 2, ¶1 — the index and the curator speak alike.',
+        cost: 'critical',
+        fingerprint: 'fp-legacy',
+        state: 'confirmed',
+        seen_count: 1
+    };
+
+    it('shows on the open Revision the finding that disables Accept, in the engine\u2019s words', () => {
+        render(
+            <StoryView
+                view={cleanSummaryPhase(WHOLE_ARTIFACT)}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
+            />
+        );
+
+        // 1. The gate: disabled, and its reason names the finding — never an Editor choice phase ① lacks.
+        const lock = document.querySelector('.sv-lock-button') as HTMLButtonElement;
+        expect(lock.disabled).toBe(true);
+        expect(Array.from(document.querySelectorAll('.sv-lock-reasons li')).map((line) => line.textContent)).toEqual([
+            '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        ]);
+        expect(lock.getAttribute('title')).toBe(
+            'Not yet: 1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        );
+
+        // 2. The pane open on THAT revision: the same row is listed, so "No Reader findings on this
+        //    revision yet" cannot sit beside the blocker (the reported contradiction).
+        expect(document.querySelector('.sv-summary-focus-empty')).toBeNull();
+        expect((document.querySelector('.find-title') as HTMLElement).textContent).toBe(
+            'The Summary keeps one voice too many'
+        );
+        expect((document.querySelector('.sv-summary-current-title') as HTMLElement).textContent).toBe('Findings · 1');
+    });
+
+    it('leaves a clean selected revision enabled, with no reason list at all (no invented blocker)', () => {
+        const { container } = render(
+            <StoryView
+                view={cleanSummaryPhase()}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
+            />
+        );
+
+        // T11/F1: this is enabled because the projection PROVES the review finished — five closed passes
+        // for the winner of the round `sampling.round` reports. A projection without them is not clean.
+        expect((document.querySelector('.sv-lock-button') as HTMLButtonElement).disabled).toBe(false);
+        expect(container.querySelector('.sv-lock-reasons')).toBeNull();
+        expect(container.querySelector('.sv-summary-focus-empty')?.textContent).toBe(
+            'No Reader findings on this revision yet.'
+        );
+    });
+
+    it('holds Accept over a settled round the deep review has not read yet (T11/F1)', () => {
+        // Everything the Author controls is done — Goal passing, tray empty, the round settled on its
+        // winner — and the review family has dispatched no pass. Accept must stay shut, naming the wait.
+        render(
+            <StoryView
+                view={{ ...cleanSummaryPhase(), runs: [] }}
+                actions={fixtureActions().actions}
+                now={NOW}
+                selection={{ panel: 'summary', ref: 'revision:rv-picked' }}
+            />
+        );
+
+        const lock = document.querySelector('.sv-lock-button') as HTMLButtonElement;
+
+        expect(lock.disabled).toBe(true);
+        expect(Array.from(document.querySelectorAll('.sv-lock-reasons li')).map((line) => line.textContent)).toEqual([
+            "5 deep-review passes still owed on the selected Summary revision — the round's evidence is not complete (§6.4 step 6)"
+        ]);
     });
 });
 
@@ -305,7 +697,7 @@ describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', ()
 
         const { container, rerender } = render(
             <StoryView
-                view={{ ...view, sampling: { round: 3, history: [] } }}
+                view={{ ...view, sampling: { round: 3, active_round: 4, history: [] } }}
                 actions={fixtureActions().actions}
                 now={NOW}
             />
@@ -317,7 +709,7 @@ describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', ()
         const inChapters = { ...view, story: { ...view.story, phase: 'chapters' as const } };
         rerender(
             <StoryView
-                view={{ ...inChapters, sampling: { round: 3, history: [] } }}
+                view={{ ...inChapters, sampling: { round: 3, active_round: 4, history: [] } }}
                 actions={fixtureActions().actions}
                 now={NOW}
                 selection={{ panel: 'chapters' }}

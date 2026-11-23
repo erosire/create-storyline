@@ -11,14 +11,18 @@ import {
     buildRevisionUnits,
     competingRevisionsFor,
     completionDiscardSentence,
+    deepReviewProgress,
     diffWords,
     draftVerdicts,
     earlierDecisionOf,
+    findingAppliesToRevision,
+    findingRevisionScope,
     formatElapsed,
     groupChapters,
     hasEditorRole,
     isLiveRun,
     isPanelRole,
+    isSupersededSummaryDraft,
     isVerifiedIdea,
     lockCheck,
     panelDissent,
@@ -28,9 +32,19 @@ import {
     pendingProposalsFor,
     runsStoppedByPause,
     revisionBodyText,
-    undoTargetFor
+    summaryScopeContext,
+    undoTargetFor,
+    unconfirmedBlockingFindings
 } from './story-contract';
 import { NOW, fixtureCompletion, fixtureRuns, fixtureTemplates, fixtureView } from './story-fixtures';
+import type { StoryViewData } from './story-contract';
+// The wire slice (`api.ts:SamplingView`), typed so the fixtures below cannot quietly drop one of the two
+// round numbers the projection sends (T12/P1).
+import type { SamplingView } from '../api';
+// The same default the loop dispatches the deep review by (`records.ts:screeningSizeOf`), so the clean
+// baselines spell out the pass count the engine actually owes rather than a number this file picked.
+import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
+import type { Cost, Finding, FindingState, Revision, Run, Story } from '../../shared/types';
 
 describe('story-contract — phases, locks and backtrack (U-16, L-31, L-32)', () => {
     it('maps which lock signed which phase, with phase ③ signed only by `completed` (L-25a)', () => {
@@ -282,5 +296,649 @@ describe('story-contract — runs, ideas, templates, completion (U-7, D-27/D-32,
             builtin: false,
             editable: true
         });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase ①'s Accept gate (T5 / R3, T11) — every sentence behind a disabled "Accept final Summary".
+//
+// These cases are the stable Author decision point R3 asked for: after a clean review the lock must be
+// ENABLED with no invented blocker; when something really does hold the phase, the reason must name the
+// wait the loop actually owes (the engine's selection, an armed fix, the sweep's dial, the Author's own
+// approval, an undecided suspicion, §6.4 step 6's review) — never "wait for the Editor's choice", which
+// phase ① (D-47, §16.6) does not have.
+//
+// T11 ADDED THE PROJECTION HONESTY RULE: the baselines below are FULLY REVIEWED projections. A settled
+// round carries five closed `wi_review_<winner>_aN` rows (`runs` is required and uncapped on the wire),
+// and the drafts carry the round `sampling.round` says is in flight. `runs: []` alone is not a clean
+// Story — it is an unread Summary, and every case pinned here says which of the two it means.
+// ---------------------------------------------------------------------------
+
+/** One instant for every local row: these cases are about STATES, and only one revision is selected. */
+const AT = '2026-11-11T11:02:00.000Z';
+
+/**
+ * One Summary draft of the fixture Summary (`sum1`) — §16.6's engine settles the round over rows like
+ * these. `state` has NO default on purpose: the gate cases differ precisely in which draft is
+ * `selected`, which is `discarded`, and which is still `drafted`, so an implicit state would hide what
+ * the case asserts (a row that is not `selected` is not the Summary on record — see `gateView`).
+ *
+ * `round` defaults to 1, the round the baseline projection reports (`sampling.round: 1`). A case that is
+ * about a LATER round passes it explicitly: the round number is what makes a draft current-round work, an
+ * Author override of an older round, or a draft the loop has set aside (T11/F1, F2).
+ */
+function draft(id: string, state: Revision['state'], created = AT, round = 1): Revision {
+    return {
+        id,
+        rev: 1,
+        created_at: created,
+        updated_at: created,
+        story_id: 's1',
+        unit_kind: 'summary',
+        unit_ref: 'sum1',
+        body: { premise: 'A flooded city keeps its memory in a sealed cathedral of data.' },
+        run_ref: `run_${id}`,
+        template_ref: 't-builtin',
+        state,
+        round,
+        verdict_refs: []
+    };
+}
+
+/**
+ * A Reader finding. PASSING NO `related` reproduces the legacy/whole-artifact spelling (`target_ref`
+ * only, no L-11a refs) — the shape whose old mismatch produced "no findings" beside a blocking reason.
+ * T11/F4: refs that name a NON-draft id (the Summary row, a Seed Brief, a criterion) are the same
+ * whole-artifact answer, and a case passes them to pin that.
+ */
+function findingOn(id: string, cost: Cost, state: FindingState, related?: string[]): Finding {
+    return {
+        id,
+        rev: 1,
+        created_at: AT,
+        updated_at: AT,
+        story_id: 's1',
+        target_ref: 'sum1',
+        criterion_ref: 'C-14',
+        title: `${id} on the Summary`,
+        evidence: 'round 2, ¶1 — the page says so',
+        cost,
+        fingerprint: `fp-${id}`,
+        state,
+        seen_count: 1,
+        ...(related === undefined ? {} : { related_refs: related })
+    };
+}
+
+/** §16.1 job 5's deep-review Run row: the `work_item_ref` claim key is the projection's only read of the review. */
+function reviewRun(revisionId: string, pass: number, state: Run['state'] = 'torn_down'): Run {
+    return {
+        id: `run_review_${revisionId}_a${pass}`,
+        rev: 1,
+        created_at: AT,
+        updated_at: AT,
+        story_id: 's1',
+        work_item_ref: `wi_review_${revisionId}_a${pass}`,
+        template_ref: 't-reader',
+        role: 'reader',
+        state,
+        started_at: AT,
+        ended_at: state === 'working' ? null : AT,
+        tokens: 100,
+        kind: 'work',
+        delegated: []
+    };
+}
+
+/** The closed passes 1…n for one draft — the rows a settled round's review leaves on the wire. */
+function closedPasses(revisionId: string, passes: number): Run[] {
+    return Array.from({ length: passes }, (_, index) => reviewRun(revisionId, index + 1));
+}
+
+type GateOverrides = Omit<Partial<StoryViewData>, 'story'> & { story?: Partial<Story> };
+
+/**
+ * Phase ① with every REAL gate clean — Goal passing, the phase's tray decided, the round settled on
+ * `revision_sel`, no findings, the round's five deep-review passes CLOSED, and the sampling slice naming
+ * the round these drafts belong to. A case overrides the one fact it is about.
+ *
+ * `revision_sel` carries `state: 'selected'` because that is how the server marks a round's winner
+ * (`engine.ts:1287`, `routes.ts:1081`) and it is the only spelling `selectedSummaryRevision` resolves
+ * (`records.ts:212`, mirrored by `story-contract.ts:selectedSummaryRevision`). A settled round with no
+ * `selected` row is a state the loop cannot produce, and the blocker set below would silently be empty.
+ *
+ * `auto_approve: []` is deliberate: with the dial off, a `confirmed` finding is Author work, which is
+ * what the state-split reasons need. The Ideas are emptied rather than marked decided, because the tray
+ * reason belongs to the L-7a case already pinned above.
+ */
+function gateView(overrides: GateOverrides = {}): StoryViewData {
+    const view = fixtureView();
+    const { story: storyOverrides, ...rest } = overrides;
+
+    return {
+        ...view,
+        story: { ...view.story, phase: 'summary', summary_locked: false, auto_approve: [], ...storyOverrides },
+        goal: { ...view.goal, failing: [] },
+        ideas: [],
+        revisions: [
+            draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z'),
+            draft('revision_sel', 'selected')
+        ],
+        findings: [],
+        // T11/F1: an honest clean projection shows the review having RUNN. `runs` is required and uncapped
+        // (`api.ts:StoryView`, `server/api/projections.ts`), so the shipped server carries these five
+        // closed claims; `runs: []` would be a Summary nobody read, and the gate owes all five passes.
+        runs: closedPasses('revision_sel', DEFAULT_SUMMARY_READERS),
+        // §10: the shipped server always sends the slice, and BOTH round numbers (T12/P1). The drafts
+        // above carry round 1 and one of them is `selected`, so round 1 is the COMPLETED round the deep
+        // review is owed for (`round`), and round 2 is the one in flight (`active_round`) — the number the
+        // supersession comparison uses. A case about a live round says `active_round: 1` instead.
+        sampling: ROUND_ONE_DONE,
+        ...rest
+    };
+}
+
+/**
+ * The slice a round leaves when it CLOSES: `round` is the completed one, `active_round` the one after it
+ * (§6.6 — `sampling_round` advances on the selection, `records.ts:samplingRoundOf` is one past it).
+ */
+const ROUND_ONE_DONE: SamplingView = {
+    round: 1,
+    active_round: 2,
+    history: [{ round: 1, at: AT, samples: [], selected: 'revision_sel' }]
+};
+
+/** The slice of a Story that has never selected: the in-flight round IS round 1, and `round` says 1 too. */
+const ROUND_ONE_IN_FLIGHT: SamplingView = { round: 1, active_round: 1, history: [] };
+
+/** The clean baseline's selected draft, for the reads that take it explicitly. */
+const SELECTED = (): Revision => draft('revision_sel', 'selected');
+
+describe('story-contract — Phase ①\u2019s Accept gate names the waits the engine actually has (R3, §16.6)', () => {
+    it('says the engine selects the round\u2019s winner — phase ① has no Editor draft choice (D-47)', () => {
+        const gate = lockCheck(
+            gateView({
+                // Nothing has been selected here, so the round in flight IS round 1 (`active_round: 1`) and
+                // both drafts are live work — the state the baseline's CLOSED round is not (T12/P1).
+                sampling: ROUND_ONE_IN_FLIGHT,
+                revisions: [draft('revision_a', 'drafted', '2026-11-11T11:01:00.000Z'), draft('revision_b', 'drafted')]
+            })
+        );
+
+        expect(gate.phase).toBe('summary');
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            '2 Summary revisions still in this round — the engine selects the winner once every draft has its screening reviews (§16.6)'
+        ]);
+        // The reported contradiction's first half: a wait on a decision phase ① never makes.
+        expect(gate.reasons.join(' ')).not.toContain('Editor');
+    });
+
+    it('leaves later phases alone: a plotlines-phase lock still names the Goal and nothing about drafts', () => {
+        const view = fixtureView();
+        const inPlotlines = {
+            ...view,
+            story: { ...view.story, phase: 'plotlines' as const, summary_locked: true, plotlines_locked: false }
+        };
+        const gate = lockCheck(inPlotlines);
+
+        // `rv-sum-a` is still `competing` in the fixtures, and phase ② keeps its own Editor-selection
+        // rules (§16.8 supersedes them for phase ① only), so no phase-① line may leak in here.
+        expect(gate.reasons).toEqual([
+            'the Goal has not passed: C-8, C-11 still failing (4/7 · failing: C-8, C-11)'
+        ]);
+    });
+
+    it('splits the open-finding reason by what is owed: armed round, dial sweep, or the Author (D-34, D-35)', () => {
+        const gate = lockCheck(
+            gateView({
+                story: { auto_approve: ['critical'] },
+                findings: [
+                    findingOn('f-armed', 'major', 'approved', ['revision_sel']),
+                    findingOn('f-dial', 'critical', 'confirmed', ['revision_sel']),
+                    findingOn('f-desk', 'major', 'confirmed', ['revision_sel'])
+                ]
+            })
+        );
+
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            '1 approved critical/major finding on the selected Summary — the next Summary round writes fresh drafts to clear them (D-34)',
+            '1 critical/major finding on the selected Summary at a cost your dial auto-approves — the sweep approves them and the next Summary round clears them (D-35)',
+            '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        ]);
+    });
+
+    it('does not promise a round to a finding that is waiting on the Author\u2019s decision (D-34)', () => {
+        const gate = lockCheck(gateView({ findings: [findingOn('f-desk', 'major', 'confirmed', ['revision_sel'])] }));
+
+        expect(gate.reasons).toEqual([
+            '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        ]);
+        expect(gate.reasons.join(' ')).not.toContain('the next Summary round');
+    });
+
+    it('names the two sign-off waits the loop enforces, from the projected state (D-33, §6.4 step 6)', () => {
+        const gate = lockCheck(
+            gateView({
+                story: { summary_readers: 3 },
+                findings: [findingOn('f-open', 'major', 'unconfirmed', ['revision_sel'])],
+                runs: [reviewRun('revision_sel', 1), reviewRun('revision_sel', 2, 'working')]
+            })
+        );
+
+        // 3 passes are owed in total (the Author's own `summary_readers`); pass 1 is closed, pass 2 is
+        // alive, so exactly one more is owed — and the reason says which wait it is, not "another round".
+        expect(gate.reasons).toEqual([
+            '1 critical/major finding on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)',
+            "2 deep-review passes still owed on the selected Summary revision — the round's evidence is not complete (1 still running) (§6.4 step 6)"
+        ]);
+        expect(gate.canLock).toBe(false);
+    });
+
+    it('keeps a clean selected revision ENABLED, with no invented finding, competition or review blocker', () => {
+        const gate = lockCheck(
+            gateView({
+                // Recorded notes at the costs phase ① never blocks on (D-30), plus an undecided taste
+                // note, which `unconfirmedBlockingFindings` also filters out at this phase.
+                findings: [
+                    findingOn('f-minor', 'minor', 'confirmed', ['revision_sel']),
+                    findingOn('f-taste', 'taste', 'unconfirmed')
+                ]
+            })
+        );
+
+        expect(gate.canLock).toBe(true);
+        expect(gate.reasons).toEqual([]);
+    });
+
+    it('neither blocks nor lists a finding aimed at another revision (revision attribution holds)', () => {
+        const gate = lockCheck(gateView({ findings: [findingOn('f-old', 'critical', 'approved', ['revision_old'])] }));
+
+        expect(gate.canLock).toBe(true);
+        expect(gate.reasons).toEqual([]);
+    });
+
+    it('counts a whole-artifact (legacy, no related_refs) finding against the SELECTED revision', () => {
+        const gate = lockCheck(gateView({ findings: [findingOn('f-legacy', 'critical', 'confirmed')] }));
+
+        // The pane shows the same row on this revision (`story-nav.test.ts` pins the pair), so the
+        // screenshot's "No Reader findings on this revision yet" cannot stand beside this reason.
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+        ]);
+    });
+
+    it('answers the attribution question once, for every panel that asks it', () => {
+        const view = gateView();
+        const context = summaryScopeContext(view);
+
+        // Draft-scoped rows belong to the draft they name — and to no other.
+        const onWinner = findingOn('f-a', 'major', 'confirmed', ['revision_sel']);
+        const onLoser = findingOn('f-b', 'major', 'confirmed', ['revision_old']);
+
+        expect(findingAppliesToRevision(onWinner, 'revision_sel', 'sum1', context)).toBe(true);
+        expect(findingAppliesToRevision(onLoser, 'revision_sel', 'sum1', context)).toBe(false);
+        expect(findingAppliesToRevision(onLoser, 'revision_old', 'sum1', context)).toBe(true);
+
+        // Whole-artifact rows apply to every revision of THAT unit, and to no other unit.
+        const whole = findingOn('f-legacy', 'major', 'confirmed');
+
+        expect(findingAppliesToRevision(whole, 'revision_sel', 'sum1', context)).toBe(true);
+        expect(findingAppliesToRevision({ ...whole, target_ref: 'c1' }, 'revision_sel', 'sum1', context)).toBe(false);
+    });
+
+    // -----------------------------------------------------------------------
+    // T11/F4 — the server's attribution is "do the refs name a known Summary DRAFT", not "are there refs".
+    // A row naming `[unitRef]`, a Seed Brief or a criterion with `target_ref === sum1` is a whole-artifact
+    // finding: it blocks, and it must be visible on the selected revision. A row naming ONLY a retired
+    // draft is history. `records.ts:findingRevisionScope` is the source; these are its answers.
+    // -----------------------------------------------------------------------
+    it('reads finding scope the way the server does: artifact, selected, superseded (T11/F4)', () => {
+        const view = gateView();
+        const context = summaryScopeContext(view);
+
+        // The map the whole decision rests on: both drafts are known, and `sum1` is the unit, not a draft.
+        expect([...context.draftRounds.entries()]).toEqual([
+            ['revision_old', 1],
+            ['revision_sel', 1]
+        ]);
+        expect(context).toMatchObject({ round: 1, activeRound: 2, selectedId: 'revision_sel', summaryRef: 'sum1' });
+
+        expect(findingRevisionScope(findingOn('f-empty', 'major', 'confirmed'), context)).toBe('artifact');
+        // Refs that name no draft — the Summary row itself, a brief, a criterion, a chapter — are the
+        // legacy whole-Story shape and keep their blocking weight.
+        expect(findingRevisionScope(findingOn('f-unit', 'major', 'confirmed', ['sum1']), context)).toBe('artifact');
+        expect(
+            findingRevisionScope(findingOn('f-seed', 'major', 'confirmed', ['seed_brief_1', 'C-14']), context)
+        ).toBe('artifact');
+        // Refs naming drafts decide between the winner and the set-aside.
+        expect(findingRevisionScope(findingOn('f-win', 'major', 'confirmed', ['revision_sel']), context)).toBe(
+            'selected'
+        );
+        expect(findingRevisionScope(findingOn('f-loser', 'major', 'confirmed', ['revision_old']), context)).toBe(
+            'superseded'
+        );
+        // A row naming BOTH names the winner, so the round still answers it (the server's `includes` rule).
+        expect(
+            findingRevisionScope(findingOn('f-both', 'major', 'confirmed', ['revision_old', 'revision_sel']), context)
+        ).toBe('selected');
+    });
+
+    it('blocks on a whole-artifact finding that names non-draft refs, and shows it on the revision', () => {
+        for (const related of [['sum1'], ['seed_brief_1'], ['C-14', 'c2'], ['sum1', 'seed_brief_1']]) {
+            const gate = lockCheck(gateView({ findings: [findingOn('f-whole', 'critical', 'confirmed', related)] }));
+
+            // The invisible blocker must not survive: the row that holds the lock is the row the pane lists.
+            expect(gate.canLock).toBe(false);
+            expect(gate.reasons).toEqual([
+                '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
+            ]);
+            expect(findingAppliesToRevision(findingOn('f-whole', 'critical', 'confirmed', related), 'revision_sel', 'sum1', summaryScopeContext(gateView()))).toBe(true);
+        }
+    });
+
+    it('does not block on an unconfirmed suspicion that names only a retired draft (T11/F3)', () => {
+        const view = gateView({
+            revisions: [
+                draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z'),
+                draft('revision_sel', 'selected')
+            ],
+            findings: [
+                findingOn('f-stale', 'critical', 'unconfirmed', ['revision_old']),
+                findingOn('f-whole', 'major', 'unconfirmed'),
+                findingOn('f-live', 'critical', 'unconfirmed', ['revision_sel'])
+            ]
+        });
+
+        // The retired draft's suspicion is off the round's blocking set (the review re-reads the KEPT
+        // draft, which never contained the defect); the winner's and the whole-Summary one stay.
+        expect(unconfirmedBlockingFindings(view).map((finding) => finding.id)).toEqual(['f-whole', 'f-live']);
+
+        const gate = lockCheck(view);
+
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            '2 critical/major findings on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)'
+        ]);
+    });
+
+    // -----------------------------------------------------------------------
+    // T11/F2 — a `drafted` row of an OLDER round is a loser the selection did not delete, not a round in
+    // flight (`records.ts:isSupersededSummaryDraft`). The reviewer's example: drafted round 1 while the
+    // winner is round 3. T12/P1 fixed which number that comparison uses: `sampling.round` names the round
+    // whose SELECTION closed (round 3), and `active_round` names the one in flight (round 4), so BOTH a
+    // round-1 loser and the round-3 leftover the selection outran are retired — and only a round-4 draft
+    // is live work. The server-side twin of this case is `server/loop/phase1-round-parity.test.ts`.
+    // -----------------------------------------------------------------------
+    it('retires a drafted Summary row from an older round instead of holding the lock (T11/F2)', () => {
+        const rounds = {
+            // Round 3 closed; the loop is sampling round 4 (§6.6, `records.ts:samplingRoundOf`).
+            sampling: {
+                round: 3,
+                active_round: 4,
+                history: [{ round: 3, at: AT, samples: [], selected: 'revision_sel' }]
+            } satisfies SamplingView,
+            revisions: [
+                draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z', 1),
+                draft('revision_zombie', 'drafted', '2026-11-11T11:02:00.000Z', 1),
+                draft('revision_late', 'drafted', '2026-11-11T11:02:30.000Z', 3),
+                draft('revision_sel', 'selected', AT, 3)
+            ],
+            // The round that closed is the one whose winner's review is dispatchable, so the clean
+            // baseline owes it all five closed passes (T11/F1).
+            runs: closedPasses('revision_sel', DEFAULT_SUMMARY_READERS)
+        };
+        const view = gateView(rounds);
+        const context = summaryScopeContext(view);
+
+        expect({ round: context.round, activeRound: context.activeRound }).toEqual({ round: 3, activeRound: 4 });
+        expect(
+            isSupersededSummaryDraft(
+                view,
+                view.revisions.find((revision) => revision.id === 'revision_zombie')!,
+                context
+            )
+        ).toBe(true);
+        // The row T12/P1 adds: the round that JUST closed, still short of a selection when the engine
+        // moved on. The old comparison (`round` = 3) read it as live competition.
+        expect(
+            isSupersededSummaryDraft(view, view.revisions.find((revision) => revision.id === 'revision_late')!, context)
+        ).toBe(true);
+        // The winner and the recorded history keep their existing meanings, and a draft of the round IN
+        // FLIGHT is ordinary competition.
+        expect(
+            isSupersededSummaryDraft(view, view.revisions.find((revision) => revision.id === 'revision_sel')!, context)
+        ).toBe(false);
+        expect(
+            isSupersededSummaryDraft(view, view.revisions.find((revision) => revision.id === 'revision_old')!, context)
+        ).toBe(false);
+        expect(
+            isSupersededSummaryDraft(
+                { ...view, revisions: [draft('revision_now', 'drafted', AT, 4)] },
+                draft('revision_now', 'drafted', AT, 4),
+                context
+            )
+        ).toBe(false);
+
+        const gate = lockCheck(view);
+
+        expect(gate.canLock).toBe(true);
+        expect(gate.reasons).toEqual([]);
+        // The phantom blocker this removes, spelled the way the old gate wrote it.
+        expect(gate.reasons.join(' ')).not.toContain('still in this round');
+    });
+
+    // -----------------------------------------------------------------------
+    // T11/F1 — the deep review of a FRESH selection. `runs` is required and uncapped, so a review family
+    // with no row for the winner means "not reviewed yet": every pass is owed, exactly
+    // `records.ts:deepReviewPassesOwed`. Only an absent `runs` slice stays silent.
+    // -----------------------------------------------------------------------
+    it('holds Accept over a fresh selection whose review has not dispatched a single pass (T11/F1)', () => {
+        const gate = lockCheck(
+            gateView({
+                story: { summary_readers: 5 },
+                // Present-but-empty review family: the ONLY rows are another family (the round's sampling).
+                runs: [{ ...fixtureRuns()[0], work_item_ref: 'wi_sample_sum1_r1_a1' }]
+            })
+        );
+
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            "5 deep-review passes still owed on the selected Summary revision — the round's evidence is not complete (§6.4 step 6)"
+        ]);
+    });
+
+    it('holds Accept over a partly reviewed winner, and counts the pass still running', () => {
+        const gate = lockCheck(
+            gateView({
+                story: { summary_readers: 4 },
+                runs: [...closedPasses('revision_sel', 2), reviewRun('revision_sel', 3, 'working')]
+            })
+        );
+
+        expect(gate.canLock).toBe(false);
+        expect(gate.reasons).toEqual([
+            "2 deep-review passes still owed on the selected Summary revision — the round's evidence is not complete (1 still running) (§6.4 step 6)"
+        ]);
+    });
+
+    it('releases Accept once every configured pass has a closed run (the clean projection)', () => {
+        const gate = lockCheck(gateView({ story: { summary_readers: 3 }, runs: closedPasses('revision_sel', 5) }));
+
+        // Extra closed rows do not create a debt, and a dial set to fewer readers than the ledger carries
+        // is satisfied by its own numbered passes.
+        expect(gate.canLock).toBe(true);
+        expect(gate.reasons).toEqual([]);
+    });
+
+    it('counts the deep review per numbered pass, and stays silent only for an absent runs slice', () => {
+        const selected = SELECTED();
+
+        // T11/F1: a PRESENT but empty review family is evidence, not silence — all five passes are owed.
+        expect(deepReviewProgress(gateView({ story: { summary_readers: 5 }, runs: [] }), selected)).toEqual({
+            closed: 0,
+            live: 0,
+            owed: 5
+        });
+
+        // A review family of ANOTHER draft's rows says nothing about this one; the passes stay owed.
+        expect(
+            deepReviewProgress(gateView({ story: { summary_readers: 5 }, runs: [reviewRun('revision_old', 1)] }), selected)
+        ).toEqual({ closed: 0, live: 0, owed: 5 });
+
+        // A suffixed or extra key is not a numbered pass and cannot substitute for one.
+        expect(
+            deepReviewProgress(
+                gateView({
+                    story: { summary_readers: 5 },
+                    runs: [
+                        { ...reviewRun('revision_sel', 1), work_item_ref: 'wi_review_revision_sel_a1x' },
+                        { ...reviewRun('revision_sel', 11), work_item_ref: 'wi_review_revision_sel_a11' }
+                    ]
+                }),
+                selected
+            )
+        ).toEqual({ closed: 0, live: 0, owed: 5 });
+
+        // Partial: two closed keys (a failed retry of pass 1 is still ONE pass), one live, and another
+        // revision's review rows are not this draft's evidence.
+        expect(
+            deepReviewProgress(
+                gateView({
+                    story: { summary_readers: 5 },
+                    runs: [
+                        reviewRun('revision_sel', 1),
+                        reviewRun('revision_sel', 1, 'failed'),
+                        reviewRun('revision_sel', 2),
+                        reviewRun('revision_sel', 3, 'working'),
+                        reviewRun('revision_old', 1)
+                    ]
+                }),
+                selected
+            )
+        ).toEqual({ closed: 2, live: 1, owed: 3 });
+
+        // Complete: every pass has a closed run, so the round's evidence is in.
+        expect(
+            deepReviewProgress(
+                gateView({ story: { summary_readers: 2 }, runs: [reviewRun('revision_sel', 1), reviewRun('revision_sel', 2)] }),
+                selected
+            )
+        ).toEqual({ closed: 2, live: 0, owed: 0 });
+
+        // The pass count is the Author's `summary_readers` (§16.1 job 5); an unset Story falls back to the
+        // SHARED default (5), the same one the loop dispatches by.
+        expect(deepReviewProgress(gateView({ runs: [reviewRun('revision_sel', 1)] }), selected)).toEqual({
+            closed: 1,
+            live: 0,
+            owed: 4
+        });
+
+        // THE ONE LEGACY BRANCH: a payload whose `runs` collection is absent (checked before iterating)
+        // says nothing about the review, so nothing is claimed owed.
+        expect(
+            deepReviewProgress({ ...gateView(), runs: undefined } as unknown as StoryViewData, selected)
+        ).toEqual({ closed: 0, live: 0, owed: 0 });
+    });
+
+    it('owes no un-dispatchable passes for an Author override of an older-round revision (T11/F1)', () => {
+        // The guard the backend dispatches by (work.ts:811): only the round whose selection just closed —
+        // `(selected.round ?? 1) === (view.sampling?.round ?? 1)` — can have its review dispatched.
+        const olderRound = draft('revision_sel', 'selected', AT, 1);
+        const view = gateView({
+            story: { summary_readers: 5 },
+            // Round 3 is the COMPLETED round (`round`), so `active_round` is 4. The deep-review guard is
+            // made against the completed round — `records.ts:deepReviewRoundOf` — NOT the in-flight one:
+            // a pass bought for a draft the loop moved past would be answered by nobody (T10/F7).
+            sampling: { round: 3, active_round: 4, history: [] } satisfies SamplingView,
+            runs: [reviewRun('revision_sel', 1)]
+        });
+
+        expect(deepReviewProgress(view, olderRound)).toEqual({ closed: 1, live: 0, owed: 0 });
+
+        // The same rows over the CURRENT round's winner owe every absent pass.
+        expect(
+            deepReviewProgress({ ...view, sampling: { round: 1, active_round: 2, history: [] } }, SELECTED())
+        ).toEqual({
+            closed: 1,
+            live: 0,
+            owed: 4
+        });
+
+        // And the gate shows it: an older-round override is not held by work the loop will never run.
+        const gate = lockCheck(
+            gateView({
+                story: { summary_readers: 5 },
+                sampling: { round: 3, active_round: 4, history: [] } satisfies SamplingView,
+                revisions: [draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z', 1), olderRound],
+                runs: []
+            })
+        );
+
+        expect(gate.canLock).toBe(true);
+        expect(gate.reasons).toEqual([]);
+    });
+
+    it('compares supersession against the in-flight round, and falls back honestly without it (T12/P1)', () => {
+        // Round 1 closed with `revision_sel`; a round-1 draft the selection outran is retired by
+        // `active_round: 2` — the number the projection sends. Drop the field (an older build's payload)
+        // and the slice's own `selected` sample is the same evidence: a round COMPLETED, so round 2.
+        const closedRoundOne = {
+            revisions: [
+                draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z', 1),
+                draft('revision_zombie', 'drafted', '2026-11-11T11:02:00.000Z', 1),
+                draft('revision_sel', 'selected', AT, 1)
+            ],
+            findings: []
+        };
+        const withField = gateView({
+            ...closedRoundOne,
+            sampling: {
+                round: 1,
+                active_round: 2,
+                history: [{ round: 1, at: AT, samples: [], selected: 'revision_sel' }]
+            }
+        });
+
+        expect(summaryScopeContext(withField).activeRound).toBe(2);
+        expect(
+            isSupersededSummaryDraft(
+                withField,
+                withField.revisions.find((revision) => revision.id === 'revision_zombie')!,
+                summaryScopeContext(withField)
+            )
+        ).toBe(true);
+
+        // The same rows on a payload that predates `active_round`: the projection names the last round's
+        // chosen sample iff a selection COMPLETED (§6.6), so the fallback still retires the loser.
+        const legacyPayload: StoryViewData = {
+            ...withField,
+            sampling: { round: 1, history: [], selected: { revision_id: 'revision_sel', critical: 0, high: 0 } } as unknown as SamplingView
+        };
+        const legacyContext = summaryScopeContext(legacyPayload);
+
+        expect(legacyContext).toMatchObject({ round: 1, activeRound: 2 });
+        expect(
+            isSupersededSummaryDraft(
+                legacyPayload,
+                legacyPayload.revisions.find((revision) => revision.id === 'revision_zombie')!,
+                legacyContext
+            )
+        ).toBe(true);
+
+        // And a payload with NO completed round anywhere — no slice at all, the oldest build — answers
+        // round 1 for both questions, so nothing is retired on a guess.
+        const barePayload: StoryViewData = { ...withField, sampling: undefined };
+
+        expect(summaryScopeContext(barePayload)).toMatchObject({ round: 1, activeRound: 1 });
+        expect(
+            isSupersededSummaryDraft(
+                barePayload,
+                barePayload.revisions.find((revision) => revision.id === 'revision_zombie')!,
+                summaryScopeContext(barePayload)
+            )
+        ).toBe(false);
     });
 });

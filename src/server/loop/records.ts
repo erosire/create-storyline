@@ -213,6 +213,49 @@ export function selectedSummaryRevision(
 }
 
 /**
+ * Which draft one finding is ABOUT (T6/R2c, documents/specifications.md §15 step 11).
+ *
+ * `related_refs` is the only attribution a finding carries, and three different readers need the
+ * same answer — the sign-off's blocking set, the verification queue, and the tool that raises the
+ * finding — so the answer is computed once here rather than re-derived per call site:
+ *
+ *  - `selected`   — it names the draft the Summary row currently carries. Real work on the text the
+ *                   Author would sign.
+ *  - `superseded` — every ref names a Summary draft this Story has ALREADY HAD (the revision row
+ *                   exists) and none of them is the carried draft: the defect was written about a
+ *                   text the Summary no longer holds. It stays on the record as audit, but it neither
+ *                   blocks the phase nor earns another verification pass, and re-running the review
+ *                   over the kept draft cannot decide it (that is the treadmill).
+ *  - `artifact`   — it names no draft at all, or names something that is not a Summary revision
+ *                   (the Summary row itself, a criterion, a chapter). L-11a's legacy whole-Story
+ *                   shape: it reads as a statement about the Summary as a whole, so it keeps the
+ *                   blocking weight it always had — it must never be silently dropped.
+ *
+ * A ref that names a revision of ANOTHER story counts as `artifact` (conservative: unknown means
+ * "keep blocking", never "quietly ignore").
+ */
+export type FindingRevisionScope = 'selected' | 'superseded' | 'artifact';
+
+export function findingRevisionScope(store: Store, story: Story, finding: Finding): FindingRevisionScope {
+    const related = finding.related_refs ?? [];
+
+    if (related.length === 0) return 'artifact';
+
+    // The Summary row's own id is a unit ref, not a revision, so it must never be mistaken for a
+    // draft the finding is scoped to (L-11a's whole-Summary findings name it).
+    const summaryRef = storySummary(store, story.id)?.id;
+    const rounds = summaryRevisionRounds(store, story.id);
+    const selectedId = selectedSummaryRevision(store, story.id)?.id;
+
+    const namesDraft = related.filter((ref) => ref !== summaryRef && rounds.has(ref));
+
+    // Every ref is a whole-Summary statement (no draft named): the legacy shape, and it blocks.
+    if (namesDraft.length === 0) return 'artifact';
+
+    return namesDraft.includes(selectedId ?? '') ? 'selected' : 'superseded';
+}
+
+/**
  * The findings that still block a Summary from being final: critical or major findings on the
  * SELECTED draft. Findings on a discarded sibling are history, not work — the next Reader round
  * reads the kept draft fresh. Minor and taste findings never block (they are not show-stoppers).
@@ -231,11 +274,14 @@ export function summaryBlockingFindings(store: Store, story: Story, unitRef: str
         // make every finding invisible to the phase gate.
         if (finding.cost !== 'critical' && finding.cost !== 'major') return false;
 
-        // A draft-scoped finding names its draft in L-11a's related_refs. A finding with none is
-        // about the Summary as a whole and therefore still blocks the final choice.
-        const related = finding.related_refs ?? [];
+        // T6/R2c: the SAME attribution the verification queue and the raising tool read
+        // (`records.ts:findingRevisionScope`). Only the two non-superseded answers keep blocking
+        // weight, and their rules are exactly what this filter did before: a finding that names no
+        // draft blocks only when its TARGET is this Summary (L-11a's legacy whole-Story shape), and
+        // a finding that names a draft blocks.
+        const scope = findingRevisionScope(store, story, finding);
 
-        return related.length === 0 ? finding.target_ref === unitRef : related.includes(selected.id);
+        return scope === 'superseded' ? false : scope === 'artifact' ? finding.target_ref === unitRef : true;
     });
 }
 
@@ -296,12 +342,94 @@ export const unconfirmedFindings = (store: Store, storyId: string): Finding[] =>
  * at `minor`/`taste`, and the Editor records them, but they are not show-stoppers. Those notes
  * must not hold the Editor's choice, the fix pass or the phase sign-off — only a suspicion that
  * would actually cost the Writer a pass does. Every other phase keeps D-33's all-costs rule.
+ *
+ * T6/R2c adds the other half of the same question: in phase ① a suspicion that names a draft the
+ * loop has ALREADY set aside (`records.ts:findingRevisionScope` → `superseded`) cannot hold this
+ * round either. The review has no way to decide it — re-verifying re-reads the KEPT draft, which
+ * never contained the defect — so the round would wait on a question that can never be answered.
+ * The finding stays `unconfirmed` on the record (the Author still sees it); it is only removed from
+ * this round's blocking set, exactly like a finding on a discarded sibling.
  */
 export const unconfirmedBlockingFindings = (store: Store, story: Story): Finding[] =>
     unconfirmedFindings(store, story.id).filter(
         (finding) =>
-            story.phase !== 'summary' || finding.cost === 'critical' || finding.cost === 'major'
+            story.phase !== 'summary' ||
+            (finding.cost === 'critical' || finding.cost === 'major') &&
+                findingRevisionScope(store, story, finding) !== 'superseded'
     );
+
+// ---------------------------------------------------------------------------
+// Phase ①'s per-finding verification budget (D-33, T6/R2d)
+// ---------------------------------------------------------------------------
+
+/**
+ * The anchored claim family of one finding's verification thread — trailing `_` included.
+ *
+ * `work.ts` mints the keys as `wi_verify_finding_<finding id>_<generation>`, and findings come from
+ * one counter, so `wi_verify_finding_finding_1` is a PREFIX of `finding_10`'s family: the count has
+ * to be anchored on the `_` or one finding's budget is spent by another finding's passes (the same
+ * trap `records.ts:screenPrefixOf` documents for the screening family).
+ */
+export const verifyFindingPrefixOf = (findingId: string): string => `wi_verify_finding_${findingId}_`;
+
+/**
+ * Every run row in one finding's anchored verification family, live and closed.
+ *
+ * Both the budget count and the live check read THIS list, so "has the finding been sent `CAP` times"
+ * and "is the last pass still in flight" cannot be computed from two different families (T10/F3).
+ */
+export function verifyFindingRuns(store: Store, findingId: string): Run[] {
+    const prefix = verifyFindingPrefixOf(findingId);
+
+    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix));
+}
+
+/**
+ * Is one finding's verification thread still in flight? (T10/F3)
+ *
+ * The cap counts DISPATCHED passes, so the last pass the loop bought spends the budget the moment its
+ * run opens — while it is still running, the Editor may be about to answer the finding right now. An
+ * escalation is a question to the Author, and opening it mid-pass tells the Author the crew gave up on a
+ * pass that has not finished; worse, a valid final Editor decision landing afterwards would leave a
+ * resolved-looking question behind. Only the CLOSED ledger may say "undecided".
+ */
+export const verifyFindingLive = (store: Store, findingId: string): boolean =>
+    verifyFindingRuns(store, findingId).some((run) => isLiveRun(run));
+
+/** How many Editor verification passes one finding has already been sent for, live and closed. */
+export const verifyFindingAttempts = (store: Store, findingId: string): number =>
+    verifyFindingRuns(store, findingId).length;
+
+/**
+ * Has one finding used up its verification budget? The number lives with the sampling allowance it
+ * mirrors (`records.ts:FINDING_VERIFY_CAP`).
+ */
+export const isFindingVerifyExhausted = (store: Store, findingId: string): boolean =>
+    verifyFindingAttempts(store, findingId) >= FINDING_VERIFY_CAP;
+
+/**
+ * The phase-① findings the Editor has been sent at `FINDING_VERIFY_CAP` times and never decided.
+ *
+ * The queue (`work.ts`) stops offering them a job the moment the budget is spent; this is the list
+ * the sweep escalates on, so the two halves cannot disagree about WHICH findings stalled. A finding
+ * about a superseded draft is not here — it earns no job in the first place (R2c), so it must not
+ * borrow the escalation of a finding that is still live.
+ *
+ * T10/F3 adds the second exclusion: a finding whose LAST bought pass is still running is not stalled
+ * either. The budget is spent on the run count, so without this the sweep opened the Author's question
+ * over the head of an Editor run that had not answered yet, and a decision arriving one commit later
+ * would have had to close a row that should never have opened.
+ */
+export function findingsVerifyStalled(store: Store, story: Story): Finding[] {
+    if (story.phase !== 'summary') return [];
+
+    return unconfirmedFindings(store, story.id).filter(
+        (finding) =>
+            findingRevisionScope(store, story, finding) !== 'superseded' &&
+            isFindingVerifyExhausted(store, finding.id) &&
+            !verifyFindingLive(store, finding.id)
+    );
+}
 
 /**
  * D-34: `confirmed` findings the dial does NOT cover — the pile on the Author's desk.
@@ -567,12 +695,24 @@ export function competingRevisions(store: Store, storyId: string, unitRef: strin
         .sort(recency);
 }
 
-/** L-37's condition 4 / L-20: any unit still waiting on an Editor. */
-export function unitsWithCompetingRevisions(store: Store, storyId: string): string[] {
+/**
+ * L-37's condition 4 / L-20: any unit still waiting on an Editor.
+ *
+ * T6/R2b: a Summary draft the loop has ALREADY set aside is not competition. Selection deletes its
+ * losers, but a draft that was still being screened when the Editor chose survives the delete, and
+ * without this filter that dead draft keeps the Summary unit in this list forever — which holds both
+ * the drain (§6.7's condition 4) and the phase sign-off over a Summary the Editor has already
+ * chosen. Chapters keep counting every draft: there, competing drafts are the ordinary state.
+ */
+export function unitsWithCompetingRevisions(store: Store, story: Story): string[] {
     const units = new Set<string>();
+    const rounds = summaryRevisionRounds(store, story.id);
 
     for (const revision of store.revisions.list()) {
-        if (revision.story_id === storyId && isReviewableDraft(revision)) units.add(revision.unit_ref);
+        if (revision.story_id !== story.id || !isReviewableDraft(revision)) continue;
+        if (revision.unit_kind === 'summary' && isSupersededSummaryDraft(store, story, revision, rounds)) continue;
+
+        units.add(revision.unit_ref);
     }
 
     return [...units].sort();
@@ -727,6 +867,17 @@ export function samplingSizeOf(story: Story): number {
 export const SAMPLING_RETRY_ALLOWANCE = 3;
 
 /**
+ * How many times the loop may send the Editor at ONE finding before it stops and asks the Author.
+ *
+ * `SAMPLING_RETRY_ALLOWANCE` is the loop's universal "the first attempt plus this many retries"
+ * budget (§6.4 step 3), so the same grace applies here. Without a cap phase ①'s verify queue is a
+ * treadmill: an Editor run that closes without calling a tool leaves the finding `unconfirmed`, and
+ * an unconfirmed finding is a D-33 hold, so every sweep bought another pass on the same question
+ * forever — the loop never drained, never stalled, and never told the Author (T6/R2d).
+ */
+export const FINDING_VERIFY_CAP = 1 + SAMPLING_RETRY_ALLOWANCE;
+
+/**
  * The attempt cap of one round's SAMPLING family (§6.4 step 3): `summary_sampling` owed samples plus
  * the retry allowance. Read from here by `./work` (the dispatch gate and the wave-scoped exhaustion
  * read) and `./engine` (the selection gate and the wave re-arm), so those three call sites cannot
@@ -744,7 +895,26 @@ export function screeningSizeOf(story: Story): number {
     return DEFAULT_SUMMARY_READERS;
 }
 
-/** The sampling round IN FLIGHT: the rounds before it completed a selection (§6.6). */
+/**
+ * The sampling round IN FLIGHT: one past the rounds that completed a selection (§6.6).
+ *
+ * This is the ONE round number supersession is measured against, on both sides of the wire — the
+ * projection sends it as `sampling.active_round` (`api.ts:SamplingView`) so the dashboard compares
+ * against the same integer instead of re-deriving it from `sampling.round` (T12/P1). The table, with
+ * what `sampling_round` / `deepReviewRoundOf` say beside it:
+ *
+ * | state                                             | `sampling_round` | THIS | deep review |
+ * | ------------------------------------------------- | ---------------- | ---- | ----------- |
+ * | never selected (`?? 0`)                           | absent           | 1    | 1           |
+ * | Author reset after round R (engine's scrap path)  | 0                | 1    | 0           |
+ * | round R selected, nothing of R+1 written          | R                | R+1  | R           |
+ * | round R+1 mid-flight (its drafts exist)           | R                | R+1  | R           |
+ *
+ * Before the first selection this is 1, which is why round 1's drafts are LIVE here and superseded
+ * once a selection lands: the counter, not a timestamp, is the whole rule. Note the reset row — the
+ * in-flight round is 1 while the deep review belongs to round 0, i.e. to no selection at all
+ * (`isDeepReviewSelection` refuses, and the review is not owed).
+ */
 export const samplingRoundOf = (story: Story): number => (story.sampling_round ?? 0) + 1;
 
 /**
@@ -760,6 +930,170 @@ export const samplingWaveOf = (story: Story): number => {
     const raw = story.sampling_wave;
 
     return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+};
+
+/**
+ * The WAVE-AGNOSTIC sampling family of one round — trailing `_` included (T10/F5).
+ *
+ * The wave sits AFTER the round in the key (`wi_sample_<summary>_<round>_w<wave>_<attempt>`), so the
+ * wave-0 spelling of the prefix is the whole round's family: every wave's key starts with it. The
+ * trailing `_` is what anchors the round, exactly as it anchors the screening family
+ * (`screenPrefixOf`): round 1's prefix `wi_sample_s_1_` is NOT a prefix of round 10's
+ * `wi_sample_s_10_1`, so a started round 10 can never be read as a started round 1.
+ */
+export const sampleRoundPrefixOf = (summaryRef: string, round: number): string => samplePrefixOf(summaryRef, round);
+
+/**
+ * Has one sampling round STARTED — did the loop already send the Writer for it? (§16.6, D-52)
+ *
+ * `stories.sampling_round` only advances on a COMPLETED selection (§6.6), so "started" is read from
+ * the ledger rather than from the Story. T10/F5: it is read from the round's WHOLE family
+ * (`sampleRoundPrefixOf`), NOT from the current wave. "Did this round ever sample?" is a fact about the
+ * round, and a sampling-failure escalation the Author clears bumps `sampling_wave` underneath it: read
+ * wave-scoped, a round with three drafts on the ledger and a fresh wave looks UNstarted, `samplingLegClosed`
+ * refuses to close the leg, and the round strands its own drafts with the sign-off gated on a selection
+ * that will never be offered. Wave-scoped counting stays where it belongs — the retry cap
+ * (`sampleAttempts`) and the escalation's re-arm both read the ACTIVE wave only.
+ */
+export const samplingRoundStarted = (store: Store, story: Story, round: number): boolean => {
+    const summaryRef = storySummary(store, story.id)?.id ?? '';
+
+    if (summaryRef === '') return false;
+
+    const prefix = sampleRoundPrefixOf(summaryRef, round);
+
+    return store.runs.list().some((run) => run.story_id === story.id && (run.work_item_ref ?? '').startsWith(prefix));
+};
+
+/**
+ * Is this round's sampling LEG closed — will nothing more be written before the Editor chooses?
+ *
+ * The attempt cap (§6.4 step 3, `samplingCapOf`) and the arming rule (D-49, §16.7) are the only two ways
+ * a round stops sampling early, and both mean the same thing for the selection: the drafts that exist are
+ * the drafts the Editor has to choose from.
+ *
+ * The `samplingRoundStarted` clause on the second arm is what keeps two different rules apart. A round
+ * that was never armed and never sampled has nothing to select and must keep refusing — that is D-49's
+ * release, and it is still honoured. A round that sampled and was then disarmed mid-flight must still
+ * be allowed to close, or its own drafts strand with the sign-off gated on a selection that will never
+ * come (D-52, §16.6/§16.7). Reading it from the ledger rather than from
+ * the caller's guards is what makes the predicate safe to reuse.
+ *
+ * T10/F5 splits the two ledger reads the arms need, and they are deliberately NOT the same scope: the
+ * cap arm counts the ACTIVE WAVE (that is the re-arm contract, T12/E), while the started arm reads the
+ * round's whole family. A wave bump is a retry, not a new round — the drafts made before it are still
+ * this round's, and a started round that cannot close strands them.
+ */
+export const samplingLegClosed = (store: Store, story: Story, round: number): boolean => {
+    const summary = storySummary(store, story.id);
+
+    if (summary === undefined) return false;
+
+    return (
+        sampleAttempts(store, summary.id, round, samplingWaveOf(story)) >= samplingCapOf(story) ||
+        (!samplingArmed(store, story, round) && samplingRoundStarted(store, story, round))
+    );
+};
+
+/**
+ * The sampling ROUND each Summary draft of this Story belongs to (§6.2a), and — because it is keyed by
+ * draft id — THE definition of "this id is one of this Story's Summary drafts" that
+ * `findingRevisionScope` reads.
+ *
+ * Three passes, in this order, and each one exists for a different real row:
+ *   1. `revisions.round` — authoritative for every draft the pipeline wrote (§6.2a).
+ *   2. `sampling_history` — the P11 audit line, the only surviving round for a draft the selection
+ *      hard-deleted (P13/D-22), and for a row that predates the `round` field but was part of a
+ *      COMPLETED round.
+ *   3. every remaining Summary row at round `1` — the round-less legacy row that has neither (T12/P2).
+ *      It must stay a MEMBER of the map, or a finding naming it reads as a whole-Story statement.
+ *
+ * A row that appears in none of them is not a draft of this Story: another Story's revision, the
+ * Summary UNIT row, a Seed Brief or a criterion id stay unknown, and `findingRevisionScope` keeps
+ * those blocking (unknown means "keep the weight", never "quietly ignore").
+ */
+export function summaryRevisionRounds(store: Store, storyId: string): Map<string, number> {
+    const rounds = new Map<string, number>();
+
+    for (const revision of summaryRevisions(store, storyId)) {
+        if (typeof revision.round === 'number' && Number.isFinite(revision.round))
+            rounds.set(revision.id, revision.round);
+    }
+
+    for (const history of storySamplingHistory(store, storyId)) {
+        for (const sample of history.samples) {
+            if (!rounds.has(sample?.revision_id)) rounds.set(sample.revision_id, history.round);
+        }
+    }
+
+    // T12/P2 — the round-LESS rows are STILL drafts. A row written before §6.2a numbered rounds has
+    // neither its own `round` nor a history line (the P11 audit only records COMPLETED rounds, and a
+    // legacy selection may predate that too), and dropping it from the map made it an unknown id:
+    // `findingRevisionScope` then answered `artifact` for a finding naming that very draft, and
+    // `summaryBlockingFindings` weighted it only when its TARGET happened to be the Summary row — so a
+    // blocker filed against the carried revision with `target_ref` = the revision went silent. The
+    // dashboard's own map (`story-contract.ts:summaryScopeContext`) already counted such a row, which is
+    // the second answer this pass removes. Membership is "this Story has a Summary draft with this id";
+    // the VALUE is `1`, the same fallback `isSupersededSummaryDraft` and `roundRevisions` already apply
+    // to a row with no round (§3.5) — and a legacy round-1 row is exactly that.
+    for (const revision of summaryRevisions(store, storyId)) {
+        if (!rounds.has(revision.id)) rounds.set(revision.id, 1);
+    }
+
+    return rounds;
+}
+
+/** The persisted selection audit of one Story, oldest round first (§6.6, P11). */
+export type SamplingRound = NonNullable<Story['sampling_history']>[number];
+
+export function storySamplingHistory(store: Store, storyId: string): SamplingRound[] {
+    const story = store.stories.get(storyId);
+
+    const history = story === undefined ? [] : story.sampling_history ?? [];
+
+    return [...history].sort((left, right) => left.round - right.round);
+}
+
+/**
+ * Is this Summary draft a LOSER of a wave the loop has already moved past? (T6/R2b, R2c)
+ *
+ * Selection hard-deletes its losers (engine.ts:trySelectSample), but a draft that was still being
+ * screened when the Editor chose survives the delete: it never entered the candidate set the choice
+ * was made from, and nothing else ever cleans it up. It sits in the active round's revision list
+ * forever — a screening job that can never be answered, a competition that can never be decided,
+ * and findings written about it that can never be confirmed.
+ *
+ * The rule is one comparison: the active round is `samplingRoundOf(story)` and the selection
+ * history only records COMPLETED rounds, so a draft of an OLDER round that is still not `selected`
+ * has been set aside by a choice the loop already made. `sampling_round` never goes backwards on
+ * its own (only an Author reset clears it, engine.ts's reset path) and no tool writes a Summary
+ * revision once the phase is signed off, so this cannot sweep up a draft the active round has yet
+ * to review.
+ *
+ * THE FOUR STATES, stated once because the dashboard has to answer them identically (T12/P1, mirrored
+ * by `story-contract.ts:isSupersededSummaryDraft`):
+ *   - before the first selection (active round 1): round-1 drafts are LIVE — `1 < 1` is false;
+ *   - after round R's selection, before anything of R+1 exists (active R+1): a leftover round-R draft
+ *     is superseded — the loop moved on the moment it chose;
+ *   - during R+1 (active R+1): R+1 drafts are LIVE and every older round is superseded;
+ *   - an Author override that installs an OLDER round's revision changes WHICH draft the Summary
+ *     carries, never the active round, so the rivals of that older round stay superseded — this
+ *     predicate reads `sampling_round`, never `selectedSummaryRevision` (that is what
+ *     `isDeepReviewSelection` owns, and the two must not be confused: an override can retire a review
+ *     debt, it cannot re-arm a generation the loop already spent).
+ *
+ * A round-less legacy row takes round 1 from `summaryRevisionRounds` (its third pass), the same
+ * fallback `roundRevisions` uses (§3.5), so both sides number it the same way.
+ */
+export const isSupersededSummaryDraft = (
+    store: Store,
+    story: Story,
+    revision: Revision,
+    rounds = summaryRevisionRounds(store, story.id)
+): boolean => {
+    if (revision.state === 'selected' || revision.state === 'discarded') return false;
+
+    return (rounds.get(revision.id) ?? revision.round ?? 1) < samplingRoundOf(story);
 };
 
 /** §3.3: the Story's ACCEPTED Seed Brief, newest last. Undefined is a real state (nothing structured). */
@@ -793,6 +1127,49 @@ export const researchKeyOf = (brief: SeedBrief): string => `wi_research_${brief.
 export function researchClosed(store: Store, story: Story, brief: SeedBrief): boolean {
     return runsForItem(store, researchKeyOf(brief)).some((run) => run.story_id === story.id && !isLiveRun(run));
 }
+
+/**
+ * D-51 — the three states phase ①'s second gate can be in, in the order the sweep reads them.
+ *
+ * `waived`  — the Editor wrote an EMPTY `research_questions` list: the pass is not owed at all,
+ *             so no `wi_research_*` Work Item exists and nothing waits for one (R1b).
+ * `needed`  — the brief lists questions, OR the brief predates the field (no property): the pass
+ *             has to close before a sample may be taken (R1c, and the legacy path of R1a).
+ * `closed`  — a run for the brief's research key exists and is no longer live, so the gate is
+ *             satisfied and sampling may be generated.
+ */
+export type ResearchGate = 'waived' | 'needed' | 'closed';
+
+/**
+ * D-51: did the Editor WAIVE research for this brief?
+ *
+ * Only an ARRAY that is present and EMPTY says yes. `undefined` is the legacy shape (a brief
+ * stored before the field existed) and counts as "needed" — silently skipping a pass an older
+ * Story was owed would change what its stored brief means. A non-empty list is a scope, never a
+ * waiver, even if a later run reports that nothing in it needed an external lookup (R1d: that run
+ * CLOSES the pass as `closed`, it does not rewrite the decision).
+ */
+export const researchWaived = (brief: SeedBrief): boolean =>
+    Array.isArray(brief.research_questions) && brief.research_questions.length === 0;
+
+/**
+ * The ONE predicate phase ①'s second gate reads (D-51).
+ *
+ * Work generation, the Phase-① drain reason and the sampling precondition all ask this same
+ * question, so the three of them cannot disagree about whether a sample may be taken. The order is
+ * deliberate: a waived scope never consults the run rows, so an Editor who waived research cannot
+ * be blocked by a research pass that was never going to happen.
+ */
+export function researchGate(store: Store, story: Story, brief: SeedBrief): ResearchGate {
+    if (researchWaived(brief)) return 'waived';
+    if (researchClosed(store, story, brief)) return 'closed';
+
+    return 'needed';
+}
+
+/** The questions the Researcher's pass is scoped to; `[]` for a legacy brief that names none. */
+export const researchQuestionsOf = (brief: SeedBrief): string[] =>
+    Array.isArray(brief.research_questions) ? brief.research_questions : [];
 
 /**
  * Round 1 samples as soon as structure and research are closed; a REFINEMENT round (§6.4 step 7)
@@ -853,6 +1230,10 @@ export const screenPrefixOf = (revisionId: string): string => `wi_screen_${revis
  * from wave 1 (T12/E). The wave segment is inside the prefix, so `sampleAttempts` counts the runs of
  * the CURRENT wave only: that is what makes the Author's clear re-arm a spent round (the old wave's
  * rows stay on the ledger but no longer count against the new cap).
+ *
+ * With no `wave` (wave 0) the prefix is the ROUND's whole family — every wave's key starts with
+ * `wi_sample_<summary>_<round>_` — which is what `sampleRoundPrefixOf` exposes for the wave-agnostic
+ * "has this round started" read (T10/F5).
  */
 export const samplePrefixOf = (summaryRef: string, round: number, wave = 0): string =>
     wave > 0 ? `wi_sample_${summaryRef}_${round}_w${wave}_` : `wi_sample_${summaryRef}_${round}_`;
@@ -912,9 +1293,38 @@ export function openFixTasks(store: Store, storyId: string): Task[] {
  */
 export const deepReviewKeyOf = (revisionId: string, pass: number): string => `wi_review_${revisionId}_a${pass}`;
 
+/**
+ * The round the deep review belongs to: the round whose SELECTION the Story carries (§6.4 step 6).
+ *
+ * `sampling_round` advances on a completed selection (§6.6), so after round N's selection the carried
+ * draft is round N's and the review is owed for it, while round N+1 is still only sampling. `?? 1`
+ * covers a Story whose field is absent — a selection installed before the field existed is round 1's,
+ * which is also what a Revision with no `round` reads as (§3.5/§6.2a).
+ */
+export const deepReviewRoundOf = (story: Story): number => story.sampling_round ?? 1;
+
+/**
+ * Is this revision the one the deep review is owed passes FOR? (T10/F7 — one condition, two readers)
+ *
+ * `work.ts` offers a `wi_review_*` pass only for the current round's selection, and the reason is not
+ * cosmetic: the deep review is the review of the text the pipeline just chose, and a Reader pass bought
+ * for a draft the loop has moved past answers nothing. So the SAME condition has to answer the ledger
+ * question "what is still owed?" — otherwise an Author who selects an OLDER-round revision (the Summary
+ * pane can select any draft of the Story) owes `summary_readers` passes that generation will never
+ * offer, the drain names them as unmet work, and the sign-off waits on passes the loop cannot dispatch.
+ * One predicate, read by the queue, the drain probe and the sign-off, so an older-round selection is
+ * simply not the review target rather than a debt nobody can pay.
+ */
+export const isDeepReviewSelection = (story: Story, revision: Revision): boolean =>
+    (revision.round ?? 1) === deepReviewRoundOf(story);
+
 /** How many deep-review passes the selected revision still owes (a live pass does not count). */
 export function deepReviewPassesOwed(store: Store, story: Story, revision: Revision | undefined): number {
     if (revision === undefined) return 0;
+
+    // T10/F7: a selection from another round owes nothing, and it is owed NOTHING — the queue that
+    // would pay the debt only ever dispatches the current round's review.
+    if (!isDeepReviewSelection(story, revision)) return 0;
 
     let owed = 0;
 
@@ -949,16 +1359,39 @@ export const deepReviewComplete = (store: Store, story: Story, revision: Revisio
 export function openEscalationTask(
     store: Store,
     storyId: string,
-    input: { title: string; detail: string; reusePrefix: string; why: string; priority?: number }
+    input: {
+        title: string;
+        detail: string;
+        reusePrefix: string;
+        why: string;
+        priority?: number;
+        /**
+         * The row's state. `open` (the default, and what every existing escalation writes) keeps the
+         * row in the queue as a hold on the drain; `blocked` is the shape `checker.ts:requestAuthor`
+         * uses for a question, and it is what `status.ts:decideStory` step 4 turns into the "the crew
+         * asked you" Author wait — a `blocked` row is NOT dispatchable work, so the loop stops instead
+         * of reading `ready` with nothing to run.
+         */
+        state?: 'open' | 'blocked';
+        /** The finding this question is about, so the sweep can close the row when it is decided. */
+        findingRef?: string;
+    }
 ): Task {
+    const state = input.state ?? 'open';
+
+    // T10/F2: when the row belongs to ONE finding, the reuse lookup matches the finding itself, not
+    // just the title's opening. Ids come from one counter, so `finding_1` is a text prefix of
+    // `finding_10` and a title-only prefix match hands one finding's question to another finding's
+    // sweep — the "one row per finding" contract this helper exists to keep.
     const existing = store.tasks
         .list()
         .find(
             (task) =>
                 task.story_id === storyId &&
                 task.kind === 'escalation' &&
-                task.state === 'open' &&
-                task.title.startsWith(input.reusePrefix)
+                task.state === state &&
+                task.title.startsWith(input.reusePrefix) &&
+                (input.findingRef === undefined || task.finding_ref === input.findingRef)
         );
 
     if (existing !== undefined) return existing;
@@ -970,9 +1403,10 @@ export function openEscalationTask(
             title: input.title,
             detail: input.detail,
             owner_role: 'author',
-            state: 'open',
+            state,
             priority: input.priority ?? 1,
-            attempts: 0
+            attempts: 0,
+            ...(input.findingRef === undefined ? {} : { finding_ref: input.findingRef })
         },
         loopAttr(input.why)
     ) as Task;

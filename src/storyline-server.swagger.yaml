@@ -2052,6 +2052,14 @@ components:
                 type: string
             selection_note:
               type: string
+            # R1: why a retained row reads `discarded`. Optional, and absent on rows discarded
+            # before it existed; it never replaces `selection_note`, which stays the winner's (T-2a).
+            discard_reason:
+              type: string
+              description: >-
+                The human-readable reason this revision was discarded, written when it moved to
+                `discarded` (the Editor's `why`/`selection_note`, the Author's note, or the journal
+                attribution of the delete that removed it).
             # §3.5 additions to the pre-pipeline Revision row (no §4 field renamed or dropped).
             origin:
               type: string

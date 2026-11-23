@@ -178,6 +178,12 @@ export const STORY_SCOPED_CRITERIA = ['C-4', 'C-10', 'C-11', 'C-13'];
  * The Seed Brief the scripted Editor derives (§1 step 2, §3.3). Every field is a pure function of
  * the Seed text, so a test can pin the record exactly and a second Story with the same Seed gets
  * the same brief. The Seed itself is never written (P5): these are the DERIVED projection's words.
+ *
+ * D-51: `research_questions` is a REQUIRED arg of `structureSeed`, and these integration rows run
+ * the REAL tool over HTTP — an omitted field would be a T-11 refusal and no Story would ever reach
+ * sampling. The scripted Editor states ONE question, which keeps the phase-① slices dispatching their
+ * Researcher (`wi_research_1` closes, and the samples wait for it). A script that wants the waiver
+ * overrides the spread with its own `research_questions: []` in the `structureSeed` args.
  */
 export const seedBriefFields = (seed: string) => {
     const logline = (seed.split('\n')[0] ?? '').trim();
@@ -193,7 +199,8 @@ export const seedBriefFields = (seed: string) => {
         promise: `the book pays the promise "${logline}" makes`,
         tone_hints: 'as the Seed tells it',
         constraints: [] as string[],
-        open_questions: [] as string[]
+        open_questions: [] as string[],
+        research_questions: [`what outside fact does "${logline}" depend on that the Seed does not state`]
     };
 };
 

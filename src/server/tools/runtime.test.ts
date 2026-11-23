@@ -11,8 +11,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Store } from '../store/store';
 import { seedHashOf } from '../../shared/seed-hash';
-import type { Chapter, ChapterSection, Revision, RoleKind, Story, StoryPhase } from '../../shared/types';
+import type { Chapter, ChapterSection, Revision, RoleKind, SeedBrief, Story, StoryPhase } from '../../shared/types';
 import type { ToolSchema } from '../llm/client';
+// The loop's own D-51 readings, imported here so these rows pin that the tool payload and the drain
+// gate agree on what counts as a waiver (T10/F1).
+import { researchGate, researchWaived } from '../loop/records';
 import { createToolRuntime, type RunToolContext, type ToolResult, type ToolRuntime } from './index';
 import type { RunSession } from './types';
 
@@ -473,7 +476,7 @@ describe('the W2 call pipeline', () => {
         // §8.1 (8) + §8.2 (10) + §8.3 (6) + §8.4 (17) + §8.5 (4) + the Phase-1 research surface
         // (4). Every session holds all of them whatever its kind (T-6a), so the count is itself a
         // conformance number.
-        expect(result.catalogue_size).toBe(51);
+        expect(result.catalogue_size).toBe(52);
     });
 
     it('refuses an unknown role kind naming T-0 rather than defaulting it (T-0)', async () => {
@@ -1219,7 +1222,13 @@ describe('the W2 call pipeline', () => {
         accessed_at: '2026-11-23T09:00:00.000Z'
     };
 
-    /** A well-formed `structureSeed` call for the Seed this fixture Story holds. */
+    /**
+     * A well-formed `structureSeed` call for the Seed this fixture Story holds.
+     *
+     * D-51: `research_questions` is a required arg, so the fixture states a decision — here ONE
+     * question, which keeps these rows on the pre-existing behaviour (the brief dispatches a
+     * Researcher). The waiver rows below send `[]` explicitly.
+     */
     const seedCall = () => ({
         seed_hash: seedHashOf(story.idea),
         logline: 'A keeper learns the light was never the point.',
@@ -1232,6 +1241,7 @@ describe('the W2 call pipeline', () => {
         promise: 'The debt is paid by the last page.',
         constraints: ['No flashbacks after chapter 3.'],
         open_questions: [],
+        research_questions: ['What could 1880 North Sea lighthouse engineering actually do?'],
         why: 'The Seed states every structural field this brief restates.'
     });
 
@@ -1474,6 +1484,15 @@ describe('the W2 call pipeline', () => {
             seed_hash: seedHashOf(story.idea),
             status: 'accepted'
         });
+        // D-51: the non-empty path is unchanged — the questions are stored verbatim, the waiver flag is
+        // false, and the result names the dispatch. Only an empty list moves the pipeline to sampling.
+        expect(accepted.data).toMatchObject({
+            fields: {
+                research_questions: ['What could 1880 North Sea lighthouse engineering actually do?'],
+                research_waived: false
+            },
+            next: 'the pipeline may now dispatch research against this brief, one pass over the research_questions you listed; a Seed edit re-arms the structuring'
+        });
         expect(store.seedBriefs.list()).toHaveLength(1);
     });
 
@@ -1529,6 +1548,314 @@ describe('the W2 call pipeline', () => {
             ['seed_brief_1', 'draft'],
             ['seed_brief_2', 'accepted']
         ]);
+    });
+
+    // ── D-51: the research decision on the brief, and the empty research report ──────────────
+    //
+    // Three things have to be true for the waiver to be a DECISION rather than an accident: the arg is
+    // required (an omission is a refusal, not a waiver), an empty list is stored AS an empty list (the
+    // loop's gate reads the field's presence, not its emptiness alone), and the pass that finds nothing
+    // has a report to end with that writes nothing.
+
+    it('refuses a structureSeed call that leaves the research decision out (D-51, T-11)', async () => {
+        const withoutDecision: Record<string, unknown> = { ...seedCall() };
+
+        delete withoutDecision.research_questions;
+
+        const refused = await call('editor', 'structureSeed', withoutDecision);
+
+        // "No research" may only ever be a choice the Editor SENT. A tired context that simply forgets
+        // the field must be refused naming it, not quietly waived — the whole Story's phase ① turns on
+        // the difference, and a silent waiver would be invisible in the record.
+        expect({ refused: refused.refused, tool: refused.tool, issues: refused.issues }).toEqual({
+            refused: 'T-11',
+            tool: 'structureSeed',
+            issues: [{ field: 'research_questions', expected: 'an array of string' }]
+        });
+        // Refused BEFORE the write: no half-decided brief is left in the store.
+        expect(store.seedBriefs.list()).toEqual([]);
+    });
+
+    it('stores research_questions: [] as the waiver it states, and repeats it on a second call (D-51)', async () => {
+        const waived = await call('editor', 'structureSeed', { ...seedCall(), research_questions: [] });
+
+        expect(waived.ok).toBe(true);
+        expect(waived.data).toMatchObject({
+            status: 'accepted',
+            fields: {
+                // Stored as an EMPTY ARRAY, not as an absent field: `records.ts:researchGate` reads the
+                // difference as `waived` versus `needed`, and the loop's whole gate turns on it.
+                research_questions: [],
+                research_waived: true
+            },
+            next: 'the pipeline may now sample: this brief waives the research leg (D-51), so no Researcher is dispatched for it — a Seed edit re-arms the structuring'
+        });
+        expect(store.seedBriefs.list().map((brief) => [brief.id, brief.research_questions])).toEqual([
+            ['seed_brief_1', []]
+        ]);
+
+        // A re-dispatched Editor converges on the row it already wrote, and the repeat answers WITH the
+        // decision that row carries — it cannot be used to re-decide the waiver.
+        const again = await call('editor', 'structureSeed', { ...seedCall(), research_questions: [] });
+
+        expect(again.repeat).toBe(true);
+        expect(again.data).toMatchObject({ seed_brief_id: 'seed_brief_1', research_questions: [], research_waived: true });
+    });
+
+    it('refuses a structureSeed call whose research_questions is not an array (D-51, T-11)', async () => {
+        // A string is the shape a model reaches for when it means "one question". Guessing here would
+        // store `[]` (a waiver) or split prose into questions, and both readings change the pipeline.
+        const refused = await call('editor', 'structureSeed', {
+            ...seedCall(),
+            research_questions: 'What did the 1911 survey map measure?'
+        });
+
+        expect({ refused: refused.refused, tool: refused.tool, issues: refused.issues }).toEqual({
+            refused: 'T-11',
+            tool: 'structureSeed',
+            issues: [
+                {
+                    field: 'research_questions',
+                    expected: 'an array of string',
+                    received: 'What did the 1911 survey map measure?'
+                }
+            ]
+        });
+        expect(store.seedBriefs.list()).toEqual([]);
+    });
+
+    it('reports "nothing needs research" as a report, writing nothing, for the Researcher alone (D-51, R1d)', async () => {
+        await call('editor', 'structureSeed', { ...seedCall(), research_questions: [] });
+
+        const rationale = 'The Seed states every fact this story leans on; nothing outside it needs establishing.';
+        const reported = await call('researcher', 'reportNoResearch', {
+            rationale,
+            why: 'the pass read the brief and the knowledge and found no fact to establish (D-51)'
+        });
+
+        expect(reported.ok).toBe(true);
+        expect(reported.summary).toBe('Research pass closed with nothing to record (Seed Brief seed_brief_1)');
+        expect(reported.data).toEqual({
+            research: 'none',
+            // The brief is named from the RECORD, not from an arg: a run cannot answer a brief that is
+            // not there, the same "compare, never trust" rule `structureSeed`'s hash enforces.
+            seed_brief_id: 'seed_brief_1',
+            seed_hash: seedHashOf(story.idea),
+            research_questions: [],
+            research_waived: true,
+            knowledge_rows: 0,
+            rationale,
+            next: 'this research pass is closed with no Knowledge written; the loop may now sample the Seed Brief (D-51)'
+        });
+        expect(reported.notes).toEqual([
+            'This brief waives the research leg (D-51): the report confirms the waiver from the Researcher side.',
+            'Nothing was written: this is a report, not a Knowledge row (T-10 needs a citation) and not a task.'
+        ]);
+
+        // R1d's "nothing is manufactured": the store gained no Knowledge row, and the brief was not even
+        // touched — an unchanged rev is the proof the pass wrote nothing at all.
+        expect(store.knowledge.list()).toEqual([]);
+        expect(store.seedBriefs.list().map((brief) => [brief.id, brief.rev])).toEqual([['seed_brief_1', 1]]);
+
+        // §7.1/§7.2: the answer is the Researcher's alone, even though every kind holds `read` on
+        // `knowledge` — a Writer answering its own research question would be an unlogged decision.
+        for (const kind of ['writer', 'editor', 'checker', 'reader'] as const) {
+            const refused = await call(kind, 'reportNoResearch', {
+                rationale: 'a non-Researcher answers the pass anyway',
+                why: 'T-1a: the refusal is the record'
+            });
+
+            expect({ kind, ok: refused.ok, refused: refused.refused }).toEqual({
+                kind,
+                ok: false,
+                refused: 'P10'
+            });
+        }
+
+        // The rationale is REQUIRED: "nothing needs research" is only a decision when the pass states
+        // why, and the silence this tool replaces is exactly the run that could not.
+        const silent = await call('researcher', 'reportNoResearch', { why: 'nothing to record' });
+
+        expect({ refused: silent.refused, tool: silent.tool, issues: silent.issues }).toEqual({
+            refused: 'T-11',
+            tool: 'reportNoResearch',
+            issues: [{ field: 'rationale', expected: 'string' }]
+        });
+    });
+
+    // ── T10/F1 + F8: what `reportNoResearch` says when the RECORD does not state a waiver ─────
+    //
+    // D-51 is a one-way ratchet: only a stored EMPTY array is the Editor's waiver, and absence is
+    // never one. The payload used to read `brief?.research_questions ?? []`, so a legacy row and a
+    // missing brief both came back as `research_waived: true` with waiver prose — a tool answer
+    // claiming a decision nobody made, next to a Story the loop still owed a research pass. These
+    // rows pin the three record states (legacy fieldless, no brief at all, malformed value) against
+    // the loop's own predicate, which is the agreement that has to hold.
+
+    /** The note a report files when the RECORD states no waiver — asserted verbatim, three ways. */
+    const NO_WAIVER_NOTE =
+        'No research waiver is on this record, so none is claimed: the empty result is this pass\'s own, and the loop closes the research gate from this closed run (D-51).';
+
+    /** The line every `reportNoResearch` answer carries, waived or not. */
+    const REPORTS_ONLY_NOTE =
+        'Nothing was written: this is a report, not a Knowledge row (T-10 needs a citation) and not a task.';
+
+    /** `reportNoResearch`'s closing line, unchanged across all three record states. */
+    const CLOSED_NEXT =
+        'this research pass is closed with no Knowledge written; the loop may now sample the Seed Brief (D-51)';
+
+    /**
+     * A `seed_briefs` row written the way a pre-D-51 build wrote one: no `research_questions`
+     * property at all (or, for the malformed case, a value that is not a list). The tool layer can no
+     * longer produce either shape, so the store write is the only honest way to reach it.
+     */
+    function seedPreD51Brief(research_questions?: unknown): SeedBrief {
+        return store.seedBriefs.create(
+            {
+                story_id: story.id,
+                seed_hash: seedHashOf(story.idea),
+                logline: 'A keeper learns the light was never the point.',
+                protagonist: 'The keeper',
+                want: 'To keep the light burning',
+                obstacle: 'The debt the light was built on',
+                stakes: 'The harbour',
+                setting: 'A rock in the North Sea, 1880',
+                world_rules: ['No magic; the light is engineering.'],
+                promise: 'The debt is paid by the last page.',
+                constraints: [],
+                open_questions: [],
+                // Only present when the caller says what the legacy row carries — `undefined` leaves the
+                // key off the record entirely, which is the shape a row written before D-51 has.
+                ...(research_questions === undefined ? {} : { research_questions }),
+                status: 'accepted'
+            } as unknown as Omit<SeedBrief, 'id' | 'rev' | 'created_at' | 'updated_at'>,
+            { run_ref: null, why: 'seed: a Seed Brief written before the research_questions field existed (D-51)' }
+        ) as SeedBrief;
+    }
+
+    it('reports a legacy fieldless brief as the pass\'s own empty result, never as a waiver (D-51, T10/F1)', async () => {
+        const legacy = seedPreD51Brief();
+
+        expect(Object.prototype.hasOwnProperty.call(legacy, 'research_questions')).toBe(false);
+
+        const rationale = 'The Seed states every fact this story leans on; nothing outside it needs establishing.';
+        const reported = await call('researcher', 'reportNoResearch', {
+            rationale,
+            why: 'the pass read the brief and found no fact to establish (D-51)'
+        });
+
+        expect(reported.ok).toBe(true);
+        expect(reported.data).toEqual({
+            research: 'none',
+            seed_brief_id: 'seed_brief_1',
+            seed_hash: seedHashOf(story.idea),
+            // `null`, NOT `[]`: the record states nothing, and `[]` would be the Editor's answer.
+            research_questions: null,
+            research_waived: false,
+            knowledge_rows: 0,
+            rationale,
+            next: CLOSED_NEXT
+        });
+        expect(reported.notes).toEqual([NO_WAIVER_NOTE, REPORTS_ONLY_NOTE]);
+
+        // The agreement that matters: the loop reads the SAME row as owed work, so the tool's answer and
+        // the gate cannot point in different directions (test-only import of the loop's predicate).
+        expect(researchWaived(legacy)).toBe(false);
+        expect(researchGate(store, store.stories.require(story.id), legacy)).toBe('needed');
+    });
+
+    it('reports a run that answered with no accepted brief as no waiver (T10/F1)', async () => {
+        const rationale = 'There is no brief for this pass to answer; nothing outside the Seed needs establishing.';
+        const reported = await call('researcher', 'reportNoResearch', {
+            rationale,
+            why: 'the pass ran before any brief was accepted (D-51)'
+        });
+
+        expect(reported.ok).toBe(true);
+        expect(reported.summary).toBe('Research pass closed with nothing to record');
+        expect(reported.data).toEqual({
+            research: 'none',
+            seed_brief_id: null,
+            seed_hash: null,
+            research_questions: null,
+            research_waived: false,
+            knowledge_rows: 0,
+            rationale,
+            next: CLOSED_NEXT
+        });
+        expect(reported.notes).toEqual([NO_WAIVER_NOTE, REPORTS_ONLY_NOTE]);
+        // Nothing was written — the report is still zero-write with no brief to name.
+        expect(store.seedBriefs.list()).toEqual([]);
+        expect(store.knowledge.list()).toEqual([]);
+    });
+
+    it('reads a malformed stored list as "the record states nothing", in the tool and the loop alike (T10/F8)', async () => {
+        // A `''` where a list belongs: `'' !== undefined && ''.length === 0` used to read as a waiver in
+        // the tool while `records.ts:researchWaived` (an `Array.isArray` read) still owed the pass.
+        const malformed = seedPreD51Brief('');
+
+        const reported = await call('researcher', 'reportNoResearch', {
+            rationale: 'The questions this pass was given are answered by the Seed itself.',
+            why: 'the pass closed without a Knowledge row (D-51)'
+        });
+
+        expect(reported.data).toMatchObject({ research_questions: null, research_waived: false });
+        expect(researchWaived(malformed)).toBe(false);
+        expect(researchGate(store, store.stories.require(story.id), malformed)).toBe('needed');
+
+        // `structureSeed`'s idempotent repeat echoes the same reading rather than a waiver it did not
+        // earn, so no path through the knowledge surface turns a malformed row into a decision.
+        const again = await call('editor', 'structureSeed', seedCall());
+
+        expect(again.repeat).toBe(true);
+        expect(again.data).toMatchObject({
+            seed_brief_id: 'seed_brief_1',
+            research_questions: null,
+            research_waived: false
+        });
+    });
+
+    // ── T10/F9: a blank research entry is not an answer the Editor can be credited with ────────
+
+    it('refuses a research_questions entry that is blank instead of cleaning it into a waiver (D-51, T10/F9)', async () => {
+        const question = 'What could 1880 North Sea lighthouse engineering actually do?';
+
+        // `['']` cleaned to `[]` is a WAIVER nobody voted for, and `['q', '  ']` cleaned to `['q']` is a
+        // scope change nobody made. Both are refusals naming the entry, not silent normalisation.
+        for (const value of [[''], ['   '], ['\t'], [question, '  '], [' ', question]]) {
+            const refused = await call('editor', 'structureSeed', {
+                ...seedCall(),
+                research_questions: value
+            });
+
+            expect({ value, refused: refused.refused, field: refused.field, rule: refused.rule }).toEqual({
+                value,
+                refused: 'T-11',
+                field: 'research_questions',
+                rule: 'D-51'
+            });
+            // The refusal names WHICH entry, so the fix is one turn instead of a guess.
+            expect(refused.index).toBe(value.findIndex((entry) => entry.trim() === ''));
+            expect(refused.fix).toContain('[]');
+            // Refused before the write: no half-decided brief is left behind (T-1a).
+            expect(store.seedBriefs.list()).toEqual([]);
+        }
+    });
+
+    it('still trims and dedups the research list it accepts, and stores what the Editor meant (D-51, T10/F9)', async () => {
+        const first = 'What could 1880 North Sea lighthouse engineering actually do?';
+        const second = 'What did the 1911 survey map actually measure?';
+
+        const built = await call('editor', 'structureSeed', {
+            ...seedCall(),
+            research_questions: [`  ${first}  `, first, ` ${second} `]
+        });
+
+        expect(built.ok).toBe(true);
+        expect(built.data).toMatchObject({
+            fields: { research_questions: [first, second], research_waived: false }
+        });
+        expect(store.seedBriefs.list().map((brief) => brief.research_questions)).toEqual([[first, second]]);
     });
 
     it('retires a knowledge entry to low with the mark kept for the audit, and refuses a second retire', async () => {
@@ -1727,5 +2054,144 @@ describe('the pinned tool-runtime contract', () => {
 
         expect(calls).toEqual([{ role: 'checker_2', task: 'Which draft pays the setup off?' }]);
         expect(answer).toEqual({ ok: true, summary: 'The bell, not the map.' });
+    });
+});
+
+/**
+ * Phase ①'s finding attribution (T6/R2c, D-33, documents/specifications.md §15 step 11).
+ *
+ * Every phase-① gate that decides whether a defect is work — the sign-off's blocking set, the
+ * verification queue, and the selection's retirement of a lost draft — reads `related_refs` to learn
+ * WHICH DRAFT the finding describes. A finding filed without that id, or with the id of a draft the
+ * selection has since set aside, can never be decided: the Editor's verification pass reads the draft
+ * the Summary carries, which never contained the defect. So the one id is asked for where it is cheap
+ * to ask — at filing — and the refusal is actionable rather than a silent acceptance.
+ */
+describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
+    let store: Store;
+    let story: Story;
+    let chapter: Chapter;
+
+    /** A Summary draft the way phase ① leaves one behind: the Summary row is its unit (§4.15, §6.2a). */
+    function seedSummaryRevision(unitRef: string, state: Revision['state'], round: number): Revision {
+        return store.revisions.create(
+            {
+                story_id: story.id,
+                unit_kind: 'summary',
+                unit_ref: unitRef,
+                round,
+                body: { premise: 'A keeper, a light, a debt.', logline: 'The keeper logs her own relief.' },
+                state,
+                verdict_refs: []
+            },
+            { why: 'seed: summary draft' }
+        ) as Revision;
+    }
+
+    /** Phase ① with a completed selection: `revision_1` is carried and `revision_2` was set aside. */
+    beforeEach(() => {
+        const world = seedWorld();
+
+        store = world.store;
+        story = world.story;
+        chapter = world.chapter;
+
+        store.stories.update(story.id, { phase: 'summary' }, { why: 'seed: phase ①' });
+        seedSummaryRevision('summary_1', 'selected', 2);
+        seedSummaryRevision('summary_1', 'competing', 1);
+    });
+
+    async function file(args: Record<string, unknown>, roleKind = 'checker'): Promise<ToolResult> {
+        const runtime = createToolRuntime(store);
+        const context: RunToolContext = runtime.createContext(sessionFor(story.id, roleKind));
+
+        return runtime.execute(context, 'raiseFinding', {
+            target_ref: 'summary_1',
+            criterion_ref: 'C-3',
+            title: 'The relief arrives before the storm',
+            evidence: 'summary_1 logline',
+            cost: 'major',
+            why: 'Triage.',
+            ...args
+        });
+    }
+
+    it('refuses a Summary finding that names no draft, asking for the revision the Summary carries', async () => {
+        const result = await file({});
+
+        expect(result).toMatchObject({
+            ok: false,
+            refused: 'D-33',
+            field: 'related_refs',
+            expected: ['revision_1'],
+            fix: 'call raiseFinding again with related_refs including revision_1 — the Summary revision you actually read'
+        });
+        expect(result.message).toContain('has to name the draft it describes');
+        // The row is not filed "with the ref missing": an unattributable phase-① defect is the exact
+        // record that used to hold the round forever, so nothing lands at all.
+        expect(store.findings.list()).toEqual([]);
+    });
+
+    it('refuses a finding naming a draft the selection set aside, and names the draft that replaced it', async () => {
+        const result = await file({ related_refs: ['revision_2'] });
+
+        expect({ ok: result.ok, refused: result.refused, field: result.field, expected: result.expected }).toEqual({
+            ok: false,
+            refused: 'D-33',
+            field: 'related_refs',
+            expected: ['revision_1']
+        });
+        expect(result.message).toBe(
+            'Rule: D-33 — revision_2 is not the draft the Summary carries — the selection replaced it with revision_1, ' +
+                'so a defect written about it is history, not work the round can act on (D-33, §6.6).'
+        );
+        expect(store.findings.list()).toEqual([]);
+    });
+
+    it('files the finding that names the carried draft, keeping the refs it propagates on (L-11a)', async () => {
+        const result = await file({ related_refs: ['revision_1'] });
+
+        expect(result.ok).toBe(true);
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.target_ref}:${finding.state}`)).toEqual([
+            'finding_1:summary_1:unconfirmed'
+        ]);
+        expect(store.findings.list()[0].related_refs).toEqual(['revision_1']);
+    });
+
+    it('leaves the shapes the rule is not about alone: a whole-Story defect, a chapter defect, and a round before its first selection', async () => {
+        // L-11a's whole-Story finding: the Story row is the target and there is no draft to name, so
+        // this is the legacy shape the dashboard still has to show — refusing it would drop a defect.
+        const wholeStory = await file({ target_ref: story.id });
+
+        expect(wholeStory.ok).toBe(true);
+
+        // A chapter target: the defect is aimed at its own row, where there is no competing-draft
+        // question to answer, and phase ①'s rule has nothing to say.
+        const chapterFinding = await file({ target_ref: chapter.id, criterion_ref: 'C-7' });
+
+        expect(chapterFinding.ok).toBe(true);
+
+        // Round 1, before any selection installed a draft: nothing to name, so nothing to refuse.
+        const fresh = seedWorld();
+
+        fresh.store.stories.update(fresh.story.id, { phase: 'summary' }, { why: 'seed: phase ①, no selection' });
+        const runtime = createToolRuntime(fresh.store);
+        const beforeSelection = await runtime.execute(
+            runtime.createContext(sessionFor(fresh.story.id, 'checker')),
+            'raiseFinding',
+            {
+                target_ref: 'summary_1',
+                criterion_ref: 'C-3',
+                title: 'Filed before the first selection',
+                evidence: 'summary_1 premise',
+                cost: 'major',
+                why: 'Triage.'
+            }
+        );
+
+        expect(beforeSelection.ok).toBe(true);
+        expect(fresh.store.findings.list().map((finding) => `${finding.id}:${finding.target_ref}`)).toEqual([
+            'finding_1:summary_1'
+        ]);
     });
 });

@@ -30,8 +30,9 @@
 // this class at all: the wrapper in ./panel short-circuits a mutating call BEFORE `execute`, so
 // `runtime.calls` is exactly "what really executed" — which is what the panel's acceptance needs.
 // The ONE exception to the permission-blind rule is the Phase-1 research surface (structureSeed /
-// writeKnowledge / readKnowledge / retireKnowledge): those three writes are gated by the kind that
-// owns them, because a run-layer test must not be able to script an impossible session (see
+// writeKnowledge / readKnowledge / retireKnowledge / reportNoResearch): those writes — and D-51's
+// zero-write research report, which is still the Researcher's alone — are gated by the kind that owns
+// them, because a run-layer test must not be able to script an impossible session (see
 // `wrongKindRefusal`).
 import {
     CasConflict,
@@ -767,7 +768,7 @@ function defaultTools(): Record<string, MockToolHandler> {
         },
 
         // -- Phase-1 research (documents/phase-1-research-pipeline.md §7.1) ---------------------
-        // The four tools a run-layer test may now script. They are schema-faithful enough for the
+        // The five tools a run-layer test may now script. They are schema-faithful enough for the
         // run layer's purposes (a real row, a real commit, a real refusal code) and they mirror the
         // REAL tool's one structural guard per call: the kind gate (§7.2), the Seed hash (P5), and
         // the retire refusal. The fingerprint here is mock-local on purpose — the run layer's rig
@@ -819,6 +820,13 @@ function defaultTools(): Record<string, MockToolHandler> {
                         tone_hints: str(args.tone_hints) || undefined,
                         constraints: Array.isArray(args.constraints) ? (args.constraints as string[]) : [],
                         open_questions: Array.isArray(args.open_questions) ? (args.open_questions as string[]) : [],
+                        // D-51: the arg, WHEN SENT, is stored as sent — `[]` is the Editor's waiver and
+                        // must survive the round trip. An absent arg keeps the pre-D-51 row shape (no
+                        // field), which `records.ts:researchGate` reads as `needed`. The double does not
+                        // require the arg, because its job is the row shape, not the schema guard.
+                        ...(Array.isArray(args.research_questions)
+                            ? { research_questions: args.research_questions as string[] }
+                            : {}),
                         status: 'accepted'
                     },
                     attrFor(ctx, args)
@@ -920,6 +928,48 @@ function defaultTools(): Record<string, MockToolHandler> {
             } catch (error) {
                 return asToolError(error);
             }
+        },
+
+        // D-51: the Researcher's zero-write closing report. The double mirrors the real tool's guards —
+        // the §7.2 kind gate, the stated rationale, and the Seed Brief READ from the record — and then
+        // writes nothing at all. That absence is the tool's whole point, so what the run layer asserts
+        // is the run's own tally: a run that reports here is not a no-op turn (S-4) even though the
+        // store gained no row.
+        reportNoResearch: async (ctx, args, runtime) => {
+            if (ctx.roleKind !== 'researcher') return wrongKindRefusal(ctx, 'reportNoResearch', 'researcher');
+
+            const rationale = str(args.rationale).trim();
+
+            if (!rationale)
+                return {
+                    ok: false,
+                    refused: 'T-11',
+                    message:
+                        'reportNoResearch needs a rationale: say why this premise needs no fact outside itself, or write the knowledge (D-51)'
+                };
+
+            // The brief this pass answers, read from the record exactly as the real tool reads it
+            // (`structureSeed` keeps at most one `accepted` row per Story, so the last one is the live one).
+            const accepted = runtime.store.seedBriefs
+                .list()
+                .filter((row) => row.story_id === ctx.storyId && row.status === 'accepted');
+            const brief = accepted[accepted.length - 1];
+
+            const knowledge_rows = runtime.store.knowledge
+                .list()
+                .filter((row) => row.story_id === ctx.storyId).length;
+
+            return {
+                ok: true,
+                summary: `Research pass closed with nothing to record${brief ? ` (Seed Brief ${brief.id})` : ''}`,
+                data: {
+                    research: 'none',
+                    seed_brief_id: brief?.id ?? null,
+                    research_questions: brief?.research_questions ?? [],
+                    knowledge_rows,
+                    rationale
+                }
+            };
         },
 
         // -- D-17e: the seam the run layer injected ----------------------------------------------

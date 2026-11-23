@@ -1035,10 +1035,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         // L-13: the note is the sentence the next run reads in the draft's `selection_note`, so a bare
         // click still has to say who chose — that is the default, and the Author may type their own.
-        const note =
-            typeof parsed.body.note === 'string' && parsed.body.note.trim().length > 0
-                ? parsed.body.note.trim()
-                : 'selected by the Author (D-24)';
+        const authorNote = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
+        const note = authorNote.length > 0 ? authorNote : 'selected by the Author (D-24)';
 
         // §4.15: a `pending` draft is still being written by its Writer. Installing it would make
         // the Summary the half-filled text its own Writer has not finished — the Author's override
@@ -1057,7 +1055,14 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         try {
             await store.commit('author_revision_select', () => {
-                const attribution = authorAttr(`the Author selected ${draft.id} for ${draft.unit_ref} (D-24, U-13)`);
+                const decision = `the Author selected ${draft.id} for ${draft.unit_ref} (D-24, U-13)`;
+                const attribution = authorAttr(decision);
+                // R1: a row this selection sets aside needs its own reason in the row, so the rail can
+                // say why it is `discarded`. The Author's own sentence when they typed one; otherwise
+                // the attribution sentence naming this decision — never blank, and never words the
+                // Author did not supply. `note` itself is the winner's `selection_note` (T-2a) and its
+                // default is unchanged, so `note` stays optional on the wire.
+                const discardReason = authorNote.length > 0 ? authorNote : decision;
 
                 // The install is per unit kind (§4.15 stores `body: unknown`), and the chapter path
                 // records `current_revision` so the restore path stays expressible (D-24).
@@ -1098,9 +1103,12 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                     )) {
                     if (draft.unit_kind === 'summary') {
                         losing.push(sibling.id);
-                        store.revisions.update(sibling.id, { state: 'discarded' }, attribution, [
-                            { id: sibling.id, rev: sibling.rev }
-                        ]);
+                        store.revisions.update(
+                            sibling.id,
+                            { state: 'discarded', discard_reason: discardReason },
+                            attribution,
+                            [{ id: sibling.id, rev: sibling.rev }]
+                        );
                     } else {
                         store.revisions.delete(sibling.id, attribution, [{ id: sibling.id, rev: sibling.rev }]);
                     }

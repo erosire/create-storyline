@@ -45,6 +45,10 @@ import type {
     TemplateRole,
     Verdict
 } from '../../shared/types';
+// Phase ①'s Readers-per-sample default. It is a SHARED constant (`shared/types.ts`, the same value
+// `records.ts:screeningSizeOf` falls back to), so the dashboard's owed-review readout counts the
+// passes the loop actually dispatches rather than a number this file invented.
+import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
 
 export type { CompletionPreview, CostDistribution, FailingCriterion };
 
@@ -297,6 +301,416 @@ export interface LockCheck {
     statement: string;
 }
 
+// ---------------------------------------------------------------------------
+// Phase ①'s sign-off reads (T5 — ONE predicate per question)
+//
+// WHY THIS SECTION EXISTS: the rail ("does this Revision carry findings"), the Summary pane
+// ("No Reader findings on this revision yet") and the lock ("1 critical/major finding still open")
+// all answer the SAME attribution question, and while they each carried their own matching rule the
+// Author got a disabled Accept next to an empty findings list — a blocker that is invisible on the
+// row it blocks. Every rule below is the single dashboard-side answer; `story-nav.ts` and `lockCheck`
+// both read them, so the panels cannot disagree again.
+// ---------------------------------------------------------------------------
+
+/**
+ * D-30/D-34 — the two costs that can hold a sign-off. A `minor`/`taste` note is recorded and never
+ * blocks; phase ①'s whole bar is this pair (the server's `records.ts:summaryBlockingFindings` and
+ * `unconfirmedBlockingFindings` filter on exactly these).
+ */
+export const BLOCKING_FINDING_COSTS: Cost[] = ['critical', 'major'];
+
+/** Is this finding at a cost that can hold the phase? (D-30, D-34) */
+export function isBlockingCostFinding(finding: Finding): boolean {
+    return BLOCKING_FINDING_COSTS.includes(finding.cost);
+}
+
+/**
+ * D-33/D-35 — does the AUTHOR have to decide this finding, or does the dial approve it on the sweep?
+ * `story.auto_approve` is the projected dial (D-35b: one write sets the gate and the drain threshold),
+ * which is what the loop's `findingsAwaitingAuthor`/`findingsToAutoApprove` split reads.
+ */
+export function dialCoversCost(story: Story, cost: Cost): boolean {
+    return (story.auto_approve ?? []).includes(cost);
+}
+
+/**
+ * The round-and-draft context every revision-scope question needs (T11/F2, F4), built ONCE per view read.
+ *
+ * WHY A CONTEXT RATHER THAN A LOOKUP PER CALL: the dashboard and the server must answer four questions
+ * the same way — is this draft retired (F2), does this finding speak about this revision (F4), does an
+ * unconfirmed suspicion still hold the round (F3), and which passes does the winner still owe (F1). The
+ * server answers all four from the SAME two reads (`records.ts:summaryRevisionRounds` and
+ * `samplingRoundOf`), and while the dashboard guessed at them from a bare ref list it disagreed with the
+ * engine about findings that name a non-draft ref (`[unitRef]`, `seed_brief_1`, a criterion) and about
+ * drafts the loop has already set aside. One context object is the dashboard's single read of the same
+ * facts, so `lockCheck`, the rail's badges, the pane's list, the review tick and the unconfirmed count
+ * cannot drift apart again.
+ */
+export interface SummaryScopeContext {
+    /**
+     * Every known Summary draft id -> the round it was written in (`records.ts:summaryRevisionRounds`).
+     * Membership is the F4 question — "do these refs name a DRAFT?" — so a draft that never recorded a
+     * round is still in the map, at the round the server's own `?? revision.round ?? 1` fallback gives it.
+     */
+    draftRounds: Map<string, number>;
+    /**
+     * The round whose SELECTION the Story carries: `sampling.round` (`server/api/projections.ts:
+     * samplingView`, i.e. `story.sampling_round ?? 1` — `0` after an Author reset). This is the round
+     * the deep review is dispatched FOR, so the F1 dispatch guard (`work.ts:811`,
+     * `records.ts:isDeepReviewSelection`) and `deepReviewProgress` below are made against THIS number.
+     */
+    round: number;
+    /**
+     * The round IN FLIGHT — the integer `records.ts:isSupersededSummaryDraft` compares a draft's round
+     * against, sent by the projection as `sampling.active_round` (`records.ts:samplingRoundOf`), so the
+     * rail, the attention badge, the override list and the lock count competition exactly as the engine
+     * does (T12/P1).
+     *
+     * WHY NOT `round + 1`: the two numbers coincide only while a selection has landed. Before the first
+     * selection `round` is already the in-flight round (1), and after an Author reset `round` is 0 while
+     * the round being sampled is 1 again — an off-by-one guess either way, which is the bug this field
+     * removes. The fallback below is the OLDER-payload case only (the slice is additive,
+     * `api.ts:StoryView.sampling`): the projection names a `selected` sample iff a round COMPLETED
+     * (§6.6), so `round + 1` is `samplingRoundOf`'s own answer in that branch, and with no selection on
+     * the wire nothing has completed and round 1 is in flight. A malformed history row that names no
+     * sample of its own is the one state that reads low here — and it can only under-claim supersession,
+     * never retire live work.
+     */
+    activeRound: number;
+    /** The round's winner, when the view has one; `undefined` while the round has not settled. */
+    selectedId?: string;
+    /**
+     * The Summary ROW's id. It is a unit ref, never a draft, so a ref naming it is a statement about the
+     * Summary as a whole (L-11a's whole-Summary findings name it) — `records.ts:findingRevisionScope`
+     * excludes it from `namesDraft` for exactly that reason, and so does this file.
+     */
+    summaryRef?: string;
+}
+
+/** The one read of the projected revision facts; every scope predicate below takes its result. */
+export function summaryScopeContext(view: StoryViewData): SummaryScopeContext {
+    const draftRounds = new Map<string, number>();
+
+    // THE SAME THREE PASSES the server runs (`records.ts:summaryRevisionRounds`), in the same order, so
+    // the map cannot answer a scope question the engine would answer differently:
+    //   1. `revision.round` — authoritative for anything the pipeline wrote (§6.2a);
+    //   2. the capped sampling audit — the surviving round of a draft the selection hard-deleted
+    //      (P13/D-22), whose row the projection recovers from the journal but which may carry no round;
+    //   3. every remaining Summary row at round 1 — the round-less legacy row (T12/P2). Membership is
+    //      what F4 asks ("is this id one of this Story's DRAFTS?"), and `1` is the fallback the server's
+    //      own `?? revision.round ?? 1` chain gives the same row; a legacy round-1 row is exactly that.
+    // The order matters: history wins over the round-less fallback, exactly as it does on the server.
+    for (const revision of view.revisions) {
+        if (revision.unit_kind !== 'summary') continue;
+
+        if (typeof revision.round === 'number' && Number.isFinite(revision.round))
+            draftRounds.set(revision.id, revision.round);
+    }
+
+    for (const row of view.sampling?.history ?? []) {
+        for (const sample of row.samples ?? []) {
+            if (!draftRounds.has(sample.revision_id)) draftRounds.set(sample.revision_id, row.round);
+        }
+    }
+
+    for (const revision of view.revisions) {
+        if (revision.unit_kind !== 'summary') continue;
+
+        if (!draftRounds.has(revision.id)) draftRounds.set(revision.id, 1);
+    }
+
+    const sampling = view.sampling;
+    const completed = sampling?.round ?? 1;
+
+    return {
+        draftRounds,
+        round: completed,
+        activeRound: sampling?.active_round ?? (sampling?.selected === undefined ? completed : completed + 1),
+        selectedId: selectedSummaryRevision(view)?.id,
+        summaryRef: view.summary?.id
+    };
+}
+
+/**
+ * Is this Summary draft a LOSER of a wave the loop has already moved past? T11/F2's single answer,
+ * equivalent to `records.ts:isSupersededSummaryDraft`.
+ *
+ * Selection hard-deletes its losers, but a draft that was still being screened when the winner was
+ * chosen survives the delete: it never entered the candidate set, and nothing else ever cleans it up. It
+ * sits in the active round's revision list forever — a screening job that can never be answered, a
+ * competition that can never be decided, and findings written about it that can never be confirmed. The
+ * dashboard used to read it as a live round: "N Summary revisions still in this round" beside a Summary
+ * whose round had already settled, which is the phantom blocker this predicate removes.
+ *
+ * The rule is ONE comparison against the round the loop is WORKING (`context.activeRound`, the
+ * projection's `sampling.active_round`): a `drafted`/`competing` draft of an OLDER round has been set
+ * aside by a choice the loop already made. `selected` and `discarded` keep their existing meanings (the
+ * winner and the recorded history), and a draft of the CURRENT round or a later one is ordinary work,
+ * not a corpse.
+ *
+ * THE FOUR STATES, identical to `records.ts:isSupersededSummaryDraft`'s table (T12/P1 — the parity test
+ * is `server/loop/phase1-round-parity.test.ts`, which feeds ONE projected payload to both sides):
+ * before the first selection round-1 drafts are live; after round R's selection a leftover round-R draft
+ * is superseded; during R+1 its drafts are live and older ones superseded; and an Author override of an
+ * older revision changes which draft the Summary carries, never the in-flight round, so that round's
+ * rivals stay superseded.
+ */
+export function isSupersededSummaryDraft(
+    view: StoryViewData,
+    revision: Revision,
+    context: SummaryScopeContext = summaryScopeContext(view)
+): boolean {
+    // Rounds only number phase ①'s sampling tree; a chapter draft's `round` is §4.4 bookkeeping, and the
+    // server keeps counting every chapter draft as competition (`records.ts:unitsWithCompetingRevisions`).
+    if (revision.unit_kind !== 'summary') return false;
+    if (revision.state === 'selected' || revision.state === 'discarded') return false;
+
+    return (context.draftRounds.get(revision.id) ?? revision.round ?? 1) < context.activeRound;
+}
+
+/**
+ * Where a finding's weight lands, in the server's three answers (`records.ts:findingRevisionScope`).
+ * Kept under the server's name so a reader can diff the two predicates side by side.
+ */
+export type FindingRevisionScope = 'selected' | 'superseded' | 'artifact';
+
+export function findingRevisionScope(finding: Finding, context: SummaryScopeContext): FindingRevisionScope {
+    const related = finding.related_refs ?? [];
+
+    // No refs at all is the legacy whole-Story shape: it reads as a statement about the Summary, and the
+    // server keeps its blocking weight (`summaryBlockingFindings`'s target-only clause).
+    if (related.length === 0) return 'artifact';
+
+    // T11/F4: the question is whether any ref names a KNOWN Summary DRAFT — not how many refs exist. A
+    // row that names `[unitRef]`, `seed_brief_1`, a criterion or another non-draft id says nothing about
+    // one draft, so it is a whole-artifact statement and keeps its weight. Retiring it on ref COUNT alone
+    // is what made a real blocker invisible on the very revision it was holding.
+    const namesDraft = related.filter((ref) => ref !== context.summaryRef && context.draftRounds.has(ref));
+
+    if (namesDraft.length === 0) return 'artifact';
+
+    return namesDraft.includes(context.selectedId ?? '') ? 'selected' : 'superseded';
+}
+
+/**
+ * L-11a's attribution question, answered once for the whole Story view: does this finding speak about
+ * THIS revision of the unit?
+ *
+ * Three answers, all from `findingRevisionScope` (T11/F4):
+ *   - `artifact` — the row names no draft (no refs at all, or refs that name the Summary row, a brief, a
+ *     criterion, a chapter). It is a statement about the Summary as a whole, so it is every revision of
+ *     that unit's business, including the selected one: dropping it would hide a genuine blocker, and
+ *     listing it in the lock but not in the pane is the contradiction this predicate removes;
+ *   - `selected` / `superseded` — the row belongs to the draft(s) it names and to no other. A defect seen
+ *     on Revision 2 is listed on Revision 2 (it is history the Author can still open) and never on the
+ *     winner. `summaryBlockingFindings` then drops the superseded ones from the gate, exactly as
+ *     `records.ts:summaryBlockingFindings` and `unconfirmedBlockingFindings` do.
+ */
+export function findingAppliesToRevision(
+    finding: Finding,
+    revisionId: string,
+    unitRef: string,
+    context: SummaryScopeContext
+): boolean {
+    return (
+        findingRevisionScope(finding, context) === 'artifact'
+            ? finding.target_ref === unitRef
+            : (finding.related_refs ?? []).includes(revisionId)
+    );
+}
+
+/**
+ * The draft the Summary row carries — the text the Author signs and the deep review judges (§6.6).
+ * Newest wins (`created_at`, id as the stable tie-break), because a Story that has been through several
+ * rounds has one `selected` row per round and only the last one is the Summary on record.
+ *
+ * This lives here, not in `story-nav.ts`, because BOTH sides of the Story view need it: the rail's
+ * revision list and the lock's blocker set must resolve the same draft, and `story-nav` imports this
+ * module (the other direction would be a cycle).
+ */
+export function selectedSummaryRevision(view: StoryViewData): Revision | undefined {
+    const summary = view.summary;
+
+    if (summary === null || summary === undefined) return undefined;
+
+    return view.revisions
+        .filter(
+            (revision) =>
+                revision.unit_kind === 'summary' &&
+                revision.unit_ref === summary.id &&
+                revision.state === 'selected'
+        )
+        .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+        .slice(-1)[0];
+}
+
+/**
+ * The findings that still hold the final Summary: `confirmed`/`approved` critical or major rows that
+ * apply to the SELECTED revision. This is the dashboard mirror of `records.ts:summaryBlockingFindings`,
+ * the set the loop holds `phase_signoff` for (`status.ts:508-531`), so the Accept button can neither
+ * invent a blocker the engine ignores nor hide one it enforces.
+ *
+ * Findings on a DISCARDED sibling are history, not work: the next round reads the kept draft fresh.
+ */
+export function summaryBlockingFindings(view: StoryViewData, selected: Revision | undefined): Finding[] {
+    if (selected === undefined) return [];
+
+    // The unit the drafts belong to. `unit_ref` is the Summary row on every phase-① revision, so the
+    // fallback is the same id, never a guess at one.
+    const unitRef = view.summary?.id ?? selected.unit_ref;
+    const context = summaryScopeContext(view);
+
+    return view.findings.filter(
+        (finding) =>
+            (finding.state === 'confirmed' || finding.state === 'approved') &&
+            isBlockingCostFinding(finding) &&
+            // T11/F4: a row that names ONLY drafts the loop has already set aside is history, not work —
+            // `records.ts:summaryBlockingFindings` answers `scope === 'superseded'` with `false`, and a
+            // whole-artifact row keeps blocking only when its TARGET is this Summary.
+            findingRevisionScope(finding, context) !== 'superseded' &&
+            findingAppliesToRevision(finding, selected.id, unitRef, context)
+    );
+}
+
+/**
+ * D-33 / L-37's second condition, as projected: every suspicion nobody has confirmed or disputed. Phase
+ * ① counts critical/major only (the same cost filter `records.ts:unconfirmedBlockingFindings` applies),
+ * and the sign-off waits for that set (`status.ts:494,529`). `view.findings` carries every state, so no
+ * new endpoint is needed to say it out loud.
+ *
+ * T11/F3 adds the server's other half of the same question (`records.ts:unconfirmedBlockingFindings` +
+ * `findingRevisionScope`): in phase ① a suspicion that names ONLY a draft the loop has already set aside
+ * cannot hold this round either — re-verifying re-reads the KEPT draft, which never contained the defect,
+ * so the round would wait on a question that can never be answered. The row stays on the record (and on
+ * the rail entry of the draft it names); it is only out of THIS round's blocking set. Critical/major
+ * suspicions on the current winner, and whole-artifact legacy rows, keep holding the sign-off.
+ */
+export function unconfirmedBlockingFindings(view: StoryViewData): Finding[] {
+    const { story } = view;
+    const context = summaryScopeContext(view);
+
+    return view.findings.filter(
+        (finding) =>
+            finding.state === 'unconfirmed' &&
+            // `&&` binds tighter than `||`, exactly as the server's filter reads: outside phase ① every
+            // cost counts, inside phase ① only a blocking cost that is not superseded does.
+            (story.phase !== 'summary' ||
+                (isBlockingCostFinding(finding) && findingRevisionScope(finding, context) !== 'superseded'))
+    );
+}
+
+/** The Author's Readers-per-sample count (D-17d) — `records.ts:screeningSizeOf`, mirrored not imported. */
+export const summaryReadersOf = (story: Story): number => {
+    const raw = story.summary_readers;
+
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+
+    return DEFAULT_SUMMARY_READERS;
+};
+
+/**
+ * §16.1 job 5's claim-key family (`records.ts:deepReviewKeyOf` is `wi_review_<selected>_a<pass>`). A Run
+ * row's `work_item_ref` IS its claim key (`run/executor.ts`), so the projected `runs` slice is the only
+ * way the dashboard can see how far the deep review of the selected revision has got.
+ */
+export const DEEP_REVIEW_KEY_PREFIX = 'wi_review_';
+
+/** One deep-review pass's claim key, spelled the way the ledger stores it (§16.1 job 5). */
+export const deepReviewKeyOf = (revisionId: string, pass: number): string =>
+    `${DEEP_REVIEW_KEY_PREFIX}${revisionId}_a${pass}`;
+
+export interface DeepReviewProgress {
+    /** Configured passes carrying a CLOSED run — a `failed` or `abandoned` pass counts, exactly as the ledger's own read does. */
+    closed: number;
+    /** Passes whose run is still alive (§4.13's live states) and has no closed row yet. */
+    live: number;
+    /**
+     * Passes the selected revision still owes, or `0` when the round cannot dispatch them (an
+     * older-round Author override) or when the payload carries no `runs` slice at all.
+     */
+    owed: number;
+}
+
+/**
+ * How far the deep review of the SELECTED revision has got (§6.4 step 6, §16.7): the passes are
+ * `summary_readers` in number, and a pass is answered once its claim key carries a non-live run.
+ *
+ * T11/F1 — THE DEFAULT IS OWED, NOT SILENT. `StoryView.runs` is a REQUIRED, uncapped projection
+ * (`api.ts:StoryView`, `server/api/projections.ts`'s `runs:` line sends every row of the Story), so a
+ * present slice that carries no `wi_review_` row for the winner is evidence of ONE thing: the sweep has
+ * not dispatched the review yet, and all `summary_readers` passes are owed. Counting that case as zero
+ * made a freshly selected revision look reviewed and let Accept light up over an unread Summary. The
+ * count therefore walks the numbered passes `1..summaryReaders` and asks each one for its own key —
+ * exactly `records.ts:deepReviewPassesOwed`'s loop — so:
+ *   - a closed row for pass 3 does not answer pass 1;
+ *   - an extra or suffixed key (`_a1x`, another draft's prefix) is not a numbered pass at all and cannot
+ *     substitute for one;
+ *   - a pass with a live row is REPORTED as live (the Author sees the work in flight) and still owed.
+ *
+ * ONE HONEST SILENCE SURVIVES: a payload whose `runs` slice is ABSENT (checked before iterating, so an
+ * older build that never sends the collection is not mistaken for an unreviewed Story). There the
+ * dashboard cannot tell "nobody has read it" from "this server does not report runs", and the lock names
+ * a wait the projection proves, never one it guesses.
+ *
+ * THE ROUND GUARD (coordinated with the backend's owed predicate, `work.ts:811` /
+ * `records.ts:isDeepReviewSelection`): the round whose selection just closed — `context.round`, NOT the
+ * in-flight `context.activeRound` — is the only one whose deep review is dispatchable. A sample of the
+ * round in flight has no findings to judge yet, and a pass bought for an OLDER round would be answered by
+ * nobody. So an Author override of an older-round revision owes no un-dispatchable passes here, while the
+ * round the Story's Summary came from owes every absent pass.
+ */
+export function deepReviewProgress(view: StoryViewData, selected: Revision | undefined): DeepReviewProgress {
+    if (selected === undefined) return { closed: 0, live: 0, owed: 0 };
+
+    // The legacy branch, guarded BEFORE any iteration: an absent slice says nothing about the review.
+    if (view.runs === undefined || view.runs === null) return { closed: 0, live: 0, owed: 0 };
+
+    const runsByKey = new Map<string, Run[]>();
+
+    for (const run of view.runs) {
+        const key = run.work_item_ref;
+
+        // A row with no claim key belongs to no pass, whatever its id looks like.
+        if (key === undefined || key.length === 0) continue;
+
+        const rows = runsByKey.get(key);
+
+        if (rows === undefined) runsByKey.set(key, [run]);
+        else rows.push(run);
+    }
+
+    const passes = summaryReadersOf(view.story);
+    const context = summaryScopeContext(view);
+    const closedFor = (pass: number): boolean =>
+        (runsByKey.get(deepReviewKeyOf(selected.id, pass)) ?? []).some((run) => !isLiveRun(run));
+
+    let closed = 0;
+    let live = 0;
+
+    // Enumerating the passes (rather than the rows) is what turns an absent pass into a debt, and what
+    // keeps another revision's ledger, or a malformed key, out of this draft's count.
+    for (let pass = 1; pass <= passes; pass += 1) {
+        if (closedFor(pass)) {
+            closed += 1;
+            continue;
+        }
+
+        const rows = runsByKey.get(deepReviewKeyOf(selected.id, pass)) ?? [];
+
+        if (rows.length > 0) live += 1;
+    }
+
+    // An older-round override: the loop will not dispatch these passes, so it does not owe them, and the
+    // lock must not hold a sign-off on work that can never run. The counts above stay honest.
+    if ((selected.round ?? 1) !== context.round) return { closed, live, owed: 0 };
+
+    return { closed, live, owed: Math.max(0, passes - closed) };
+}
+
+/** One reason line's count + noun, so every blocker sentence reads the same and the plural is never wrong. */
+const reasonCount = (count: number, singular: string, pluralWord: string): string =>
+    `${count} ${count === 1 ? singular : pluralWord}`;
+
 export function lockCheck(view: StoryViewData): LockCheck {
     const { story, goal } = view;
     const phase = story.phase;
@@ -318,16 +732,32 @@ export function lockCheck(view: StoryViewData): LockCheck {
 
     // PHASE ①'S OWN BAR. The Summary is accepted only when the current round has a winner and
     // that winner has no critical/major flaw left. Minor/taste notes never hold the final Summary.
+    //
+    // WHY THE REASONS ARE ORDERED LIKE THIS: they follow the round's own stages — drafts still being
+    // written, the round not settled yet, the winner's open defects, then the two waits the loop
+    // enforces that this panel used to hide (an undecided suspicion, and §6.4 step 6's deep review).
+    // `status.ts:524-535` is the engine's gate; every line below names one of its clauses, and nothing
+    // here adds a wait the engine does not have.
     if (phase === 'summary' && story.summary_locked === false && view.summary) {
         const summary = view.summary;
+        // One scope read for the whole gate (T11/F2, F4): the competition count, the blocker set and the
+        // unconfirmed count all answer from the same round/draft map the rail's list uses.
+        const context = summaryScopeContext(view);
         const unfinished = view.revisions.filter(
             (revision) =>
                 revision.unit_kind === 'summary' && revision.unit_ref === summary.id && isPendingRevision(revision)
         );
         const competing = view.revisions.filter(
             (revision) =>
-                revision.unit_kind === 'summary' && revision.unit_ref === summary.id && isReviewableRevision(revision)
+                revision.unit_kind === 'summary' &&
+                revision.unit_ref === summary.id &&
+                isReviewableRevision(revision) &&
+                // T11/F2 (`records.ts:unitsWithCompetingRevisions`): a draft the loop has already set
+                // aside is not a round in flight, so it cannot hold the lock it can never be judged by.
+                !isSupersededSummaryDraft(view, revision, context)
         );
+
+        const selected = selectedSummaryRevision(view);
 
         if (unfinished.length > 0) {
             reasons.push(
@@ -336,35 +766,72 @@ export function lockCheck(view: StoryViewData): LockCheck {
         }
 
         if (competing.length > 0) {
+            // R3 / §16.6 (D-47): phase ① has NO Editor draft choice — the round settles by a
+            // deterministic engine selection (fewest critical → fewest high → fewest total → earliest
+            // sample), and it fires only once every drafted sample has its full screening set
+            // (§16.1 job 4). Telling the Author to "wait for the Editor's choice" points at a decision
+            // that will never arrive, which is the other half of the reported contradiction. Later
+            // phases really do have an Editor applying `selection_rules`, and their copy is untouched.
             reasons.push(
-                `${competing.length} Summary revision${competing.length === 1 ? '' : 's'} still competing — wait for the Editor's choice`
+                `${reasonCount(competing.length, 'Summary revision', 'Summary revisions')} still in this round — the engine selects the winner once every draft has its screening reviews (§16.6)`
             );
         }
 
-        const selected = view.revisions
-            .filter(
-                (revision) =>
-                    revision.unit_kind === 'summary' &&
-                    revision.unit_ref === summary.id &&
-                    revision.state === 'selected'
-            )
-            .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
-            .slice(-1)[0];
-
-        const blocking = selected
-            ? view.findings.filter(
-                  (finding) =>
-                      (finding.state === 'confirmed' || finding.state === 'approved') &&
-                      (finding.cost === 'critical' || finding.cost === 'major') &&
-                      ((finding.related_refs ?? []).length === 0
-                          ? finding.target_ref === summary.id
-                          : (finding.related_refs ?? []).includes(selected.id))
-              )
-            : [];
+        // THE SAME PREDICATE THE PANE USES. `story-nav.ts:summaryRevisions` lists a revision's findings
+        // through `findingAppliesToRevision`; counting the blockers here through anything else is what
+        // let a finding disable the Accept button while the opened revision read "No Reader findings on
+        // this revision yet".
+        const blocking = summaryBlockingFindings(view, selected);
 
         if (blocking.length > 0) {
+            // D-34/D-35: the WAIT differs per state, so the copy differs. An `approved` row has already
+            // armed the Writer work; a `confirmed` row the dial covers is approved on the next sweep;
+            // a `confirmed` row the dial does not cover is sitting on the Author's desk, and promising it
+            // "the next round" is false — nothing is queued until the Author decides.
+            const armed = blocking.filter((finding) => finding.state === 'approved');
+            const dialArmed = blocking.filter(
+                (finding) => finding.state === 'confirmed' && dialCoversCost(story, finding.cost)
+            );
+            const awaitingApproval = blocking.filter(
+                (finding) => finding.state === 'confirmed' && !dialCoversCost(story, finding.cost)
+            );
+
+            if (armed.length > 0) {
+                reasons.push(
+                    `${reasonCount(armed.length, 'approved critical/major finding', 'approved critical/major findings')} on the selected Summary — the next Summary round writes fresh drafts to clear them (D-34)`
+                );
+            }
+            if (dialArmed.length > 0) {
+                reasons.push(
+                    `${reasonCount(dialArmed.length, 'critical/major finding', 'critical/major findings')} on the selected Summary at a cost your dial auto-approves — the sweep approves them and the next Summary round clears them (D-35)`
+                );
+            }
+            if (awaitingApproval.length > 0) {
+                reasons.push(
+                    `${reasonCount(awaitingApproval.length, 'critical/major finding', 'critical/major findings')} on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)`
+                );
+            }
+        }
+
+        // The clause at `status.ts:529`: a suspicion nobody has confirmed or disputed is still work, and
+        // the sign-off waits for it. The row is on the revision's list, so the panel and the lock agree.
+        const unconfirmed = unconfirmedBlockingFindings(view);
+
+        if (unconfirmed.length > 0) {
             reasons.push(
-                `${blocking.length} critical/major finding${blocking.length === 1 ? '' : 's'} still open on the selected Summary — the next round has to clear them`
+                `${reasonCount(unconfirmed.length, 'critical/major finding', 'critical/major findings')} on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)`
+            );
+        }
+
+        // The clause at `status.ts:513-515,532`: §6.4 step 6's deep review of the selected revision is
+        // the phase's evidence, and owed passes hold the stop exactly like an open fix task does. T11/F1:
+        // a settled round with no `wi_review_` row for its winner owes EVERY pass — the projected `runs`
+        // slice is required and uncapped, so silence is "not reviewed yet", not "nothing owed".
+        const review = deepReviewProgress(view, selected);
+
+        if (review.owed > 0) {
+            reasons.push(
+                `${reasonCount(review.owed, 'deep-review pass', 'deep-review passes')} still owed on the selected Summary revision — the round's evidence is not complete${review.live > 0 ? ` (${review.live} still running)` : ''} (§6.4 step 6)`
             );
         }
     }

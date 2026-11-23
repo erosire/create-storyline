@@ -43,16 +43,22 @@ import {
     deepReviewKeyOf,
     dispatchableTasks,
     findingRefs,
+    findingRevisionScope,
+    FINDING_VERIFY_CAP,
     ideasToVerify,
     isClaimed,
+    isDeepReviewSelection,
+    isFindingVerifyExhausted,
     isLiveRun,
+    isSupersededSummaryDraft,
     last,
     liveRuns,
     maxConcurrentOf,
     openEscalationTask,
     openTasks,
-    researchClosed,
+    researchGate,
     researchKeyOf,
+    researchQuestionsOf,
     roundRevisions,
     runsForItem,
     SAMPLING_RETRY_ALLOWANCE,
@@ -74,10 +80,12 @@ import {
     storyPlotlines,
     storySummary,
     summaryRevisions,
+    summaryRevisionRounds,
     templatesFor,
     unconfirmedBlockingFindings,
     unconfirmedFindings,
     unitIsChecked,
+    verifyFindingAttempts,
     verdictsTargeting,
     wholeStoryVerdicts
 } from './records';
@@ -88,6 +96,7 @@ import {
     type RoleKind,
     type StoryPhase,
     type Story,
+    type Finding,
     type Task,
     type Template,
     type UnitKind,
@@ -525,6 +534,48 @@ export function openSamplingFailureTask(store: Store, story: Story): Task {
 export const SCREENING_PARTIAL_PREFIX = 'Phase ① screening incomplete in round';
 
 /**
+ * The escalation title's stable opening for a finding the Editor will not decide — the reuse key
+ * (T6/R2d). It names the FINDING, so two stalled findings ask two questions and a sweep that
+ * re-escalates the same one cannot stack a third row.
+ */
+export const FINDING_VERIFY_STALL_PREFIX = 'Phase ① verification undecided for finding';
+
+/**
+ * Queue (or re-find) the Author's escalation for a finding whose verification budget is spent.
+ *
+ * Why the row is `blocked` rather than `open`: an `open` row is dispatchable work, and the crew has
+ * nothing left to run — the Story would read `ready` while every path forward was refused, which is
+ * the contradiction this pass exists to remove. A `blocked` row is the shape `checker.ts:requestAuthor`
+ * writes for a question, and `status.ts:decideStory` step 4 turns it into the honest "the crew asked
+ * you" Author wait (P7, L-36/L-37).
+ *
+ * The engine closes the row when the finding leaves `unconfirmed` (engine.ts:escalateVerifyStall) —
+ * the Author's approve/dispute is the answer, and the question must not outlive it.
+ *
+ * T10/F2 — the reuse key names the finding and is ANCHORED on the title separator. Findings come from
+ * one counter, so `finding_1` is a text prefix of `finding_10`: the old `"<prefix> <id>"` key let
+ * finding_1's row satisfy finding_10's lookup (in the order finding_1 escalated first, finding_10 never
+ * got its own question — and the row it borrowed named the wrong finding). `openEscalationTask` now
+ * also requires the stored `finding_ref` to match exactly, so the one-row-per-finding contract holds
+ * whatever the titles say.
+ */
+export function openFindingVerifyStallTask(store: Store, story: Story, finding: Finding): Task {
+    return openEscalationTask(store, story.id, {
+        title: `${FINDING_VERIFY_STALL_PREFIX} ${finding.id} — the Editor was sent ${FINDING_VERIFY_CAP} times and never decided it`,
+        detail:
+            `finding ${finding.id} (${finding.cost}, ${finding.fingerprint}, target ${finding.target_ref}) is still ` +
+            '`unconfirmed` after every verification pass the loop is allowed to buy. No further pass is offered for it; ' +
+            'approve it, dispute it, or discard it, and the Summary round moves again (§15 step 11, D-33).',
+        // The ` —` separator is the anchor: `… finding finding_1 —` is not a prefix of
+        // `… finding finding_10 —`, which is exactly the collision the bare id produced.
+        reusePrefix: `${FINDING_VERIFY_STALL_PREFIX} ${finding.id} —`,
+        state: 'blocked',
+        findingRef: finding.id,
+        why: `finding ${finding.id} stayed unconfirmed across ${FINDING_VERIFY_CAP} Editor verification passes; the answer is the Author's (D-33, P7)`
+    });
+}
+
+/**
  * Queue (or re-find) the Author's escalation for a round selected on a PARTIAL screening set
  * (T12/C).
  *
@@ -555,7 +606,9 @@ export function openScreeningExhaustionTask(
  * Phase ①'s jobs, in the pipeline's own order (§6.4 steps 1-6):
  *
  *   1. `structure_seed` — priority 0, one per Seed hash. Refuses everything below it.
- *   2. `research`       — priority 0, one per accepted brief. Refuses sampling until it closes.
+ *   2. `research`       — priority 0, one per accepted brief, and ONLY when the Editor's
+ *                          `research_questions` list is non-empty: an empty list WAIVES this leg
+ *                          (D-51), so no candidate is generated and sampling is not gated on it.
  *   3. `sample_unit`    — priority 2, ONE job per sweep: the next sample of the in-flight round.
  *   4. `screen_samples` — priority 2, one job per unaided screening pass of a drafted sample.
  *   5. deep review      — priority 2, `check_unit` WITH tools, one pass per Reader on the selected
@@ -590,17 +643,29 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                 // (D-17b's `serves_phase` keeps the phase-②/③ Writers out of this pool anyway).
                 templateRef: 'editor-seed-structure',
                 roleName: 'editor',
-                note: 'Seed structure: read the Seed and call structureSeed with the structured brief — the Seed itself is never edited (P5). Put gaps in open_questions; never invent a fact.'
+                note: 'Seed structure: read the Seed and call structureSeed with the structured brief — the Seed itself is never edited (P5). Put gaps in open_questions; never invent a fact. State the research decision in research_questions: the questions a draft could not answer from the Seed alone, or [] when the premise is self-contained and the Researcher is waived (D-51) — never invent a question to fill the list.'
             }
         );
 
         if (built !== undefined) out.push(built);
     }
 
-    // -- 2. Research the brief (§6.4 step 2) ------------------------------------------------------
+    // -- 2. Research the brief (§6.4 step 2, D-51) ------------------------------------------------
     // The key names the brief's `rev`, so a re-structured brief re-arms the pass and the samples
-    // wait for the new knowledge (a live research run does not count — `researchClosed`).
-    if (brief !== undefined && !researchClosed(store, story, brief)) {
+    // wait for the new knowledge (a live research run does not count — `records.ts:researchGate`).
+    //
+    // D-51: the Editor's `research_questions` list decides whether this job exists at all. A brief
+    // whose list is EMPTY is WAIVED — no candidate, no run, nothing to wait for — which is what
+    // stops a one-line Seed like "A Dog Tale" from buying a Researcher that invents a topic to
+    // justify its own dispatch. A brief that predates the field (no property) is `needed`, exactly
+    // as it was before the field existed.
+    if (brief !== undefined && researchGate(store, story, brief) === 'needed') {
+        // The questions ride in the note because the job briefing renders it (`brief.ts:renderJob`),
+        // which is how a dispatched Researcher learns WHICH facts the Editor actually asked for
+        // instead of surveying the whole setting. An empty scope never reaches this branch, so the
+        // list below is always non-empty; a legacy brief names none and says so.
+        const questions = researchQuestionsOf(brief);
+
         const built = candidate(
             store,
             story,
@@ -613,7 +678,18 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
             {
                 templateRef: 'researcher-story',
                 roleName: 'researcher',
-                note: 'Research the facts this Seed Brief depends on and record them with writeKnowledge — one entry per claim, importance that means something, sources cited (T-10).'
+                note:
+                    'Research the facts this Seed Brief depends on and record them with writeKnowledge — one entry per claim, importance that means something, sources cited (T-10). ' +
+                    // The report sentence comes BEFORE the question list on purpose: the briefing clips
+                    // the note at 600 chars (`brief.ts:renderJob`), and the questions are the
+                    // variable-length part. An agent that never reaches the list still learns how to end
+                    // the run without inventing a fact (D-51).
+                    'When none of the questions below needs an external lookup, close the pass with reportNoResearch rather than manufacturing a source (D-51). ' +
+                    `The Editor's research questions for this brief (${questions.length}): ${
+                        questions.length === 0
+                            ? '(the brief predates the research_questions field — read the Seed Brief and research only what it genuinely cannot answer)'
+                            : questions.map((question) => `"${question}"`).join('; ')
+                    }.`
             }
         );
 
@@ -632,7 +708,12 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // Gated on BOTH gates above, and on the round's arming rule: round 1 samples immediately after
     // research; round N+1 waits for the deep review to have defined the issues it must answer
     // (`records.ts:samplingArmed` — an open `fix` task and no unconfirmed blocking finding).
-    if (brief !== undefined && researchClosed(store, story, brief) && samplingArmed(store, story, round)) {
+    //
+    // D-51: `researchGate` is the same predicate gate 2 above reads, and anything but `needed` lets
+    // the sample through — `waived` (the Editor decided there was nothing external to look up) and
+    // `closed` (a pass ran and finished) are both "gate satisfied". Reading the two gates from one
+    // predicate is what keeps generation and the drain probe (§6.7) telling the same story.
+    if (brief !== undefined && researchGate(store, story, brief) !== 'needed' && samplingArmed(store, story, round)) {
         const have = roundRevisions(store, story.id, round).length;
         // T12/E: the claim family is WAVE-scoped, so a wave the Author's clear re-armed starts at
         // attempt 1 while the spent wave's run rows stay on the ledger as audit (P11). The prefix is
@@ -680,8 +761,20 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // A sample is screenable the moment the engine persisted it (`drafted`); the pipeline is
     // per-draft, so the screens of sample 1 do not wait for sample 3. The claim key names the
     // REVISION, which is how each draft's passes stay independent across a restart.
+    //
+    // T6/R2b: the round's OWN drafts are screened even after its sampling leg has closed — the wave
+    // being disarmed or spending its attempt cap mid-flight stops NEW samples, it does not cancel the
+    // screening the round still owes. `records.ts:isSupersededSummaryDraft` is the other half: a draft
+    // of a wave the Editor has already chosen past is never screened (that was the job that could
+    // never be answered), while a draft of the round in flight always is.
+    const revisionRounds = summaryRevisionRounds(store, story.id);
+
     for (const revision of summaryRevisions(store, story.id)) {
         if (revision.state !== 'drafted') continue;
+
+        // A draft the Editor has already set aside: nothing a screener says about it can steer the
+        // round that is running now, so the pass would be bought forever and answered by nobody.
+        if (isSupersededSummaryDraft(store, story, revision, revisionRounds)) continue;
 
         const prefix = `wi_screen_${revision.id}`;
         const screens = screensFor(store, revision.id);
@@ -725,7 +818,11 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // screening passes (no tools) and the review passes (tools) can never be confused in the ledger.
     const selected = selectedSummaryRevision(store, story.id);
 
-    if (selected !== undefined && (selected.round ?? 1) === (story.sampling_round ?? 1)) {
+    // T10/F7: one condition, shared with `records.ts:deepReviewPassesOwed` — the review is offered for
+    // the CURRENT round's selection only. The records-level predicate is what the drain probe and the
+    // sign-off read, so an Author-selected older-round draft is neither offered passes nor held open by
+    // passes it was never owed (the round's `deepReviewRoundOf`, §6.4 step 6).
+    if (selected !== undefined && isDeepReviewSelection(story, selected)) {
         for (let pass = 1; pass <= readers; pass += 1) {
             const key = deepReviewKeyOf(selected.id, pass);
 
@@ -846,9 +943,29 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     // D-33/D-38: one Editor thread PER finding. A batch of findings made the Editor's brief (and
     // its reply) grow with every Reader report, which is where a 1M-token thread came from; a
     // single finding per Work Item keeps each thread small and its decision auditable.
+    //
+    // T6/R2c + R2d put two bounds on this queue, both of which the sweep's escalation reads the same
+    // way (`records.ts:findingsVerifyStalled`), so generation and escalation cannot disagree:
+    //
+    //  - a suspicion written about a draft the loop has ALREADY set aside earns no pass at all: the
+    //    verify run re-reads the KEPT draft, which never contained the defect, so no answer it files
+    //    can confirm or dispute the finding (the same reason a finding on a discarded sibling never
+    //    blocks the phase — `records.ts:findingRevisionScope`);
+    //  - a finding that has been sent `FINDING_VERIFY_CAP` times is dropped from the queue. An Editor
+    //    run that closes without calling a tool leaves the finding `unconfirmed`, and an unconfirmed
+    //    finding is a D-33 hold, so an uncapped queue bought the same question every sweep forever.
     for (const finding of unconfirmed) {
+        if (
+            ctx.phase === 'summary' &&
+            (findingRevisionScope(store, story, finding) === 'superseded' ||
+                isFindingVerifyExhausted(store, finding.id))
+        )
+            continue;
+
         const prefix = `wi_verify_finding_${finding.id}`;
-        const generation = dispatchCount(store, prefix) + 1;
+        // Counted on the ANCHORED family (`records.ts:verifyFindingPrefixOf`): `finding_1` is a
+        // prefix of `finding_10`, so an unanchored count would spend one finding's budget on another.
+        const generation = verifyFindingAttempts(store, finding.id) + 1;
         const unit =
             ctx.phase === 'summary'
                 ? finding.target_ref === story.id

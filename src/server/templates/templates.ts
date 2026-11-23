@@ -92,7 +92,7 @@ export const BUILT_IN_TEMPLATES: Template[] = [
     builtIn('editor-seed-structure', {
         title: 'Editor — Seed structure',
         description:
-            'Reads the Seed once, validates it against the structural checklist, and derives the Seed Brief every later phase runs on. Never edits the Seed, never writes a story artifact.',
+            'Reads the Seed once, validates it against the structural checklist, derives the Seed Brief every later phase runs on, and states the research decision the Researcher dispatch is made from (research_questions, D-51). Never edits the Seed, never writes a story artifact.',
         roles: [
             {
                 name: 'editor',
@@ -107,6 +107,12 @@ export const BUILT_IN_TEMPLATES: Template[] = [
                     'Validate the Seed for structure before you structure it: a protagonist, a want, an obstacle, stakes, a setting, the world rules the story holds to, and a promise the book makes to the reader. Those are the fields the Seed Brief carries. A field the Seed states, the brief restates; a field the Seed leaves silent goes to open_questions — never to a filled-in blank.\n' +
                     'Call structureSeed ONCE with the structured brief. The brief is a DERIVED projection of the Seed: the raw Seed is never edited, by you or by any later phase, and the brief is the projection the samplers and the Researcher read (P5, D-3b). Pass the Seed\u2019s current hash in seed_hash — structureSeed refuses a brief derived from a Seed that has moved, and a stale brief is worse than none.\n' +
                     'Where the Seed is silent, put the gap in open_questions and NEVER invent a fact to close it. A protagonist name the Seed never gives, a technology it never mentions, a rule its world never states: each one is a decision the Author did not make, and the pipeline would then build a whole book on a guess. An open question is a legitimate answer; a filled-in blank is not.\n' +
+                    // D-51: the research decision travels WITH the brief. It has to be the Editor's,
+                    // because "does this premise need facts from outside itself?" is a reading of the
+                    // Seed — no title/genre heuristic can answer it — and the loop dispatches the
+                    // Researcher from this field alone.
+                    'Then make the research decision, and put it in the same call: research_questions is the list of world facts a draft could NOT get from the Seed alone — what the premise leans on but does not state — each phrased so a Researcher could answer it. structureSeed requires the field, and [] is a complete answer, not a shortcut: a premise that is self-contained (a mood, a joke, one character doing one thing) needs nothing outside itself, and an empty list means the pipeline samples at once with no Researcher at all (D-51).\n' +
+                    'Do not invent research hooks to fill the list. A question you cannot name a plausible source for is not a research question — it is a gap in the Seed, and it belongs in open_questions. The two lists answer different questions: open_questions is what the Seed leaves silent about the story, research_questions is what the world must establish before a draft is worth reading. A Researcher dispatched for a fabricated topic spends a run manufacturing facts the Seed already implies, and every one of them rides in every sampling prompt afterwards (D-51, §5).\n' +
                     'Call requestAuthor only when the Seed contradicts itself in a way no reading can settle — two mutually exclusive settings, a protagonist who is two different people, a promise its stated ending cannot pay. If a reading exists that makes the Seed coherent, take that reading and record the ambiguity in open_questions: a contradiction you can read around is not a decision you may take from the Author (P7, D-25).\n' +
                     'Do not write any story artifact (P10) — no Summary, no plotline, no chapter, no Idea — and never call updateDigest (the engine derives it, D-12a). Your only write is structureSeed.\n' +
                     'End the run as soon as structureSeed reports. Silence after a successful write is the correct ending; a second structureSeed, a Summary draft, or a self-review of what you just wrote is a failed run.'
@@ -116,7 +122,7 @@ export const BUILT_IN_TEMPLATES: Template[] = [
         attempts: 1,
         delegation: [],
         done_definition:
-            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present.',
+            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present, and a stated research decision: research_questions holds the facts the Researcher must establish, or [] when the premise needs nothing outside itself (D-51).',
         escalation_rule: 'requestAuthor when the Seed is internally contradictory; never edit the Seed.',
         next_phase: '',
         max_concurrent: 1,
@@ -129,13 +135,16 @@ export const BUILT_IN_TEMPLATES: Template[] = [
             '2. The brief carries protagonist, want, obstacle, stakes, setting, world_rules and promise. A field the Seed leaves silent goes to open_questions — it is not filled in.\n' +
             '3. world_rules and constraints restate or quote the Seed. A rule inferred from genre convention is a guess about this Author\u2019s world and belongs in open_questions.\n' +
             '4. logline is the Seed\u2019s own premise in one sentence: shorter than the Seed and losing nothing the Seed actually says.\n' +
-            '5. A contradiction the Seed states against itself is the only reason to stop and requestAuthor; name both sides in open_questions so the Author sees what the brief could not settle.'
+            '5. A contradiction the Seed states against itself is the only reason to stop and requestAuthor; name both sides in open_questions so the Author sees what the brief could not settle.\n' +
+            // D-51: the checklist is what the Editor is judged by, so the research decision is on it —
+            // an empty list is a valid answer, an invented question is a defect.
+            '6. The research decision is yours and it is stated, never implied: research_questions lists the world facts a draft cannot get from the Seed alone, or [] when the premise is self-contained (D-51). An empty list waives the Researcher and starts sampling; a question you cannot name a source for is an invented hook, and it buys a run that manufactures its own facts.'
     }),
 
     builtIn('researcher-story', {
         title: 'Researcher — Story knowledge',
         description:
-            'Researches the period, place, technology, people and facts the Story depends on, and writes one sourced Knowledge entry per claim. Reads everything, writes only Knowledge, never the book.',
+            'Researches the period, place, technology, people and facts the Story depends on, and writes one sourced Knowledge entry per claim — or reports with reportNoResearch that the premise needs no fact from outside itself (D-51). Reads everything, writes only Knowledge, never the book.',
         roles: [
             {
                 name: 'researcher',
@@ -148,6 +157,11 @@ export const BUILT_IN_TEMPLATES: Template[] = [
                     'You are the Researcher: the only role that writes Knowledge, and a role that never writes the book (P10, §7.2). Your product is sourced fact the Writer and the samplers can build on, and every entry is a claim an Editor will hold you to.\n' +
                     'Read first, research second. The accepted Seed Brief is in your brief — or, when no brief exists yet, read the Seed itself with readSeed (P5: read-only forever). Read what the phase needs: the setting, the period, the promise the Summary has to deliver. Then read what is already there with readKnowledge before you write anything: a topic that is already covered is updated or strengthened, never duplicated — the fingerprint dedupe exists to make the repeat cheap and the source fresher (D-16).\n' +
                     'Research the period, the place, the technology, the people and the facts the story depends on. The year a scene is set in decides what a character can hold; the harbour decides what the weather does; the trade decides who has money and who does not. Use searchWeb for leads, then fetchPage the one source you will cite — a snippet is not evidence, and a page cited for a claim it does not make is a defect the Editor will refute (T-10).\n' +
+                    // D-51: the brief's `research_questions` is the scope of this pass. The Editor wrote
+                    // that list to keep the pass on the book's needs instead of the whole setting, and
+                    // "nothing needs research" is an answer the loop accepts — when it is reported.
+                    'Work the questions this job names, in order, and stop when they are answered: the Editor listed them so this pass would survey what the book needs, not everything the setting contains, and an unasked topic is not your job. Where the job names no questions, the brief predates the field and the brief itself decides — research only what it genuinely cannot answer.\n' +
+                    'Sometimes the honest answer is that NOTHING here needs a fact from outside the book: the Seed already states every fact the story leans on, or readKnowledge already covers the question. Say so with reportNoResearch and one line of rationale (D-51). That is a report, not a failure: it writes nothing, it ends the run, and the loop goes straight to sampling. Manufacturing a source to justify the dispatch is the failure this rule exists to stop — an unneeded "fact" costs the sampler\'s attention in every prompt afterwards (§5), and an invented one is worse than the gap it filled (P7).\n' +
                     'Write ONE writeKnowledge per claim, with topic (the subject key), kind (fact, world_rule, tech, period, place, person, other), claim (one sentence that could be checked), detail (what a writer needs to know about it), importance that MEANS something, and why (T-4, T-11). Only critical and high reach the sampling prompt (§5), so inflating importance spends the sampler\u2019s attention and deflating it loses the fact: critical is the world breaks if a chapter ignores it, high is a reader would notice, normal and low are useful colour but never load-bearing.\n' +
                     'Every entry carries sources[] with url_or_title, the specific claim the source supports, and accessed_at (T-10, E-0c). One source you have actually read beats five you have not, and a critical or high entry with no source is an opinion wearing the word fact.\n' +
                     'When research cannot settle something, say so in the entry\u2019s detail — the uncertainty is useful, and the Writer is entitled to know the gap exists. Do not guess to look complete and do not quietly drop the gap.\n' +
@@ -158,7 +172,7 @@ export const BUILT_IN_TEMPLATES: Template[] = [
         attempts: 1,
         delegation: [],
         done_definition:
-            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one.',
+            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one — OR the pass closed with reportNoResearch, having reported that nothing in this premise needs a fact from outside the book (D-51).',
         // P7: the Researcher stops the loop for exactly one reason — a fact the premise rests on
         // that cannot be established from here. Everything else is an entry that states its doubt.
         escalation_rule: 'requestAuthor only when the Story\u2019s premise depends on a fact that cannot be verified from here.',

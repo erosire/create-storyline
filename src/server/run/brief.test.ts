@@ -573,8 +573,16 @@ describe('brief — the Seed Brief, the Knowledge, and the new Phase-1 kinds', (
         expect(text).toContain(
             'Every entry cites a source you actually read, and the source backs the claim you attached it to (T-10). A claim you cannot source belongs in a task or in `requestAuthor`, not in Knowledge — escalate rather than guess (P7).'
         );
+        // D-51: the research job is scoped to the Editor's questions, and the EMPTY answer has to be
+        // taught as a report — a Researcher that finds nothing and says nothing is a no-op turn
+        // counted against the Story (S-4), which is exactly the failure D-51 exists to prevent.
+        expect(text).toContain('Work the questions this job names');
+        expect(text).toContain('close the pass with `reportNoResearch` and one line saying why');
         // §7.2's permission row is still stated beside it (T-1a: refuse, teach, never silently allow).
         expect(text).toContain('You are the Researcher: you search the web and record what you find');
+        // …and that row names the zero-write report too, so "may I end with nothing?" is answered by
+        // the permission line as well as by the etiquette.
+        expect(text).toContain('`reportNoResearch` closes it, writing nothing (D-51)');
     });
 
     it('names the two new Phase-1 artifacts in the artifact heading (§6.1)', () => {
@@ -615,5 +623,11 @@ describe('brief — the Seed Brief, the Knowledge, and the new Phase-1 kinds', (
         expect(research.sections).toContain("ARTIFACT UNDER REVIEW — the Story's knowledge (research pass)");
         // `seed_review` is gone, not aliased: the old heading must never render again.
         expect(structure.text).not.toContain('the Seed (Author truth, read-only for you — P5)');
+        // D-51: the structuring job states the research decision it owes `structureSeed`, and says in
+        // the same breath that an empty list is a complete answer — the waiver has to be a choice the
+        // run can see it making, not a field it might happen to forget.
+        expect(structure.text).toContain('`research_questions`: the facts a draft could NOT get from the Seed alone');
+        expect(structure.text).toContain('`[]` is a complete answer, not a shortcut');
+        expect(structure.text).toContain('Do not invent a research hook to fill the list');
     });
 });

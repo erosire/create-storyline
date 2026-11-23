@@ -79,7 +79,9 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
     research: ['searchWeb', 'fetchPage', 'proposeIdea', 'markUnverifiable'],
     // The Phase-1 research surface (documents/phase-1-research-pipeline.md §7.1). It has no §8
     // section, which is why it is a sixth group rather than a widening of an existing one.
-    knowledge: ['structureSeed', 'writeKnowledge', 'readKnowledge', 'retireKnowledge']
+    // `reportNoResearch` is D-51's zero-write report: a dispatched research pass that finds nothing
+    // to record still has to be able to report.
+    knowledge: ['structureSeed', 'writeKnowledge', 'readKnowledge', 'retireKnowledge', 'reportNoResearch']
 };
 
 /**
@@ -392,6 +394,8 @@ const SPEC_TOOL_CONTRACT: Record<
             'tone_hints',
             'constraints',
             'open_questions',
+            // D-51: the research decision is an arg of the same call, so the spec table lists it.
+            'research_questions',
             'expects',
             'why'
         ],
@@ -407,6 +411,9 @@ const SPEC_TOOL_CONTRACT: Record<
             'promise',
             'constraints',
             'open_questions',
+            // D-51: REQUIRED, and `[]` is a valid value — the schema refuses an omitted field (T-11),
+            // never an empty array, so the waiver has to be stated rather than left out.
+            'research_questions',
             'why'
         ],
         writes: 'seed_briefs',
@@ -433,6 +440,18 @@ const SPEC_TOOL_CONTRACT: Record<
         required: ['knowledge_id', 'expects', 'why'],
         writes: 'knowledge',
         level: 'write',
+        allow: 'nnnn'
+    },
+    // D-51: the Researcher's ZERO-WRITE report. It needs no source (there is no claim to cite) and no
+    // `expects` (nothing is read-modified-written); its one required arg is the reason the pass is
+    // empty, which is what makes "nothing needs research" a stated decision instead of a silence.
+    // `level: 'read'` is honest about the write, and `allow: 'nnnn'` is the four-column reading of an
+    // `onlyKinds: ['researcher']` tool — the Researcher's own column is pinned in permissions.test.ts.
+    reportNoResearch: {
+        args: ['rationale', 'why'],
+        required: ['rationale'],
+        writes: 'knowledge',
+        level: 'read',
         allow: 'nnnn'
     }
 };
@@ -511,11 +530,11 @@ describe('the §8 catalogue', () => {
             });
 
         // T-6a: registration is the flat union of the five §8 sections plus the Phase-1 research
-        // surface — 51 tools, no shadowing.
+        // surface — 52 tools, no shadowing. The 52nd is D-51's `reportNoResearch`.
         expect(TOOL_NAMES).toEqual([...SPEC_TOOL_NAMES]);
-        expect(TOOL_NAMES.length).toBe(51);
-        expect(ALL_TOOLS.length).toBe(51);
-        expect(TOOL_BY_NAME.size).toBe(51);
+        expect(TOOL_NAMES.length).toBe(52);
+        expect(ALL_TOOLS.length).toBe(52);
+        expect(TOOL_BY_NAME.size).toBe(52);
         // Every tool knows its own section, which is what `describeTool`'s provenance reads.
         expect(TOOL_NAMES.map((name) => GROUP_OF_TOOL.get(name) ?? 'missing')).toEqual([
             ...SPEC_GROUP_SIZES.writer.map(() => 'writer'),
@@ -543,7 +562,7 @@ describe('the §8 catalogue', () => {
                 role: data.role,
                 total: data.total,
                 tools: data.tools.map((row: { name: string }) => row.name)
-            }).toEqual({ roleKind, role: roleKind, total: 51, tools: [...TOOL_NAMES] });
+            }).toEqual({ roleKind, role: roleKind, total: 52, tools: [...TOOL_NAMES] });
         }
     });
 
@@ -621,7 +640,7 @@ describe('the §8 catalogue', () => {
         expect({ role: data.role, role_name: data.role_name, total: data.total, note: data.note }).toEqual({
             role: 'reader',
             role_name: 'reader_1',
-            total: 51,
+            total: 52,
             note: LIST_NOTE
         });
 
@@ -657,7 +676,9 @@ describe('the §8 catalogue', () => {
         // `kind` narrows to what that kind could actually call — how a run checks a handoff is
         // possible before it files the task (§7's column sums).
         // The Phase-1 surface adds one read to every kind (`readKnowledge`), one Editor-only tool
-        // (`structureSeed`) and two Researcher-only tools no other kind may call.
+        // (`structureSeed`) and THREE Researcher-only tools no other kind may call (`writeKnowledge`,
+        // `retireKnowledge`, and D-51's `reportNoResearch`) — which is why the four sums below did not
+        // move when the 52nd tool was registered.
         for (const [kind, total] of [
             ['writer', 39],
             ['editor', 37],
@@ -669,6 +690,32 @@ describe('the §8 catalogue', () => {
             expect({ kind, total: rows.length }).toEqual({ kind, total });
             expect(rows.every((row) => row[`allowed_for_${kind}`] === true)).toBe(true);
         }
+
+        // D-51: the research waiver has to be DISCOVERABLE from inside the run — a Researcher deciding
+        // "nothing here needs research" learns it may report, rather than calling a tool it has never
+        // seen and eating a T-6c refusal. One predicate answers both surfaces (T-6c), so the row is
+        // pinned exactly once, from the unfiltered list a Writer reads.
+        const researchRows = (await callAs(store, 'researcher', 'listTools', { kind: 'researcher' })).data as Record<
+            string,
+            any
+        >;
+        expect(researchRows.tools.map((row: { name: string }) => row.name)).toContain('reportNoResearch');
+
+        const unfiltered = (await callAs(store, 'writer', 'listTools', {})).data as Record<string, any>;
+        expect(unfiltered.tools.find((row: { name: string }) => row.name === 'reportNoResearch')).toEqual({
+            name: 'reportNoResearch',
+            purpose: TOOL_BY_NAME.get('reportNoResearch')!.description,
+            writes: 'knowledge',
+            // Zero writes, so neither guard applies: no `expects` (nothing is read-modified-written)
+            // and no T-5 `why` (nothing is attributed) — the tool's one required arg is its rationale.
+            needs: { expects: false, why: false },
+            allowed_for_writer: false,
+            allowed_for_editor: false,
+            allowed_for_checker: false,
+            allowed_for_reader: false,
+            allowed_for_researcher: true,
+            allowed_for_this_role: false
+        });
 
         // A Reader holds `proposeIdea` and not `editChapter` — T-9's one extra right, visible from
         // inside the run rather than only from the harness config.

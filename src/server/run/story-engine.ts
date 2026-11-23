@@ -46,6 +46,10 @@ import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
 import type { RoleKind, Run, Story, StoryPhase } from '../../shared/types';
 import type { Store } from '../store';
+// The ONE definition of "this journaled Run row is still alive" (`spawning|working|reporting`).
+// `StoryHarnessManager.statuses` reads it so the roster and the loop never disagree about what a
+// live run is (L-37), and `loop/records.ts` imports nothing from `run/`, so this edge is not a cycle.
+import { isLiveRun } from '../loop/records';
 import {
     StoryThreadLog,
     type StoryThreadActivity,
@@ -997,6 +1001,22 @@ export class StoryHarness {
         return [...this.runs.values()].some((run) => run.endedAt === undefined);
     }
 
+    /**
+     * The journaled Run id each LIVE engine thread of this harness belongs to, with the employee
+     * kind it runs as. `StoryHarnessManager.statuses` needs exactly this to keep a Run from being
+     * counted twice — once as its thread and once as its row. The identity is the thread's
+     * `run_id`: the parent row's id itself for a single-agent run, a panel agent and a delegate
+     * (all three pass `runId: runId`, see `executor.ts`), and a `<run_id>#<role>` sub-label
+     * wherever a thread record names its parent that way. `api/projections.ts:agentThreads` dedups
+     * the thread LIST with the same `run_id.split('#')[0]` identity, so the two surfaces count the
+     * same execution (R1) — the split is what makes a sub-labelled thread cover its parent row too.
+     */
+    liveRunRefs(): Array<{ kind: RoleKind; runId: string }> {
+        return [...this.runs.values()]
+            .filter((run) => run.endedAt === undefined)
+            .map((run) => ({ kind: run.roleKind, runId: run.runId }));
+    }
+
     /** The status projection for this Story's employees and their live threads. */
     statuses(): StoryAgentStatus[] {
         const story = this.store.stories.get(this.storyId) as Story | undefined;
@@ -1143,7 +1163,22 @@ export class StoryHarnessManager {
             );
     }
 
-    /** The global employee status projection across every Story harness this process owns. */
+    /**
+     * The global employee status projection across every Story harness this process owns.
+     *
+     * R1 — "running" has TWO live sources and both must count:
+     *   - a live ENGINE thread inside some Story's harness (`StoryHarness.statuses`), and
+     *   - a live journaled Run row (`loop/records.ts:isLiveRun` — `spawning|working|reporting`),
+     *     which is the ONLY trace a run leaves while it has no engine thread: a `toolMode:'none'`
+     *     structured run calls `chat.complete` directly (`run/executor.ts:runStructuredTurn`) and
+     *     retains its thread record only in `execute`'s `finally`, and a tool run's row says
+     *     `spawning` before its thread is even created. Before this reconciliation the tile read
+     *     `idle` for exactly those runs while the thread panel showed the same Writer RUNNING.
+     *
+     * A run that has BOTH counts once: `mergeJournaledRuns` drops every row a live thread already
+     * accounts for, and the roster order (catalogue order — §7.3's alphabetic sort is the route's)
+     * and every other field stay exactly as the harness projected them (R3).
+     */
     statuses(): StoryAgentStatus[] {
         const byKind = new Map<RoleKind, StoryAgentStatus>();
 
@@ -1180,7 +1215,67 @@ export class StoryHarnessManager {
             }
         }
 
+        this.mergeJournaledRuns(byKind);
+
         return [...byKind.values()];
+    }
+
+    /**
+     * Adds the live runs NO engine thread represents, so an employee whose work runs off-thread is
+     * still `running` with the right thread count (R1), and turns the employee back to `idle` when
+     * neither a thread nor a live row is left — the closed rows belong to `recent`, never here.
+     *
+     * Coverage uses the projections' identity per employee kind (the same scoping
+     * `api/projections.ts:agentThreads` applies when it filters a kind's records): a row is skipped
+     * when a live thread of that SAME kind names it, either exactly (`run_7`) or as a parent of a
+     * sub-labelled thread (`run_7#agent_2`). A kind with no live thread keeps its row.
+     *
+     * Appended rows keep the `working` contract's oldest-first order and take the `run_row:` thread
+     * id the projections already give a run-row thread, so a thread key never collides with an
+     * engine thread id and a refetch is stable.
+     */
+    private mergeJournaledRuns(byKind: Map<RoleKind, StoryAgentStatus>): void {
+        const covered = new Map<RoleKind, Set<string>>();
+
+        for (const story of this.harnesses.values()) {
+            for (const ref of story.liveRunRefs()) {
+                const ids = covered.get(ref.kind) ?? new Set<string>();
+
+                ids.add(ref.runId.split('#')[0]);
+                covered.set(ref.kind, ids);
+            }
+        }
+
+        // A legacy role kind is not on the roster tile, so its row has nothing to merge into (V-1).
+        const rows = this.store.runs
+            .list()
+            .filter((run) => isLiveRun(run) && byKind.has(run.role) && !covered.get(run.role)?.has(run.id));
+
+        rows.sort((left, right) => left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id));
+
+        for (const run of rows) {
+            const status = byKind.get(run.role);
+
+            if (status === undefined) continue;
+
+            const story = this.store.stories.get(run.story_id) as Story | undefined;
+
+            status.working.push({
+                story_id: run.story_id,
+                story_title: story?.title ?? run.story_id,
+                // A run that is executing NOW belongs to the phase the Story is in. The work-item
+                // name hints `api/projections.ts:legacyPhase` needs are only for the thread list's
+                // pre-retention rows, which cannot ask the Story what phase it was in.
+                phase: story?.phase ?? 'chapters',
+                role_name: run.role,
+                work_item: run.work_item_ref ?? run.id,
+                thread_id: `run_row:${run.id}`,
+                // `working` rows carry epoch-ms (an engine thread's `startedAt`); the journal's
+                // clock is ISO 8601, so the row's timestamp is read into the same scale.
+                started_at: Date.parse(run.started_at)
+            });
+            status.status = 'running';
+        }
     }
 
     /** True when a Story has a harness, i.e. has ever dispatched work. */

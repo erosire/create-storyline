@@ -23,6 +23,9 @@
  * produced (U-16's button, D-35's dial, G-1's ops) rather than "something happened".
  */
 import { criterionById } from '../../shared/criteria';
+// Phase ①'s Readers-per-sample default (shared with the loop's own `screeningSizeOf`), so a baseline that
+// spells out "the review ran" uses the count the loop dispatches by rather than a number a test invented.
+import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
 import type {
     CastMember,
     Chapter,
@@ -739,6 +742,44 @@ export function fixtureRuns(): Run[] {
             delegated: []
         }
     ];
+}
+
+/**
+ * §16.1 job 5 — the deep-review Run rows a settled phase-① round leaves behind for its winner: one row
+ * per pass, keyed the way the ledger mints the claim (`records.ts:deepReviewKeyOf` /
+ * `story-contract.ts:deepReviewKeyOf` = `wi_review_<revisionId>_a<pass>`).
+ *
+ * WHY A FIXTURE NEEDS TO SHOW THESE (T11/F1): `StoryView.runs` is a REQUIRED, uncapped slice
+ * (`api.ts:StoryView`, `server/api/projections.ts` sends every run row of the Story), so a phase-①
+ * baseline that carries no `wi_review_` row is not a clean Story — it is a revision nobody has read, and
+ * `deepReviewProgress` owes all `summary_readers` passes for it. A test that wants "the review is done"
+ * has to say so with these rows; only an explicitly legacy payload may omit the slice.
+ */
+export function fixtureReviewRuns(
+    revisionId: string,
+    passes = DEFAULT_SUMMARY_READERS,
+    state: Run['state'] = 'torn_down'
+): Run[] {
+    return Array.from({ length: passes }, (_, index) => {
+        const pass = index + 1;
+
+        return {
+            id: `r-review-${revisionId}-a${pass}`,
+            rev: 1,
+            created_at: ago(40),
+            updated_at: ago(35),
+            story_id: 's1',
+            work_item_ref: `wi_review_${revisionId}_a${pass}`,
+            template_ref: 't-builtin',
+            role: 'reader',
+            state,
+            started_at: ago(40),
+            ended_at: state === 'working' ? null : ago(35),
+            tokens: 800,
+            kind: 'work',
+            delegated: []
+        } satisfies Run;
+    });
 }
 
 /** §4.12 — the catalogue: one Author crew (assignable, editable), one built-in (duplicate-only). */

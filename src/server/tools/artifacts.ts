@@ -605,6 +605,11 @@ export async function commitSelection(
 ): Promise<{ deleted: string[] }> {
     const { store, storyId } = ctx;
     const why = selectionNote;
+    // R1: the sentence the rail shows on every row THIS selection sets aside. `selectionNote` is the
+    // Editor's mandatory justification (`whyField: 'selection_note'`, T-2a; the pipeline refuses a
+    // blank one in tools/context.ts:232), so a discarded sample carries the very rule that decided
+    // against it rather than an invented one. `selection_note` itself stays the winner's (T-2a).
+    const reason = selectionNote.trim();
     let deleted: string[] = [];
     await commitAs(
         ctx,
@@ -637,7 +642,14 @@ export async function commitSelection(
                 const loserIds = new Set(losers.map((loser) => loser.id));
 
                 for (const loser of losers) {
-                    store.revisions.update(loser.id, { state: 'discarded' }, buildAttribution(ctx, why));
+                    // R1: the reason is written in the same update that sets the state, so a
+                    // `discarded` row can never exist without its explanation (the rail reads the
+                    // field, not the journal).
+                    store.revisions.update(
+                        loser.id,
+                        { state: 'discarded', discard_reason: reason },
+                        buildAttribution(ctx, why)
+                    );
                 }
 
                 // A discarded draft is history, not work. Its findings stay in the book (nothing is

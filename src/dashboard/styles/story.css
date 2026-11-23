@@ -1796,24 +1796,71 @@
     list-style: none;
 }
 
+/*
+ * R10 — each employee has ONE colour, and it is the tile's left edge.
+ *
+ * The rail is five near-identical cards read by shape, so the identity has to be pre-attentive
+ * rather than worded: a persistent 3px stripe on the leading edge (and the name in the same tint)
+ * tells the Author which employee a tile is before they read it. The stripe is the ONLY thing the
+ * identity owns — the running/selected border stays blue and the state pill stays green (idle) or
+ * blue (running), so "which employee" and "what is it doing" never compete for the same channel.
+ *
+ * `--agent-tint` is declared per kind below and consumed with a fallback, so a kind this rail has
+ * never seen renders the neutral stripe instead of an unstyled edge.
+ */
 .sv-agent-tile {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
     padding: 0.55rem 0.65rem;
     border: 1px solid var(--line-strong);
+    /* The identity stripe. `border-left` (not a pseudo-element) keeps the tile's single border box:
+       the 1px -> 3px step is the only geometry this change makes. */
+    border-left: 3px solid var(--agent-tint, var(--line-strong));
     border-radius: var(--radius-sm);
     background: var(--surface-2);
     cursor: pointer;
 }
 
+/*
+ * R10 — the identity rules are per kind, and they only set the variable: nothing here paints a
+ * card, a badge or a state, which is what keeps the five hues from becoming a second status system.
+ * Writer is the platform blue (the accent it already owns), Editor the completion green, Reader the
+ * teal, and the two roles with no token of their own take the quiet purple/rose pair — distinct at
+ * a glance, all five inside the same low-saturation ink palette.
+ */
+.sv-agent-tile[data-agent='writer'] {
+    --agent-tint: var(--accent);
+}
+
+.sv-agent-tile[data-agent='editor'] {
+    --agent-tint: var(--finished);
+}
+
+.sv-agent-tile[data-agent='reader'] {
+    --agent-tint: var(--accent-2);
+}
+
+.sv-agent-tile[data-agent='checker'] {
+    --agent-tint: #b9a4e0;
+}
+
+.sv-agent-tile[data-agent='researcher'] {
+    --agent-tint: #e0a0b6;
+}
+
 .sv-agent-tile[data-status='running'] {
     border-color: var(--accent);
+    /* R10 — `border-color` above resets all four edges, so the stripe is restated here: a running
+       employee still shows WHICH employee it is under the blue "live" border. */
+    border-left-color: var(--agent-tint, var(--accent));
 }
 
 .sv-agent-tile[data-selected='true'] {
     border-color: var(--accent);
     background: var(--accent-soft);
+    /* Same restatement as `running`: selection is state, the stripe is identity, both stay visible. */
+    border-left-color: var(--agent-tint, var(--accent));
 }
 
 /*
@@ -1838,8 +1885,13 @@
     outline-offset: 2px;
 }
 
+/*
+ * R10 — the hover used to flatten every tile's name to the platform blue, which made the rail look
+ * identical under the cursor. It keeps the kind's own tint instead, so the identity survives the
+ * hover that leads into opening it.
+ */
 .sv-agent-tile__open:hover .sv-agent-tile__name {
-    color: var(--accent);
+    color: var(--agent-tint, var(--accent));
 }
 
 .sv-agent-tile__head {
@@ -1851,8 +1903,14 @@
     padding: 0;
 }
 
+/*
+ * R10 — the name wears the same tint as the tile's left stripe: one colour read twice is the whole
+ * identity, with no icon, dot or label added. An unknown kind falls back to the inherited text
+ * colour rather than to a colour it has not earned.
+ */
 .sv-agent-tile__name {
     font-weight: 700;
+    color: var(--agent-tint, inherit);
 }
 
 .sv-agent-tile__rank {
@@ -2302,10 +2360,13 @@
     color: var(--urgent);
 }
 
+/* P8/U-7 — the kill row now renders INSIDE `.sv-thread__detail`, which already owns the horizontal
+   padding and the vertical gap between blocks (R4 nesting). Zeroing its own padding keeps the
+   button flush with the Request block instead of double-indented and double-spaced. */
 .sv-thread__actions {
     display: flex;
     justify-content: flex-end;
-    padding: 0 0.65rem 0.45rem;
+    padding: 0;
 }
 
 .sv-thread__kill {

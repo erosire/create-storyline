@@ -89,10 +89,11 @@ export function permissionLine(kind: RoleKind): string {
         case 'reader':
             return 'You are a Reader: your output is `raiseFinding` and `submitVerdict`, plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
         case 'researcher':
-            // §7.2: the one kind whose WRITE is not a story artifact. The line names its three
-            // tools and the P10 route, so a researcher that cannot establish a fact files a task
-            // instead of reaching for the book.
-            return 'You are the Researcher: you search the web and record what you find — `writeKnowledge`, `readKnowledge`, `retireKnowledge`. Any write to a story artifact is refused naming P10: file a task and let the Writer write it.';
+            // §7.2: the one kind whose WRITE is not a story artifact. The line names its tools and the
+            // P10 route, so a researcher that cannot establish a fact files a task instead of reaching
+            // for the book — and names D-51's zero-write report, so a pass with nothing to record ends
+            // by reporting instead of by saying nothing (S-4).
+            return 'You are the Researcher: you search the web and record what you find — `writeKnowledge`, `readKnowledge`, `retireKnowledge` — and when the pass needs no fact from outside the book, `reportNoResearch` closes it, writing nothing (D-51). Any write to a story artifact is refused naming P10: file a task and let the Writer write it.';
         default:
             return 'You are a checker: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b). Any write to a story artifact is refused naming P10: file the task and let the Writer write it.';
     }

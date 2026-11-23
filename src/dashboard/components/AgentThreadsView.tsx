@@ -14,7 +14,9 @@
 // has a clickable segment timeline; the Author does not need it here. The two things a thread is
 // judged by are what it was asked and what it said, so a CLOSED bar shows exactly those two
 // blocks. A RUNNING bar shows the same collapsed request and, below it, the steps the employee
-// is taking right now; the answer replaces those steps the moment the thread closes.
+// is taking right now; the answer replaces those steps the moment the thread closes. The kill
+// control is part of that EXPANDED detail and never the collapsed bar: expanding is the
+// confirmation, so a stray click on a bar cannot tear down a live run.
 import '../styles/story.css';
 import { useMemo, useState } from 'react';
 import { PHASE_LABELS, PHASE_ORDER, formatElapsed } from './story-contract';
@@ -43,11 +45,26 @@ const STATE_LABEL: Record<AgentThreadRecord['state'], string> = {
 
 /**
  * A thread that is not running now is ARCHIVED: completed (`torn_down`), failed, or abandoned.
- * The Author's tab beside the Story title toggles that set, so the list can read as "what is
- * working now" without losing the closed threads the Story was built out of.
+ * The list is RUNNING-ONLY until the Author opts into that set with the tab beside the Story
+ * title: clicking an employee answers "what is working now", and the closed threads the Story was
+ * built out of stay one deliberate click away (R7). The tab is never pressed on the Author's
+ * behalf — nothing derives it from the data (R8).
  */
 function isArchived(thread: AgentThreadRecord): boolean {
     return thread.state !== 'running';
+}
+
+/**
+ * R7 — does this bar need a role chip? The surface is ALREADY the one employee the Author clicked
+ * (the region is named "Writer threads", the tile is highlighted), so a bar that says `writer`
+ * again is the same word three times on one screen. A chip that carries information the region
+ * name does not — a panel sibling (`writer#agent_2`) or a delegated role (`researcher`) — stays.
+ */
+function isRedundantRole(roleName: string, kind: string): boolean {
+    const role = roleName.trim();
+
+    // A blank role would render an empty chip, and a role equal to the selected kind repeats it.
+    return role.length === 0 || role === kind.trim();
 }
 
 interface PhaseGroup {
@@ -120,14 +137,17 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
     /** U-8: the request is collapsed by default, at every state — open the bar, then the block. */
     const [requests, setRequests] = useState<Set<string>>(() => new Set());
     /**
-     * The Story ids whose archived threads the Author has folded away. Archived threads are shown
-     * by default — the Story's history is the point of this surface — and the tab beside the title
-     * hides them so the list reads as the threads working right now.
+     * The Story ids whose archived threads the Author has OPTED INTO. Nothing is opted in at mount,
+     * so the list reads as "what is working now" (R7); the tab beside the title pulls the closed
+     * threads in. This is view-local state that only the click below writes, so a refresh or a new
+     * `threads` prop can never select Archived on the Author's behalf (R8) — while an explicit
+     * choice survives a same-Story refetch (R9). Switching employees remounts the view (the shell
+     * keys it by kind), which is what resets the choice per employee (R7).
      */
-    const [archivedHidden, setArchivedHidden] = useState<Set<string>>(() => new Set());
+    const [archivedShown, setArchivedShown] = useState<Set<string>>(() => new Set());
 
     const toggleArchived = (storyId: string): void => {
-        setArchivedHidden((current) => {
+        setArchivedShown((current) => {
             const next = new Set(current);
 
             if (next.has(storyId)) next.delete(storyId);
@@ -166,15 +186,21 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                     (count, group) => count + group.threads.filter(isArchived).length,
                     0
                 );
-                const archivedShown = !archivedHidden.has(story.storyId);
-                const phases = archivedShown
-                    ? story.phases
-                    : story.phases
-                          .map((group) => ({
-                              ...group,
-                              threads: group.threads.filter((thread) => !isArchived(thread))
-                          }))
-                          .filter((group) => group.threads.length > 0);
+                // R7 — positive opt-in: `archivedShown` holds the Stories the Author has opened.
+                // R9 — the tab is a FILTER, not an addition: it answers one question at a time.
+                // Unpressed the Story lists what is running now; pressed it lists only the closed
+                // threads (torn_down / failed / abandoned). `isArchived` is the single predicate for
+                // both branches, so a live bar can never sit in the Archived list and a closed one
+                // can never leak into the live list — the rows are filtered in the DOM, not by CSS.
+                const historyVisible = archivedShown.has(story.storyId);
+                const wanted = historyVisible
+                    ? isArchived
+                    : (thread: AgentThreadRecord): boolean => !isArchived(thread);
+                const phases = story.phases
+                    .map((group) => ({ ...group, threads: group.threads.filter(wanted) }))
+                    // A phrase with no row in this reading is not printed: an empty "P1 Summary —
+                    // 0 threads" heading would be a second way of saying "nothing here".
+                    .filter((group) => group.threads.length > 0);
 
                 return (
                     <div className="sv-threads__story" data-story={story.storyId} key={story.storyId}>
@@ -183,12 +209,12 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                             <button
                                 type="button"
                                 className="sv-threads__archive-tab"
-                                aria-pressed={archivedShown}
-                                data-active={archivedShown ? 'true' : 'false'}
+                                aria-pressed={historyVisible}
+                                data-active={historyVisible ? 'true' : 'false'}
                                 title={
-                                    archivedShown
-                                        ? 'Hide the completed, failed and abandoned threads — show only what is running now'
-                                        : 'Show the completed, failed and abandoned threads again'
+                                    historyVisible
+                                        ? 'Hide the completed, failed and abandoned threads again — show only what is running now'
+                                        : 'Show the completed, failed and abandoned threads'
                                 }
                                 onClick={() => toggleArchived(story.storyId)}
                             >
@@ -197,7 +223,11 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                             </button>
                         </div>
 
-                        {phases.length === 0 ? (
+                        {/* R9 — this sentence is an answer about the LIVE list, so it belongs to the
+                            live branch only. An Archived reading with nothing to show (a Story whose
+                            only thread is still running) is simply blank: "no thread is running now"
+                            would be false on the screen that is showing a running employee. */}
+                        {!historyVisible && phases.length === 0 ? (
                             <p className="sv-threads__empty">
                                 no thread is running now — {archivedCount} archived thread
                                 {archivedCount === 1 ? ' is' : 's are'} hidden.
@@ -223,6 +253,9 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                         const expanded = open.has(thread.thread_id);
                                         const requestVisible = requests.has(thread.thread_id);
                                         const code = PHASE_CODE[thread.phase];
+                                        // R7 — the chip repeats the employee only when it repeats it
+                                        // exactly; see `isRedundantRole`.
+                                        const roleVisible = !isRedundantRole(thread.role_name, kind);
                                         const duration = formatElapsed(thread.started_at, thread.ended_at, now);
                                         const answerText =
                                             thread.answer.length > 0
@@ -250,7 +283,16 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                                     <span className="sv-thread__title">
                                                         {thread.title.length > 0 ? thread.title : thread.role_name}
                                                     </span>
-                                                    <span className="sv-thread__role">{thread.role_name}</span>
+                                                    {/* R7 — the region is already "Writer threads" and the
+                                                        tile is lit, so a bar reading `writer` again is the
+                                                        same word three times. The chip is dropped ONLY for
+                                                        that repeat (and for a blank role); a panel sibling
+                                                        (`writer#agent_2`) or a delegated role still shows.
+                                                        A bar with no title still falls back to `role_name`
+                                                        above, so the row is never nameless. */}
+                                                    {roleVisible ? (
+                                                        <span className="sv-thread__role">{thread.role_name}</span>
+                                                    ) : null}
                                                     <span
                                                         className="sv-thread__duration"
                                                         title="wall-clock, informational only (S-6, E-0)"
@@ -267,20 +309,12 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                                     </span>
                                                 </button>
 
-                                                {thread.state === 'running' ? (
-                                                    <div className="sv-thread__actions">
-                                                        <button
-                                                            type="button"
-                                                            className="sv-thread__kill"
-                                                            disabled={onKillRun === undefined}
-                                                            title="Tear this run down; the Story keeps running (P8, U-7, S-3)"
-                                                            onClick={() => onKillRun?.(thread.run_id)}
-                                                        >
-                                                            kill run
-                                                        </button>
-                                                    </div>
-                                                ) : null}
-
+                                                {/* R4 — the running thread's cord used to sit in its
+                                                    own row under the COLLAPSED bar, where it was one
+                                                    stray click from tearing down live work. Nothing
+                                                    renders here now; the button lives inside
+                                                    `sv-thread__detail` below, so a closed bar has no
+                                                    kill affordance at all. */}
                                                 {expanded ? (
                                                     <div className="sv-thread__detail">
                                                         <section className="sv-thread__block">
@@ -304,6 +338,30 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                                                 </div>
                                                             ) : null}
                                                         </section>
+
+                                                        {/* P8 / U-7 — the Author's cord, now a sibling
+                                                            of the Request block INSIDE the expanded
+                                                            detail (R4). R5: the click calls
+                                                            `onKillRun` once, immediately, with this
+                                                            thread's run id — no confirmation and no
+                                                            second-step arming, because there never
+                                                            was one. R6: with no cord injected the
+                                                            button stays disabled rather than hidden,
+                                                            and a thread that is not running gets no
+                                                            button at all. */}
+                                                        {thread.state === 'running' ? (
+                                                            <div className="sv-thread__actions">
+                                                                <button
+                                                                    type="button"
+                                                                    className="sv-thread__kill"
+                                                                    disabled={onKillRun === undefined}
+                                                                    title="Tear this run down; the Story keeps running (P8, U-7, S-3)"
+                                                                    onClick={() => onKillRun?.(thread.run_id)}
+                                                                >
+                                                                    kill run
+                                                                </button>
+                                                            </div>
+                                                        ) : null}
 
                                                         {thread.state === 'running' ? (
                                                             /* U-8 — below the collapsed request: what the employee is

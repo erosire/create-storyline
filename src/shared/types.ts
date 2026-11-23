@@ -782,6 +782,16 @@ export interface Revision extends StoredRecord {
     /** T-2a / L-17: required on a selection, and it names the rule applied and what each draft was preferred for. */
     selection_note?: string;
     /**
+     * Why this retained row reads `discarded`, in the words of whoever discarded it. Written
+     * whenever a row moves to `discarded` and stays: the sidebar needs to say WHY a revision lost,
+     * and `selection_note` belongs to the winner (T-2a), so it cannot carry the loser's reason.
+     *
+     * Sources, in order of honesty: the Editor's mandatory `why` (`rejectAll`, `selectRevision`),
+     * the Author's optional selection note, and the journal `attribution.why` on a hard delete that
+     * `viewRevisions` reconstructs. Absent on rows discarded before the field existed.
+     */
+    discard_reason?: string;
+    /**
      * Phase ① sampling (documents/phase-1-research-pipeline.md §3.5): how the draft came into
      * existence. `sampled` is a round-1 one-turn Writer answer the engine persisted from the
      * validated structured output (D-12a's engine-writes exception); `refined` is every later
@@ -967,6 +977,21 @@ export interface SeedBrief extends StoredRecord {
     tone_hints?: string;
     constraints: string[];
     open_questions: string[];
+    /**
+     * §3.3 / D-51 — the Editor's explicit research DECISION, made while structuring (R1a).
+     *
+     * Each entry is one concrete external fact the requested story depends on that cannot be
+     * answered from the Author's Seed or from this brief; the Researcher's pass is scoped to that
+     * list. An EMPTY list is a decision, not an oversight: research is WAIVED, no research Work
+     * Item is generated, and sampling proceeds (D-51). It is never derived from the title, the
+     * genre or the prose — only `structureSeed` writes it, and the Editor owns it.
+     *
+     * OPTIONAL ON PURPOSE (backward compatibility, D-51): a brief stored before the field existed
+     * carries NO property, and the gate reads that as "research needed" — the pre-D-51 behaviour.
+     * The tool always writes the property for a NEW brief (including `[]`), so absence is only
+     * ever a legacy reading. `records.ts:researchGate` is the one predicate that interprets it.
+     */
+    research_questions?: string[];
     status: SeedBriefState;
     notes?: string;
 }

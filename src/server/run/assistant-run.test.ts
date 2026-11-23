@@ -89,6 +89,9 @@ const CREW_SURFACE = [
     'readSummary',
     'readVerdicts',
     'rejectAll',
+    // D-51: the Researcher's zero-write report is registered like every other tool (T-6a: the whole
+    // catalogue on every session); only the §7.2 row decides who may call it.
+    'reportNoResearch',
     'requestAuthor',
     'requestMerge',
     'retireKnowledge',

@@ -17,7 +17,7 @@
 import { PERMISSION_ROWS } from './permissions';
 import { checkerTools } from './checker';
 import { editorTools } from './editor';
-// The Phase-1 pipeline's four tools (documents/phase-1-research-pipeline.md §7.1). They live in
+// The Phase-1 pipeline's five tools (documents/phase-1-research-pipeline.md §7.1). They live in
 // their own module and their own group because they belong to NO §8 section: §8.1-§8.5 are the
 // pinned pre-pipeline catalogue, and keeping this surface separate is what lets the §8
 // conformance test still diff those five tables against the spec while T-6a registers this group
@@ -33,10 +33,10 @@ import type { ToolDefinition } from './types';
  * plus `knowledge`, the Phase-1 research surface (§7.1) that has no §8 section of its own.
  *
  * WHY A SIXTH GROUP RATHER THAN FOLDING THESE INTO AN EXISTING ONE: `structureSeed` is the
- * Editor's, `writeKnowledge`/`retireKnowledge` are the Researcher's and `readKnowledge` is every
- * kind's. No single §8 group owns that shape, and a tool filed under a group it does not belong
- * to would make the conformance test lie about which spec table registers it. The group is
- * registered like every other (T-6a: the whole catalogue on every session).
+ * Editor's, `writeKnowledge`/`retireKnowledge`/`reportNoResearch` are the Researcher's and
+ * `readKnowledge` is every kind's. No single §8 group owns that shape, and a tool filed under a
+ * group it does not belong to would make the conformance test lie about which spec table registers
+ * it. The group is registered like every other (T-6a: the whole catalogue on every session).
  */
 export const TOOL_GROUPS: Record<
     'writer' | 'editor' | 'checker' | 'plumbing' | 'research' | 'knowledge',
@@ -95,10 +95,10 @@ export const GOVERNED_COLLECTIONS: readonly string[] = [...new Set(PERMISSION_RO
  * The names §8.1–§8.5 register, as a set, for the conformance test that pins the catalogue
  * against the spec (T-6c: "what a role can reach is answerable from inside the run").
  *
- * The last four are the Phase-1 research surface (documents/phase-1-research-pipeline.md §7.1).
- * They are listed here — not in the §8 sections above — because the ORDER is the registration
- * order `TOOL_NAMES` answers in, and a tool that is registered but absent from this list would
- * make the conformance test pass while the catalogue silently grew.
+ * The last five are the Phase-1 research surface (documents/phase-1-research-pipeline.md §7.1,
+ * plus D-51's `reportNoResearch`). They are listed here — not in the §8 sections above — because
+ * the ORDER is the registration order `TOOL_NAMES` answers in, and a tool that is registered but
+ * absent from this list would make the conformance test pass while the catalogue silently grew.
  */
 export const SPEC_TOOL_NAMES: readonly string[] = [
     // §8.1 — the Writer surface
@@ -157,5 +157,8 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     'structureSeed',
     'writeKnowledge',
     'readKnowledge',
-    'retireKnowledge'
+    'retireKnowledge',
+    // D-51: the Researcher's zero-write closing report — a dispatched pass that finds nothing to
+    // record must still be able to REPORT, or S-4 counts the run as a no-op turn.
+    'reportNoResearch'
 ];

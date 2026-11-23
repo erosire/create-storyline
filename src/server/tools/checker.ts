@@ -25,6 +25,7 @@ import {
     openTask,
     ownerFor,
     resolvedChapter,
+    revisionRows,
     scoreLine,
     stableFingerprint
 } from './artifacts';
@@ -441,6 +442,52 @@ const raiseFinding: ToolDefinition = {
         // L-11a: normalised before the dedupe lookup, so a repeat that only adds refs is still
         // recognised as the same finding (the fingerprint never looks at them).
         const relatedRefs = relatedRefsOf(ctx.args.related_refs);
+
+        // T6/R2c: phase ①'s defect must say WHICH DRAFT it describes, at the moment it is filed.
+        //
+        // Every downstream reader — the sign-off's blocking set, the verification queue, and the
+        // selection's retirement of a lost draft — decides what a finding is about by reading
+        // `related_refs` against the draft the Summary row carries. A finding that names a draft the
+        // loop has already set aside can never be decided: the Editor's verification pass reads the
+        // KEPT draft, which never contained the defect, so the round waits on a question no run can
+        // answer (and the crew used to be re-sent at it every sweep). Asking for the one id where it is
+        // cheap to ask is the whole fix, and it is refused before the D-16 dedupe so a mis-scoped call
+        // cannot even bump `seen_count`.
+        //
+        // Deliberately narrow:
+        //   * phase ① only — a chapter or plotline defect is aimed at its own row, where there is no
+        //     competing-draft question to answer;
+        //   * a Summary TARGET only — `raiseFinding`'s targets are artifacts (§8's narrow TARGET_KINDS,
+        //     the note on that constant above), so "the Summary" is the shape a phase-① draft defect
+        //     takes, and the Story-targeted whole-Story findings L-11a propagates stay untouched;
+        //   * only once a selection has installed a draft — before the first selection there is nothing
+        //     to name, so the rule cannot hold the very first round.
+        if (ctx.story.phase === 'summary' && target.collection === 'summaries') {
+            const drafts = revisionRows(ctx.store, ctx.storyId).filter((row) => row.unit_kind === 'summary');
+            const carried = drafts.find((row) => row.state === 'selected');
+
+            if (carried !== undefined && !relatedRefs.includes(carried.id)) {
+                // The refs that name a Summary draft at all: if they name only superseded drafts, the
+                // crew is describing a text the Summary no longer holds, which is worth saying out loud
+                // rather than filing as a defect on the current one.
+                const stale = relatedRefs.filter((ref) => drafts.some((row) => row.id === ref));
+
+                throw new ToolRefusal(
+                    'D-33',
+                    relatedRefs.length === 0
+                        ? `a phase ① finding on the Summary has to name the draft it describes: the Summary now carries ${carried.id}, and a finding that names no draft cannot be verified against it (D-33, §6.4 step 6).`
+                        : stale.length > 0
+                          ? `${stale.join(', ')} is not the draft the Summary carries — the selection replaced it with ${carried.id}, so a defect written about it is history, not work the round can act on (D-33, §6.6).`
+                          : `a phase ① finding on the Summary has to name the draft it describes alongside its other refs: the Summary now carries ${carried.id} (D-33, §6.4 step 6).`,
+                    {
+                        field: 'related_refs',
+                        expected: [carried.id],
+                        fix: `call raiseFinding again with related_refs including ${carried.id} — the Summary revision you actually read`
+                    }
+                );
+            }
+        }
+
         const fingerprint = fingerprintFinding(target.id, criterionRef, title);
         const duplicate = duplicateFinding(ctx.store, ctx.storyId, fingerprint);
         const why = whyOf(ctx) || `Finding on ${target.id} for ${criterionRef}: ${title}`;

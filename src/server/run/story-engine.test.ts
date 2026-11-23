@@ -418,6 +418,237 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
+    it('counts a live Run row that has no engine thread — the off-thread Writer tile (R1)', () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const chat = new MockChatClient(async () => ({ message: { content: 'done' } }));
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        // A `toolMode: 'none'` run is the case the tile used to miss: the row says `working` from
+        // the moment the executor dispatches it, while `run/executor.ts:runStructuredTurn` calls
+        // `chat.complete` directly and opens NO engine thread — the thread record only lands in
+        // `execute`'s `finally`. The Author sees the thread panel RUNNING and the tile idle.
+        store.runs.create(
+            {
+                story_id: story.id,
+                work_item_ref: 'wi_draft_chapter_1',
+                role: 'writer',
+                state: 'working',
+                started_at: '2026-11-23T10:00:00.000Z',
+                ended_at: null,
+                tokens: 0,
+                kind: 'work',
+                delegated: []
+            },
+            { run_ref: null, author: true, why: 'seed the live row an off-thread run leaves behind' }
+        );
+
+        const rows = manager.statuses();
+        const writer = rows.find((row) => row.kind === 'writer');
+
+        expect(writer?.status).toBe('running');
+        // Exactly one working entry, on the identity the thread list already uses for a run-row
+        // thread (`api/projections.ts:agentThreads`), so a refetch never re-keys the row.
+        expect(writer?.working).toEqual([
+            {
+                story_id: story.id,
+                story_title: 'Hollow Sea',
+                phase: 'chapters',
+                role_name: 'writer',
+                work_item: 'wi_draft_chapter_1',
+                thread_id: 'run_row:run_1',
+                started_at: Date.parse('2026-11-23T10:00:00.000Z')
+            }
+        ]);
+        // It is a LIVE run, so it is not also a closed thread (S-3's list stays the closed ones)…
+        expect(writer?.recent).toEqual([]);
+        // …and it belongs to one employee: no other tile moves (R3). Catalogue order is the
+        // projection's; §7.3's alphabetic sort is `api/routes.ts`'s.
+        expect(rows.filter((row) => row.kind !== 'writer').map((row) => [row.kind, row.status, row.working.length])).toEqual(
+            [
+                ['editor', 'idle', 0],
+                ['reader', 'idle', 0],
+                ['checker', 'idle', 0],
+                ['researcher', 'idle', 0]
+            ]
+        );
+
+        manager.dispose();
+    });
+
+    it('counts every live Run row across Stories oldest first, and keeps a closed row out (R1)', () => {
+        const store = Store.empty();
+        const first = storyOf(store, 'Hollow Sea');
+        const second = storyOf(store, 'Salt Year');
+        const runtime = new MockToolRuntime(store, first.id);
+        const chat = new MockChatClient(async () => ({ message: { content: 'done' } }));
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        const liveRow = (storyId: string, workItem: string, startedAt: string) =>
+            store.runs.create(
+                {
+                    story_id: storyId,
+                    work_item_ref: workItem,
+                    role: 'writer',
+                    state: 'spawning',
+                    started_at: startedAt,
+                    ended_at: null,
+                    tokens: 0,
+                    kind: 'work',
+                    delegated: []
+                },
+                { run_ref: null, author: true, why: 'seed a live row for the roster reconciliation' }
+            );
+
+        // Newest written first: the projection's `working` promise is oldest first regardless.
+        liveRow(second.id, 'wi_draft_chapter_2', '2026-11-23T10:05:00.000Z');
+        liveRow(first.id, 'wi_draft_chapter_1', '2026-11-23T10:01:00.000Z');
+        liveRow(second.id, 'wi_seed_structure', '2026-11-23T10:03:00.000Z');
+
+        store.runs.create(
+            {
+                story_id: first.id,
+                work_item_ref: 'wi_draft_chapter_0',
+                role: 'writer',
+                state: 'torn_down',
+                started_at: '2026-11-23T09:00:00.000Z',
+                ended_at: '2026-11-23T09:30:00.000Z',
+                tokens: 12,
+                kind: 'work',
+                end_reason: 'completed',
+                delegated: []
+            },
+            { run_ref: null, author: true, why: 'seed a closed row that must stay off `working`' }
+        );
+
+        const writer = manager.statuses().find((row) => row.kind === 'writer');
+
+        expect(writer?.status).toBe('running');
+        expect(writer?.working).toEqual([
+            {
+                story_id: first.id,
+                story_title: 'Hollow Sea',
+                phase: 'chapters',
+                role_name: 'writer',
+                work_item: 'wi_draft_chapter_1',
+                thread_id: 'run_row:run_2',
+                started_at: Date.parse('2026-11-23T10:01:00.000Z')
+            },
+            {
+                story_id: second.id,
+                story_title: 'Salt Year',
+                phase: 'chapters',
+                role_name: 'writer',
+                work_item: 'wi_seed_structure',
+                thread_id: 'run_row:run_3',
+                started_at: Date.parse('2026-11-23T10:03:00.000Z')
+            },
+            {
+                story_id: second.id,
+                story_title: 'Salt Year',
+                phase: 'chapters',
+                role_name: 'writer',
+                work_item: 'wi_draft_chapter_2',
+                thread_id: 'run_row:run_1',
+                started_at: Date.parse('2026-11-23T10:05:00.000Z')
+            }
+        ]);
+        // The closed row is history, not a live thread: it belongs to `recent` (S-3).
+        expect(writer?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_4', 'torn_down']]);
+
+        manager.dispose();
+    });
+
+    it('counts a live engine thread and the Run row it belongs to ONCE, and closes to idle (R1)', async () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const chat = new MockChatClient(async (): Promise<ChatResponse> => {
+            await gate;
+
+            return { message: { content: 'done' } };
+        });
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        store.runs.create(
+            {
+                story_id: story.id,
+                work_item_ref: 'wi_draft_chapter_1',
+                role: 'writer',
+                state: 'working',
+                started_at: '2026-11-23T10:00:00.000Z',
+                ended_at: null,
+                tokens: 0,
+                kind: 'work',
+                delegated: []
+            },
+            { run_ref: null, author: true, why: 'seed the row this engine thread belongs to' }
+        );
+
+        const running = manager.run({
+            storyId: story.id,
+            phase: 'chapters',
+            label: 'run_1',
+            // `executor.ts` passes the journaled id, so the thread and the row name the same run.
+            runId: 'run_1',
+            roleName: 'writer',
+            roleKind: 'writer',
+            model: 'mock',
+            system: 'BRIEF',
+            kickoff: 'write',
+            context: contextFor(store, runtime, story.id),
+            runtime,
+            tally: createTally()
+        });
+
+        const threadId = manager.forStory(story.id).threads()[0]?.thread_id;
+        const during = manager.statuses().find((row) => row.kind === 'writer');
+
+        // ONE entry — the engine thread's own — because the row it belongs to is covered by the
+        // thread's `run_id` (the identity `api/projections.ts:agentThreads` dedups on, R1).
+        expect(during?.status).toBe('running');
+        expect(during?.working).toHaveLength(1);
+        expect(during?.working[0]).toMatchObject({
+            story_id: story.id,
+            story_title: 'Hollow Sea',
+            phase: 'chapters',
+            role_name: 'writer',
+            work_item: 'run_1'
+        });
+        expect(during?.working.map((thread) => thread.thread_id)).toEqual([threadId]);
+
+        release();
+        await running;
+
+        // The thread is closed but the row is still `working` (the executor closes it only after the
+        // result is committed): the journal still says a run is live, so the tile still says running.
+        expect(
+            manager.statuses().find((row) => row.kind === 'writer')?.working.map((thread) => thread.thread_id)
+        ).toEqual(['run_row:run_1']);
+
+        store.runs.update(
+            'run_1',
+            { state: 'torn_down', ended_at: '2026-11-23T10:00:09.000Z', tokens: 0 },
+            { run_ref: null, author: true, why: 'close the run the way the executor does' }
+        );
+
+        // Neither a thread nor a live row is left: idle, with the run visible as history (S-3).
+        const closed = manager.statuses().find((row) => row.kind === 'writer');
+
+        expect(closed?.status).toBe('idle');
+        expect(closed?.working).toEqual([]);
+        expect(closed?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_1', 'torn_down']]);
+
+        manager.dispose();
+    });
+
     it('adds all five defined employees to every Story harness, at Rank A, with the Editor routing the session (R15)', () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');

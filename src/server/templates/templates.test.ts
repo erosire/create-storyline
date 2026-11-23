@@ -141,8 +141,15 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(structure.roles[0].prompt).toContain('structureSeed');
         expect(structure.roles[0].prompt).toContain('open_questions');
         expect(structure.roles[0].prompt).toContain('never edit');
+        // D-51: the research decision is part of THIS one call, and the prompt has to teach both halves
+        // of it — that the field must be stated, and that an empty list is a legitimate answer rather
+        // than a gap to be filled with an invented question.
+        expect(structure.roles[0].prompt).toContain('research_questions');
+        expect(structure.roles[0].prompt).toContain('[] is a complete answer');
+        expect(structure.roles[0].prompt).toContain('Do not invent research hooks');
+        expect(structure.selection_rules).toContain('research_questions');
         expect(structure.done_definition).toBe(
-            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present.'
+            'An accepted Seed Brief whose seed_hash matches the current Seed, every non-optional field present, and a stated research decision: research_questions holds the facts the Researcher must establish, or [] when the premise needs nothing outside itself (D-51).'
         );
         expect(structure.escalation_rule).toBe(
             'requestAuthor when the Seed is internally contradictory; never edit the Seed.'
@@ -166,8 +173,12 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(researcher.roles[0].prompt).toContain('fetchPage');
         expect(researcher.roles[0].prompt).toContain('writeKnowledge');
         expect(researcher.roles[0].prompt).toContain('readKnowledge');
+        // D-51: the pass is scoped to the questions the job names, and the empty answer is a REPORT —
+        // both belong in the role prompt, because the tool list cannot say "you may stop with nothing".
+        expect(researcher.roles[0].prompt).toContain('reportNoResearch');
+        expect(researcher.roles[0].prompt).toContain('Work the questions this job names');
         expect(researcher.done_definition).toBe(
-            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one.'
+            'The facts the Seed Brief\u2019s world_rules/setting depend on are covered, every critical/high entry cites at least one source, and no entry duplicates an open one — OR the pass closed with reportNoResearch, having reported that nothing in this premise needs a fact from outside the book (D-51).'
         );
 
         // `writer-summary-sampler` — no tools, one turn, one `SummarySample`.

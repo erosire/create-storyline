@@ -503,7 +503,11 @@ const rejectAll: ToolDefinition = {
                 for (const draft of drafts) {
                     store.revisions.update(
                         draft.id,
-                        { state: 'discarded' },
+                        // R1: `why` rides on the row as `discard_reason`, not only in the journal, so
+                        // the rail can say WHY each revision is discarded. T-5 refuses a blank `why`
+                        // before this runs (context.ts:232) and `whyOf` trims it, so the field is
+                        // always non-empty; `selection_note` stays the winner's own (T-2a).
+                        { state: 'discarded', discard_reason: why },
                         buildAttribution(ctx, why),
                         expects.filter((entry) => entry.id === draft.id)
                     );

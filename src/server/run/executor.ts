@@ -605,15 +605,17 @@ export class RunExecutor {
      *       place for `response_format` or `seed`, and `StoryHarness.streamFor` calls
      *       `chat.complete` without them, so an engine thread CANNOT deliver §4.2's structured
      *       contract or §5's sampling seed.
-     *   (b) `GET /agents` builds `working` from live ENGINE threads (`StoryHarnessManager.statuses`
-     *       → `StoryHarness.statuses`), while `recent` reads the store's run rows.
-     * So this path owns the provider call directly. The trade-off, stated plainly: the run row is
+     *   (b) `GET /agents` reads its live `working` list from the ENGINE threads a Story harness owns
+     *       (`StoryHarness.statuses`), reconciled with the live run rows by
+     *       `StoryHarnessManager.mergeJournaledRuns` — which is why a run with no thread of its own
+     *       can still count on the tile, and why `recent` (the CLOSED rows) never double-books it.
+     * So this path owns the provider call directly. The consequence, stated plainly: the run row is
      * created/updated/closed exactly like a normal run (D-18, S-3 — `spawning` → `working` →
-     * `torn_down`) and appears in every store-derived surface, but it does NOT appear as a live
-     * `working` thread on the employee tile while it runs, because no engine thread exists. A
-     * one-turn sampling call is seconds long and cannot host tools, so a live tile would add a
-     * thread surface for a run whose whole product is its answer; the retained thread log below
-     * keeps the request/answer history complete (U-8).
+     * `torn_down`) and appears in every store-derived surface — including the employee tile's live
+     * `working` list, which counts it from the row (R1) while no engine thread exists for it. A
+     * one-turn sampling call is seconds long and cannot host tools, so it earns no engine thread
+     * surface of its own; the retained thread log below keeps the request/answer history complete
+     * (U-8).
      *
      * Tokens are added to the run's tally per call (S-6/E-0), including the repair attempt — a
      * failed answer still cost the provider call.

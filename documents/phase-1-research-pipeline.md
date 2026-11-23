@@ -504,7 +504,7 @@ Replace the `seed_review` block in `src/server/loop/work.ts:630-653` with:
 
 1. **`structure_seed`** — priority 0, one per `seed_hash`.
    Claim: `wi_structure_seed_<hash>`. Refuses `sample_unit` until an `accepted` SeedBrief exists.
-2. **`research`** — priority 0, one per accepted SeedBrief revision (`wi_research_<brief_rev>`).
+2. **`research`** — priority 0, one per accepted SeedBrief revision (`wi_research_<brief.rev>`).
    Refuses sampling until it closes. A `knowledge_gap` finding re-arms it.
 3. **`sample_unit` × `summary_sampling`** — priority 2, one per sample:
    `wi_sample_<unit>_<round>_<i>`. Each carries `toolMode: 'none'`,
@@ -851,3 +851,30 @@ written; this appendix is the truthful as-built record (pinned by the tests name
 - **Selection waits for the owed samples.** A round fires only when its full `summary_sampling` set
   exists OR its sampling attempts reached the cap (T12/D) — the early-selection bug an independent
   review found is gone.
+- **The research leg is the Editor's decision, not a heuristic (D-51, 2026-11-23).** §6.4's step 2 read
+  as an unconditional stage; as built, `structureSeed` REQUIRES a `research_questions` array (T-11 when
+  the arg is omitted) and `[]` WAIVES the pass: `loop/records.ts:researchGate()` returns `'waived'` and
+  §6.4's step 3 proceeds with the pass never existing: no `wi_research_<brief.rev>` Work Item, no run
+  row, and the §6.7 drain reason at `loop/status.ts` ("the Seed Brief has no closed research pass")
+  never fires for that Story. There is no research row in the status payload or the dashboard that a
+  waiver would hide or show — what it changes is the queue and the drain reason, nothing else. A
+  non-empty list keeps §6.4's ordering and is carried verbatim in
+  the Work candidate's `note`, so the Researcher answers the questions the Editor wrote rather than a
+  guess. A stored brief with no field — a row written before it existed — keeps the gate (`needed`):
+  absence is never a waiver. The same predicate closes gate 2 and satisfies the §9 drain clause, so there
+  is one rule, not three. `research_questions` is an optional property on `SeedBriefStructure`
+  (§3.2's record) precisely so an older row still parses.
+- **A dispatched pass that finds nothing answers with a report, not silence (D-51).** `reportNoResearch`
+  (researcher-only, one required `rationale`, ZERO writes — no Knowledge row, no task, no invented fact,
+  P7) is the fifth tool of the §8.7 knowledge group. It is classified as a READ tool
+  (`run/catalogue.ts:READ_TOOLS`)
+  *and* a REPORT tool (`REPORT_TOOLS`): the first makes a D-38 panel agent answer it rather than propose a
+  write that does not exist, the second is what S-4 counts, so the run ends `torn_down` with
+  `no_op === false` and the brief's research key is closed for good. Ending the pass without calling
+  either tool is a counted silent no-op (S-4) whose closed run row STILL closes the gate —
+  `records.ts:researchClosed` reads any closed run, not the tool call — so the pass is not bought
+  again; what the report adds is the reason on the record and the `no_op === false` that keeps S-4's
+  no-progress stop off a Story whose pass did answer. `structureSeed`'s §8.7 argument list gains
+  the required `research_questions`; the catalogue is 52 tools, and per-kind totals are unchanged because
+  the new tool is researcher-only. Pinned by `src/server/loop/phase1-research-waiver.test.ts` and the
+  D-51 cases in `src/server/tools/runtime.test.ts`.

@@ -81,6 +81,21 @@ const modelChoices = (current: string, catalog: readonly string[] = []): string[
     return choices;
 };
 
+/**
+ * R4 — the running badge's FACE is the count alone ("1", "4"). The rail is five tiles read at a
+ * glance, and the word "running" repeats what the pill's blue already says: the sentence crowds the
+ * head, so the Author reads a number and the colour carries the state (minimal, visually indicated).
+ */
+const runningCount = (count: number): string => String(count);
+
+/**
+ * The running badge's SENTENCE ("1 thread running", "4 threads running"), kept singular/plural.
+ * It is what the badge's `title` and `aria-label`, and the tile button's composed accessible name,
+ * still say — so the count the face shows has one answer for hover, screen reader and eye, and R4's
+ * minimal face costs nothing in meaning.
+ */
+const runningBadge = (count: number): string => `${count} thread${count === 1 ? '' : 's'} running`;
+
 export interface AgentsPanelProps {
     agents: AgentStatusRow[];
     /**
@@ -149,6 +164,13 @@ export function AgentsPanel({
                     // status badges, the model line's blank space, and the template note all land on
                     // the tile. The head button carries the keyboard and screen-reader path; the
                     // model dropdown itself is the one spot that keeps its click.
+                    //
+                    // R10: the three data hooks below are the tile's whole visual vocabulary, and the
+                    // colour is CSS-only (story.css). `data-agent` sets `--agent-tint` — the identity
+                    // stripe on the left edge and the name — which is what tells the five employees
+                    // apart in the rail; `data-status` and `data-selected` stay the live/active
+                    // signals (blue border, blue count pill) and the idle pill stays green, so identity
+                    // never replaces status. Nothing here computes a colour.
                     return (
                         <li
                             className="sv-agent-tile"
@@ -165,7 +187,16 @@ export function AgentsPanel({
                                 type="button"
                                 className="sv-agent-tile__open"
                                 aria-pressed={active}
-                                aria-label={`open ${agent.title} threads`}
+                                // R4: the face prints a bare number, and a button's own aria-label
+                                // REPLACES the name of everything inside it — so the sentence the
+                                // badge no longer shows is composed here instead. A screen reader
+                                // hears "open Writer threads — 4 threads running"; an idle tile keeps
+                                // the plain "open Writer threads" it always had.
+                                aria-label={
+                                    agent.status === 'running'
+                                        ? `open ${agent.title} threads — ${runningBadge(agent.working.length)}`
+                                        : `open ${agent.title} threads`
+                                }
                                 title={`open every ${agent.title} thread in the content area (U-8)`}
                                 onClick={(event) => {
                                     // The tile's own handler would otherwise fire twice for this one.
@@ -186,19 +217,22 @@ export function AgentsPanel({
                                         className={`sv-agent-tile__state sv-agent-tile__state--${agent.status}`}
                                         title={
                                             agent.status === 'running'
-                                                ? `${agent.working.length} thread${agent.working.length === 1 ? '' : 's'} running`
+                                                ? runningBadge(agent.working.length)
                                                 : 'idle — no thread right now'
                                         }
                                         aria-label={
                                             agent.status === 'running'
-                                                ? `${agent.working.length} thread${agent.working.length === 1 ? '' : 's'} running`
+                                                ? runningBadge(agent.working.length)
                                                 : `${agent.title} is idle`
                                         }
                                     >
-                                        {/* The badge IS the count while the employee works: "RUNNING"
-                                            only says something is running, but the Author needs to know
-                                            how many threads that is. */}
-                                        {agent.status === 'running' ? agent.working.length : agent.status}
+                                        {/* R4 — the face is the count and the pill's colour is the
+                                            state: "4" plus blue reads as four live threads without a
+                                            word. The sentence lives in the title/aria-label above and
+                                            in the tile button's composed name, so nothing is lost —
+                                            only the repeated wording is. An idle tile keeps its word,
+                                            because "idle" IS the state and has no count to show. */}
+                                        {agent.status === 'running' ? runningCount(agent.working.length) : agent.status}
                                     </span>
                                 </span>
                             </button>

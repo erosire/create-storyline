@@ -34,7 +34,7 @@ import {
     summaryRevisionUnit
 } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, storyStatusLabel } from './story-contract';
+import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, selectedSummaryRevision, storyStatusLabel } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 
 /** D-2a/L-34/L-37a: awaiting the Author is calm, stalled is urgent — and neither is an error. */
@@ -81,6 +81,22 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
     // Phase ①'s rail opens one flat Revision; the pane renders that version and its findings.
     const revisionFocus = summaryRevisionFocus(view, active);
     const revisions = summaryRevisions(view);
+    // R1: the ordinary Summary pane prints the ONE revision the record names, so the id comes from the
+    // contract's own authority — `selectedSummaryRevision` is the newest `state: 'selected'` row for this
+    // Summary (story-contract.ts:531-545), the same draft `summaryBlockingFindings` and the Accept gate
+    // read. Several rounds leave several `selected` rows, which is why an id is passed rather than the
+    // pane guessing at a state. It is NOT `view.sampling.selected.revision_id`: the Author's override
+    // (§6.6) changes the row's state without appending sampling history, so that field can lag the record.
+    const onRecordRevision = selectedSummaryRevision(view);
+    // T4: the Author's override (U-13, D-24) and the review's recommendation of a candidate now live on the
+    // revision the rail OPENS, because R1 keeps candidates out of the overview. The authority is the
+    // contract's own candidate list — `summaryUnit` above is `story-nav.summaryRevisionUnit`, i.e.
+    // `isReviewableRevision` minus `isSupersededSummaryDraft` (story-nav.ts:128-141, the same list
+    // `server/loop/phase1-round-parity.test.ts` pins as the Author's override). So a `drafted` row an older
+    // round already lost keeps its disabled button, and no row gains an action the API would refuse.
+    const focusSelectable =
+        revisionFocus !== undefined &&
+        (summaryUnit?.revisions ?? []).some((revision) => revision.id === revisionFocus.revision.id);
     // U-13 / D-24 — the Author's pick among the Summary's competing revisions.
     const onSelectRevision = actions.selectRevision
         ? (unitRef: string, revisionId: string) => void actions.selectRevision?.(unitRef, revisionId)
@@ -112,9 +128,11 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                             story={story}
                             summary={view.summary}
                             revisions={revisions}
+                            onRecordRevisionId={onRecordRevision?.id}
                             recommendedRevisionId={recommended}
                             onSelectRevision={onSelectRevision}
                             focus={revisionFocus}
+                            focusSelectable={focusSelectable}
                             readyForReview={summaryReadyForReview(view)}
                             sampling={story.summary_sampling}
                             readers={story.summary_readers}

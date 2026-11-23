@@ -40,7 +40,13 @@ export const REPORT_TOOLS = [
     // Their write IS the report — appending the two names is what keeps those runs out of loop
     // detection without widening the set to every mutating tool.
     'structureSeed',
-    'writeKnowledge'
+    'writeKnowledge',
+    // D-51: the Researcher's ZERO-WRITE report. A pass that was dispatched and concluded "nothing
+    // needs research" has no `writeKnowledge` to end with, and a run that reports nothing is a no-op
+    // turn counted against the Story (S-4) — which would re-dispatch the same question forever. This
+    // name is ALSO in `READ_TOOLS` below: "did this touch the store" and "did this run report" are
+    // different questions, and a report that writes nothing answers the first one as a read.
+    'reportNoResearch'
 ] as const;
 
 /** Reads and lookups: these execute for real everywhere, including inside a panel agent (D-38). */
@@ -63,7 +69,13 @@ const READ_TOOLS = [
     'describeTool',
     'compareRevisions',
     'searchWeb',
-    'fetchPage'
+    'fetchPage',
+    // D-51: `reportNoResearch` writes NOTHING — it is a report whose whole content is "the pass found
+    // nothing to record". Classified as a read so a D-38 panel agent answers it for real rather than
+    // proposing a write that does not exist; `isReportTool` still says the run reported (S-4), because
+    // "did this touch the store" and "did this run report" are different questions (see REPORT_TOOLS).
+    // The name-prefix heuristic cannot catch it — `report*` is not a read prefix — so it is listed.
+    'reportNoResearch'
 ] as const;
 
 /** Name prefixes that identify a read (T-7/T-8 reads are the only tools that never write). */

@@ -168,7 +168,30 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
 
         const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body as { sampling: unknown };
 
-        expect(view.sampling).toEqual({ round: 1, history: [] });
+        // `round` is the last COMPLETED round and `active_round` is the round in flight; before the first
+        // selection they are the SAME number (T12/P1), which is exactly why the client may not derive one
+        // from the other.
+        expect(view.sampling).toEqual({ round: 1, active_round: 1, history: [] });
+    });
+
+    it('reports the reset counter as 0 while the in-flight round is 1 again (T12/P1)', async () => {
+        const world = makeApp();
+        const storyId = await createStory(world.app);
+        const row = world.store.stories.require(storyId);
+
+        // A backtrack reset `sampling_round` to 0 (engine.ts's `scrapPhasesAfter`) rather than deleting it.
+        // The view reports the stored 0 — the round whose SELECTION the Story carries, which is none — while
+        // supersession still measures against round 1, the round the reopened phase is sampling.
+        world.store.stories.update(
+            storyId,
+            { sampling_round: 0 },
+            { run_ref: null, why: 'seed: the Author reopened phase ① (§16.7)' },
+            [{ id: storyId, rev: row.rev }]
+        );
+
+        const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body as { sampling: unknown };
+
+        expect(view.sampling).toEqual({ round: 0, active_round: 1, history: [] });
     });
 
     it('caps the history at the last five rounds, newest first, and names the last selection', async () => {
@@ -186,8 +209,11 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
         const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body as { sampling: unknown };
 
         expect(view.sampling).toEqual({
-            // The loop's `sampling_round` is the last COMPLETED round (§6.6); the in-flight one is 8.
+            // The loop's `sampling_round` is the last COMPLETED round (§6.6); the in-flight one is 8, and
+            // the projection sends BOTH because supersession and the deep review ask different questions
+            // (T12/P1).
             round: 7,
+            active_round: 8,
             // The winner of round 7 with the counts that won it — read off the history line, because
             // the selection commit hard-deletes the losers (P13/D-22).
             selected: { revision_id: 'revision_7a', critical: 7, high: 0 },
@@ -234,6 +260,7 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
 
         expect(view.sampling).toEqual({
             round: 2,
+            active_round: 3,
             history: [
                 {
                     round: 2,

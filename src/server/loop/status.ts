@@ -25,18 +25,22 @@ import {
     findingsAwaitingAuthor,
     findingsCreatedSince,
     ideasToVerify,
+    isSupersededSummaryDraft,
     last,
     latestJournalSeq,
     liveRuns,
     loopStory,
     repeatIdeas,
-    researchClosed,
+    researchGate,
     roundRevisions,
-    SAMPLING_RETRY_ALLOWANCE,
     sampleAttempts,
     samplingArmed,
+    // T12/P3: the drain's sampling clause reads the ACTIVE wave's attempt count against the engine's own
+    // cap helper, so both numbers come from the same definitions `./work` and `./records` dispatch by.
+    samplingCapOf,
     samplingRoundOf,
     samplingSizeOf,
+    samplingWaveOf,
     screensFor,
     screeningSizeOf,
     selectedSummaryRevision,
@@ -114,7 +118,7 @@ export const ideasAwaitingVerification = (store: Store, story: Story): Idea[] =>
 export function drainPreconditions(store: Store, story: Story): { met: boolean; unmet: string[] } {
     const tasks = dispatchableTasks(store, story.id);
     const unconfirmed = unconfirmedBlockingFindings(store, story);
-    const competing = unitsWithCompetingRevisions(store, story.id);
+    const competing = unitsWithCompetingRevisions(store, story);
     const pendingDrafts = unitsWithPendingRevisions(store, story.id);
     const unverified = ideasAwaitingVerification(store, story);
     // A Writer that has not filed a revision yet is invisible to `unitsWithPendingRevisions`: the
@@ -157,7 +161,8 @@ const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
  * Phase ①'s stage-by-stage drain reasons (documents/phase-1-research-pipeline.md §6.7):
  *
  *   1. no accepted Seed Brief for the CURRENT Seed (`seed_hash` mismatch counts as none);
- *   2. the brief's research pass has no closed run;
+ *   2. the brief's research pass has no closed run — and D-51: a brief whose `research_questions`
+ *      list is EMPTY WAIVES that pass, so a waived Story owes no research row and never reports this;
  *   3. the in-flight sampling round is unfinished — a live sample/screen, a drafted sample short of
  *      its screening passes, or fewer samples than the size while the retry allowance remains.
  *
@@ -177,7 +182,11 @@ function phase1Unmet(store: Store, story: Story): string[] {
         return unmet;
     }
 
-    if (!researchClosed(store, story, brief)) {
+    // D-51: only a brief that OWES a research pass can hold the drain here. `records.ts:researchGate`
+    // answers `waived` when the Editor's `research_questions` list is empty, and a waived Story must
+    // read as drained with no research row at all — this is the same predicate `work.ts`'s gates 2 and
+    // 3 read, which is what keeps generation and this probe (§6.7) telling one story.
+    if (researchGate(store, story, brief) === 'needed') {
         unmet.push(
             "the Seed Brief has no closed research pass — the Researcher has not recorded the Knowledge it depends on (§6.4 step 2)"
         );
@@ -196,8 +205,14 @@ function phase1Unmet(store: Store, story: Story): string[] {
             `${live.length} sampling/screening run${live.length === 1 ? '' : 's'} still in flight (§6.4 steps 3-4)`
         );
 
+    // T6/R2b: a draft the loop has already set aside is not owed screening either — the screening job
+    // is not offered for it (`work.ts:phase1PipelineCandidates` gate 4), so counting it here would put
+    // the drain probe and the work queue back into the contradiction this pass is fixing.
     const owed = summaryRevisions(store, story.id).filter(
-        (revision) => revision.state === 'drafted' && screensFor(store, revision.id).length < screeningSizeOf(story)
+        (revision) =>
+            revision.state === 'drafted' &&
+            screensFor(store, revision.id).length < screeningSizeOf(story) &&
+            !isSupersededSummaryDraft(store, story, revision)
     ).length;
 
     if (owed > 0)
@@ -208,9 +223,15 @@ function phase1Unmet(store: Store, story: Story): string[] {
     const round = samplingRoundOf(story);
     const have = roundRevisions(store, story.id, round).length;
     const size = samplingSizeOf(story);
-    const attempts = sampleAttempts(store, summary.id, round);
+    // T12/P3 — the count has to be the one the ENGINE spends its cap by: the ACTIVE wave's attempts
+    // (`work.ts:507` and `records.ts:samplingLegClosed` both pass `samplingWaveOf(story)`, because the
+    // Author's clear of a sampling escalation re-arms the round in a NEW wave, T12/E). Read without the
+    // wave, `sampleAttempts` returns the whole round family — every wave's spent runs — so a round the
+    // Author just re-armed looked spent and this sentence went silent over samples the sweep is about to
+    // dispatch, while a round whose NEW wave has spent its cap looked the same as one that had not.
+    const attempts = sampleAttempts(store, summary.id, round, samplingWaveOf(story));
 
-    if (samplingArmed(store, story, round) && have < size && attempts < size + SAMPLING_RETRY_ALLOWANCE)
+    if (samplingArmed(store, story, round) && have < size && attempts < samplingCapOf(story))
         unmet.push(
             `${have} of ${size} sample${size === 1 ? '' : 's'} exist for round ${round} and retries remain (§6.4 step 3)`
         );
@@ -477,7 +498,7 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // the phase is not eligible to advance at all (L-20, D-23), so the lock is not offered yet and the
     // Editor's job keeps the Story `ready`. Signing off over unchosen drafts would put the choice in
     // the Author's hands by default rather than by decision.
-    const competing = unitsWithCompetingRevisions(store, story.id);
+    const competing = unitsWithCompetingRevisions(store, story);
     // A draft whose Writer run closed short of a block is not competition yet: it is work the loop
     // still owes (§4.15), so a phase sign-off over it would park the Writer's own correction.
     const pendingDrafts = unitsWithPendingRevisions(store, story.id);

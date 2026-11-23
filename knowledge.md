@@ -31,7 +31,7 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 | --------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl`. `Store.empty()` / `Store.load(root)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`.                                                                      |
 | Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                                                       |
-| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
+| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Checker/Reader/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`, `reportNoResearch`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules. A refusal names its rule id and the row it refused on. |
 | Brief     | `src/server/run/brief.ts` | The artefact a tool-carrying crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2). A `toolMode: 'none'` run is given the compiled phase-① prompt instead (`run/phase1-prompt.ts`), and its hash is what the row carries. |
 | Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`) — EXCEPT a `toolMode: 'none'` run (phase ①'s samples and screens), which calls `chat.complete` directly from `run/executor.ts`, gets no tool context and therefore opens no engine thread.                                                                 |
 | Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ①'s pipeline is `phase1PipelineCandidates`), phase ①'s deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`), drain and completion (L-35b, L-37, L-25), directives, backtrack, kill. |
@@ -89,9 +89,11 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 - **A `toolMode: 'none'` run has no engine thread.** Phase ①'s `sample_unit`/`screen_samples` runs
   call `chat.complete` directly (`run/executor.ts:runStructuredTurn`): the run row is the ordinary
   `spawning → working → torn_down` record and the request/answer pair is retained in the thread log
-  (`single_<runId>`), but `GET /agents` builds `working` from live ENGINE threads — so a sampling run
-  never shows as a live tile thread. It shows in `recent` (read from run rows) and in the employee's
-  retained thread history.
+  (`single_<runId>`). `GET /agents`'s live `working` list is the harness's engine threads MERGED with
+  the live run rows (`run/story-engine.ts:StoryHarnessManager.mergeJournaledRuns`, which drops a row
+  that a live thread of that kind already names), so a sampling run DOES hold one working tile
+  thread — keyed `run_row:<runId>` — while it runs, and afterwards reads in `recent` (run rows) and
+  in the employee's retained thread history.
 - **A phase's unit ref differs per phase**: phase ① is the Summary row id, phase ②'s set-level
   work is the empty ref `''`, phase ③'s units are chapter ids. `loop/work.ts` treats `''` as the
   set, and a `ref === ''` unit is not "already drafted" (see Fixes below).
@@ -375,13 +377,24 @@ carries the employee roster. The three columns stay in place on every view. The 
   requires, so the rail can tick a phase the sweep would still hold.
   Phase ①'s history is a FLAT `Revision 1 … N` list: `api/projections.ts`
   returns the live revisions plus the losers it recovers from the journal's delete payloads
-  (marked `discarded`), `story-nav.ts:summaryRevisions` labels them in creation order, and the
-  pane shows the Summary on record, the two sampling counts and that list. The engine's pick is the
+  (marked `discarded`), and `story-nav.ts:summaryRevisions` labels them in creation order. The RAIL
+  shows all of them and a rail click opens any one — parked rows and their `discard_reason` included.
+  The pane's own overview shows the Summary on record, the two sampling counts, and exactly ONE
+  revision card: the row `story-contract.ts:selectedSummaryRevision` names, i.e. the newest
+  `state: 'selected'` draft. Several rounds leave several `selected` rows and only the last is on
+  record, which is why the overview is keyed on that id and not on `sampling.selected.revision_id`
+  (the Author's override changes the row's state without appending sampling history). An older round's
+  accepted row, a `drafted`/`pending` draft and a parked loser print no card, and with nothing
+  accepted the pane says so instead of falling back to the drafts. The engine's pick is the
   row with `state: 'selected'` (and the `sampling` slice's `selected` counts); "Editor recommends"
   appears only when a verdict was filed **on a draft** with `hard_pass` and
   `recommendation: 'advance'` — phase ①'s deep-review Readers file against the unit, so normally
-  none does. Every `drafted` draft still has its own Select
-  (`POST /stories/:id/revisions/:revisionId/select`, D-24), which is the Author's override.
+  none does. That verdict names a CANDIDATE, and R1 keeps candidates off the overview, so the mark and the
+  Author's Select (`POST /stories/:id/revisions/:revisionId/select`, D-24) both sit on the revision the rail
+  OPENS (T4): `StoryView` offers the Select only to a row `summaryRevisionUnit` lists — reviewable and not
+  superseded — and the row's own state is the second gate, so the accepted row reads `Selected`, a `pending`
+  block `Pending` and a parked one `Discarded`, each disabled. The overview's single card therefore carries
+  neither the mark nor an enabled write.
 - **Characters** — `CharactersPane`. It reads `view.cast` (the §4.5 sheet added to the Story view
   beside `view.ledger`) and shows want / need / arc / voice / state now. It can ask the Editor to
   start or update the cast through the directive route; **Characters is a supporting phrase, not
@@ -548,11 +561,12 @@ round N+1's prompt carries BASE REVISION + FIX TASKS    → …until a clean rou
 
 **The Seed is never edited (P5).** `structureSeed` writes a DERIVED `seed_briefs` row — logline,
 protagonist, want/need, obstacle, stakes, setting, world_rules, promise, tone hints, constraints,
-open questions — and refuses a `seed_hash` that is not the current Seed's, naming P5. One accepted
-brief per Story; a re-dispatched Editor converges on the existing row, and a new Seed hash
-supersedes the old brief in the same commit. A brief whose hash no longer matches the Seed counts as
-NO brief (`loop/records.ts:currentSeedBrief`), so an Author edit re-arms the structuring and every
-later stage waits.
+open questions, and the `research_questions` list that decides the next stage (D-51) — and refuses a
+`seed_hash` that is not the current Seed's, naming P5. One accepted brief per Story; a re-dispatched
+Editor converges on the existing row, and a new Seed hash supersedes the old brief in the same
+commit. A brief whose hash no longer matches the Seed counts as NO brief
+(`loop/records.ts:currentSeedBrief`), so an Author edit re-arms the structuring and every later
+stage waits.
 
 **The Researcher is the fifth employee.** `researcher-story` runs at Rank A, holds the web and the
 whole catalogue, and writes only `knowledge` (plus a queue task). `writeKnowledge` records one
@@ -562,7 +576,34 @@ accessed_at}` citation (T-10), and a `fingerprint` that dedupes (D-16: a repeat 
 merges the sources and takes the new triage). `readKnowledge` is the bounded lookup (40 rows,
 `critical` → `low`, newest first within a level) the deep-review Reader and Editor hold;
 `retireKnowledge` marks a stale entry `low` and appends `(retired)` to its detail instead of deleting
-it. Every session holds all four tools (T-6a); §7's permission rows decide who may call them.
+it; `reportNoResearch` closes a pass that found nothing to record (D-51, below). Every session holds
+all five tools (T-6a); §7's permission rows decide who may call them.
+
+**Research happens only when the Editor said it must (D-51).** `structureSeed` REQUIRES
+`research_questions` — an array of world-fact questions the draft cannot get from the Seed alone, or
+`[]` to say the premise is self-contained and the leg is waived. Omitting it is a T-11 refusal, so an
+Editor can never leave the question undecided; and nothing in the loop reads the title, the genre or
+the prose to guess it. `loop/records.ts:researchGate()` is the ONE implementation of the rule
+(`'waived' | 'needed' | 'closed'`): `phase1PipelineCandidates` holds the sampling gate on it,
+`phase1Unmet`'s drain clause reads it, and a waived brief queues no `wi_research_<rev>` at all —
+the `research` family simply never appears in the status panel. A stored brief with NO field is a row
+written before the field existed and keeps D-40's gate (`needed`), never a waiver (D-5). A non-empty
+list scopes the pass: the Work candidate's `note` carries the exact questions, so the Researcher
+answers those and not a guess.
+
+When the pass IS dispatched and the reading concludes there is nothing to record — the premise is
+self-contained after all, or `readKnowledge` already answers the questions — the Researcher calls
+`reportNoResearch(rationale)`: researcher-only, zero writes (no Knowledge row, because
+`writeKnowledge` demands a citation and an invented fact is worse than none — P7), and the call is
+classified READ **and** REPORT (`run/catalogue.ts`): `READ_TOOLS` because it touches no record, which
+is what makes a D-38 panel agent ANSWER it rather than propose a write that does not exist, and
+`REPORT_TOOLS` because it is the run's report — the distinction S-4 counts, so the run is
+`no_op: false` and the loop does not burn its attempts re-dispatching a closed pass. A silent end,
+with neither tool called, stays a counted no-op (S-4) — but it still CLOSES the pass, because
+`records.ts:researchClosed` reads any closed run of `wi_research_<brief.rev>`, not the tool call: the
+Researcher is not bought again, and what the tool adds is the reason on the record plus the
+`no_op: false` that keeps S-4's no-progress stop off a Story whose pass did answer. That silence is
+the failure mode the tool exists to prevent.
 
 **Sampling is tool-less, one turn and the same prompt for every sample.** `summary_sampling`
 (standard 3) is how many samples a round owes. Each `sample_unit` run is one assistant turn with an
@@ -590,7 +631,8 @@ the attempt counter — not the row count — is what buys the retry.
 sample/screen settlement and once per sweep. It fires only when the in-flight round
 (`sampling_round + 1`) has a `drafted` revision, no revision of it is already `selected`, the round
 OWES NO MORE SAMPLES — the full `summary_sampling` set exists, or the round's sample attempts (current
-wave) reached `summary_sampling + 3` so the survivors are all there will be — every `drafted` sample is
+wave) reached `summary_sampling + 3` so the survivors are all there will be, or the round's sampling
+LEG has closed (D-52, below) — every `drafted` sample is
 SCREENED (its full `summary_readers` set, or its screening attempts reached `summary_readers + 3`, in
 which case the selection commit opens the partial-screening escalation), and no live
 `wi_sample_*`/`wi_screen_*` run remains.
@@ -599,10 +641,85 @@ sample** (creation order; id last). One commit then installs the winner's six pr
 Summary — `premise`, `promise`, `theme`, `tone`, `ending`, `world_rules`, and NEVER `chapter_count` —
 marks it `selected` with its `issue_counts`, appends the round's `sampling_history` line BEFORE any
 delete, hard-deletes every other revision of the round and every `sample_reviews` row pointing at
-one, marks the open `fix` tasks `done`, closes each finding they named — while still
+one — and, since D-52, every `drafted`/`competing` leftover of an EARLIER round too, together with the
+findings that named only those drafts (retired to `discarded`) and the open tasks they queued (closed
+`wontfix`) — marks the open `fix` tasks `done`, closes each finding they named — while still
 `confirmed`/`approved` — as `fixed`, and advances `sampling_round`. The
 losers exist afterwards only as that history line and as the journal's delete payload (the Story view
-still renders them as `discarded`); no route restores one.
+still renders them as `discarded`); no route restores one. Rows the TOOLS parked as `discarded`
+(`commitSelection` sets losers aside for the dashboard) are never deleted by the sweep —
+`records.ts:isReviewableDraft` is that guard.
+
+**A disarmed round is still a round (D-52).** The arming rule gates NEW samples, never a round that
+already sampled. A refinement round's leg can close under itself — a deep review files an unconfirmed
+`critical`/`major` while the round's first draft is still being screened, and `samplingArmed` then
+refuses the next sample — and if selection waited on the full set, the round would strand: the sign-off
+needs a selection that can never happen, and the loop waits on work it stopped buying itself. Two facts
+are read separately from the ledger, and deliberately at DIFFERENT scopes: the cap arm counts the CURRENT
+WAVE (`records.ts:sampleAttempts` at `stories.sampling_wave` — that is the re-arm contract of T12/E), while
+`records.ts:samplingRoundStarted` asks the ROUND question wave-agnostically: any
+`wi_sample_<summary>_<round>_*` key, current wave or not (`records.ts:sampleRoundPrefixOf`), because a wave
+bump is a retry of the same round and the drafts made before it are still this round's.
+`records.ts:samplingLegClosed` is the pair: that round spent the cap, OR started and is no longer armed. A round
+that never started keeps refusing, exactly as D-49 says; a round that started has a CLOSED leg, and the
+selection proceeds on the drafts that exist. Screening never depends on arming — what the leg closing
+cancels is a NEW sample, not the passes an existing draft owes — and D-33 still holds the sign-off while
+a finding is unconfirmed, so the round is shorter, not weaker. The same settlement then retires the
+earlier rounds' leftovers (§16.6 step 4 of D-52): `records.ts:isSupersededSummaryDraft` (round < the
+loop's current round, not `selected`, not already parked `discarded`), and rounds are read from BOTH
+`revisions.round` and the `sampling_history` lines, because the sweep's delete drops the rows and the
+history is what proves a round was chosen past. Those drafts, their reviews, the findings that named
+only them (`discarded`) and the open tasks those findings queued (`wontfix`) go in the same commit —
+otherwise a dead draft's review keeps blocking the sign-off and its task re-arms the next round forever.
+
+**A finding belongs to one draft (D-53).** Phase ① reads the owner off `related_refs` with
+`records.ts:findingRevisionScope`, and the answer is one of `selected` / `superseded` / `artifact`:
+
+- `selected` — it names the revision the Summary row carries. It blocks and it is verified.
+- `superseded` — every ref names a Summary draft this Story already had (its row, or the round's
+  `sampling_history` line names it) and none names the carried draft. The complaint describes a text the
+  Summary no longer holds: it stays `unconfirmed` for the Author, and it neither blocks a gate nor buys
+  another verification pass, because the pass re-reads the KEPT draft and can never decide it.
+- `artifact` — no ref names a draft, or a ref names something that is not one (the Summary row itself, a
+  criterion, a chapter). L-11a's whole-Story shape keeps its full blocking weight and is never silently
+  dropped; an id NOTHING names counts as `artifact`. A draft the sweep DELETED is the exception the audit
+  covers: `records.ts:summaryRevisionRounds` reads `revisions.round` AND the `sampling_history` lines, so an
+  id a history line still names is `superseded`, never `artifact`.
+
+The scope feeds the sign-off's blocking set (`summaryBlockingFindings`), the verification queue
+(`unconfirmedBlockingFindings`), the drain probe and the selection's retirement, so no two gates disagree
+about which draft a complaint describes — and it feeds `status.ts:unitsWithCompetingRevisions`, which is
+why a set-aside draft stopped holding both the sign-off and the drain. Because that reading is the only
+attribution a finding carries, `raiseFinding` ASKS FOR IT AT FILING in phase ①: on a Summary target, in
+phase `summary`, once a selection has installed a draft, the raise is refused naming **D-33**
+(`field: 'related_refs'`, `expected: [the carried id]`) unless the refs name that revision. A
+`stories`-targeted whole-Story finding, a chapter/plotline finding, and a filing before the round's first
+selection stay free — and the refusal runs BEFORE the D-16 fingerprint dedupe, so asking the caller to
+attribute an existing complaint must never silently fold it into the old row.
+
+And the queue is BOUNDED. The verify family is anchored per finding (`wi_verify_finding_<id>_`, the
+trailing `_` so `finding_1`'s budget is never spent by `finding_10`) and stops at `FINDING_VERIFY_CAP` =
+one pass plus `SAMPLING_RETRY_ALLOWANCE` retries (4 today). An undecided `verify_findings` run leaves the
+finding `unconfirmed`, which is a D-33 hold, so an uncapped queue bought the same question on every sweep
+forever: never drained, never stalled, never explained. The stalled list excludes two findings besides the
+superseded-draft case: one whose LAST bought pass is still live (the budget is spent on the run count, and
+opening an Author question over the head of an Editor run that has not answered would have to close a row that
+should never have opened — `records.ts:verifyFindingLive`), and one whose scope is a set-aside draft. On the
+sweep after the budget is spent, with neither exclusion holding,
+`engine.escalateVerifyStall` opens ONE Author escalation — "the crew asked you", `owner_role: 'author'`,
+`finding_ref` set — and closes it (`done`) as soon as the finding leaves `unconfirmed`. The reuse lookup that
+keeps it at ONE per finding matches the row's `finding_ref`, not just the title, and the title prefix it
+matches on is anchored with the ` —` separator: ids come from one counter, so a bare `finding_1` prefix is
+also a prefix of `finding_10`, and one finding's question would otherwise be handed to another finding's
+sweep. The row is
+`blocked`, not `open`: `decideStory`'s step 4 renders a `blocked` row as the Author question, while an
+`open` row is dispatchable work that would leave the Story `ready` with nothing to run
+(`loop/records.ts:OPEN_TASK_STATES` counts `open` and `claimed` only).
+`records.ts:findingsVerifyStalled` is the one list both halves read, so generation and escalation cannot
+disagree about which findings stalled — and that is also why the OPENING of the row is phase-scoped while the
+CLOSING is not: outside phase ① the list is empty by definition, so `engine.escalateVerifyStall` still runs
+its close pass and retires a `blocked` row whose finding was decided after the Story moved on (the row would
+otherwise sit on the tray forever, holding the queue the sweep already answered).
 
 **The deep review is where the Readers get their tools back.** Once a round has selected, the winner
 gets `summary_readers` `check_unit` passes — `wi_review_<selected>_a<pass>` — rotating over
@@ -628,16 +745,27 @@ deliberately not owed, and the deep review closed. Both resets are explicit: `ed
 backtrack to `summary` set `sampling_round` to 0, `sampling_history` to empty and `sampling_wave` to
 0, because both scrap the revisions and samples those fields describe.
 
+Two exclusions keep the round's own leftovers from becoming a permanent stop (D-52/D-53), and they are
+applied in BOTH the sign-off gate and `phase1Unmet` — the two read the same predicates, so the UI cannot
+offer the button and name the same row as unmet work: a `drafted`/`competing` Summary revision of a round
+the loop has already chosen past is a leftover, not competition, and is not owed screening
+(`records.ts:isSupersededSummaryDraft`, used by `status.ts:unitsWithCompetingRevisions`); and a finding
+whose refs name only such a draft is not an unconfirmed blocker (`records.ts:summaryBlockingFindings`, D-53) —
+while a finding naming NO draft keeps its whole-Story weight and still blocks when its target is the Summary
+row itself (L-11a). The round's clean Stop is therefore a real state: the
+selected draft reviewed, the crew asked the Author what to change, and the Story `pending` with
+`phase_signoff` offered.
+
 The job keys, which are the whole ledger:
 
 | job | key | notes |
 | --- | --- | --- |
 | `structure_seed` | `wi_structure_seed_<seedHash>` | one per Seed hash; priority 0; binds `editor-seed-structure` explicitly |
-| `research` | `wi_research_<brief.rev>` | one per accepted brief revision; priority 0; `researcher-story` |
+| `research` | `wi_research_<brief.rev>` | one per accepted brief revision; priority 0; `researcher-story`; **skipped entirely when the brief's `research_questions` is `[]` (D-51)** — a legacy brief without the field keeps the pass |
 | `sample_unit` | `wi_sample_<summary>_<round>_<attempt>`, or `wi_sample_<summary>_<round>_w<wave>_<attempt>` after a re-armed wave | `<attempt>` is 1-based and store-derived; ONE per sweep per round while no sampler is live |
 | `screen_samples` | `wi_screen_<revision>_<attempt>` | one owed pass per drafted sample; per-revision family |
 | `check_unit` (deep review) | `wi_review_<selected>_a<pass>` | one per pass, rotating the four Reader angles; tools ON |
-| `verify_findings` | `wi_verify_finding_<finding>_<n>` | `<n>` is the dispatch generation; one thread per finding; binds `editor-general` (FIRST in `DEFAULT_ASSIGNMENT`) |
+| `verify_findings` | `wi_verify_finding_<finding>_<n>` | `<n>` is the dispatch generation; one thread per finding; binds `editor-general` (FIRST in `DEFAULT_ASSIGNMENT`); the FAMILY `wi_verify_finding_<finding>_` is the budget — one finding gets at most `FINDING_VERIFY_CAP` passes (D-53), then one `blocked` Author escalation |
 
 The deviations from the design document, stated plainly because the docs describe the CODE:
 
@@ -665,21 +793,47 @@ The deviations from the design document, stated plainly because the docs describ
    round also refuses to select while samples are genuinely still owed: the full `summary_sampling`
    set must exist, or the sampling cap must be spent (T12/D).
 7. **Sign-off and drain also wait for every deep-review pass of the selected revision**
-   (`records.ts:deepReviewPassesOwed`), so the phase is not signed on a half-reviewed draft.
+   (`records.ts:deepReviewPassesOwed`), so the phase is not signed on a half-reviewed draft — but only
+   when that revision IS the review target. `records.ts:isDeepReviewSelection` (the draft's `round` is
+   the Story's `sampling_round`) is the ONE condition both the `wi_review_*` queue and the debt read,
+   so selecting an OLDER-round draft from the Summary pane cannot owe `summary_readers` passes the loop
+   will never dispatch — the sign-off would wait on a debt nobody can pay.
 8. **`editSeed`/backtrack-to-summary reset `sampling_round`, `sampling_history` and `sampling_wave`.**
 9. **C-16/C-17 were NOT added.** The Goal's summary level is still C-14/C-15; the Seed Brief is an
    input, never the contract C-14 measures against.
-10. **A no-tool run does not appear as a live engine thread on the employee tile.** It calls
-    `chat.complete` directly; its run row (`spawning → working → torn_down`) and its retained thread
-    record (`single_<runId>`) are the history, and `GET /agents`' `working` list is built from engine
-    threads only.
+10. **A no-tool run has no engine THREAD, yet it still counts as one live tile thread.** It calls
+    `chat.complete` directly, so the harness has no thread to show; `GET /agents`' `working` list
+    MERGES the live engine threads with the live run rows
+    (`run/story-engine.ts:StoryHarnessManager.mergeJournaledRuns`, deduped by `run_id`), which is
+    what stops the tile reading `idle` while such a run works. Its run row
+    (`spawning → working → torn_down`) and its retained thread record (`single_<runId>`) are the
+    history once it closes.
+11. **Selection waits on the round's sampling LEG, not on the arming rule (D-52).** The arming rule still
+    gates every NEW sample, but a round that already sampled and was then disarmed (or spent its cap) is
+    selected on the drafts it has — `records.ts:samplingLegClosed` — and the same commit retires the
+    earlier rounds' leftover drafts with the findings that named only them (`discarded`) and the open tasks
+    those findings queued (`wontfix`). Without the first half a round strands with nothing running and
+    nothing offered; without the second half a dead draft's review holds the sign-off and its task re-arms
+    the next round forever.
+12. **A finding's `related_refs` decide what they block, and the verify family is capped (D-53).**
+    `records.ts:findingRevisionScope` separates the carried draft, a superseded draft and a non-draft ref;
+    a superseded finding stays on the record and blocks/verifies nothing, the whole-Summary shape keeps its
+    weight, `raiseFinding` asks for the carried revision at filing (D-33), and one finding gets at most
+    `FINDING_VERIFY_CAP` verification passes before the loop stops and asks the Author (a `blocked`
+    escalation, `finding_ref` set, closed when the finding leaves `unconfirmed`).
 
 The tests that pin all of it: `src/server/loop/phase1-research.test.ts` (the whole loop: gates,
 samples, screens, selection, truncation, round 2, sign-off),
+`src/server/loop/phase1-lifecycle.test.ts` (the round's STOP and its three stranding bugs: a clean round
+settles at "reviewed, ask the Author" with nothing queued, a disarmed round that already sampled still
+selects, findings and drafts that belong to a superseded revision stop blocking at the selection that
+retires them, and an undecided verification queue caps at four passes and escalates to the Author — driven
+by the rig's `crew.verifyReports` knob),
 `src/server/loop/phase1-gates.test.ts` (the degradation and retry rules: scrapped revisions take
 their screening reviews, screening exhaustion selects partially and escalates, no early selection,
 the wave re-arm, R8's negative gate), `src/server/loop/restart.test.ts` (a mid-round restart
 re-buys the lost sample under a new key and selects once), `src/server/loop/sample-select.test.ts`
 (the ranking), `src/server/run/phase1-prompt.test.ts` (the byte-stable hash, the importance filter,
-the round-2 sections), `src/server/integration/summary-sampling.test.ts` (the real server), and
+the round-2 sections), `src/server/tools/runtime.test.ts` (the phase-① `raiseFinding` attribution rule
+across all four ref shapes), `src/server/integration/summary-sampling.test.ts` (the real server), and
 `src/server/llm/structured.test.ts` (the transport fallback and the validator).

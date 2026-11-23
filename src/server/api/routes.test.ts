@@ -338,9 +338,11 @@ describe('§10.2 U-1 — the Stories panel', () => {
             downgrades: 0
         });
         // §10: a Story that has not been structured or sampled still answers both slices — a null
-        // brief (gate 1 has not run) and round 1 with no history, never absent keys.
+        // brief (gate 1 has not run) and round 1 with no history, never absent keys. T12: the slice also
+        // carries `active_round`, the round the loop is working — on a Story nobody has sampled yet that
+        // is round 1 as well, so the Author never sees "round 1 done" standing next to an empty history.
         expect(view.seed_brief).toBeNull();
-        expect(view.sampling).toEqual({ round: 1, history: [] });
+        expect(view.sampling).toEqual({ round: 1, active_round: 1, history: [] });
 
         const goal = view.goal as {
             phase_progress: string;

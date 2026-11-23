@@ -11,8 +11,19 @@
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
 import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
-import { buildRevisionUnits, isDecidedIdea, isPendingRevision, isReviewableRevision } from './story-contract';
-import type { RevisionUnit, StoryViewData } from './story-contract';
+import {
+    buildRevisionUnits,
+    findingAppliesToRevision,
+    findingRevisionScope,
+    isDecidedIdea,
+    isPendingRevision,
+    isReviewableRevision,
+    isSupersededSummaryDraft,
+    selectedSummaryRevision,
+    summaryBlockingFindings,
+    summaryScopeContext
+} from './story-contract';
+import type { FindingRevisionScope, RevisionUnit, StoryViewData } from './story-contract';
 
 /** The four reading phrases, in the Author's order. */
 export type StoryPhraseKey = 'summary' | 'characters' | 'plotlines' | 'chapters';
@@ -75,6 +86,9 @@ export function phraseLabel(spec: StoryPhraseSpec): string {
  * U-4's review step: the Summary is reviewable when its goal has passed (the loop has nothing
  * left to improve) or when the Author has already signed it. A locked Summary keeps its tick —
  * the rail should not make a signed artifact look unfinished.
+ *
+ * The defect check goes through `summaryBlockingFindings`, the SAME read `lockCheck` uses, so the tick
+ * and the Accept button can never disagree about which revision a finding sits on (T5).
  */
 export function summaryReadyForReview(view: StoryViewData): boolean {
     if (view.story.summary_locked) {
@@ -92,18 +106,9 @@ export function summaryReadyForReview(view: StoryViewData): boolean {
     if (!storyInSummaryPhase(view) || !prose || view.goal.failing.length > 0) return false;
     if (summaryHasCompetingRevisions(view)) return false;
 
-    const selected = selectedSummaryRevision(view);
-
-    if (selected === undefined) return true;
-
-    return !view.findings.some(
-        (finding) =>
-            (finding.state === 'confirmed' || finding.state === 'approved') &&
-            (finding.cost === 'critical' || finding.cost === 'major') &&
-            ((finding.related_refs ?? []).length === 0
-                ? finding.target_ref === summary?.id
-                : (finding.related_refs ?? []).includes(selected.id))
-    );
+    // No selected draft means the round has not settled yet, and there is no winner to hold a defect
+    // against; `summaryBlockingFindings` answers the empty case with an empty list.
+    return summaryBlockingFindings(view, selectedSummaryRevision(view)).length === 0;
 }
 
 function storyInSummaryPhase(view: StoryViewData): boolean {
@@ -114,6 +119,11 @@ function storyInSummaryPhase(view: StoryViewData): boolean {
  * The standalone Summary review unit U-13 renders. Only COMPETING drafts are offered: a revision
  * that is already `selected` is the Summary on record, and re-presenting it as a choice would
  * ask the Author to decide something twice. `undefined` when no draft is waiting.
+ *
+ * T11/F2: a `drafted`/`competing` row from an OLDER round is not an offer either. The loop set it
+ * aside when it chose this round's winner, so `POST /revisions/:id/select` is the one thing the Author
+ * cannot meaningfully do with it — the same exclusion `work.ts`'s candidates and
+ * `records.ts:isSupersededSummaryDraft` apply.
  */
 export function summaryRevisionUnit(view: StoryViewData): RevisionUnit | undefined {
     const unit = buildRevisionUnits(view).find((candidate) => candidate.unitKind === 'summary');
@@ -122,7 +132,10 @@ export function summaryRevisionUnit(view: StoryViewData): RevisionUnit | undefin
         return undefined;
     }
 
-    const competing = unit.revisions.filter(isReviewableRevision);
+    const context = summaryScopeContext(view);
+    const competing = unit.revisions.filter(
+        (revision) => isReviewableRevision(revision) && !isSupersededSummaryDraft(view, revision, context)
+    );
 
     return competing.length === 0 ? undefined : { ...unit, revisions: competing };
 }
@@ -177,9 +190,10 @@ function newestAdvancingVerdict(verdicts: Verdict[]): Verdict | undefined {
  *     …
  *     - Revision 6
  *
- * Every round writes three complete drafts (Revision 1, 2, 3), the Editor keeps one and marks the
- * other two `discarded`, and the next round writes three more (Revision 4, 5, 6) from the kept
- * text. The rows are never deleted; the rail is the Author's record of every version tried.
+ * Every round writes three complete drafts (Revision 1, 2, 3), the engine's deterministic selection
+ * keeps one (§16.6, D-47 — no Editor picks a column in phase ①), and the drafts it did not keep read as
+ * `discarded` history. The rows are never deleted by the rail; the rail is the Author's record of every
+ * version tried.
  */
 export interface SummaryRevisionEntry {
     revision: Revision;
@@ -187,10 +201,32 @@ export interface SummaryRevisionEntry {
     index: number;
     /** Findings the Readers filed against THIS revision. */
     findings: Finding[];
+    /**
+     * How each listed finding is scoped, keyed by finding id (T11/F6). The pane needs it because the
+     * finding's own refs do not read as prose: a whole-artifact row (`records.ts:findingRevisionScope`
+     * answers `artifact`) is a statement about the Summary, and labelling it "on this revision" on every
+     * card would put the same sentence under six different drafts. `selected`/`superseded` rows name the
+     * draft they are about, and only that card may claim them.
+     */
+    findingScopes: Record<string, FindingRevisionScope>;
     /** The Editor's verdicts that judged this revision or one of its findings. */
     editorVerdicts: Verdict[];
     /** The Editor's note if this revision won a selection. */
     editorNote?: { note: string; at: string };
+    /**
+     * Why a `discarded` draft was parked, for the rail's marker and the opened revision (T4/R1).
+     *
+     * Derived from `Revision.discard_reason` — the explanation the selection commit writes alongside the
+     * state. It is TRIMMED, it is read only while the row's state really is `discarded` (a draft a backtrack
+     * re-selects keeps its old reason on the record, and this is not a statement about a draft on record),
+     * and it is ABSENT when the row carries none, because legacy rows (and blank writes) predate the field:
+     * the dashboard may mark a draft as discarded without a reason, but it may never invent one. It is NOT
+     * `selection_note` — that one belongs to the draft that WON, and putting it on a loser would present the
+     * winner's praise as the loser's fault. The wording stays NEUTRAL ("Discard reason", never "Editor's"):
+     * phase ① settles a round by the deterministic selector (§16.6, D-47), so nothing in a phase-① discard
+     * is an Editor's sentence.
+     */
+    discardReason?: string;
 }
 
 const SUMMARY_REVISION_PREFIX = 'revision:';
@@ -232,6 +268,10 @@ export function summaryRevisions(view: StoryViewData): SummaryRevisionEntry[] {
 
     const verdicts = view.verdicts ?? [];
     const runById = new Map<string, Run>(view.runs.map((run) => [run.id, run]));
+    // ONE scope read for the whole list (T11/F4): the rail's badges, the pane's rows and their copy, the
+    // review tick and `lockCheck`'s blocker count all answer from the same round/draft map, so a finding
+    // cannot be a blocker on one surface and invisible on another.
+    const context = summaryScopeContext(view);
     const drafts = view.revisions
         .filter((revision) => revision.unit_kind === 'summary' && revision.unit_ref === summary.id)
         .sort(byDraftAge);
@@ -250,9 +290,23 @@ export function summaryRevisions(view: StoryViewData): SummaryRevisionEntry[] {
             .filter(
                 (finding) =>
                     findingIds.has(finding.id) ||
-                    (finding.related_refs ?? []).includes(revision.id)
+                    // T5 + T11/F4: the pane's attribution rule IS `findingAppliesToRevision`, the same one
+                    // the lock counts blockers with. A whole-artifact row — no refs, or refs that name the
+                    // Summary row, a brief or a criterion rather than a draft — is therefore listed HERE
+                    // too, on the selected revision, exactly where the Accept button says it is holding
+                    // the lock; a row naming another draft is listed on THAT draft and never on the
+                    // winner. Neither half may be silently dropped.
+                    findingAppliesToRevision(finding, revision.id, summary.id, context)
             )
             .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+
+        // The scope rides with the row so the pane's copy is the SAME decision, not a second guess
+        // (T11/F6). Only the listed rows are keyed; a retired draft's findings are still visible there.
+        const findingScopes: Record<string, FindingRevisionScope> = {};
+
+        for (const finding of findings) {
+            findingScopes[finding.id] = findingRevisionScope(finding, context);
+        }
 
         const editorVerdicts = verdicts.filter((verdict) => {
             const run = verdict.run_ref === undefined ? undefined : runById.get(verdict.run_ref);
@@ -267,48 +321,62 @@ export function summaryRevisions(view: StoryViewData): SummaryRevisionEntry[] {
             );
         });
 
+        // T4/R1: the discard explanation is narrow on purpose, twice over.
+        //   - it is read ONLY while the row really is `discarded`: a draft a backtrack re-selects keeps its
+        //     old reason on the record, and showing it there would tell the Author this draft is parked when
+        //     it is the one on record;
+        //   - it is TRIMMED and OMITTED when blank, so a legacy `discarded` row (no field, or a blank write)
+        //     yields `undefined` and the surfaces mark the discard without fabricating a reason (L-17).
+        const discardReason = revision.state === 'discarded' ? (revision.discard_reason ?? '').trim() : '';
+
         return {
             revision,
             index: position + 1,
             findings,
+            findingScopes,
             editorVerdicts,
             ...((revision.selection_note ?? '').trim().length > 0
                 ? { editorNote: { note: (revision.selection_note ?? '').trim(), at: revision.updated_at } }
-                : {})
+                : {}),
+            ...(discardReason.length > 0 ? { discardReason } : {})
         };
     });
 }
 
-/** The revision the Summary row carries, for the "final Summary" decision. */
-export function selectedSummaryRevision(view: StoryViewData): Revision | undefined {
-    const summary = view.summary;
+/**
+ * The revision the Summary row carries, for the "final Summary" decision (§6.6).
+ *
+ * The IMPLEMENTATION moved to `story-contract.ts` (T5): the lock needs the same draft and cannot import
+ * this module (story-nav imports story-contract, not the reverse). The name stays re-exported here so
+ * every rail/pane call site keeps reading its own module.
+ */
+export { selectedSummaryRevision };
 
-    if (summary === null || summary === undefined) return undefined;
-
-    return view.revisions
-        .filter(
-            (revision) =>
-                revision.unit_kind === 'summary' &&
-                revision.unit_ref === summary.id &&
-                revision.state === 'selected'
-        )
-        .sort(byDraftAge)
-        .slice(-1)[0];
-}
-
-/** True while a Summary round is still competing and the Editor has not chosen. */
+/**
+ * True while a Summary round has not settled: drafts are still `drafted`/`competing`, or a Writer is
+ * still filling a block.
+ *
+ * The wording matters after R3: phase ①'s round is settled by the engine's deterministic selection
+ * (§16.6, D-47), not by an Editor picking a column, so nothing here waits for a choice that never
+ * arrives — it waits for the round to finish.
+ */
 export function summaryHasCompetingRevisions(view: StoryViewData): boolean {
     const summary = view.summary;
 
     if (summary === null || summary === undefined) return false;
 
+    const context = summaryScopeContext(view);
+
     // Pending drafts are not competition yet, but they are still open work: the Summary must not
-    // look ready for review while a Writer is still filling its blocks (§4.15).
+    // look ready for review while a Writer is still filling its blocks (§4.15). A REVIEWABLE draft of an
+    // older round is neither: the loop already chose past it (T11/F2), so it must not hold the tick the
+    // settled round has earned (`records.ts:unitsWithCompetingRevisions` makes the same cut).
     return view.revisions.some(
         (revision) =>
             revision.unit_kind === 'summary' &&
             revision.unit_ref === summary.id &&
-            (isReviewableRevision(revision) || isPendingRevision(revision))
+            (isPendingRevision(revision) ||
+                (isReviewableRevision(revision) && !isSupersededSummaryDraft(view, revision, context)))
     );
 }
 
@@ -495,11 +563,29 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
         }
     }
 
+    const context = summaryScopeContext(view);
     const summaryDrafts = view.revisions.filter(
-        (revision) => revision.unit_kind === 'summary' && isReviewableRevision(revision)
+        (revision) =>
+            revision.unit_kind === 'summary' &&
+            isReviewableRevision(revision) &&
+            // T11/F2: a draft from a round the loop has already settled is not a round in flight, so it
+            // earns no chip — the rail would point at a selection that has already happened.
+            !isSupersededSummaryDraft(view, revision, context)
     );
     if (summaryDrafts.length > 0) {
-        add({ panel: 'summary', label: 'choose a draft', tone: 'awaiting' });
+        // PHASE ① COPY ONLY (T5 / R3, §16.6 + D-47). An open Summary draft is a round that has not
+        // settled, and in phase ① NOTHING asks the Author or an Editor to settle it: the engine picks the
+        // winner deterministically (fewest critical → fewest high → fewest total → earliest, §6.5) once
+        // every draft has its screening set (§16.1 job 4). "choose a draft" pointed at a decision that
+        // never arrives, which is the half of the reported contradiction the rail still carried.
+        // A `competing`/`drafted` Summary row in a LATER phase is a pre-§16.6 legacy row whose Editor
+        // really does apply `selection_rules` (§16.8 supersedes them for phase ① only), so its wording
+        // is untouched.
+        add({
+            panel: 'summary',
+            label: story.phase === 'summary' ? 'engine selects a draft' : 'choose a draft',
+            tone: 'awaiting'
+        });
     }
 
     if (view.completion_preview && story.status !== 'completed') {

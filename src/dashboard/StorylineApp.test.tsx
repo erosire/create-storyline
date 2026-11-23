@@ -120,6 +120,12 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(store.getSnapshot().selectedAgent).toBe('writer');
         expect(client.listAgentThreads).toHaveBeenCalledWith('writer');
         expect(screen.getByTestId('agent-threads')).toBeTruthy();
+        // R7 — the Writer is already the selected thing (its tile is lit, the region is named after
+        // it), so the heading says only what the content IS. The accessible name still names the
+        // employee, which is the one place the sentence belongs.
+        expect(screen.getByRole('heading', { level: 2, name: 'Threads' })).toBeTruthy();
+        expect(screen.getByRole('main', { name: 'Writer threads' })).toBeTruthy();
+        expect(screen.queryByRole('heading', { name: /Writer — threads/ })).toBeNull();
         // The centre changed; the roster stayed as the third column.
         expect(screen.getByTestId('agents-panel')).toBeTruthy();
         expect(screen.queryByTestId('story-view')).toBeNull();
@@ -129,6 +135,60 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(store.getSnapshot().selectedAgent).toBeNull();
         expect(screen.getByTestId('story-view')).toBeTruthy();
         expect(screen.queryByTestId('agent-threads')).toBeNull();
+    });
+
+    it('resets the thread surface when the Author switches straight from one employee to another (R7)', async () => {
+        // Every thread here is CLOSED, so the Archived tab is the only thing that can make one
+        // visible: a choice the Author made in the Writer's list must not carry into the Editor's.
+        const threads = [
+            {
+                thread_id: 'thread-1',
+                run_id: 'run_1',
+                story_id: 'story_1',
+                story_title: 'Hollow Sea',
+                phase: 'summary' as const,
+                role: 'writer',
+                role_name: 'writer',
+                title: 'write the summary',
+                state: 'torn_down' as const,
+                started_at: '2026-11-22T10:00:00.000Z',
+                ended_at: '2026-11-22T10:00:02.000Z',
+                tokens: 12,
+                request: 'Write the Summary.',
+                answer: 'Written.',
+                retained: true
+            }
+        ];
+        const { store, client } = fakeHarness([storyRow('story_1', { title: 'Hollow Sea' })], [], {
+            listAgentThreads: vi.fn(async (kind: string) => ({ kind, threads }))
+        });
+        const archivedTab = () => screen.getByRole('button', { name: /Archived/ });
+
+        await store.reload();
+        await store.openStory('story_1');
+        await mount(store);
+
+        await click(screen.getByRole('button', { name: /open Writer threads/ }));
+
+        // R7 — Writer opens running-only, unpressed, with the zero-running sentence rather than the
+        // closed pass the old default showed automatically.
+        expect(archivedTab().getAttribute('aria-pressed')).toBe('false');
+        expect(screen.queryByText('write the summary')).toBeNull();
+        expect(screen.getByText(/no thread is running now/)).toBeTruthy();
+
+        // R9 — the Author opens the history by hand, and it is there.
+        await click(archivedTab());
+        expect(archivedTab().getAttribute('aria-pressed')).toBe('true');
+        expect(screen.getByText('write the summary')).toBeTruthy();
+
+        // A tile-to-tile switch reuses this same region, so the shell keys the surface by employee
+        // kind: the Editor gets a fresh view — running-only, Archived unselected.
+        await click(screen.getByRole('button', { name: /open Editor threads/ }));
+
+        expect(store.getSnapshot().selectedAgent).toBe('editor');
+        expect(client.listAgentThreads).toHaveBeenCalledWith('editor');
+        expect(archivedTab().getAttribute('aria-pressed')).toBe('false');
+        expect(screen.queryByText('write the summary')).toBeNull();
     });
 
     it('deselects the employee when the left rail opens a phrase (U-8 / U-4)', async () => {

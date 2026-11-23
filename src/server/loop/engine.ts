@@ -25,8 +25,10 @@ import {
     competingRevisions,
     confirmedOpenFingerprints,
     dispatchableTasks,
+    findingsVerifyStalled,
     isFullyScreened,
     isLiveRun,
+    isReviewableDraft,
     lapsedRuns,
     last,
     liveRuns,
@@ -43,6 +45,7 @@ import {
     runsForItem,
     sampleAttempts,
     samplingCapOf,
+    samplingLegClosed,
     samplingRoundOf,
     samplingSizeOf,
     samplingWaveOf,
@@ -52,6 +55,8 @@ import {
     storyFindings,
     storyPlotlines,
     storySummary,
+    summaryRevisions,
+    tasksForFinding,
     templatesFor,
     undecidedIdeas,
     wholePassClosed,
@@ -73,6 +78,8 @@ import {
     generateWork,
     openSamplingFailureTask,
     openScreeningExhaustionTask,
+    openFindingVerifyStallTask,
+    FINDING_VERIFY_STALL_PREFIX,
     SAMPLING_FAILURE_PREFIX,
     samplingExhausted
 } from './work';
@@ -97,6 +104,7 @@ import {
     AUTHOR_APPROVED_BY,
     AUTO_APPROVED_BY,
     OPEN_FINDING_STATES,
+    CLOSED_FINDING_STATES,
     DEFAULT_GLOBAL_MAX_CONCURRENT,
     DEFAULT_LEASE_IDLE_MS,
     DEFAULT_SWEEP_INTERVAL_MS,
@@ -549,6 +557,14 @@ export class LoopEngine implements EngineApi {
                 openSamplingFailureTask(store, requireStory(store, story.id));
             });
         }
+
+        // T6/R2d: the other phase-① failure the loop cannot work around by itself — an Editor
+        // verification pass that closes without ever confirming or disputing the finding. The queue
+        // stops buying passes once the budget is spent (`work.ts`'s verify loop), and this is the row
+        // that tells the Author, so a silent run becomes a question instead of an endless sweep.
+        // The same pass closes the row when the finding is decided (the Author's approve/dispute, or
+        // the Editor finally answering), because a question must not outlive its answer.
+        await this.escalateVerifyStall(story.id);
 
         // L-1 steps 1 and 6: the levels, the trend, and the round. The measurement runs before the
         // decision because L-37a's precedence requires the stall to be computable, and the stall needs
@@ -1196,10 +1212,19 @@ export class LoopEngine implements EngineApi {
         // T12/D: the round may not select while it still OWES samples. `samplingSizeOf` is what the
         // Author asked for; the attempt cap is the only honest way to give up on the rest. The
         // attempt count is the CURRENT WAVE's, exactly as generation counts it (T12/E).
+        //
+        // T6/R2b adds the third way a round stops owing samples: its sampling LEG has closed
+        // (`records.ts:samplingLegClosed` — the cap is spent, or the wave was disarmed after the round
+        // had started). Refusing there strands the round: the drafts that exist are screened and
+        // reviewed, the sign-off gates on a selection (§15 step 10), and the samples that would have
+        // completed the round will never be written — so the loop waited on work it had stopped
+        // buying. Selection is not the sign-off: D-33 still holds the phase while a suspicion is
+        // undecided, and the NEXT round is still gated on the arming rule (`records.ts:samplingArmed`).
         const size = samplingSizeOf(story);
         const attempts = sampleAttempts(store, summary.id, round, samplingWaveOf(story));
 
-        if (revisions.length < size && attempts < samplingCapOf(story)) return;
+        if (revisions.length < size && attempts < samplingCapOf(story) && !samplingLegClosed(store, story, round))
+            return;
 
         const readers = screeningSizeOf(story);
         const reviewsOf = new Map<string, SampleReview[]>();
@@ -1313,9 +1338,34 @@ export class LoopEngine implements EngineApi {
 
             // Truncation is HARD (P13/D-22 as the request asks): the losers and their reviews are
             // deleted, and the history line above is the only surviving record of what competed.
-            for (const loser of revisions) {
-                if (loser.id === current.id) continue;
+            //
+            // T6/R2c widens the set to the older rounds' leftovers. A draft that was still being
+            // screened when an EARLIER selection ran escaped that commit's truncation — it was not in
+            // that round's candidate set — and nothing else ever removes it, so it sat in the ledger as
+            // a `drafted` orphan: owed screening nobody could answer, and the owner of every finding
+            // raised against it. `isReviewableDraft` keeps a `pending` draft (a Writer still writing,
+            // §4.15) out of the set, and the newest `selected` row (`current.id`) is never retired.
+            const retired = summaryRevisions(store, fresh.id).filter(
+                (revision) =>
+                    revision.id !== current.id && isReviewableDraft(revision) && (revision.round ?? 1) <= round
+            );
+            const retiredIds = new Set(retired.map((revision) => revision.id));
+            // Every summary revision that survives this commit. A finding is retired by a deleted draft
+            // only when it names NO surviving draft — otherwise it is also a statement about a text the
+            // Summary still holds, and L-11a's whole-Summary findings (no refs at all, or a ref that is
+            // not a draft) are nobody's property and must never be dropped silently.
+            const survivingIds = new Set(
+                summaryRevisions(store, fresh.id)
+                    .filter((revision) => !retiredIds.has(revision.id))
+                    .map((revision) => revision.id)
+            );
+            const ownedByRetired = (finding: Finding) => {
+                const named = finding.related_refs ?? [];
 
+                return named.some((ref) => retiredIds.has(ref)) && !named.some((ref) => survivingIds.has(ref));
+            };
+
+            for (const loser of retired) {
                 for (const review of screensFor(store, loser.id)) {
                     store.sampleReviews.delete(
                         review.id,
@@ -1325,7 +1375,45 @@ export class LoopEngine implements EngineApi {
 
                 store.revisions.delete(
                     loser.id,
-                    loopAttr(`sampling round ${round} selected ${current.id}; the losing sample is truncated, not kept (§6.6, P13)`)
+                    loopAttr(
+                        `sampling round ${round} selected ${current.id}; ${loser.id} was a draft no round would pick up again, so it is truncated with the losers, not kept (§6.6, P13)`
+                    )
+                );
+            }
+
+            // T6/R2c, the second half: the DEFECTS those drafts carried. A confirmed or approved
+            // finding that named only a retired draft is a claim about a text the Summary no longer
+            // holds, and the open fix task it raised promises work on that same text. Left alone, the
+            // task alone holds the phase sign-off forever (`status.ts:phaseWorkQueued` counts every
+            // dispatchable task), so the loop would judge the defect, act on it, and stop before
+            // finishing it — the L-37 condition 1 hold with nothing behind it.
+            //
+            // `discarded` is §4.10's word for a defect that will not be acted on and the idiom
+            // `acceptCompletion` already uses; the finding row stays (the audit keeps it), and the
+            // task's `why` says which draft carried it. A finding that also names a surviving draft,
+            // or names no draft at all, keeps its state untouched.
+            for (const finding of storyFindings(store, fresh.id)) {
+                if (!ownedByRetired(finding)) continue;
+                if (CLOSED_FINDING_STATES.includes(finding.state)) continue;
+
+                for (const task of tasksForFinding(store, fresh.id, finding.id)) {
+                    store.tasks.update(
+                        task.id,
+                        { state: 'wontfix' },
+                        loopAttr(
+                            `sampling round ${round} retired the Summary draft ${finding.related_refs?.join(', ')} that ${finding.id} described; the fix work it queued has no text to act on (§6.6, §4.7)`
+                        ),
+                        [{ id: task.id, rev: task.rev }]
+                    );
+                }
+
+                store.findings.update(
+                    finding.id,
+                    { state: 'discarded' },
+                    loopAttr(
+                        `sampling round ${round} truncated every Summary draft ${finding.id} named (${finding.related_refs?.join(', ')}); the defect was written about a text the Summary no longer holds (§6.6, D-36)`
+                    ),
+                    [{ id: finding.id, rev: finding.rev }]
                 );
             }
 
@@ -1431,6 +1519,77 @@ export class LoopEngine implements EngineApi {
                 ),
                 [{ id: fresh.id, rev: fresh.rev }]
             );
+        });
+    }
+
+    /**
+     * T6/R2d — the sweep's answer to a verification pass that never decided the finding.
+     *
+     * Phase ①'s verify queue is bounded (`records.ts:FINDING_VERIFY_CAP`): once the budget is spent
+     * `work.ts` offers no further pass, and without this row the Story would sit with an unconfirmed
+     * finding, no dispatchable work, and no explanation — the drain can never be met (D-33), the sign
+     * off is refused for the same reason, and the dashboard shows "ready" next to a phase that will not
+     * advance. The row is `blocked`, which is the shape the decision tree reads as the Author's turn
+     * (`status.ts` step 4: "the crew asked you").
+     *
+     * Closing is symmetric: the row is the finding's, and the sweep retires it (`done`) as soon as the
+     * finding is not stalled any more — the Editor answered it in a later pass, the Author approved or
+     * disputed it, or the draft that carried it was retired with the round (T6/R2c). A question that
+     * outlives its answer would hold the "the crew asked you" state forever.
+     *
+     * T10/F4 — opening stays Phase-1-only, closing is not. `records.ts:findingsVerifyStalled` answers
+     * `[]` outside phase ①, so in a later phase this sweep can only ever CLOSE: that is the half that
+     * must still run. A row the Author resolved while the Story was in phase ① would otherwise sit
+     * `blocked` forever once the phase moved on, and `decideStory`'s step 4 reads a blocked escalation as
+     * "the crew asked you" — every later phase would drain-fail on a Phase-① question nobody is asking.
+     */
+    private async escalateVerifyStall(storyId: string): Promise<void> {
+        const store = this.store;
+        const story = requireStory(store, storyId);
+
+        const rows = store.tasks
+            .list()
+            .filter(
+                (task) =>
+                    task.story_id === story.id &&
+                    task.kind === 'escalation' &&
+                    (task.title ?? '').startsWith(FINDING_VERIFY_STALL_PREFIX)
+            );
+
+        // `findingsVerifyStalled` is phase-scoped, so outside phase ① `stalled` is empty by definition:
+        // nothing to open, and the guard below is the cheap exit for a Story that has neither.
+        const stalled = findingsVerifyStalled(store, story);
+
+        // Nothing to open and nothing to close: the common case, and the reason this is cheap enough
+        // to run on every sweep next to the sampling escalation.
+        if (stalled.length === 0 && !rows.some((task) => task.state === 'blocked')) return;
+
+        await store.commit('loop_verify_stall', () => {
+            const fresh = requireStory(store, story.id);
+            // Re-derived INSIDE the commit: the opened/closed sets must reflect the rows this
+            // transaction sees, not the ones the pre-read saw (T-4's compare-and-set discipline).
+            const stillStalled = new Set(findingsVerifyStalled(store, fresh).map((finding) => finding.id));
+
+            // Phase ① only, because `findingsVerifyStalled` is: in a later phase this loop is empty and
+            // only the close pass below can write (T10/F4).
+            for (const finding of findingsVerifyStalled(store, fresh)) openFindingVerifyStallTask(store, fresh, finding);
+
+            for (const task of rows) {
+                if (task.state !== 'blocked') continue;
+
+                const findingRef = task.finding_ref;
+
+                if (findingRef !== undefined && stillStalled.has(findingRef)) continue;
+
+                store.tasks.update(
+                    task.id,
+                    { state: 'done' },
+                    loopAttr(
+                        `finding ${findingRef ?? task.finding_ref ?? task.id} is no longer waiting on a verification pass — the Editor, the Author, or the round that retired its draft answered it (D-33, P7)`
+                    ),
+                    [{ id: task.id, rev: task.rev }]
+                );
+            }
         });
     }
 
