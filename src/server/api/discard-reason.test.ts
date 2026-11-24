@@ -71,13 +71,18 @@ async function call(
 
 /**
  * A Story through the real create route, so the Summary row and the minted ids are the ones the
- * dashboard reads. The route writes no revisions, so the first draft a fixture files is `revision_1`.
+ * dashboard reads. The route writes no revisions, so the first draft a fixture files is `revision_0`.
  */
 async function seedStory(world: TestApp): Promise<{ storyId: string; summaryId: string }> {
     const created = await call(world.app, 'POST', '/stories', {
         title: 'The Long Sounding',
         idea: 'A cartographer maps a sea that remembers the fleet it swallowed.',
-        chapter_count: 2
+        chapter_count: 2,
+        // SUMMARY PHRASE (R5/R6): this file is about the discard reason on a SUPERSEDED Summary draft,
+        // which only a legacy book has — on a group-managed Story the Summary has no competing draft
+        // set and `revisions/:id/select` answers 409. `'sampling'` puts the create back on the pipeline
+        // these rows are written against.
+        summary_mode: 'sampling'
     });
 
     // The create route answers with the stories-row; only the minted `id` is read here, and §4.1's
@@ -87,7 +92,7 @@ async function seedStory(world: TestApp): Promise<{ storyId: string; summaryId: 
     return { storyId, summaryId: world.store.summaries.list()[0].id };
 }
 
-/** Two competing Summary drafts of one unit: `revision_1`, then `revision_2`. */
+/** Two competing Summary drafts of one unit: `revision_0`, then `revision_1`. */
 function seedSummaryDrafts(world: TestApp, storyId: string, summaryId: string, endings: string[]): void {
     for (const ending of endings) {
         world.store.revisions.create(
@@ -126,26 +131,26 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
         ]);
 
         const note = 'The deliberate flood is the promise the Seed made (D-24).';
-        const reply = await call(world.app, 'POST', `/stories/${storyId}/revisions/revision_2/select`, { note });
+        const reply = await call(world.app, 'POST', `/stories/${storyId}/revisions/revision_1/select`, { note });
 
         expect(reply.status).toBe(200);
 
         // The winner keeps riding `selection_note` (T-2a) and gains no reason of its own; the field
         // is only ever the loser's, which is why the two can sit side by side in the rail.
         expect({
-            state: world.store.revisions.require('revision_2').state,
-            selection_note: world.store.revisions.require('revision_2').selection_note,
-            discard_reason: world.store.revisions.require('revision_2').discard_reason
-        }).toEqual({ state: 'selected', selection_note: note, discard_reason: undefined });
-
-        expect({
             state: world.store.revisions.require('revision_1').state,
             selection_note: world.store.revisions.require('revision_1').selection_note,
             discard_reason: world.store.revisions.require('revision_1').discard_reason
+        }).toEqual({ state: 'selected', selection_note: note, discard_reason: undefined });
+
+        expect({
+            state: world.store.revisions.require('revision_0').state,
+            selection_note: world.store.revisions.require('revision_0').selection_note,
+            discard_reason: world.store.revisions.require('revision_0').discard_reason
         }).toEqual({ state: 'discarded', selection_note: undefined, discard_reason: note });
 
         // The same values out of the projection, with no new endpoint: `revisions` IS the rail's slice.
-        expect(reasonOf(viewRow((await call(world.app, 'GET', `/stories/${storyId}`)).body, 'revision_1'))).toEqual({
+        expect(reasonOf(viewRow((await call(world.app, 'GET', `/stories/${storyId}`)).body, 'revision_0'))).toEqual({
             state: 'discarded',
             discard_reason: note
         });
@@ -159,14 +164,14 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
             'She leaves the valley standing.'
         ]);
 
-        const reply = await call(world.app, 'POST', `/stories/${storyId}/revisions/revision_2/select`, {});
+        const reply = await call(world.app, 'POST', `/stories/${storyId}/revisions/revision_1/select`, {});
 
         expect(reply.status).toBe(200);
 
         // Nothing is invented: the reason is the very sentence P11 makes this commit carry, so the
         // rail states WHICH decision set the row aside without claiming an explanation the Author
         // never typed. `note` stays optional on the wire, so no author field turns mandatory.
-        const decision = `the Author selected revision_2 for ${summaryId} (D-24, U-13)`;
+        const decision = `the Author selected revision_1 for ${summaryId} (D-24, U-13)`;
 
         expect([
             ...new Set(
@@ -175,14 +180,14 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
                     .map((event) => event.attribution.why)
             )
         ]).toEqual([decision]);
-        expect(reasonOf(world.store.revisions.require('revision_1'))).toEqual({
+        expect(reasonOf(world.store.revisions.require('revision_0'))).toEqual({
             state: 'discarded',
             discard_reason: decision
         });
         // The winner's default note is untouched (L-13), so this change is invisible to that field.
-        expect(world.store.revisions.require('revision_2').selection_note).toBe('selected by the Author (D-24)');
+        expect(world.store.revisions.require('revision_1').selection_note).toBe('selected by the Author (D-24)');
         // The Summary leg still keeps both rows, so the rail keeps its Revision 1…N (D-22's exception).
-        expect(world.store.revisions.list().map((row) => row.id)).toEqual(['revision_1', 'revision_2']);
+        expect(world.store.revisions.list().map((row) => row.id)).toEqual(['revision_0', 'revision_1']);
     });
 
     it('a hard-deleted Summary sample reconstructs with the journal reason, not an invented one (R3)', async () => {
@@ -195,24 +200,24 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
 
         // Phase ①'s truncation removes the loser outright (loop/engine.ts:1376), so the row only comes
         // back through `viewRevisions`; the delete's `attribution.why` is its only history.
-        const truncation = 'sampling round 2 retired the Summary draft revision_2 (§6.6, D-36)';
-        world.store.revisions.delete('revision_2', { run_ref: null, why: truncation });
+        const truncation = 'sampling round 2 retired the Summary draft revision_1 (§6.6, D-36)';
+        world.store.revisions.delete('revision_1', { run_ref: null, why: truncation });
 
         const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body;
 
         expect({
-            id: viewRow(view, 'revision_2').id,
-            ...reasonOf(viewRow(view, 'revision_2')),
-            body: viewRow(view, 'revision_2').body
+            id: viewRow(view, 'revision_1').id,
+            ...reasonOf(viewRow(view, 'revision_1')),
+            body: viewRow(view, 'revision_1').body
         }).toEqual({
-            id: 'revision_2',
+            id: 'revision_1',
             state: 'discarded',
             discard_reason: truncation,
             body: { fields: { ending: 'She leaves the valley standing.' } }
         });
 
         // The live row is untouched — reconstruction adds a reason to history, never to a draft.
-        expect(reasonOf(viewRow(view, 'revision_1'))).toEqual({
+        expect(reasonOf(viewRow(view, 'revision_0'))).toEqual({
             state: 'competing',
             discard_reason: undefined
         });
@@ -226,17 +231,17 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
         const editorReason = 'The Editor rejected it: nothing here answers the Seed.';
 
         world.store.revisions.update(
-            'revision_2',
+            'revision_1',
             { state: 'discarded', discard_reason: editorReason },
             { run_ref: null, why: 'fixture: the Editor rejected the draft' }
         );
         // A later prune deletes the row; its own wording must not overwrite the reason on the row.
-        world.store.revisions.delete('revision_2', {
+        world.store.revisions.delete('revision_1', {
             run_ref: null,
             why: 'a later prune removed the discarded draft (D-22)'
         });
 
-        expect(reasonOf(viewRow((await call(world.app, 'GET', `/stories/${storyId}`)).body, 'revision_2'))).toEqual({
+        expect(reasonOf(viewRow((await call(world.app, 'GET', `/stories/${storyId}`)).body, 'revision_1'))).toEqual({
             state: 'discarded',
             discard_reason: editorReason
         });
@@ -250,20 +255,20 @@ describe('the discard reason on the projected revision history (R1, R3)', () => 
         // A row written before `discard_reason` existed. The store keeps records whole (store/store.ts
         // does not field-whitelist an update), so it simply carries no such key.
         world.store.revisions.update(
-            'revision_2',
+            'revision_1',
             { state: 'discarded' },
             { run_ref: null, why: 'fixture: legacy discard' }
         );
 
         const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body;
-        const legacy = viewRow(view, 'revision_2');
+        const legacy = viewRow(view, 'revision_1');
 
         expect(reasonOf(legacy)).toEqual({ state: 'discarded', discard_reason: undefined });
         // Absent, not empty: the rail shows no reason rather than a blank one.
         expect('discard_reason' in legacy).toBe(false);
         expect((view as { revisions: Revision[] }).revisions.map((row) => row.id)).toEqual([
-            'revision_1',
-            'revision_2'
+            'revision_0',
+            'revision_1'
         ]);
     });
 });

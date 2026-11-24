@@ -169,11 +169,12 @@ async function twoRounds(rig: Rig): Promise<{ first: string; second: string }> {
 
 describe('T10/F2 — one stalled finding, one escalation, whatever the id prefixes', () => {
     /**
-     * Ten findings, so `finding_1` and `finding_10` both exist: the collision needs the counter, and
-     * the counter is the only thing that ever produced these ids.
+     * Eleven findings, so `finding_1` and `finding_10` both exist: the collision needs the counter, and
+     * the counter is the only thing that ever produced these ids. ZERO-BASED ids (W1) start at
+     * `finding_0`, so eleven rows are what it takes to reach the `_1`/`_10` pair this rule is about.
      */
-    function seedTenFindings(rig: Rig): string[] {
-        return Array.from({ length: 10 }, (_, index) =>
+    function seedElevenFindings(rig: Rig): string[] {
+        return Array.from({ length: 11 }, (_, index) =>
             seedFinding(rig.store, rig.storyId, {
                 target_ref: summaryOf(rig).id,
                 criterion_ref: 'C-14',
@@ -186,9 +187,9 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
 
     it('gives finding_10 its own row when finding_10 escalates first', async () => {
         const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
-        const ids = seedTenFindings(rig);
+        const ids = seedElevenFindings(rig);
 
-        expect(ids).toEqual(Array.from({ length: 10 }, (_, index) => `finding_${index + 1}`));
+        expect(ids).toEqual(Array.from({ length: 11 }, (_, index) => `finding_${index}`));
 
         // Both findings have spent their anchored budgets, so BOTH are stalled lists — the queue and the
         // escalation read the same predicate (`records.ts:findingsVerifyStalled`).
@@ -206,7 +207,7 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
         openFindingVerifyStallTask(rig.store, storyOf(rig), rig.store.findings.require('finding_10'));
         openFindingVerifyStallTask(rig.store, storyOf(rig), rig.store.findings.require('finding_1'));
 
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked', 'task_2:escalation:blocked']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked', 'task_1:escalation:blocked']);
         expect(escalationRefs(rig)).toEqual([
             'escalation:blocked:finding_10',
             'escalation:blocked:finding_1'
@@ -216,13 +217,13 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
         openFindingVerifyStallTask(rig.store, storyOf(rig), rig.store.findings.require('finding_10'));
         openFindingVerifyStallTask(rig.store, storyOf(rig), rig.store.findings.require('finding_1'));
 
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked', 'task_2:escalation:blocked']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked', 'task_1:escalation:blocked']);
     });
 
     it('gives each finding its own row when finding_1 escalates first (the other order)', async () => {
         const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
 
-        seedTenFindings(rig);
+        seedElevenFindings(rig);
         exhaustVerifyFamily(rig, 'finding_1', false);
         exhaustVerifyFamily(rig, 'finding_10', false);
 
@@ -272,17 +273,17 @@ describe('T10/F3 — the Author is asked only after the last bought pass has clo
         expect(taskRows(rig)).toEqual([]);
         expect(findingsVerifyStalled(rig.store, storyOf(rig))).toEqual([]);
         expect(runKeys(rig, 'wi_verify_')).toEqual([
-            'wi_verify_finding_finding_1_1',
-            'wi_verify_finding_finding_1_2',
-            'wi_verify_finding_finding_1_3',
-            'wi_verify_finding_finding_1_4'
+            'wi_verify_finding_finding_0_1',
+            'wi_verify_finding_finding_0_2',
+            'wi_verify_finding_finding_0_3',
+            'wi_verify_finding_finding_0_4'
         ]);
 
         // The bought pass closes WITHOUT deciding (the `verifyReports: 'silent'` answer). Now, and only
         // now, is there a fact of the matter to take to the Author.
         const liveRun = rig.store.runs
             .list()
-            .find((run) => run.work_item_ref === 'wi_verify_finding_finding_1_4');
+            .find((run) => run.work_item_ref === 'wi_verify_finding_finding_0_4');
 
         if (liveRun === undefined) throw new Error('the last bought verification pass has no run row');
 
@@ -294,9 +295,9 @@ describe('T10/F3 — the Author is asked only after the last bought pass has clo
 
         await rig.step();
 
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked']);
-        expect(escalationRefs(rig)).toEqual(['escalation:blocked:finding_1']);
-        expect(findingsVerifyStalled(rig.store, storyOf(rig)).map((row) => row.id)).toEqual(['finding_1']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked']);
+        expect(escalationRefs(rig)).toEqual(['escalation:blocked:finding_0']);
+        expect(findingsVerifyStalled(rig.store, storyOf(rig)).map((row) => row.id)).toEqual(['finding_0']);
 
         const story = storyOf(rig);
 
@@ -336,7 +337,7 @@ describe('T10/F3 — the Author is asked only after the last bought pass has clo
         // cost, so the loop approved it on the spot and queued the fix work (D-35/D-34) — the queue moved
         // on instead of stopping to ask the Author.
         expect(rig.store.tasks.list().filter((task) => task.kind === 'escalation')).toEqual([]);
-        expect(taskRows(rig)).toEqual(['task_1:fix:open']);
+        expect(taskRows(rig)).toEqual(['task_0:fix:open']);
         expect(findingsVerifyStalled(rig.store, storyOf(rig))).toEqual([]);
         expect(rig.store.findings.require(finding.id).state).toBe('approved');
     });
@@ -358,13 +359,13 @@ describe('T10/F4 — a resolved Phase-① stall row closes after the phase advan
         // Phase ① spends the budget and opens the Author's question (the R2d shape this file builds on).
         for (let sweep = 0; sweep < 8; sweep += 1) await rig.step();
 
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked']);
         expect(storyOf(rig).pending_kind).toBe('drained');
 
         // The Author discards the defect, and the Summary is locked — the phase advance is what the
         // Author's lock does (§15 step 5), so the row now belongs to a phase the Story has left.
         rig.store.findings.update(
-            'finding_1',
+            'finding_0',
             { state: 'discarded' },
             { run_ref: null, why: 'test: the Author dismissed the defect (D-33)' }
         );
@@ -375,13 +376,13 @@ describe('T10/F4 — a resolved Phase-① stall row closes after the phase advan
         );
 
         expect(storyOf(rig).phase).toBe('plotlines');
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked']);
 
         await rig.step();
 
         // The close half of the sweep still runs outside phase ①: the row is `done`, no `blocked`
         // escalation survives, and the Story is not held in "the crew asked you" by a Phase-① question.
-        expect(taskRows(rig)).toEqual(['task_1:escalation:done']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:done']);
         expect(
             rig.store.tasks.list().filter((task) => task.kind === 'escalation' && task.state === 'blocked')
         ).toEqual([]);
@@ -414,8 +415,8 @@ describe('T8 — the deep review is owed for the current round’s selection onl
         expect(deepReviewPassesOwed(rig.store, storyOf(rig), current)).toBe(2);
         expect(deepReviewComplete(rig.store, storyOf(rig), current)).toBe(false);
         expect(offers(rig).filter((key) => key.startsWith('wi_review_'))).toEqual([
-            'wi_review_revision_2_a1',
-            'wi_review_revision_2_a2'
+            'wi_review_revision_1_a1',
+            'wi_review_revision_1_a2'
         ]);
         expect(drainPreconditions(rig.store, storyOf(rig)).unmet).toContain(
             '2 deep-review passes still owed for the selected Summary revision (§6.4 step 6)'

@@ -86,10 +86,10 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // Phase ① files nothing here: the deep-review Reader is a Reader, not the checker whose
         // `checkerFinds` fixture this is (rig/mock.ts), so the two plotline rows are the whole ladder
         // this walk reaches.
-        const row = rig.store.findings.list().find((finding) => finding.target_ref === 'plotline_1');
+        const row = rig.store.findings.list().find((finding) => finding.target_ref === 'plotline_0');
 
         expect(row).toMatchObject({
-            id: 'finding_1',
+            id: 'finding_0',
             criterion_ref: 'C-13',
             cost: 'major',
             state: 'fixed',
@@ -101,13 +101,13 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         // D-34: the approval is what creates the Writer work, aimed at the artifact the finding named.
         // Phase ②'s checker filed the same defect against each plotline, and each row got its own task.
-        expect(taskRows(rig)).toEqual(['task_1:fix:done:finding_1:1', 'task_2:fix:done:finding_2:1']);
-        expect(rig.store.tasks.get('task_1')?.detail).toContain('C-13 on plotline_1');
+        expect(taskRows(rig)).toEqual(['task_0:fix:done:finding_0:1', 'task_1:fix:done:finding_1:1']);
+        expect(rig.store.tasks.get('task_0')?.detail).toContain('C-13 on plotline_0');
 
         // The fix passes really ran, and they are what closed the rows.
         expect(fixRuns(rig)).toEqual([
-            'wi_fix_plotline_2_1_finding_2_task_2',
-            'wi_fix_plotline_1_1_finding_1_task_1'
+            'wi_fix_plotline_1_1_finding_1_task_1',
+            'wi_fix_plotline_0_1_finding_0_task_0'
         ]);
     });
 
@@ -123,7 +123,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
                 .filter((task) => task.kind === 'fix')
                 .map((task) => `${task.finding_ref}:${task.detail?.split(' · ')[0]}`)
                 .sort()
-        ).toEqual(['finding_1:C-13 on plotline_1', 'finding_2:C-13 on plotline_2']);
+        ).toEqual(['finding_0:C-13 on plotline_0', 'finding_1:C-13 on plotline_1']);
     });
 
     it('carries the criterion and the finding on the task row — the queue, not the transcript, is the plan (§4.7, D-11)', async () => {
@@ -133,16 +133,16 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // plan the Goal is reachable from. A row that lost either ref would still run, but the Author
         // could no longer read WHICH bar the fix was filed against, and the finding it answers.
         expect(queueRows(rig)).toEqual([
-            'task_1:fix:done:C-13:finding_1:1',
-            'task_2:fix:done:C-13:finding_2:1'
+            'task_0:fix:done:C-13:finding_0:1',
+            'task_1:fix:done:C-13:finding_1:1'
         ]);
-        expect(rig.store.tasks.require('task_1')).toMatchObject({
+        expect(rig.store.tasks.require('task_0')).toMatchObject({
             kind: 'fix',
             owner_role: 'writer',
             criterion_ref: 'C-13',
-            finding_ref: 'finding_1',
+            finding_ref: 'finding_0',
             title: 'fix major: the map contradicts the 1911 survey',
-            detail: 'C-13 on plotline_1 · plotline_1'
+            detail: 'C-13 on plotline_0 · plotline_0'
         });
     });
 
@@ -175,9 +175,9 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // (server/tools/artifacts.ts:708-712) matches rows that are NOT `fixed`, so a re-claim
         // after a fix opens a FRESH row instead of resurrecting the closed one (L-16a, D-16).
         // The two untouched rows are the first sighting and one same-fingerprint repeat.
-        const chapter = ladder(rig).filter((row) => row.includes('|chapter_1:'));
+        const chapter = ladder(rig).filter((row) => row.includes('|chapter_0:'));
 
-        expect(chapter).toContain('C-13|chapter_1:fixed:major:auto:seen2');
+        expect(chapter).toContain('C-13|chapter_0:fixed:major:auto:seen2');
         expect(chapter.length).toBeGreaterThan(2);
 
         // Every re-claim after the first is a new row with a new task behind it — the loop does
@@ -185,30 +185,30 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         // The walk spends 30 sweeps here, so the exact rows are pinned: the first fixed sighting
         // (seen twice), six fixed re-claims, and the newest re-raise still open.
         expect(chapter).toEqual([
-            'C-13|chapter_1:fixed:major:auto:seen2',
-            'C-13|chapter_1:fixed:major:auto:seen1',
-            'C-13|chapter_1:fixed:major:auto:seen1',
-            'C-13|chapter_1:fixed:major:auto:seen1',
-            'C-13|chapter_1:fixed:major:auto:seen1',
-            'C-13|chapter_1:fixed:major:auto:seen1',
-            'C-13|chapter_1:confirmed:major:none:seen1'
+            'C-13|chapter_0:fixed:major:auto:seen2',
+            'C-13|chapter_0:fixed:major:auto:seen1',
+            'C-13|chapter_0:fixed:major:auto:seen1',
+            'C-13|chapter_0:fixed:major:auto:seen1',
+            'C-13|chapter_0:fixed:major:auto:seen1',
+            'C-13|chapter_0:fixed:major:auto:seen1',
+            'C-13|chapter_0:confirmed:major:none:seen1'
         ]);
 
-        const regression = rig.store.findings.list().find((finding) => finding.id === 'finding_9');
+        const regression = rig.store.findings.list().find((finding) => finding.id === 'finding_8');
 
-        expect(regression).toMatchObject({ target_ref: 'chapter_1', criterion_ref: 'C-13', cost: 'major' });
+        expect(regression).toMatchObject({ target_ref: 'chapter_0', criterion_ref: 'C-13', cost: 'major' });
 
-        // The re-raise is a row of its own with its own task behind it: finding_9 has not been
+        // The re-raise is a row of its own with its own task behind it: finding_8 has not been
         // approved yet (the 30-sweep window closes first), and every earlier re-claim ran a fix.
         expect(taskRows(rig)).toEqual([
+            'task_0:fix:done:finding_0:1',
             'task_1:fix:done:finding_1:1',
             'task_2:fix:done:finding_2:1',
             'task_3:fix:done:finding_3:1',
             'task_4:fix:done:finding_4:1',
             'task_5:fix:done:finding_5:1',
             'task_6:fix:done:finding_6:1',
-            'task_7:fix:done:finding_7:1',
-            'task_8:fix:done:finding_8:1'
+            'task_7:fix:done:finding_7:1'
         ]);
         expect(rig.story().status).toBe('ready');
         expect(rig.story().blocked_on).toContain('C-13');
@@ -233,11 +233,11 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
         const story = rig.story();
 
         expect(ladder(rig)).toEqual([
+            'C-13|plotline_0:confirmed:major:none:seen1',
             'C-13|plotline_1:confirmed:major:none:seen1',
-            'C-13|plotline_2:confirmed:major:none:seen1',
+            'C-13|chapter_0:confirmed:major:none:seen2',
             'C-13|chapter_1:confirmed:major:none:seen2',
-            'C-13|chapter_2:confirmed:major:none:seen2',
-            'C-13|story_1:confirmed:major:none:seen1'
+            'C-13|story_0:confirmed:major:none:seen1'
         ]);
 
         // A sub-dial finding is not authorised work (L-37 condition 1), so the Story still drains — and
@@ -261,15 +261,15 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
     it('the approval is what starts Writer work, and the Author answer is on the record (D-34, D-41c)', async () => {
         const rig = await parked();
 
-        await rig.engine.approveFinding('finding_1');
+        await rig.engine.approveFinding('finding_0');
 
         // The approval queues the work; the loop runs it. `approveFinding` alone would leave the task
         // `open` — D-34's "approval starts Writer work" is about the queue, and the crew does the pass.
         await rig.run(40);
 
-        expect(ladder(rig).slice(0, 1)).toEqual(['C-13|plotline_1:fixed:major:author:seen1']);
-        expect(taskRows(rig)).toEqual(['task_1:fix:done:finding_1:1']);
-        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_1_1_finding_1_task_1']);
+        expect(ladder(rig).slice(0, 1)).toEqual(['C-13|plotline_0:fixed:major:author:seen1']);
+        expect(taskRows(rig)).toEqual(['task_0:fix:done:finding_0:1']);
+        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_0_1_finding_0_task_0']);
 
         // The rest of the tray is still a prompt, one less than before, and the Story is drained again:
         // the fix closed, and an approval that drains again is the loop re-deriving from the records.
@@ -285,20 +285,20 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
     it('the task the Author starts is the same record shape — criterion and finding refs and all (§4.7, D-11, D-34)', async () => {
         const rig = await parked();
 
-        await rig.engine.approveFinding('finding_1');
+        await rig.engine.approveFinding('finding_0');
         await rig.run(40);
 
         // The two approve paths (the dial's auto-approve and the Author's tap) go through ONE task
         // factory (invalidation.ts:createFixTask), so the row the Author sees carries exactly what the
         // loop's own row carries. A second shape here would be two queue dialects in one store.
-        expect(queueRows(rig)).toEqual(['task_1:fix:done:C-13:finding_1:1']);
-        expect(rig.store.tasks.require('task_1')).toMatchObject({
+        expect(queueRows(rig)).toEqual(['task_0:fix:done:C-13:finding_0:1']);
+        expect(rig.store.tasks.require('task_0')).toMatchObject({
             kind: 'fix',
             owner_role: 'writer',
             criterion_ref: 'C-13',
-            finding_ref: 'finding_1'
+            finding_ref: 'finding_0'
         });
-        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_1_1_finding_1_task_1']);
+        expect(fixRuns(rig)).toEqual(['wi_fix_plotline_0_1_finding_0_task_0']);
     });
 
     it('accepting completion discards the leftovers and says how many (L-25b)', async () => {
@@ -329,11 +329,11 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
             'the Author accepted completion: 5 findings and 0 Ideas were discarded (L-25b)'
         );
         expect(ladder(rig)).toEqual([
+            'C-13|plotline_0:discarded:major:none:seen1',
             'C-13|plotline_1:discarded:major:none:seen1',
-            'C-13|plotline_2:discarded:major:none:seen1',
+            'C-13|chapter_0:discarded:major:none:seen2',
             'C-13|chapter_1:discarded:major:none:seen2',
-            'C-13|chapter_2:discarded:major:none:seen2',
-            'C-13|story_1:discarded:major:none:seen1'
+            'C-13|story_0:discarded:major:none:seen1'
         ]);
     });
 });
@@ -361,11 +361,11 @@ describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold t
         const rig = await disputed();
 
         expect(ladder(rig)).toEqual([
+            'C-13|plotline_0:disputed:major:none:seen1',
             'C-13|plotline_1:disputed:major:none:seen1',
-            'C-13|plotline_2:disputed:major:none:seen1',
+            'C-13|chapter_0:disputed:major:none:seen2',
             'C-13|chapter_1:disputed:major:none:seen2',
-            'C-13|chapter_2:disputed:major:none:seen2',
-            'C-13|story_1:disputed:major:none:seen1'
+            'C-13|story_0:disputed:major:none:seen1'
         ]);
         expect(taskRows(rig)).toEqual([]);
         expect(fixRuns(rig)).toEqual([]);
@@ -380,11 +380,11 @@ describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold t
     it('the Editor triage is final — an approval does not quietly re-cost the claim (D-34a)', async () => {
         const rig = await disputed();
 
-        await rig.engine.approveFinding('finding_1', { note: 'fine, do it' });
+        await rig.engine.approveFinding('finding_0', { note: 'fine, do it' });
 
         // D-34a: the cost the Editor left standing is the cost the work is done at. An approval that
         // re-costed everything would undo the Editor's judgement forty times a day.
-        const row = rig.store.findings.get('finding_1');
+        const row = rig.store.findings.get('finding_0');
 
         expect({ state: row?.state, cost: row?.cost, approved_by: row?.approved_by }).toEqual({
             state: 'approved',
@@ -393,10 +393,10 @@ describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold t
         });
 
         // Approve-and-recost is a separate act, and it is the only thing that moves the cost.
-        await rig.engine.approveFinding('finding_2', { cost: 'critical', by: 'author' });
+        await rig.engine.approveFinding('finding_1', { cost: 'critical', by: 'author' });
         expect({
-            cost: rig.store.findings.get('finding_2')?.cost,
-            state: rig.store.findings.get('finding_2')?.state
+            cost: rig.store.findings.get('finding_1')?.cost,
+            state: rig.store.findings.get('finding_1')?.state
         }).toEqual({
             cost: 'critical',
             state: 'approved'

@@ -10,9 +10,17 @@
 import { act, fireEvent, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { vi } from 'vitest';
-import type { ApiClient, QueueItem, StoryRow, StoryView } from '../api';
+import type {
+    ApiClient,
+    PhraseGroupReviseResult,
+    PhraseView,
+    QueueItem,
+    StoryRow,
+    StoryView
+} from '../api';
 import { DashboardContext, createDashboardStore, type DashboardStore } from '../state';
 import { DEFAULT_AUTO_APPROVE_COSTS, type Goal, type Story } from '../../shared/types';
+import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
 
 /** One STORIES-panel row with §4.1-plausible defaults; override what the test cares about. */
 export function storyRow(id: string, overrides: Partial<StoryRow> = {}): StoryRow {
@@ -107,6 +115,105 @@ export function storyView(row: StoryRow): StoryView {
 }
 
 /**
+ * R6 — the `GET /stories/:id/phrases` read, DEFAULTING TO THE SAMPLING ECHO the server sends for a legacy book
+ * (`mode:'sampling'`, empty rows, never a 404 — `server/api/projections.ts`). That default is what keeps every
+ * shell test written before the phrase read existed behaving exactly as it did: a Story with no `summary_mode`
+ * is not grouped, so the rail has no groups to draw and the desk shows the round.
+ *
+ * A grouped test passes `groupedPhraseView` (or its own rows) through `fakeApi({ getPhrase })`.
+ */
+export function phraseView(storyId: string, overrides: Partial<PhraseView> = {}): PhraseView {
+    return {
+        story_id: storyId,
+        mode: 'sampling',
+        phrase_id: null,
+        revision: 0,
+        overview: '',
+        groups: [],
+        findings: [],
+        tasks: [],
+        review: {
+            mode: 'sampling',
+            unwritten_groups: [],
+            written_groups: 0,
+            vector: {},
+            vector_hash: 'sampling',
+            review_seats: 0,
+            reviews_on_current_vector: 0,
+            deep_reviews_on_current_vector: 0,
+            open_findings: 0,
+            blocking_findings: 0,
+            open_tasks: 0,
+            mirror: { summary_id: null, in_sync: true, locked: false, fields: [] }
+        },
+        ...overrides
+    };
+}
+
+/**
+ * The five SUMMARY GROUPS, built from `shared/phrase`'s own catalog so a test can never drift from the product
+ * data (the five keys, titles, descriptions and composition order — and World rules is NOT one of them).
+ *
+ * The ids are readable, not random: a selection ref is `<prefix><id>`, and a test that asserts a ref
+ * (`summary-group:grp-premise`) or a stale-ref fallback reads better with names than with uuids. It also pins
+ * the invariant the redesign lives or dies on — the dashboard addresses a group by its id STRING, never by an
+ * index or by the shape of the id, so the server's real uuids need no client-side parsing (U2).
+ *
+ * Defaults: every group written once with clean text, no findings, no open tasks, nothing unwritten. A test
+ * overrides the rows it cares about (`groups: [...]`, `findings: [...]`) rather than reading a story out of a
+ * fixture it cannot see.
+ */
+export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView> = {}): PhraseView {
+    const groups = orderedPhraseGroupDefinitions().map((definition, index) => ({
+        id: `grp-${definition.key}`,
+        key: definition.key,
+        title: definition.title,
+        description: definition.description,
+        order: definition.order,
+        content: `${definition.title} — the text the Writer installed (group ${index + 1}).`,
+        revision: 1,
+        updated_by: 'writer',
+        history: [
+            {
+                id: `rev-${definition.key}-1`,
+                number: 1,
+                state: 'latest',
+                at: '2026-11-09T10:00:00.000Z',
+                run_ref: 'run_1',
+                finding_refs: [],
+                task_refs: [],
+                chars: 48
+            }
+        ],
+        owed_by_findings: [] as string[],
+        writer_busy: false
+    }));
+
+    return phraseView(storyId, {
+        mode: 'groups',
+        phrase_id: 'phrase_summary_1',
+        revision: 1,
+        overview: groups.map((group) => group.content).join('\n\n'),
+        groups,
+        review: {
+            mode: 'groups',
+            unwritten_groups: [],
+            written_groups: groups.length,
+            vector: Object.fromEntries(groups.map((group) => [group.id, group.revision])),
+            vector_hash: 'grp-hash-1',
+            review_seats: 1,
+            reviews_on_current_vector: 1,
+            deep_reviews_on_current_vector: 1,
+            open_findings: 0,
+            blocking_findings: 0,
+            open_tasks: 0,
+            mirror: { summary_id: 'sum_1', in_sync: true, locked: false, fields: [] }
+        },
+        ...overrides
+    });
+}
+
+/**
  * The client double. Every method is a `vi.fn` so an unexpected call is loud, and every
  * default is a resolved value so a refresh-after-mutation (which `state.ts` always does)
  * never hangs a test.
@@ -122,6 +229,23 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
         createStory: vi.fn(async (input) => storyRow('story_new', { title: input.title })),
         deleteStory: vi.fn(async (storyId: string) => ({ deleted: storyId })),
         getStory: vi.fn(async (storyId) => storyView(storyRow(storyId))),
+        // R6 — the phrase read is a SEPARATE route from `getStory`, and the store caches it separately
+        // (`snapshot.phrases`). The default is the sampling echo, so a test that never mentions groups sees the
+        // desk it saw before this read existed; a grouped test overrides it.
+        getPhrase: vi.fn(async (storyId) => phraseView(storyId)),
+        // R2 — the Author's rewrite of ONE group. The result carries the fresh `view`, which is what the store
+        // commits immediately (one phrases fetch per mutation, so a test can count the calls).
+        revisePhraseGroup: vi.fn(
+            async (storyId: string, groupId: string, input): Promise<PhraseGroupReviseResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_summary_1',
+                revision: 2,
+                installed: [{ group_id: groupId, group_key: 'premise', revision_id: `rev-${groupId}-2`, number: 2 }],
+                archived: [{ group_id: groupId, group_key: 'premise', revision_id: `rev-${groupId}-1`, number: 1 }],
+                mirror: { summary_id: 'sum_1', fields: ['premise'], written: true },
+                view: groupedPhraseView(storyId)
+            })
+        ),
         getStoryKnowledge: vi.fn(async (storyId) => ({
             story_id: storyId,
             story_title: storyRow(storyId).title,

@@ -71,7 +71,7 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
         const briefs = rig.store.seedBriefs.list();
 
         expect(briefs.map((brief) => `${brief.id}:${brief.status}:${brief.seed_hash}`)).toEqual([
-            `seed_brief_1:accepted:${seedHashOf(story.idea)}`
+            `seed_brief_0:accepted:${seedHashOf(story.idea)}`
         ]);
 
         // Gate 2: the brief's research pass, and still no sampling.
@@ -99,19 +99,19 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
             phase: 'summary'
         });
 
-        expect(third.map((candidate) => candidate.key)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(third.map((candidate) => candidate.key)).toEqual(['wi_sample_summary_0_1_1']);
 
         // The sample really runs, and the compiled prompt it was given carries the accepted brief and
         // the critical/high Knowledge — the byte-stable prefix §5 describes.
-        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_1_1_1']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_1']);
 
         const prompt = samplePromptOf(rig);
 
         expect(prompt).toContain('## SEED BRIEF');
         expect(prompt).toContain('logline: A cartographer returns to the valley she mapped as a girl');
         expect(prompt).toContain('## KNOWLEDGE — critical and high only');
-        expect(prompt).toContain('[mock|story_1|period and place|the seed names the place the story happens in · critical · place]');
-        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+        expect(prompt).toContain('[mock|story_0|period and place|the seed names the place the story happens in · critical · place]');
+        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_0']);
     });
 
     it('re-arms the structuring when the Seed changes, and resets the sampling round (§3.3, P5, §6.6)', async () => {
@@ -192,20 +192,20 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
     it('dispatches one structured sample at a time, then M screening passes for each drafted sample', async () => {
         const rig = await createRig({ summarySampling: 3, summaryReaders: 2 });
 
-        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_1_1_1']);
-        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_1_1_2']);
-        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_1_1_3']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_1']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_2']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_3']);
 
         // Three complete samples — no Editor choice, no `write_unit` (the engine persists them).
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.unit_kind}:${revision.origin}:r${revision.round}`)).toEqual([
+            'revision_0:summary:sampled:r1',
             'revision_1:summary:sampled:r1',
-            'revision_2:summary:sampled:r1',
-            'revision_3:summary:sampled:r1'
+            'revision_2:summary:sampled:r1'
         ]);
 
         // The sampler's Work Item: ONE no-tool turn, the SummarySample schema, the 1-based sample index
         // (the provider seed), and the round the compiler reads (§6.2/§6.4).
-        const sample = rig.items.get('wi_sample_summary_1_1_2');
+        const sample = rig.items.get('wi_sample_summary_0_1_2');
 
         expect({
             kind: sample?.kind,
@@ -224,14 +224,14 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
             round: 1,
             templateRef: 'writer-summary-sampler',
             roleName: 'writer',
-            unit: { kind: 'summary', ref: 'summary_1' }
+            unit: { kind: 'summary', ref: 'summary_0' }
         });
 
         // Two passes per sample, and the pass that is owed next is the one the key names.
-        expect((await rig.step()).stories[0].started).toEqual(['wi_screen_revision_1_1']);
-        expect((await rig.step()).stories[0].started).toEqual(['wi_screen_revision_1_2']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_screen_revision_0_1']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_screen_revision_0_2']);
 
-        const screen = rig.items.get('wi_screen_revision_1_2');
+        const screen = rig.items.get('wi_screen_revision_0_2');
 
         expect({
             kind: screen?.kind,
@@ -243,7 +243,7 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
             kind: 'screen_samples',
             toolMode: 'none',
             schema: 'IssueList',
-            revisionRef: 'revision_1',
+            revisionRef: 'revision_0',
             templateRef: 'reader-screening'
         });
 
@@ -258,16 +258,16 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
                 .map((run) => run.work_item_ref)
                 .sort()
         ).toEqual([
+            'wi_screen_revision_0_1',
+            'wi_screen_revision_0_2',
             'wi_screen_revision_1_1',
             'wi_screen_revision_1_2',
             'wi_screen_revision_2_1',
-            'wi_screen_revision_2_2',
-            'wi_screen_revision_3_1',
-            'wi_screen_revision_3_2'
+            'wi_screen_revision_2_2'
         ]);
         expect(
             rig.store.sampleReviews.list().map((review) => `${review.revision_ref}:${review.reader}:${review.valid}`)
-        ).toEqual(['revision_1:reader:true', 'revision_1:reader:true']);
+        ).toEqual(['revision_0:reader:true', 'revision_0:reader:true']);
     });
 });
 
@@ -280,7 +280,7 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
             summaryReaders: 2,
             crew: {
                 screenAnswer: ({ revisionId }) =>
-                    revisionId === 'revision_1'
+                    revisionId === 'revision_0'
                         ? {
                               issues: [
                                   {
@@ -292,7 +292,7 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
                                   }
                               ]
                           }
-                        : revisionId === 'revision_3'
+                        : revisionId === 'revision_2'
                           ? {
                                 issues: [
                                     {
@@ -338,12 +338,12 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
             rig.store.revisions
                 .list()
                 .map((revision) => `${revision.id}:${revision.state}:${JSON.stringify(revision.issue_counts)}`)
-        ).toEqual(['revision_2:selected:{"critical":0,"high":0}']);
+        ).toEqual(['revision_1:selected:{"critical":0,"high":0}']);
 
         // The losers' screening reviews went with the losers: only the winner's two remain.
         expect(
             rig.store.sampleReviews.list().map((review) => review.revision_ref)
-        ).toEqual(['revision_2', 'revision_2']);
+        ).toEqual(['revision_1', 'revision_1']);
 
         // §6.6's P11 audit line names every sample and the choice, BEFORE the deletes made the losers
         // unrecoverable; `sampling_round` is what makes the next round `+1`.
@@ -352,19 +352,55 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
         expect(history).toHaveLength(1);
         expect({
             round: history[0].round,
+            // H2 — the wave's ledger is part of this audit line, so the projection under test has to
+            // carry it: `wave` and `unresolved_blocking` are written with the line
+            // (`loop/engine.ts:1484-1492`) and are passed through when present
+            // (`api/projections.ts:491-499`). Reading them off the row into the received object is what
+            // lets the two literals below be the assertion, instead of the row asserting on itself.
+            wave: history[0].wave,
+            unresolved_blocking: history[0].unresolved_blocking,
             samples: history[0].samples,
             selected: history[0].selected
         }).toEqual({
             round: 1,
+            // H2 — the two facts the wave's ledger adds at the entry level, both of which a first round
+            // answers the same way whatever the rig's size: wave 0 (no Author clear has happened), and an
+            // unresolved-blocking bar of 0 (a first round demands no fix certificate). The attempt count
+            // and the ceiling are pinned where the attempt arithmetic is the subject —
+            // `phase1-sampling-progress.test.ts` and `phase1-gates.test.ts`.
+            wave: 0,
+            unresolved_blocking: 0,
             // The counts are per SAMPLE, across ALL its screening passes (§6.5): two passes each, so
-            // the critical on sample 1 is counted twice and the high on sample 3 twice.
+            // the critical on sample 1 is counted twice and the high on sample 3 twice. H2 adds the
+            // OUTCOME and the selector's reason for each refusal: this is the record that survives the
+            // truncation of the two losing drafts and their screening rows (P13/§6.6, H1-C1/F3).
             samples: [
-                { revision_id: 'revision_1', critical: 2, high: 0, valid: true, unresolved_fixes: [] },
-                { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                { revision_id: 'revision_3', critical: 0, high: 2, valid: true, unresolved_fixes: [] }
+                {
+                    revision_id: 'revision_0',
+                    critical: 2,
+                    high: 0,
+                    valid: true,
+                    unresolved_fixes: [],
+                    outcome: 'rejected',
+                    reject_reason: '2 critical / 0 major screening issues'
+                },
+                { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'accepted' },
+                {
+                    revision_id: 'revision_2',
+                    critical: 0,
+                    high: 2,
+                    valid: true,
+                    unresolved_fixes: [],
+                    outcome: 'rejected',
+                    reject_reason: '0 critical / 2 major screening issues'
+                }
             ],
-            selected: 'revision_2'
+            selected: 'revision_1'
         });
+        // A first round: there is no accepted draft, so there is no hill and no bar to report yet —
+        // `bestUnresolved` stays unproved and the streak rule never fires (R5).
+        expect(history[0].wave).toBe(0);
+        expect(history[0].unresolved_blocking).toBe(0);
         expect(story.sampling_round).toBe(1);
     });
 });
@@ -402,11 +438,11 @@ describe('§6.4 step 3 — a failed sample costs an attempt, not the round', () 
 
         await rig.run();
 
-        expect(runs(rig, 'wi_sample_summary_1_1')).toEqual([
-            'wi_sample_summary_1_1_1:failed',
-            'wi_sample_summary_1_1_2:torn_down'
+        expect(runs(rig, 'wi_sample_summary_0_1')).toEqual([
+            'wi_sample_summary_0_1_1:failed',
+            'wi_sample_summary_0_1_2:torn_down'
         ]);
-        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_0']);
         expect(summaryOf(rig).premise).toBe('the retry landed');
     });
 
@@ -420,11 +456,11 @@ describe('§6.4 step 3 — a failed sample costs an attempt, not the round', () 
         await rig.run(12);
 
         // 1 sample + the 3-attempt allowance = 4 attempts, every one a failed run.
-        expect(runs(rig, 'wi_sample_summary_1_1')).toEqual([
-            'wi_sample_summary_1_1_1:failed',
-            'wi_sample_summary_1_1_2:failed',
-            'wi_sample_summary_1_1_3:failed',
-            'wi_sample_summary_1_1_4:failed'
+        expect(runs(rig, 'wi_sample_summary_0_1')).toEqual([
+            'wi_sample_summary_0_1_1:failed',
+            'wi_sample_summary_0_1_2:failed',
+            'wi_sample_summary_0_1_3:failed',
+            'wi_sample_summary_0_1_4:failed'
         ]);
         expect(rig.store.revisions.list()).toEqual([]);
 
@@ -457,11 +493,11 @@ describe('§6.4 step 6 — the deep review runs on the SELECTED revision, with t
         const reviews = [...rig.items.values()].filter((item: WorkItem) => (item.id ?? '').startsWith('wi_review_'));
 
         expect(reviews.map((item) => item.id)).toEqual([
-            'wi_review_revision_1_a1',
-            'wi_review_revision_1_a2',
-            'wi_review_revision_1_a3'
+            'wi_review_revision_0_a1',
+            'wi_review_revision_0_a2',
+            'wi_review_revision_0_a3'
         ]);
-        expect(reviews.map((item) => item.revisionRef)).toEqual(['revision_1', 'revision_1', 'revision_1']);
+        expect(reviews.map((item) => item.revisionRef)).toEqual(['revision_0', 'revision_0', 'revision_0']);
         // §14 item 10's four angles, and NEVER the one-turn screening template: a deep-review pass
         // holds the tool catalogue, and `reader-screening` is the no-tool mode.
         expect(reviews.map((item) => item.templateRef)).toEqual([
@@ -488,7 +524,7 @@ describe('§6.4 step 6 — the deep review runs on the SELECTED revision, with t
         // One selected Summary revision, no competing drafts, nothing queued: L-29's gate holds.
         expect(
             rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)
-        ).toEqual(['revision_1:selected']);
+        ).toEqual(['revision_0:selected']);
         expect(rig.store.tasks.list()).toEqual([]);
     });
 });
@@ -511,7 +547,7 @@ describe('§6.8 — the refinement loop: a fix task arms round 2, whose selectio
             criterion_ref: 'C-14',
             cost: 'major',
             state: 'approved',
-            fingerprint: 'C-14|summary_1',
+            fingerprint: 'C-14|summary_0',
             related_refs: [selected.id]
         });
         const task = seedTask(rig.store, rig.storyId, {
@@ -531,7 +567,7 @@ describe('§6.8 — the refinement loop: a fix task arms round 2, whose selectio
         // The round number rides the item because the prompt compiler cannot derive it (§6.8): round 2
         // reads the PREVIOUS round's selected revision and the open tasks.
         expect({ key: sample?.key, round: sample?.item.round, sampleIndex: sample?.item.sampleIndex }).toEqual({
-            key: 'wi_sample_summary_1_2_1',
+            key: 'wi_sample_summary_0_2_1',
             round: 2,
             sampleIndex: 1
         });
@@ -543,7 +579,7 @@ describe('§6.8 — the refinement loop: a fix task arms round 2, whose selectio
             rig.store.revisions
                 .list()
                 .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
-        ).toEqual(['revision_1:r1:sampled:selected', 'revision_2:r2:refined:selected']);
+        ).toEqual(['revision_0:r1:sampled:selected', 'revision_1:r2:refined:selected']);
 
         // §6.8: the round's prompt carried the task, so the resample answers it — done, and the finding
         // closes with its task (a re-raise would read as a regression, L-16a).
@@ -554,8 +590,8 @@ describe('§6.8 — the refinement loop: a fix task arms round 2, whose selectio
 
         expect(story.sampling_round).toBe(2);
         expect((story.sampling_history ?? []).map((entry) => `${entry.round}:${entry.selected}`)).toEqual([
-            '1:revision_1',
-            '2:revision_2'
+            '1:revision_0',
+            '2:revision_1'
         ]);
 
         // The round-2 prompt really carried the base revision and the fix task (§6.8's compiled input).

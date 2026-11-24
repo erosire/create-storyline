@@ -224,10 +224,10 @@ describe('§15 steps 5-9 — phase ③, the chapter loop', () => {
         ).toEqual([
             // The built-in `writer-chapters` template carries `attempts: 2` (D-17d), so each chapter has
             // two blind drafts and the Editor's choice is the one that survives — chapter 2's winner is
-            // `revision_4` because chapter 1's pair took `revision_2` and `revision_3` (and phase ①'s
-            // sampling winner already spent `revision_1` in the same collection).
-            { state: 'done', current_revision: 'revision_2', last_score: '4/4' },
-            { state: 'done', current_revision: 'revision_4', last_score: '4/4' }
+            // `revision_3` because chapter 1's pair took `revision_1` and `revision_2` (and phase ①'s
+            // sampling winner already spent `revision_0` in the same collection).
+            { state: 'done', current_revision: 'revision_1', last_score: '4/4' },
+            { state: 'done', current_revision: 'revision_3', last_score: '4/4' }
         ]);
 
         // D-22: the selected draft's prose is what the chapter row carries, not the draft row.
@@ -235,7 +235,7 @@ describe('§15 steps 5-9 — phase ③, the chapter loop', () => {
             ['author', 'writer'],
             ['author', 'writer']
         ]);
-        expect(chapters[0].sections[1].text).toContain('draft wi_write_chapter_1_1_a1');
+        expect(chapters[0].sections[1].text).toContain('draft wi_write_chapter_0_1_a1');
 
         // The select ran once per chapter, and nothing is in flight.
         expect(rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_select_'))).toHaveLength(

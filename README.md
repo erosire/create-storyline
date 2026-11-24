@@ -53,18 +53,41 @@ that drives it, from one origin.
   (`src/server/api/server.ts`). It owns the loop (`src/server/loop/`), the §8 tool catalogue
   (`src/server/tools/`), the brief builder (`src/server/run/`), the provider client
   (`src/server/llm/`) and the event-journal Store (`src/server/store/` — `store.json` plus
-  `journal.jsonl`; the journal is the state, and a restart replays it). The REST API is mounted
+  `journal.jsonl`; the journal is the state, and a restart replays it). **A Story is a book**: the
+  server opens a workspace at the store root — one `Store` per Story under `<root>/stories/<uuid>/`
+  (with that Story's harness files beside it) and an app book at `<root>/server/` for the crew
+  catalogue and the host settings — and `src/server/runtime/` gives each book its own isolated
+  runtime (loop, executor, knowledge projection, thread log) behind one sweep, one fan-out ceiling and
+  one SSE feed. The REST API is mounted
   at `/v1/storyline`, and `GET /v1/storyline/stream` is a server-sent events feed of the Store's
   own commit groups (a `ready` frame first, then one frame per commit, debounced).
 - **UI** (`src/dashboard/`) — the Author's desk: the compact Stories panel with an attention-first
   phrase rail, the tabbed home desk (Requests / Create New Story), the pane-aware directive bar, the
   crew rail, the Ideas tray, the Goal panel and the prose editor. It dials the same origin at
   `/v1/storyline` and holds no authoritative state; `src/dashboard/api.ts` is its only transport.
+- **The Summary workspace** — the rail's one phrase is Summary, and under it the rail lists the
+  Summary's five **groups** (Premise, Promise, Theme, Tone, Ending), each badged with what it owes:
+  `to write` while it has no revision, a Writer mark while a live pass is replacing its text, and the
+  count of open blocking findings. The Summary pane is the composed **Overview** plus one pane per
+  group; each group pane shows that group's own revision number, its text, its findings, and a
+  **Revise** control that rewrites that group alone. Superseded revisions are counted, not listed —
+  the history stays in the book. A Story whose Summary is still written as one text (the legacy
+  `summary_mode: 'sampling'` shape) keeps the older sampling-round pane instead, including its two
+  counts and its revision list; nothing has to be migrated for that book to read correctly.
 - **The HTTP contract** is `src/storyline-server.swagger.yaml` (OpenAPI 3.0.3), the same pattern as
   the harness server's contract: every route, body, projection, status code, and the SSE feed at
   `/v1/storyline/stream` in one document. The UI renders server projections and mutates only through
   these operations; it never imports a server module, calls the model provider, or executes a harness
-  tool directly.
+  tool directly. The Summary's own three verbs are `GET /v1/storyline/stories/{id}/phrases` (the
+  grouped view; a legacy book answers `mode: 'sampling'`), `POST .../phrases/import` (the Author's
+  explicit, idempotent move of a legacy Summary onto groups) and `POST
+  .../phrases/groups/{groupId}/revise` (rewriting ONE group — `409` while a Writer pass holds it,
+  naming the runs that hold it). The whole-Summary verbs — `summary/revise`, `revisions/{id}/select`,
+  `revisions/merge` — answer `409` on a grouped Story and the refusal names the verb to use instead;
+  the crew's tools for the same moves are refused on that book too — `editSummary`, a Summary
+  `selectRevision`, and a `requestMerge` whose advice now points at a finding rather than at the
+  selection workflow — so nothing, Author or employee, is directed at the model the group design
+  replaced.
 - **The product contract** is `documents/specifications.md`. Every behaviour note in the code cites the
   id it serves (`L-` loop, `D-` design decision, `U-` UI, `S-` service, `T-` tool, `G-` goal,
   `E-` engine, `P-` principle, `V-` vocabulary), so a reader can go from a line of code to the
@@ -119,6 +142,34 @@ book and rules when this variable is unset, and when the variable IS set it outr
 boot), `STORYLINE_SWEEP_INTERVAL_MS` (how often the loop wakes; `0` means the Author drives it by hand),
 `STORYLINE_LEASE_IDLE_MS` (when an abandoned run's lease is stealable).
 
+**What the Summary asks of you.** A Story's Summary is written group by group: a Writer pass rewrites
+a batch of groups (`summary_sampling` is how many groups one pass may take) and its answer installs
+the moment it is accepted — there is no set of competing drafts to compare, and the text it replaces
+stays in the book as that group's history. An install also **re-arms the reading**: the new text is a
+new thing to read, so `summary_readers` structured seats open over the Overview as installed, then the
+same number of deep-review passes, and what they report becomes findings that name the groups they are
+about. An open finding is what routes the next rewrite, and a finding naming several groups is closed
+only once every group it names has been rewritten — a three-group complaint under a batch of one is
+three sweeps of work, and the finding stays open (with its repair task open) until the last group
+answers it. A group gets **two** rewrite attempts **against the text it holds at that moment** — that
+is a bound on re-drafting ONE text, not a lifetime ceiling on the group: a successful install resets
+the count, so a group rewritten cleanly and criticised again has a fresh pair against the NEW text, a
+rewritten Seed resets the allowance along with the text, and the reading passes never spend it. When
+the two are spent the loop stops paying for that group and leaves the finding open in your review rail
+with its attempts visible, so the recovery is on the finding — decide it, or rewrite the group yourself
+with the Revise control. Nothing installs a least-bad text and nothing re-arms a stall by itself. The
+Summary is not offered for sign-off until that reading has happened: while seats or deep passes are
+owed on the text currently installed, the loop keeps the Story `ready` instead of offering
+`phase_signoff`, and the Accept button stays blocked while a group is unwritten, a blocking finding is
+open, or a Writer is mid-rewrite on a group. A Story whose Summary is still the legacy whole-Summary
+shape (`summary_mode: 'sampling'`) keeps the older rules and their escalation rows: it writes
+`summary_sampling` competing drafts per round, installs only one, and a round that finds nothing
+acceptable installs NOTHING — it keeps the text it had, buys attempts while each measurably improves on
+the best it has proved, and stops (with one question in your queue) when the attempts stop proving
+anything. Deleting a Story is a purge: its rows — the Summary's groups, its Overview and their revision
+history included — its harness, its threads and its `<root>/stories/<uuid>/` folder go together, and a
+root still holding a flat `store.json` is refused rather than silently migrated.
+
 ### Employees, agents, harnesses, sessions and threads
 
 Storyline's roster members are **employees** — Writer, Editor, Researcher, Reader, Checker — not agents. An
@@ -143,7 +194,10 @@ server (`src/server/api/server.ts`) is the only server and owns every Story deci
   transcripts and threads, so no state crosses between books.
 - **A phase is a session.** The engine has no session object, so Storyline owns that level: the
   Story's `summary` / `plotlines` / `chapters` phase is a session record (the UI calls it a
-  "phrase", P1/P2/P3) holding the threads that phase caused.
+  "phrase", P1/P2/P3) holding the threads that phase caused. Note the two uses of the word: the
+  rail's "phrase" is this SESSION/reading surface — today exactly one, Summary — while the
+  **Summary Phrase**'s *groups* are the five writable parts inside it (`shared/phrase.ts`). They are
+  different levels, and nothing in the store branches on the rail's word.
 - **A Run is a thread.** Each dispatched Work Item (and each panel agent or delegated
   sub-context) opens a host thread in its Story's harness with the assembled brief as the system
   turn. The employee named by the template role is the agent for that thread's lifetime. The
@@ -173,10 +227,13 @@ test — it is scripted from what its brief actually says:
 - `src/server/llm/mock.ts` is a `ChatClient` whose answers come from a handler. The integration
   harness (`src/server/integration/harness.ts`) reads each run's BRIEF — the same bytes a real
   model would read — and answers as the template the brief names: a Writer calls `createPlotline` /
-  `editChapter` (a phase-① sampler answers with a structured `SummarySample` and no tool call), a
-  Checker calls `submitVerdict` with the criteria the brief briefed it on, a Reader files findings
-  (a phase-① screening Reader answers with a structured `IssueList`). A refusal the tool layer gives
-  is recorded with its rule id, so a test asserts the rule the crew hit.
+  `editChapter` (a grouped Summary's `draft_groups` run answers with a structured `GroupDraft` —
+  one `{group_ref, content}` per group in its batch — and no tool call; on a legacy book the sampler
+  answers with a structured `SummarySample`), a Checker calls `submitVerdict` with the criteria the
+  brief briefed it on, a Reader files findings (a `review_groups` seat answers with a structured
+  `GroupReview`, every issue carrying its `group_refs`; a legacy screening Reader answers with an
+  `IssueList`). A refusal the tool layer gives is recorded with its rule id, so a test asserts the
+  rule the crew hit.
 - `src/server/integration/*.test.ts` boots the real server on port 0 and drives it with `fetch`:
   `slice-phases` (Seed → Summary → Plotlines, the Ideas tray and the lock gates), `slice-chapters`
   (chapters, the finding → repair ladder, the drain that proposes completion), `slice-ops`

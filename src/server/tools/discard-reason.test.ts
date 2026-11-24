@@ -169,24 +169,33 @@ describe('the discard reason on a discarded revision (R1)', () => {
 
         expect(result.ok).toBe(true);
         expect(result.data).toEqual({
-            unit_ref: 'chapter_1',
-            discarded: ['revision_1', 'revision_2'],
+            unit_ref: 'chapter_0',
+            // `pendingRevisions` answers in `revisionRows` order — newest draft first: `created_at` desc,
+            // and for two drafts written inside one millisecond (the case here, and the case in every
+            // one-tool-turn fan-out) the MINTED ID desc, `artifacts.ts:compareNewestFirst` — so the
+            // discarded list is the drafts in REVERSE creation order.
+            discarded: ['revision_1', 'revision_0'],
             count: 2,
-            next: 'a Writer works the re-brief task for chapter_1; the rejected drafts stay readable'
+            next: 'a Writer works the re-brief task for chapter_0; the rejected drafts stay readable'
         });
 
         // R1: the reason is ON the rows, and `selection_note` is untouched — it names a winner, and
         // these rows have none.
         expect(reasonsOf(store)).toEqual([
-            { id: 'revision_1', state: 'discarded', selection_note: undefined, discard_reason: why },
-            { id: 'revision_2', state: 'discarded', selection_note: undefined, discard_reason: why }
+            { id: 'revision_0', state: 'discarded', selection_note: undefined, discard_reason: why },
+            { id: 'revision_1', state: 'discarded', selection_note: undefined, discard_reason: why }
         ]);
 
         // P11/D-12a: the journaled patch is the state change plus the reason, in one write, under the
-        // tool's own commit label — the reason is durable history, not a projection guess.
+        // tool's own commit label — the reason is durable history, not a projection guess. The order below
+        // is the ACTUAL write order, not the `discarded` list restated: `rejectAll` walks
+        // `pendingRevisions` and issues one `store.revisions.update` per draft in that order
+        // (`editor.ts:rejectAll`), so the journal is the write order the tool really performed — which is the
+        // same newest-first order, for the reason pinned above, and not an assumption read back off the
+        // `discarded` array above it.
         expect(revisionPatchesOf(store, 'tool:rejectAll')).toEqual([
             { id: 'revision_1', patch: { state: 'discarded', discard_reason: why } },
-            { id: 'revision_2', patch: { state: 'discarded', discard_reason: why } }
+            { id: 'revision_0', patch: { state: 'discarded', discard_reason: why } }
         ]);
 
         // L-18's other half is unchanged: the re-brief task still carries the same words the row does.
@@ -200,9 +209,9 @@ describe('the discard reason on a discarded revision (R1)', () => {
             }))
         ).toEqual([
             {
-                id: 'task_1',
+                id: 'task_0',
                 kind: 're_brief',
-                title: 'Re-brief chapter_1: all 2 drafts rejected',
+                title: 'Re-brief chapter_0: all 2 drafts rejected',
                 owner_role: 'writer',
                 detail: `${why}\nRe-brief: Rebuild the chapter around the map, not the weather.`
             }
@@ -221,7 +230,7 @@ describe('the discard reason on a discarded revision (R1)', () => {
         });
 
         expect(result.ok).toBe(true);
-        expect(store.revisions.require('revision_1')).toMatchObject({
+        expect(store.revisions.require('revision_0')).toMatchObject({
             state: 'discarded',
             discard_reason: 'The brief is wrong, not the prose.'
         });
@@ -234,7 +243,7 @@ describe('the discard reason on a discarded revision (R1)', () => {
         const note = 'It keeps the flood deliberate, which is the rule the Seed promises (T-2a).';
         const result = await call('editor', 'selectRevision', {
             unit_ref: summaryId,
-            revision_id: 'revision_2',
+            revision_id: 'revision_1',
             selection_note: note,
             expects: [{ id: summaryId, rev: 1 }]
         });
@@ -245,13 +254,13 @@ describe('the discard reason on a discarded revision (R1)', () => {
         // D-22's Summary exception: the loser survives as history, with the sentence that decided
         // against it. The winner keeps `selection_note` (T-2a) and gains no `discard_reason`.
         expect(reasonsOf(store)).toEqual([
-            { id: 'revision_1', state: 'discarded', selection_note: undefined, discard_reason: note },
-            { id: 'revision_2', state: 'selected', selection_note: note, discard_reason: undefined }
+            { id: 'revision_0', state: 'discarded', selection_note: undefined, discard_reason: note },
+            { id: 'revision_1', state: 'selected', selection_note: note, discard_reason: undefined }
         ]);
 
         expect(revisionPatchesOf(store, 'tool:selectRevision')).toEqual([
-            { id: 'revision_2', patch: { state: 'selected', selection_note: note } },
-            { id: 'revision_1', patch: { state: 'discarded', discard_reason: note } }
+            { id: 'revision_1', patch: { state: 'selected', selection_note: note } },
+            { id: 'revision_0', patch: { state: 'discarded', discard_reason: note } }
         ]);
 
         // The install is still the winner's prose (this is the selection, not a new verb).
@@ -264,24 +273,24 @@ describe('the discard reason on a discarded revision (R1)', () => {
 
         const result = await call('editor', 'selectRevision', {
             unit_ref: chapter.id,
-            revision_id: 'revision_2',
+            revision_id: 'revision_1',
             selection_note: 'It keeps the bell under the water.',
             expects: [{ id: chapter.id, rev: chapter.rev }]
         });
 
         expect(result.ok).toBe(true);
-        expect((result.data as Record<string, unknown>).deleted_drafts).toEqual(['revision_1']);
+        expect((result.data as Record<string, unknown>).deleted_drafts).toEqual(['revision_0']);
 
         // Only RETAINED rows carry a reason; D-22's hard delete is unchanged, and the winner's own
         // fields are exactly what they were before this field existed.
         expect(reasonsOf(store)).toEqual([
             {
-                id: 'revision_2',
+                id: 'revision_1',
                 state: 'selected',
                 selection_note: 'It keeps the bell under the water.',
                 discard_reason: undefined
             }
         ]);
-        expect(store.revisions.get('revision_1')).toBeUndefined();
+        expect(store.revisions.get('revision_0')).toBeUndefined();
     });
 });

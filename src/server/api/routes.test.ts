@@ -118,7 +118,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
         // A fresh Story is in phase ① with phase ②'s level not reached yet (L-14: `n/a`, never `0/n`), and
         // phase ①'s level fails the one criterion nothing has satisfied yet: the Seed is unwritten prose.
         expect(created.body).toEqual({
-            id: 'story_1',
+            id: 'story_0',
             title: 'The Salt Cartographer',
             phase: 'summary',
             status: 'ready',
@@ -169,7 +169,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
             chapter_count: 1
         });
 
-        const dialed = await call(app, 'PATCH', '/stories/story_1', {
+        const dialed = await call(app, 'PATCH', '/stories/story_0', {
             title: 'The Keeper',
             auto_approve: ['critical']
         });
@@ -179,7 +179,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
         expect((dialed.body as { auto_approve: string[] }).auto_approve).toEqual(['critical']);
 
         // The dial is a Story-level setting, so the view the cost panel reads carries it (D-35).
-        const view = (await call(app, 'GET', '/stories/story_1')).body as {
+        const view = (await call(app, 'GET', '/stories/story_0')).body as {
             story: { title: string; auto_approve: string[] };
         };
 
@@ -188,7 +188,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
 
         // Phase ①'s two counts are Author settings too: the Summary pane's dials are the only way
         // to ask for ten Writer samples without editing a built-in template (D-17, D-17d).
-        const counts = await call(app, 'PATCH', '/stories/story_1', {
+        const counts = await call(app, 'PATCH', '/stories/story_0', {
             summary_sampling: 10,
             summary_readers: 7
         });
@@ -196,7 +196,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
         expect(counts.status).toBe(200);
         expect(
             (
-                (await call(app, 'GET', '/stories/story_1')).body as {
+                (await call(app, 'GET', '/stories/story_0')).body as {
                     story: { summary_sampling: number; summary_readers: number };
                 }
             ).story
@@ -205,37 +205,37 @@ describe('§10.2 U-1 — the Stories panel', () => {
         // D-3c: growing creates `outlined` chapters and shrinking drops the extras. The confirm is the
         // DASHBOARD's gate (it asks before sending), so the route always grants it — `loop/engine.test.ts`
         // pins the unconfirmed refusal, and this pins what the shipped contract actually does.
-        const grown = await call(app, 'PATCH', '/stories/story_1', { chapter_count: 3 });
+        const grown = await call(app, 'PATCH', '/stories/story_0', { chapter_count: 3 });
 
         expect(grown.status).toBe(200);
         expect(
-            ((await call(app, 'GET', '/stories/story_1')).body as { chapters: Array<{ id: string }> }).chapters.map(
+            ((await call(app, 'GET', '/stories/story_0')).body as { chapters: Array<{ id: string }> }).chapters.map(
                 (row) => row.id
             )
-        ).toEqual(['chapter_1', 'chapter_2', 'chapter_3']);
+        ).toEqual(['chapter_0', 'chapter_1', 'chapter_2']);
 
-        const shrunk = await call(app, 'PATCH', '/stories/story_1', { chapter_count: 1 });
+        const shrunk = await call(app, 'PATCH', '/stories/story_0', { chapter_count: 1 });
 
         expect(shrunk.status).toBe(200);
         expect(
-            ((await call(app, 'GET', '/stories/story_1')).body as { chapters: Array<{ id: string }> }).chapters.map(
+            ((await call(app, 'GET', '/stories/story_0')).body as { chapters: Array<{ id: string }> }).chapters.map(
                 (row) => row.id
             )
-        ).toEqual(['chapter_1']);
+        ).toEqual(['chapter_0']);
 
         // D-25a last, because it is the destructive one: the Seed is what the Goal is measured against, so
         // editing it is a full backtrack — phase ① re-opens and the derived artifacts are scrapped rather
         // than a column being patched.
-        const seeded = await call(app, 'PATCH', '/stories/story_1', { idea: 'A keeper who has never left the rock.' });
+        const seeded = await call(app, 'PATCH', '/stories/story_0', { idea: 'A keeper who has never left the rock.' });
 
         expect(seeded.status).toBe(200);
         expect((seeded.body as { phase: string; summary_locked: boolean; levels: { plotlines: string } }).phase).toBe(
             'summary'
         );
         expect((seeded.body as { levels: { plotlines: string } }).levels.plotlines).toBe('n/a');
-        expect(store.stories.require('story_1').idea).toBe('A keeper who has never left the rock.');
+        expect(store.stories.require('story_0').idea).toBe('A keeper who has never left the rock.');
         expect(
-            ((await call(app, 'GET', '/stories/story_1')).body as { chapters: Array<{ id: string }> }).chapters
+            ((await call(app, 'GET', '/stories/story_0')).body as { chapters: Array<{ id: string }> }).chapters
         ).toEqual([]);
     });
 
@@ -248,7 +248,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
             chapter_count: 1
         });
 
-        const nothing = await call(app, 'PATCH', '/stories/story_1', {});
+        const nothing = await call(app, 'PATCH', '/stories/story_0', {});
 
         expect(nothing.status).toBe(400);
         expect(errorOf(nothing)).toBe(
@@ -256,14 +256,14 @@ describe('§10.2 U-1 — the Stories panel', () => {
         );
 
         expect([
-            (await call(app, 'PATCH', '/stories/story_1', { title: '   ' })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { idea: '' })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { chapter_count: 0 })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { chapter_count: 1.5 })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { auto_approve: ['enjoyable'] })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { summary_sampling: 0 })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { summary_readers: 21 })).status,
-            (await call(app, 'PATCH', '/stories/story_1', { summary_readers: 2.5 })).status
+            (await call(app, 'PATCH', '/stories/story_0', { title: '   ' })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { idea: '' })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { chapter_count: 0 })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { chapter_count: 1.5 })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { auto_approve: ['enjoyable'] })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { summary_sampling: 0 })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { summary_readers: 21 })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { summary_readers: 2.5 })).status
         ]).toEqual([400, 400, 400, 400, 400, 400, 400, 400]);
 
         const missing = await call(app, 'PATCH', '/stories/story_missing', { title: 'Nowhere' });
@@ -280,9 +280,9 @@ describe('§10.2 U-1 — the Stories panel', () => {
             idea: 'A keeper and a lighthouse.',
             chapter_count: 1
         });
-        seedChapter(store, 'story_1', { order: 1 });
+        seedChapter(store, 'story_0', { order: 1 });
 
-        const reply = await call(app, 'GET', '/stories/story_1');
+        const reply = await call(app, 'GET', '/stories/story_0');
 
         expect(reply.status).toBe(200);
 
@@ -357,7 +357,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
         ]);
         // G-1: the per-chapter bar is the chapter level's own arithmetic — an unevaluated chapter is 0
         // against the four criteria that judge one, not an empty string.
-        expect(goal.chapter_progress).toEqual({ chapter_1: '0/4 · failing: C-7, C-8, C-9, C-12' });
+        expect(goal.chapter_progress).toEqual({ chapter_0: '0/4 · failing: C-7, C-8, C-9, C-12' });
     });
 });
 
@@ -373,7 +373,7 @@ describe('§10.2 U-16 — lock and backtrack', () => {
             idea: 'A chart that redraws itself.',
             chapter_count: 1
         });
-        await call(app, 'PATCH', '/stories/story_1/goal', {
+        await call(app, 'PATCH', '/stories/story_0/goal', {
             criteria: [
                 { op: 'remove', id: 'C-14' },
                 { op: 'remove', id: 'C-15' }
@@ -390,7 +390,7 @@ describe('§10.2 U-16 — lock and backtrack', () => {
             chapter_count: 1
         });
 
-        const reply = await call(app, 'POST', '/stories/story_1/lock');
+        const reply = await call(app, 'POST', '/stories/story_0/lock');
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toBe(
@@ -402,9 +402,9 @@ describe('§10.2 U-16 — lock and backtrack', () => {
         const { app, store } = makeApp();
 
         await storyWithPassingGoal(app);
-        seedIdea(store, 'story_1', { phase: 'summary', state: 'proposed', fingerprint: 'bell-under-water' });
+        seedIdea(store, 'story_0', { phase: 'summary', state: 'proposed', fingerprint: 'bell-under-water' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/lock');
+        const reply = await call(app, 'POST', '/stories/story_0/lock');
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toBe(
@@ -417,7 +417,7 @@ describe('§10.2 U-16 — lock and backtrack', () => {
 
         await storyWithPassingGoal(app);
 
-        const reply = await call(app, 'POST', '/stories/story_1/lock');
+        const reply = await call(app, 'POST', '/stories/story_0/lock');
 
         expect(reply.status).toBe(200);
         expect((reply.body as { phase: string; summary_locked: boolean }).phase).toBe('plotlines');
@@ -453,13 +453,13 @@ describe('§10.2 U-16 — lock and backtrack', () => {
         const { app, store } = makeApp();
 
         await storyWithPassingGoal(app);
-        await call(app, 'POST', '/stories/story_1/lock');
+        await call(app, 'POST', '/stories/story_0/lock');
 
-        const reply = await call(app, 'POST', '/stories/story_1/backtrack', { phase: 'summary' });
+        const reply = await call(app, 'POST', '/stories/story_0/backtrack', { phase: 'summary' });
 
         expect(reply.status).toBe(200);
         expect((reply.body as { summary_locked: boolean; phase: string }).summary_locked).toBe(false);
-        expect(store.stories.require('story_1').summary_locked).toBe(false);
+        expect(store.stories.require('story_0').summary_locked).toBe(false);
     });
 
     it('refuses a backtrack target that is not a phase the Story left', async () => {
@@ -467,7 +467,7 @@ describe('§10.2 U-16 — lock and backtrack', () => {
 
         await call(app, 'POST', '/stories', { title: 'Wrong Target', idea: 'A lighthouse.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/backtrack', { phase: 'chapters' });
+        const reply = await call(app, 'POST', '/stories/story_0/backtrack', { phase: 'chapters' });
 
         expect(reply.status).toBe(400);
         expect(errorOf(reply)).toBe(
@@ -490,13 +490,13 @@ describe('§10.2 U-3 — stop, resume, clear-pending', () => {
             chapter_count: 1
         });
 
-        const stopped = await call(app, 'POST', '/stories/story_1/stop');
+        const stopped = await call(app, 'POST', '/stories/story_0/stop');
 
         expect(stopped.status).toBe(200);
         expect((stopped.body as { status: string }).status).toBe('stopped');
-        expect(store.stories.require('story_1').author_stop).toBe(true);
+        expect(store.stories.require('story_0').author_stop).toBe(true);
 
-        const resumed = await call(app, 'POST', '/stories/story_1/resume');
+        const resumed = await call(app, 'POST', '/stories/story_0/resume');
 
         expect(resumed.status).toBe(200);
         expect((resumed.body as { status: string }).status).toBe('ready');
@@ -506,9 +506,9 @@ describe('§10.2 U-3 — stop, resume, clear-pending', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Cleared', idea: 'A coastline that moves.', chapter_count: 1 });
-        seedTask(store, 'story_1', { kind: 'fix', state: 'open', title: 'pay off the 1911 map' });
+        seedTask(store, 'story_0', { kind: 'fix', state: 'open', title: 'pay off the 1911 map' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/clear-pending');
+        const reply = await call(app, 'POST', '/stories/story_0/clear-pending');
 
         expect(reply.status).toBe(200);
         expect(store.tasks.list().map((row) => `${row.kind}:${row.state}`)).toEqual(['fix:wontfix']);
@@ -528,22 +528,22 @@ describe('§10.2 U-10a — findings on the desk', () => {
             idea: 'A map that precedes the land.',
             chapter_count: 1
         });
-        seedFinding(store, 'story_1', { state: 'confirmed', cost: 'major', fingerprint: 'C-4|chapter_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', cost: 'major', fingerprint: 'C-4|chapter_0' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/findings/finding_1/approve', {
+        const reply = await call(app, 'POST', '/stories/story_0/findings/finding_0/approve', {
             why: 'the map has to be paid off in chapter 1'
         });
 
         expect(reply.status).toBe(200);
 
-        const finding = store.findings.require('finding_1');
+        const finding = store.findings.require('finding_0');
 
         expect(finding.state).toBe('approved');
         expect(finding.approved_by).toBe('author');
 
         const task = store.tasks.list().find((row) => row.kind === 'fix');
 
-        expect(task?.finding_ref).toBe('finding_1');
+        expect(task?.finding_ref).toBe('finding_0');
     });
 
     it('re-opens a drained Story when the approval starts work again (L-37a)', async () => {
@@ -552,15 +552,15 @@ describe('§10.2 U-10a — findings on the desk', () => {
         await call(app, 'POST', '/stories', { title: 'Re-opened', idea: 'A book that ends twice.', chapter_count: 1 });
 
         store.stories.update(
-            'story_1',
+            'story_0',
             { status: 'pending', pending_kind: 'drained' },
             { run_ref: null, author: true, why: 'the test puts the Story at the drained boundary' },
-            [{ id: 'story_1', rev: store.stories.require('story_1').rev }]
+            [{ id: 'story_0', rev: store.stories.require('story_0').rev }]
         );
 
-        seedFinding(store, 'story_1', { state: 'confirmed', cost: 'major', fingerprint: 'C-4|chapter_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', cost: 'major', fingerprint: 'C-4|chapter_0' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/findings/finding_1/approve', {
+        const reply = await call(app, 'POST', '/stories/story_0/findings/finding_0/approve', {
             why: 'still worth doing'
         });
 
@@ -576,14 +576,14 @@ describe('§10.2 U-10a — findings on the desk', () => {
             idea: 'A keeper who stops keeping.',
             chapter_count: 1
         });
-        seedFinding(store, 'story_1', { state: 'confirmed', cost: 'minor', fingerprint: 'C-4|chapter_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', cost: 'minor', fingerprint: 'C-4|chapter_0' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/findings/finding_1/discard', {
+        const reply = await call(app, 'POST', '/stories/story_0/findings/finding_0/discard', {
             why: 'the repetition is the point'
         });
 
         expect(reply.status).toBe(200);
-        expect(store.findings.require('finding_1').state).toBe('discarded');
+        expect(store.findings.require('finding_0').state).toBe('discarded');
 
         const empty = await call(app, 'GET', '/queue');
 
@@ -594,9 +594,9 @@ describe('§10.2 U-10a — findings on the desk', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Silent', idea: 'A survey with no notes.', chapter_count: 1 });
-        seedFinding(store, 'story_1', { state: 'confirmed', fingerprint: 'C-4|chapter_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', fingerprint: 'C-4|chapter_0' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/findings/finding_1/approve', { why: '   ' });
+        const reply = await call(app, 'POST', '/stories/story_0/findings/finding_0/approve', { why: '   ' });
 
         expect(reply.status).toBe(400);
         expect(errorOf(reply)).toBe('`why` is required: an approval with no reason is not auditable (D-8, T-5).');
@@ -606,19 +606,19 @@ describe('§10.2 U-10a — findings on the desk', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Mine', idea: 'One book.', chapter_count: 1 });
-        seedFinding(store, 'story_1', { state: 'confirmed', fingerprint: 'C-4|chapter_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', fingerprint: 'C-4|chapter_0' });
 
-        const reply = await call(app, 'POST', '/stories/story_1/findings/finding_9/approve', { why: 'wrong id' });
+        const reply = await call(app, 'POST', '/stories/story_0/findings/finding_8/approve', { why: 'wrong id' });
 
         expect(reply.status).toBe(404);
-        expect(errorOf(reply)).toBe('no finding named finding_9 is in the book (P1: the store is the memory)');
+        expect(errorOf(reply)).toBe('no finding named finding_8 is in the book (P1: the store is the memory)');
     });
 });
 
 describe('§10.2 U-15 — the Ideas tray', () => {
     /** A sourced, unverified Idea — D-27's exact case. */
     const sourcedIdea = (store: Store): void => {
-        seedIdea(store, 'story_1', {
+        seedIdea(store, 'story_0', {
             phase: 'summary',
             state: 'proposed',
             fingerprint: 'steeple-bell',
@@ -639,13 +639,13 @@ describe('§10.2 U-15 — the Ideas tray', () => {
         await call(app, 'POST', '/stories', { title: 'Unverified', idea: 'A valley under water.', chapter_count: 1 });
         sourcedIdea(store);
 
-        const reply = await call(app, 'POST', '/stories/story_1/ideas/idea_1/select', { note: '' });
+        const reply = await call(app, 'POST', '/stories/story_0/ideas/idea_0/select', { note: '' });
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toBe(
-            'Idea idea_1 cites sources the Editor has not verified — pick it with a note, or that is the explicit "I know" this Idea has not earned (D-27, C-15).'
+            'Idea idea_0 cites sources the Editor has not verified — pick it with a note, or that is the explicit "I know" this Idea has not earned (D-27, C-15).'
         );
-        expect(store.ideas.require('idea_1').state).toBe('proposed');
+        expect(store.ideas.require('idea_0').state).toBe('proposed');
     });
 
     it('takes a note as the Author\'s explicit "I know" and decides the tray (D-27, D-29)', async () => {
@@ -654,13 +654,13 @@ describe('§10.2 U-15 — the Ideas tray', () => {
         await call(app, 'POST', '/stories', { title: 'Known', idea: 'A valley under water.', chapter_count: 1 });
         sourcedIdea(store);
 
-        const reply = await call(app, 'POST', '/stories/story_1/ideas/idea_1/select', {
+        const reply = await call(app, 'POST', '/stories/story_0/ideas/idea_0/select', {
             note: 'I know — I read the survey myself'
         });
 
         expect(reply.status).toBe(200);
 
-        const idea = store.ideas.require('idea_1');
+        const idea = store.ideas.require('idea_0');
 
         expect(idea.state).toBe('selected');
         expect(idea.selection_note).toBe('I know — I read the survey myself');
@@ -676,7 +676,7 @@ describe('§10.2 U-15 — the Ideas tray', () => {
             store.journal
                 .filter((event) => event.commit_label === 'decide_idea')
                 .map((event) => `${event.collection}:${event.op}:${event.id}`)
-        ).toEqual(['ideas:update:idea_1', 'tasks:create:task_1']);
+        ).toEqual(['ideas:update:idea_0', 'tasks:create:task_0']);
     });
 
     it('discards and defers, and clears the sign-off the tray was blocking (L-7a, D-36)', async () => {
@@ -684,29 +684,29 @@ describe('§10.2 U-15 — the Ideas tray', () => {
 
         await call(app, 'POST', '/stories', { title: 'Deferred', idea: 'A town under the water.', chapter_count: 1 });
 
-        seedIdea(store, 'story_1', { phase: 'summary', state: 'proposed', fingerprint: 'bell' });
-        seedIdea(store, 'story_1', { phase: 'summary', state: 'proposed', fingerprint: 'lantern' });
+        seedIdea(store, 'story_0', { phase: 'summary', state: 'proposed', fingerprint: 'bell' });
+        seedIdea(store, 'story_0', { phase: 'summary', state: 'proposed', fingerprint: 'lantern' });
 
         // The loop parked this Story on the tray; that is the state the decision releases (L-7a).
         store.stories.update(
-            'story_1',
+            'story_0',
             { status: 'pending', pending_kind: 'idea_selection' },
             { run_ref: null, author: true, why: 'fixture: the tray is what this Story is waiting on' },
-            [{ id: 'story_1', rev: store.stories.require('story_1').rev }]
+            [{ id: 'story_0', rev: store.stories.require('story_0').rev }]
         );
 
-        const deferred = await call(app, 'POST', '/stories/story_1/ideas/idea_1/defer');
+        const deferred = await call(app, 'POST', '/stories/story_0/ideas/idea_0/defer');
 
         expect(deferred.status).toBe(200);
-        expect(store.ideas.require('idea_1').state).toBe('deferred');
+        expect(store.ideas.require('idea_0').state).toBe('deferred');
 
-        const discarded = await call(app, 'POST', '/stories/story_1/ideas/idea_2/discard');
+        const discarded = await call(app, 'POST', '/stories/story_0/ideas/idea_1/discard');
 
         expect(discarded.status).toBe(200);
-        expect(store.ideas.require('idea_2').state).toBe('discarded');
+        expect(store.ideas.require('idea_1').state).toBe('discarded');
 
         // The tray is empty, so a Story that was parked on idea_selection moves to the sign-off.
-        const story = store.stories.require('story_1');
+        const story = store.stories.require('story_0');
 
         expect(story.pending_kind).toBe('phase_signoff');
     });
@@ -725,28 +725,28 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
 
         // Narrow the dial to critical so the major finding really is on the desk (D-35). In
         // phase ① only critical/major findings become Author work; minor/taste notes do not.
-        await call(app, 'PATCH', '/stories/story_1', { auto_approve: ['critical'] });
-        seedFinding(store, 'story_1', {
+        await call(app, 'PATCH', '/stories/story_0', { auto_approve: ['critical'] });
+        seedFinding(store, 'story_0', {
             state: 'confirmed',
             cost: 'major',
             title: 'the bell is unpaid',
             evidence: 'ch2 sec_1',
             fingerprint: 'C-9|ch2'
         });
-        seedIdea(store, 'story_1', {
+        seedIdea(store, 'story_0', {
             phase: 'summary',
             state: 'proposed',
             body: 'let the keeper lie',
             fingerprint: 'keeper-lie'
         });
-        seedTask(store, 'story_1', {
+        seedTask(store, 'story_0', {
             kind: 'escalation',
             state: 'open',
             title: 'does the steeple survive?',
             detail: 'the two plotlines disagree',
             criterion_ref: 'C-4'
         });
-        seedTask(store, 'story_2', {
+        seedTask(store, 'story_1', {
             kind: 'capability_gap',
             state: 'open',
             title: 'no tool writes a plotline',
@@ -761,36 +761,36 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
         expect(items).toEqual([
             {
                 kind: 'finding',
-                story_id: 'story_1',
+                story_id: 'story_0',
                 story_title: 'First Book',
-                id: 'finding_1',
+                id: 'finding_0',
                 title: 'the bell is unpaid',
                 evidence: 'ch2 sec_1',
                 cost: 'major'
             },
             {
                 kind: 'idea',
-                story_id: 'story_1',
+                story_id: 'story_0',
                 story_title: 'First Book',
-                id: 'idea_1',
+                id: 'idea_0',
                 title: 'let the keeper lie',
                 detail: 'direction · phase summary',
                 evidence: 'reader-continuity'
             },
             {
                 kind: 'escalation',
-                story_id: 'story_1',
+                story_id: 'story_0',
                 story_title: 'First Book',
-                id: 'task_1',
+                id: 'task_0',
                 title: 'does the steeple survive?',
                 detail: 'the two plotlines disagree',
                 evidence: 'C-4'
             },
             {
                 kind: 'tool_gap',
-                story_id: 'story_2',
+                story_id: 'story_1',
                 story_title: 'Second Book',
-                id: 'task_2',
+                id: 'task_1',
                 title: 'no tool writes a plotline',
                 evidence: 'C-1'
             }
@@ -807,15 +807,15 @@ describe('§10.2 U-17 — the prose pane', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Running', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
+        seedChapter(store, 'story_0', { order: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/chapters/chapter_1/sections/sec_2', {
+        const reply = await call(app, 'POST', '/stories/story_0/chapters/chapter_0/sections/sec_2', {
             content: 'the Author was here'
         });
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toBe(
-            'the prose pane is editable only while the Story is stopped — pause it first (D-37): story_1 is ready'
+            'the prose pane is editable only while the Story is stopped — pause it first (D-37): story_0 is ready'
         );
     });
 
@@ -823,16 +823,16 @@ describe('§10.2 U-17 — the prose pane', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Paused Prose', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
-        await call(app, 'POST', '/stories/story_1/stop');
+        seedChapter(store, 'story_0', { order: 1 });
+        await call(app, 'POST', '/stories/story_0/stop');
 
-        const reply = await call(app, 'POST', '/stories/story_1/chapters/chapter_1/sections/sec_2', {
+        const reply = await call(app, 'POST', '/stories/story_0/chapters/chapter_0/sections/sec_2', {
             content: 'the Author was here instead'
         });
 
         expect(reply.status).toBe(200);
 
-        const section = store.chapters.require('chapter_1').sections.find((row) => row.id === 'sec_2');
+        const section = store.chapters.require('chapter_0').sections.find((row) => row.id === 'sec_2');
 
         expect(section?.text).toBe('the Author was here instead');
         expect(section?.origin).toBe('author');
@@ -842,20 +842,20 @@ describe('§10.2 U-17 — the prose pane', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Undone', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
-        await call(app, 'POST', '/stories/story_1/stop');
-        await call(app, 'POST', '/stories/story_1/chapters/chapter_1/sections/sec_2', {
+        seedChapter(store, 'story_0', { order: 1 });
+        await call(app, 'POST', '/stories/story_0/stop');
+        await call(app, 'POST', '/stories/story_0/chapters/chapter_0/sections/sec_2', {
             content: 'the Author was here instead'
         });
 
-        const reply = await call(app, 'POST', '/stories/story_1/undo', {
-            chapter_id: 'chapter_1',
+        const reply = await call(app, 'POST', '/stories/story_0/undo', {
+            chapter_id: 'chapter_0',
             section_id: 'sec_2'
         });
 
         expect(reply.status).toBe(200);
 
-        const section = store.chapters.require('chapter_1').sections.find((row) => row.id === 'sec_2');
+        const section = store.chapters.require('chapter_0').sections.find((row) => row.id === 'sec_2');
 
         expect(section?.text).toBe('Below it, water where the town had been.');
     });
@@ -864,13 +864,13 @@ describe('§10.2 U-17 — the prose pane', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Overridden', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
-        seedRevision(store, 'story_1', 'chapter_1', 'draft one', 'run_1');
-        seedRevision(store, 'story_1', 'chapter_1', 'draft two', 'run_2');
+        seedChapter(store, 'story_0', { order: 1 });
+        seedRevision(store, 'story_0', 'chapter_0', 'draft one', 'run_0');
+        seedRevision(store, 'story_0', 'chapter_0', 'draft two', 'run_1');
 
-        await call(app, 'POST', '/stories/story_1/stop');
+        await call(app, 'POST', '/stories/story_0/stop');
 
-        const reply = await call(app, 'POST', '/stories/story_1/chapters/chapter_1/sections/sec_2', {
+        const reply = await call(app, 'POST', '/stories/story_0/chapters/chapter_0/sections/sec_2', {
             content: "the Author's own paragraph"
         });
 
@@ -884,15 +884,15 @@ describe('§10.2 U-17 — the prose pane', () => {
         expect(revisions[0].selection_note).toBe(
             'selected by the Author (D-24) — their own edit is the version that stands'
         );
-        expect(store.chapters.require('chapter_1').current_revision).toBe(revisions[0].id);
+        expect(store.chapters.require('chapter_0').current_revision).toBe(revisions[0].id);
 
         // D-12a/P11: one decision, one journal group. Every row the override touched shares the label.
         const group = store.journal.filter((event) => event.commit_label === 'author_revision_override');
 
         expect(group.map((event) => `${event.collection}:${event.op}:${event.id}`)).toEqual([
-            `revisions:delete:revision_1`,
+            `revisions:delete:revision_0`,
             `revisions:update:${revisions[0].id}`,
-            'chapters:update:chapter_1'
+            'chapters:update:chapter_0'
         ]);
     });
 
@@ -900,25 +900,25 @@ describe('§10.2 U-17 — the prose pane', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Reopened', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1, state: 'done', author_locked: true });
+        seedChapter(store, 'story_0', { order: 1, state: 'done', author_locked: true });
 
-        const reply = await call(app, 'POST', '/stories/story_1/chapters/chapter_1/unapprove');
+        const reply = await call(app, 'POST', '/stories/story_0/chapters/chapter_0/unapprove');
 
         expect(reply.status).toBe(200);
-        expect(store.chapters.require('chapter_1').state).toBe('needs_recheck');
-        expect(store.chapters.require('chapter_1').author_locked).toBe(false);
+        expect(store.chapters.require('chapter_0').state).toBe('needs_recheck');
+        expect(store.chapters.require('chapter_0').author_locked).toBe(false);
     });
 
     it('writes the per-chapter bar override as §4.4 stores it (G-1)', async () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Barred', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
+        seedChapter(store, 'story_0', { order: 1 });
 
-        const reply = await call(app, 'PATCH', '/stories/story_1/chapters/chapter_1/bar', { bar_override: '-C-4 +1' });
+        const reply = await call(app, 'PATCH', '/stories/story_0/chapters/chapter_0/bar', { bar_override: '-C-4 +1' });
 
         expect(reply.status).toBe(200);
-        expect(store.chapters.require('chapter_1').bar_override).toBe('-C-4 +1');
+        expect(store.chapters.require('chapter_0').bar_override).toBe('-C-4 +1');
     });
 });
 
@@ -929,16 +929,16 @@ describe('§10.2 U-17 — the prose pane', () => {
 describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
     /** One §4.16 proposal row, as a run would have filed it. */
     const seedProposal = (store: Store): void => {
-        seedChapter(store, 'story_1', { order: 1 });
+        seedChapter(store, 'story_0', { order: 1 });
 
         store.proposals.create(
             {
-                story_id: 'story_1',
-                target_ref: 'chapter_1',
+                story_id: 'story_0',
+                target_ref: 'chapter_0',
                 target_field: 'sections[1].text',
                 patch: { insert: 'a second steeple' },
                 why: 'the payoff lands earlier',
-                run_ref: 'run_1',
+                run_ref: 'run_0',
                 state: 'pending'
             },
             { run_ref: null, author: true, why: 'fixture: an agent proposal awaiting the Author (D-20)' }
@@ -951,10 +951,10 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
         await call(app, 'POST', '/stories', { title: 'Proposed', idea: 'A ridge over water.', chapter_count: 1 });
         seedProposal(store);
 
-        const reply = await call(app, 'POST', '/stories/story_1/proposals/proposal_1/accept');
+        const reply = await call(app, 'POST', '/stories/story_0/proposals/proposal_0/accept');
 
         expect(reply.status).toBe(200);
-        expect(store.proposals.require('proposal_1').state).toBe('accepted');
+        expect(store.proposals.require('proposal_0').state).toBe('accepted');
     });
 
     it('rejects a proposal with the same decision surface (D-20a)', async () => {
@@ -963,10 +963,10 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
         await call(app, 'POST', '/stories', { title: 'Rejected', idea: 'A ridge over water.', chapter_count: 1 });
         seedProposal(store);
 
-        const reply = await call(app, 'POST', '/stories/story_1/proposals/proposal_1/reject');
+        const reply = await call(app, 'POST', '/stories/story_0/proposals/proposal_0/reject');
 
         expect(reply.status).toBe(200);
-        expect(store.proposals.require('proposal_1').state).toBe('rejected');
+        expect(store.proposals.require('proposal_0').state).toBe('rejected');
     });
 
     it('turns one line of intent into a directives record (U-9, D-19)', async () => {
@@ -974,7 +974,7 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
 
         await call(app, 'POST', '/stories', { title: 'Directed', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/directives', { text: 'kill the mentor in ch4' });
+        const reply = await call(app, 'POST', '/stories/story_0/directives', { text: 'kill the mentor in ch4' });
 
         expect(reply.status).toBe(200);
         expect(store.directives.list().map((row) => row.text)).toEqual(['kill the mentor in ch4']);
@@ -985,7 +985,7 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
 
         await call(app, 'POST', '/stories', { title: 'Chatty', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/directives', { text: '' });
+        const reply = await call(app, 'POST', '/stories/story_0/directives', { text: '' });
 
         expect(reply.status).toBe(400);
         expect(errorOf(reply)).toBe(
@@ -997,16 +997,16 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Focused', idea: 'A ridge over water.', chapter_count: 1 });
-        seedChapter(store, 'story_1', { order: 1 });
+        seedChapter(store, 'story_0', { order: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/directives', {
+        const reply = await call(app, 'POST', '/stories/story_0/directives', {
             text: 'make it colder',
-            refs: ['chapter_1']
+            refs: ['chapter_0']
         });
 
         expect(reply.status).toBe(200);
         // The sentence does not name the chapter; the ref does, so the Editor's direction is about it.
-        expect(store.directives.require('directive_1').impact).toContain('chapter_1');
+        expect(store.directives.require('directive_0').impact).toContain('chapter_0');
     });
 
     it('assigns templates wholesale and refuses a bad assignment by name (D-17b)', async () => {
@@ -1014,7 +1014,7 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
 
         await call(app, 'POST', '/stories', { title: 'Assigned', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/templates', { template_ids: ['no-such-harness'] });
+        const reply = await call(app, 'POST', '/stories/story_0/templates', { template_ids: ['no-such-harness'] });
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toContain(
@@ -1026,33 +1026,33 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
         // assigned as a Writer, so a misspelt or removed slug can never grant one (D-17b, P10).
         // `writer-summary` no longer exists (the phase-1 redesign replaced it with the Sampler,
         // templates.ts:DEFAULT_ASSIGNMENT), which is exactly why a missing slug is the fixture here.
-        const writerOnly = await call(app, 'POST', '/stories/story_1/templates', { template_ids: ['writer-orphan'] });
+        const writerOnly = await call(app, 'POST', '/stories/story_0/templates', { template_ids: ['writer-orphan'] });
 
         expect(writerOnly.status).toBe(409);
         expect(errorOf(writerOnly)).toBe(
             'that assignment is refused: assignment names "writer-orphan", which is not a template in the catalogue (D-17b); assignment has no Writer template — write permission comes only from a template assigned as a Writer (D-17b, P10) (T-0, D-17b)'
         );
 
-        const good = await call(app, 'POST', '/stories/story_1/templates', {
-            template_ids: store.stories.require('story_1').template_refs
+        const good = await call(app, 'POST', '/stories/story_0/templates', {
+            template_ids: store.stories.require('story_0').template_refs
         });
 
         expect(good.status).toBe(200);
-        expect(store.stories.require('story_1').template_refs).toEqual(DEFAULT_ASSIGNMENT);
+        expect(store.stories.require('story_0').template_refs).toEqual(DEFAULT_ASSIGNMENT);
     });
 
     it('accepts completion and closes the leftovers the preview counted (L-25b, L-26)', async () => {
         const { app, store } = makeApp();
 
         await call(app, 'POST', '/stories', { title: 'Completed', idea: 'A ridge over water.', chapter_count: 1 });
-        seedFinding(store, 'story_1', { state: 'confirmed', cost: 'taste', fingerprint: 'C-13|story_1' });
+        seedFinding(store, 'story_0', { state: 'confirmed', cost: 'taste', fingerprint: 'C-13|story_0' });
         // U-14 / T-3b: a `verified` Idea is still the Author's undecided tray — the Editor answered "is the
         // claim true?" — and `acceptCompletion` discards it like any other discardable row, so the preview
         // has to count it. The old `proposed`-only read reported 0 Ideas for exactly this row.
-        seedIdea(store, 'story_1', { phase: 'summary', state: 'verified', fingerprint: 'survey-1911' });
+        seedIdea(store, 'story_0', { phase: 'summary', state: 'verified', fingerprint: 'survey-1911' });
 
         store.stories.update(
-            'story_1',
+            'story_0',
             {
                 status: 'pending',
                 pending_kind: 'drained',
@@ -1065,10 +1065,10 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
                 }
             },
             { run_ref: null, author: true, why: 'fixture: the loop has proposed completion' },
-            [{ id: 'story_1', rev: store.stories.require('story_1').rev }]
+            [{ id: 'story_0', rev: store.stories.require('story_0').rev }]
         );
 
-        const preview = (await call(app, 'GET', '/stories/story_1')).body as { completion_preview: unknown };
+        const preview = (await call(app, 'GET', '/stories/story_0')).body as { completion_preview: unknown };
 
         expect(preview.completion_preview).toEqual({
             open_findings: 1,
@@ -1076,14 +1076,14 @@ describe('§10.2 U-5/U-9/U-13 — the rest of the Story surface', () => {
             oldest: 'the 1911 map is never paid off'
         });
 
-        const reply = await call(app, 'POST', '/stories/story_1/complete');
+        const reply = await call(app, 'POST', '/stories/story_0/complete');
 
         expect(reply.status).toBe(200);
         expect((reply.body as { status: string }).status).toBe('completed');
-        expect(store.findings.require('finding_1').state).toBe('discarded');
+        expect(store.findings.require('finding_0').state).toBe('discarded');
         // The number the preview showed is the number the accept moved: the verified row is discarded by
         // the same click, not left undecided on a finished Story.
-        expect(store.ideas.require('idea_1').state).toBe('discarded');
+        expect(store.ideas.require('idea_0').state).toBe('discarded');
     });
 });
 
@@ -1097,7 +1097,7 @@ describe('§10.2 U-6 — the Goal panel', () => {
 
         await call(app, 'POST', '/stories', { title: 'Tuned', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'PATCH', '/stories/story_1/goal', {
+        const reply = await call(app, 'PATCH', '/stories/story_0/goal', {
             threshold_soft: 3,
             criteria: [
                 { op: 'remove', id: 'C-15' },
@@ -1136,7 +1136,7 @@ describe('§10.2 U-6 — the Goal panel', () => {
         // answers one criterion — and still fails it, because the Summary does not yet deliver the Seed.
         expect(surface.phase_progress).toBe('0/1 · failing: C-14');
 
-        const goal = store.goals.list().find((row) => row.story_id === 'story_1');
+        const goal = store.goals.list().find((row) => row.story_id === 'story_0');
 
         expect(goal?.criteria.map((row) => row.id)).toEqual([
             'C-0',
@@ -1163,7 +1163,7 @@ describe('§10.2 U-6 — the Goal panel', () => {
 
         await call(app, 'POST', '/stories', { title: 'Bad Op', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'PATCH', '/stories/story_1/goal', { criteria: [{ op: 'flip' } as never] });
+        const reply = await call(app, 'PATCH', '/stories/story_0/goal', { criteria: [{ op: 'flip' } as never] });
 
         expect(reply.status).toBe(400);
         expect(errorOf(reply)).toContain('is not one of add/remove/setHard with the fields it needs (G-1)');
@@ -1293,7 +1293,7 @@ describe('§4.13 U-7 — the crew', () => {
 
         await call(app, 'POST', '/stories', { title: 'Killed', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const assistant = await call(app, 'POST', '/stories/story_1/assistant', {
+        const assistant = await call(app, 'POST', '/stories/story_0/assistant', {
             target: 'summary',
             text: 'tighten the promise line'
         });
@@ -1303,8 +1303,8 @@ describe('§4.13 U-7 — the crew', () => {
         const run = assistant.body as { id: string; state: string; kind: string };
 
         expect(run.kind).toBe('assistant');
-        expect((await call(app, 'GET', '/runs?story_id=story_1')).body).toEqual([
-            expect.objectContaining({ id: run.id, story_id: 'story_1' })
+        expect((await call(app, 'GET', '/runs?story_id=story_0')).body).toEqual([
+            expect.objectContaining({ id: run.id, story_id: 'story_0' })
         ]);
 
         const killed = await call(app, 'POST', `/runs/${run.id}/kill`);
@@ -1334,7 +1334,7 @@ describe('§4.13 U-7 — the crew', () => {
 
         await call(app, 'POST', '/stories', { title: 'Asked', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/assistant', {
+        const reply = await call(app, 'POST', '/stories/story_0/assistant', {
             target: 'summary',
             text: 'make the promise colder'
         });
@@ -1354,8 +1354,8 @@ describe('§4.13 U-7 — the crew', () => {
         expect(run.kind).toBe('assistant');
         expect(run.role).toBe('writer');
         expect(run.template_ref).toBe(assistantTemplate?.name);
-        expect(run.story_id).toBe('story_1');
-        expect(run.work_item_ref).toBe('assistant_story_1_1');
+        expect(run.story_id).toBe('story_0');
+        expect(run.work_item_ref).toBe('assistant_story_0_1');
 
         // The quiet chat answers with prose on the first turn, so this run tears down on its own (S-3).
         const closed = await waitFor(() =>
@@ -1370,7 +1370,7 @@ describe('§4.13 U-7 — the crew', () => {
 
         await call(app, 'POST', '/stories', { title: 'Empty Ask', idea: 'A ridge over water.', chapter_count: 1 });
 
-        const reply = await call(app, 'POST', '/stories/story_1/assistant', { target: 'chapters', text: 'anything' });
+        const reply = await call(app, 'POST', '/stories/story_0/assistant', { target: 'chapters', text: 'anything' });
 
         expect(reply.status).toBe(400);
         expect(errorOf(reply)).toBe(
@@ -1401,28 +1401,28 @@ describe('§10 — the commit feed maps to the pinned topics', () => {
     });
 
     it('a Story write is one `story` frame carrying the Story id', () => {
-        expect(feedEvents([event('chapters', 'update', 'chapter_1', 'story_1')])).toEqual([
-            { kind: 'story', storyId: 'story_1' }
+        expect(feedEvents([event('chapters', 'update', 'chapter_0', 'story_0')])).toEqual([
+            { kind: 'story', storyId: 'story_0' }
         ]);
     });
 
     it('a run write moves the crew panel AND the Stories row', () => {
-        expect(feedEvents([event('runs', 'create', 'run_1', 'story_1')])).toEqual([
-            { kind: 'runs', storyId: 'story_1' },
-            { kind: 'story', storyId: 'story_1' }
+        expect(feedEvents([event('runs', 'create', 'run_0', 'story_0')])).toEqual([
+            { kind: 'runs', storyId: 'story_0' },
+            { kind: 'story', storyId: 'story_0' }
         ]);
     });
 
     it('a queue write moves the desk AND the Stories row, and a burst de-duplicates per topic', () => {
         expect(
             feedEvents([
-                event('findings', 'create', 'finding_1', 'story_1'),
-                event('tasks', 'update', 'task_1', 'story_1'),
-                event('findings', 'update', 'finding_2', 'story_1')
+                event('findings', 'create', 'finding_0', 'story_0'),
+                event('tasks', 'update', 'task_0', 'story_0'),
+                event('findings', 'update', 'finding_1', 'story_0')
             ])
         ).toEqual([
-            { kind: 'queue', storyId: 'story_1' },
-            { kind: 'story', storyId: 'story_1' }
+            { kind: 'queue', storyId: 'story_0' },
+            { kind: 'story', storyId: 'story_0' }
         ]);
     });
 
@@ -1435,6 +1435,6 @@ describe('§10 — the commit feed maps to the pinned topics', () => {
     });
 
     it('ignores a collection no region reads', () => {
-        expect(feedEvents([event('directives', 'create', 'directive_1', 'story_1')])).toEqual([]);
+        expect(feedEvents([event('directives', 'create', 'directive_0', 'story_0')])).toEqual([]);
     });
 });

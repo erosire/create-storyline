@@ -3,6 +3,17 @@
 **Status:** design proposal (not yet normative). `documents/specifications.md` remains the build
 contract until this document is folded into §4, §5, §6, §7 and §8 and the tests below land.
 
+**Read this first (2026-11-24).** The title names the LEGACY model. A Story created now runs
+`summary_mode: 'groups'`: the research leg below is **exactly as written and still current**, and so is
+the one-turn/no-tools structured transport — but steps 4–9 change unit. Sampling, screening,
+deterministic selection and truncation are what a legacy `'sampling'` book still does; on a grouped
+book the unit of work is a **phrase GROUP**, the sample becomes a `draft_groups` pass whose accepted
+answer INSTALLS immediately, screening becomes a `review_groups` pass over the whole group vector, and
+there is no selection step to run. §15's closing entry, **T4**, states the pipeline as it runs today,
+and `documents/specifications.md` §17 is the normative version. Sections below that describe a round, a
+winner, a wave or a plateau are the legacy book's rules — retained, not deleted, and still enforced for
+`'sampling'` Stories.
+
 **Scope:** Phase 1 (`summary`, the UI's "phrase 1") end to end, plus the parts of the whole design
 that the new pipeline forces: a Researcher employee, a durable Knowledge collection, structured
 one-turn sampling, a screening Reader mode, deterministic sample selection, and the refinement loop
@@ -321,6 +332,12 @@ Add `@sinclair/typebox` to `packages/erosire/create-storyline/package.json` (it 
 
 ### 4.3 The two schemas
 
+The grouped model keeps both — a legacy book still answers them, and `SampledIssue` gained an optional
+`group_refs` so one wire shape covers both readers — and adds two siblings: `GroupDraftSchema` (one
+`{group_ref, content}` per group in the batch, plus `knowledge_used`) and `GroupReviewSchema` (the same
+issue list, every issue naming the groups it crosses). They are specified in `shared/phrase.ts` and
+restated in §15's T4 entry and `specifications.md` §17.2.
+
 ```ts
 // src/shared/schemas/summary-sample.ts
 export const SummarySampleSchema = Type.Object(
@@ -440,6 +457,14 @@ mentions a round number.
 ---
 
 ## 6. Loop mechanics
+
+**On a grouped book (2026-11-24) §6.1–§6.8 below are the LEGACY half of this section** — they are still
+enforced for a `summary_mode: 'sampling'` Story, and nothing in them was deleted. The grouped job kinds,
+claim keys, batch math, install commit and per-group attempt budget are §15's **T4** entry, with the
+normative statement in `documents/specifications.md` §17. What did NOT change is the part this document
+was really about: the research jobs and their claim keys (§6.1's `wi_research_seed_<seedHash>` /
+`wi_research_<questionHash>`), the D-40/D-51 gates, `toolMode: 'none'` and its structured transport
+(§4.2), the citation and evidence rules, and the Author's dial deciding what becomes a task.
 
 ### 6.1 New Work Item kinds
 
@@ -564,7 +589,7 @@ This is a hard truncate as requested. It replaces D-22's "Summary keeps discarde
 
 ### 6.7 Status and drain
 
-`drainPreconditions` (`src/server/loop/status.ts:101-133`) gains four unmet reasons:
+`drainPreconditions` (`src/server/loop/status.ts:134-171`) gains four unmet reasons:
 
 - no accepted `SeedBrief`;
 - no closed `research` run for the current brief;
@@ -574,6 +599,13 @@ This is a hard truncate as requested. It replaces D-22's "Summary keeps discarde
 `phase_signoff` is not offered while any of those hold. The drain probe still runs (L-37), but in
 this pipeline its Reader half is a tool-using Reader and its Checker half is unchanged — Phase 1's
 screening is a separate, cheap pass.
+
+**Update for the grouped book (2026-11-24 hardening).** The four reasons above are the `'sampling'`
+branch. A `summary_mode: 'groups'` Story answers from `phrase/exclusion.ts:groupPipelineOwed` instead —
+group-pipeline runs in flight, groups owing the Overview a draft or a fix pass, Reader passes owed on the
+installed vector, deep-review passes owed for it — and the sign-off offer is withheld over the same read,
+so the probe and the work queue cannot disagree (`specifications.md` §17.8, pinned by
+`loop/phase1-groups-drain.test.ts`). The Seed Brief and research reasons are shared by both branches.
 
 ### 6.8 The refinement loop, precisely
 
@@ -662,17 +694,35 @@ Add to `src/server/templates/templates.ts`:
    `web: false`. Prompt: you have no tools; answer once with the `SummarySample` JSON; the Seed
    Brief and the `critical`/`high` Knowledge are the contract; contradict nothing in the Seed
    (C-14); do not invent facts the Knowledge does not support; this is one of N independent samples,
-   commit to a framing (L-16). Done definition: a schema-valid `SummarySample`.
+   commit to a framing (L-16). The Seed and its Brief commit what they **state**: where they are
+   silent, or a question sits in `open_questions`, the Writer supplies any specific that contradicts
+   nothing — a place, a consequence, a stake, a custom. That licence is engine-owned text
+   (`run/phase1-prompt.ts:SEED_CONTRACT_NOTE`), appended to the SEED BRIEF section of the compiled
+   prompt, because the role prompt above it is an Author-editable copy (§8, §4.12). A required brief
+   field the Seed leaves silent renders as an explicit **open** marker rather than a blank, so the
+   model cannot read a silence as an unpaid promise. Done definition: a schema-valid `SummarySample`.
 4. **`reader-screening`** — kind `reader`, `serves_phase: ['summary']`, `attempts: 1`, `web: false`.
    Prompt: you have no tools; answer once with `IssueList`; report only `critical` and `high`
    problems; a `critical` is a contradiction with the Seed Brief or a `critical` Knowledge entry, a
-   `high` is a promised element the draft fails to deliver; quote the offending field verbatim;
-   return `{"issues":[]}` when the draft holds. Done definition: a schema-valid `IssueList`.
+   `high` leaves unpaid a commitment the Seed Brief states **explicitly**; the Seed is general and is
+   not an outline, so an added detail, a Seed question left open, a stake the Seed never stated and
+   setup the Summary did not promise are not issues and never a `C-14` issue — what stays reportable is
+   a contradiction and a central commitment the draft plainly does not carry; wording is phase ③'s
+   business (`minor`/`taste`, never ranked at this level); quote the offending field verbatim; return
+   `{"issues":[]}` when the draft holds. Done definition: a schema-valid `IssueList`.
 5. **`reader-deep-review`** — the existing reader templates (`reader-genre` etc.) reused with the
-   current tool catalogue, pointed at the selected revision.
-6. **`editor-general`** — unchanged, but its prompt gains one paragraph: in Phase 1 it verifies the
-   deep-review findings against the selected revision; the screening issues have already chosen the
-   draft and are not re-litigated.
+   current tool catalogue, pointed at the selected revision. Each angle prompt carries a
+   `When the artifact under review is a SUMMARY (phase ①)` clause that stands the setup-and-payoff
+   complaints down at ① and says in the same breath that phases ② and ③ keep them. The engine states
+   the same rule where the Author cannot edit it away: the review banner
+   (`run/brief.ts:READER_REVIEW_MODE`) and that file's `check_unit` job line carry the admissibility
+   test — quote the contradiction, or the finding is not admissible — because the sweep's note is
+   clipped at 600 characters (`run/brief.ts:renderJob`) and those two are not.
+6. **`editor-general`** — unchanged, but its prompt gains two paragraphs: in Phase 1 it verifies the
+   deep-review findings against the selected revision, and the screening issues have already chosen the
+   draft and are not re-litigated; and admissibility comes before accuracy — a finding whose whole case
+   is an ABSENCE is an invalid finding and gets `disputed`, however true the silence is (the same test
+   is in the engine's `verify_findings` and `confirm_finding` job lines).
 
 `DEFAULT_ASSIGNMENT` gains `editor-seed-structure` and `researcher-story`; the writer-summary
 assignment switches from `writer-summary` to `writer-summary-sampler` for new Stories.
@@ -697,6 +747,15 @@ them.
 ---
 
 ## 10. API and dashboard
+
+**Grouped addition (2026-11-24):** the surface above is what a legacy book reads. A grouped Story's
+surface is one read — `GET /stories/:id/phrases` — carrying the mode, the composed Overview, the five
+groups with their own revision numbers, history COUNTS and live holds, the findings with their
+`group_refs`, the tasks, and the review block (the vector hash, the seats reported against it, and the
+mirror state). `GET /stories/:id`'s `sampling` projection stays exactly as described below and remains
+the legacy book's audit; on a grouped Story it reports the loop's own round number (`sampling_round ??
+1`) over an EMPTY `history` with no wave recorded, because no grouped job touches those counters. The
+Author's three grouped verbs and their refusals are §17.9 of `specifications.md`.
 
 - `GET /stories/:id/knowledge` already exists; extend the projection with `importance`, `sources`
   and the entry ids so the pane can filter. The `knowledge` tool read path is unchanged.
@@ -753,6 +812,22 @@ suite stays green while the new path is built.
 ---
 
 ## 13. Test plan
+
+**The plan below is the legacy plan and it still runs** — every case in it is a `'sampling'` book's
+behaviour, and every file it names still exists. The grouped cases are a SEPARATE suite that this
+document does not enumerate: `src/server/phrase/{catalog,revisions,exclusion,findings}.test.ts`,
+`src/server/loop/phase1-groups.test.ts`, `src/server/loop/phase1-groups-restart.test.ts`,
+`src/server/api/phrase-routes.test.ts`, `src/server/integration/summary-groups.test.ts`,
+`src/server/tools/checker-group-attribution.test.ts`, and the dashboard's `*.groups.*` / `*.phrases.*`
+files. The 2026-11-24 hardening of the grouped server edges adds five more, and they pin the behaviour
+§15's T4 entry now states as current: `src/server/loop/phase1-groups-drain.test.ts` (the drain and the
+sign-off read the group pipeline, key-for-key with the generator), `src/server/loop/group-seed-reset.test.ts`
+(the Seed edit resets the group rows in place; the backtrack keeps the texts and drops the history),
+`src/server/loop/group-findings-batch-cap.test.ts` (three groups under a batch of one, a late approval,
+and the vacuous legacy read that must not close anything), `src/server/api/story-delete.test.ts` (the
+delete commit purges the three Phrase collections), and `src/server/tools/group-mode-writes.test.ts`
+(the tool-layer refusals and the exact `fix` copy each one hands the crew, with the legacy book's
+unchanged advice pinned beside them). `specifications.md` §17.13 lists the focused commands.
 
 **Unit**
 
@@ -879,10 +954,19 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   the new tool is researcher-only. Pinned by `src/server/loop/phase1-research-waiver.test.ts` and the
   D-51 cases in `src/server/tools/runtime.test.ts`.
 - **H1: phase ① hill-climbs — selection is gated on a fix certificate, not on the counts (2026-11-23).**
-  §6.5's ranking now runs INSIDE an eligibility floor (`loop/sample-select.ts:scoreSample`): a candidate
-  is selectable only with ZERO `critical`/`high` screening issues AND every fix task its own screening
-  passes were handed marked `resolved` with a non-empty `evidence` line by EVERY pass that carried it
-  (`carryingFix`, `certifiesFix`). Unanimity rather than a majority is deliberate: with
+  §6.5's ranking now runs INSIDE an eligibility floor (`loop/sample-select.ts:scoreSample`), and the
+  floor is ORIGIN-AWARE, so its wording differs per mode. A candidate measured against an ACCEPTED base
+  is selectable only when it introduces NO blocking issue OF ITS OWN — the screening schema's `high` IS a
+  finding at cost `major` (`shared/types.ts:SampledIssue`), so the pair is critical/major everywhere —
+  AND every fix task its own screening passes were handed is marked `resolved` with a non-empty
+  `evidence` line by EVERY pass that carried it (`carryingFix`, `certifiesFix`). Blocking issues the
+  accepted draft already had (`inherited_*`) cost the candidate nothing: Revision N was accepted with
+  them, and the Author decides which become work — one inherited issue the Author DID target is an open
+  fix task inside the candidate's demand, so "inherited" means "not a regression", never "excused". An
+  issue whose origin no pass stated counts as INTRODUCED: fail closed, because a pass handed the base and
+  silent about the origin cannot swear the new text is no worse than the text it replaces. A FIRST round,
+  where there is no incumbent to regress against, keeps §6.5's floor verbatim — zero `critical` AND zero
+  `high`, plus every demanded fix cleared (R5). Unanimity rather than a majority is deliberate: with
   `summary_readers` = 5, one Reader marking the fix `unresolved` is a live disagreement the loop resolves
   by resampling, not by averaging (P6). `unknown` is the Reader admitting it cannot tell, which is not a
   pass (R2); an unevidenced `resolved` is not a verdict (D-15); a pass that failed schema validation can
@@ -923,9 +1007,11 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   sample needed).
 - **A stalled round climbs instead of installing the least-bad draft (R3).** `loop/work.ts` offers one
   extra sample per sweep while the round is selection-ready but holds no eligible candidate, bounded by
-  the existing `records.ts:samplingCapOf` allowance (stage size + `SAMPLING_RETRY_ALLOWANCE` = 3, so 8
-  attempts at the 5/5 product standards and the 1-sample loop rig's 4) — an allowance, not a new round
-  cap, and no new trend rule. Exhaustion reuses `work.ts:SAMPLING_FAILURE_PREFIX` with a second title
+  the wave's budget (`records.ts:samplingProgressOf`): the ceiling starts at `samplingCapOf` (stage size
+  + `SAMPLING_RETRY_ALLOWANCE` = 3, so 8 attempts at the 5/5 product standards and the 1-sample loop
+  rig's 4) and GROWS by one attempt per PROVEN improvement, and
+  `SAMPLING_NO_PROGRESS_STREAK` (3) completed attempts in a row that beat nothing stop the round EARLY —
+  an allowance, not a new round cap, and no new trend rule. Exhaustion reuses `work.ts:SAMPLING_FAILURE_PREFIX` with a second title
   (`Phase ① sampling failed after <cap> attempts — no draft answered the fixes this round was armed
   with`, its detail naming the wave and each outstanding `task_n (unresolved on revision_n)`) so the wave
   re-arm in `engine.ts` recovers it through the existing Author path. Only the PREFIX is a contract —
@@ -1017,6 +1103,79 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   its `open` state — the fix is in the read, never in rewriting the row — and because
   `records.ts:dispatchableTasks` admits any row carrying an `owner_role`, it also holds L-37's condition 1,
   so the clean-drain sentence can never be reported over an unanswered question.
+- **H3 — the retry budget follows IMPROVEMENT, and three flat attempts stop the wave (2026-11-24).** The
+  sampling allowance stopped being a flat `stage size + 3` burn: `loop/records.ts:samplingProgressOf`
+  derives the wave's state from the ledger on every read (P11/L-3 — the engine keeps no memory, so a
+  restart recomputes exactly the same numbers), and the wave now carries a BASELINE (the lowest
+  unresolved-blocking count any regression-free, readable candidate has proved), an improvement count, and
+  a no-improvement streak. The FIRST such candidate measures the hill and is not an improvement (it beat
+  nothing); from then on only a STRICTLY LOWER count is one. Each proven improvement extends the ceiling by
+  one attempt (`samplingCapOf + improvements`), and `SAMPLING_NO_PROGRESS_STREAK` = 3 completed attempts in
+  a row that did not lower it stop the round with ONE Author escalation — so a hill that moves is never
+  stopped by a static number, and a hill that stopped moving is not allowed to keep buying attempts. A
+  candidate that regressed (any introduced blocking issue) cannot set or lower the bar — the count belongs
+  to a draft the loop would never install — so it counts as no-improvement; and an attempt with NO readable
+  candidate (the provider-failure shape) neither sets a baseline nor extends the streak, so those attempts
+  stay bounded by the static cap the provider-failure escalation already speaks of. Only a round WITH an
+  accepted base is measured at all: round 1 is producing the sample set the Author asked for, not retrying
+  a climb, so it keeps §6.5's cap and its least-bad install (R5). Nothing re-arms the stop by itself — the
+  Author's clear bumps `stories.sampling_wave`, every number above is scoped to a wave, and the fresh wave
+  starts with no baseline and no streak, because a fresh wave IS a fresh baseline.
+- **H3 — the ranking inside the eligible set is the deterministic BEST, and among equals the SMALLEST
+  change (2026-11-24).** With an accepted base, `loop/sample-select.ts:selectSample` orders eligible
+  candidates by fewest unresolved fixes → no new `critical` → no new `high` → fewest changed prose fields →
+  fewest changed characters → the earliest candidate; a first round keeps §6.5's fewest-critical →
+  fewest-high → fewest-total → earliest, because there is no incumbent there to be minimal about or to
+  regress against. Minimality (`minimalityOf`) is a TIE-BREAK, not a quality score (P6): how many of the six
+  §4.2 prose fields the draft touched, and the size of those edits in characters, measured as the smallest
+  span that explains each change (common prefix and suffix stripped, so a one-clause fix costs the clause,
+  not the paragraph). The last key is CREATION ORDER and never an id — §4 leaves id shape to the store and
+  ids are per-book and opaque, so parsing a numeric suffix is an inversion waiting to happen.
+- **H4 — the plateau is measured across REVIEWED ACCEPTED revisions, not only inside one round
+  (2026-11-24, LANDED with the current change set).** The H3 streak bounds one round's attempts; its
+  sibling bounds the phase across rounds, because a loop that selects a fresh accepted revision every round
+  can keep sampling forever without ever proving the book got better. The rule: every accepted revision is
+  deep-reviewed as §6.4 step 6 already requires, its blocking-finding count is compared against the best
+  count the WAVE has ever seen on an accepted revision, and after THREE reviewed accepted revisions in a row
+  that do not beat that best-ever bar the loop stops sampling for the wave and opens ONE Author escalation.
+  Clearing it starts a fresh wave with a fresh baseline, exactly as the within-round stop does, and nothing
+  re-arms a plateau by itself. It is a stop plus a question, never a replacement: the accepted revision the
+  plateau stops on keeps the Summary, no least-bad draft is installed, and nothing a rejected attempt failed
+  to certify is closed (§15's R4 proof rule). THE LANDSHAPE it landed on: the hill lives in ONE additive
+  field, `Story.summary_review_history` (`shared/types.ts`) — a frozen entry per reviewed accepted
+  revision, written at settle time by `engine.ts:trackRevisionProgress` — and the walk over that audit,
+  partitioned by wave so the Author's clear is a fresh baseline, is `records.ts:revisionReviewProgressOf`
+  behind the single predicate `records.ts:revisionReviewPlateau` that the arming rule, the queue and the
+  drain probe all read. The bar is the same `records.ts:SAMPLING_NO_PROGRESS_STREAK` (3) the within-round
+  rule uses, not a second number; the Author's row is `work.ts:openRevisionPlateauTask` under
+  `work.ts:SAMPLING_PLATEAU_PREFIX`, recovered by the same `engine.ts:rearmSamplingWave` path as the
+  sampling-failure row.
+- **A Summary `minor` continues only when the Author's dial says so, and one predicate decides it
+  (2026-11-24).** Phase ①'s blocking bar is `critical`/`major` PLUS `minor` exactly when `auto_approve`
+  includes `minor` (`loop/records.ts:summaryBlockingCost` — D-35's dial read as plain membership): with the
+  dial wide, a confirmed minor is authorised work that arms the next round, holds the sign-off and buys the
+  fix pass; with the dial narrow it stays `confirmed` and NON-blocking — it arms nothing, holds nothing, and
+  the Story drains with it sitting on the record. `taste` is never blocking in phase ①, dial or no dial: the
+  prose it would prefer between does not exist until phase ③ (R6). The fix was CONSISTENCY, not a new gate:
+  the engine's sweep skipped phase-① minors unconditionally while the Editor's approval path authorised them
+  whenever the dial said so, so the same finding was work on one path and a dead end on another; the engine,
+  the approval reads (`findingsToAutoApprove`, `findingsAwaitingAuthor`, `actionableFindings`) and the status
+  reads (`unconfirmedBlockingFindings`, `summaryBlockingFindings`, `isBlockingCost`) now go through that one
+  predicate. Later phases keep D-33's all-costs rule.
+- **Current state of the storage layout the pipeline runs on (2026-11-24).** §11's "additive, no renames"
+  rollout is now a matter of record rather than a plan: a Story is a BOOK — `<root>/stories/<uuid>/` holds
+  its own `store.json`, `journal.jsonl`, knowledge projection and retained thread log, and `<root>/server/`
+  is the app book for the crew catalogue and the host settings, with no Story rows of its own. Collection
+  ids are per-book and ZERO-BASED (`run_0`, `finding_3` are unique inside one book, never across the
+  workspace), so every aggregate row carries `story_id` and a follow-up verb is addressed through the Story
+  that owns it — which is why `POST /runs/{runId}/kill` takes a `?story_id=` scope instead of guessing a
+  holder (more than one holder with no scope is a 409 that names the scope, not a coin flip between two
+  Stories' `run_0`), and why `DELETE /stories/:id` is
+  ONE ordered purge that takes the rows, the harness session, the thread log, the knowledge projection, the
+  runtime and finally the DIRECTORY. This build carries NO migration and NO back-compat shim: a store root
+  still holding a flat `store.json` is refused, not converted. Everything §3.5/§3.6 add to the records is
+  still additive on the row, and the projections normalise a pre-H1 sampling-history line rather than
+  teaching the client about builds.
 - Pinned by `src/server/loop/phase1-hill-climb.test.ts` (cap-bounded retry → escalation with nothing
   closed → wave re-arm closing on the certificate; the R5 least-bad round; the demand ladder including the
   `wontfix`/`done` intersection and the verdict-echo rung; the F1 Author-discard run that used to deadlock,
@@ -1036,4 +1195,196 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   `pending`/`drained` read), plus `src/server/loop/drain.test.ts` (the question read on a drained Story,
   and a pending directive review keeping it out of the reading), `src/server/run/brief.test.ts` (F1's
   Summary-scoped artifact section), and the settled row of
-  `src/server/integration/summary-sampling.test.ts`.
+  `src/server/integration/summary-sampling.test.ts`. The H3 budget is pinned by
+  `src/server/loop/phase1-sampling-progress.test.ts` (the ledger-derived attempt/improvement/streak state,
+  the improvement-extended ceiling, and the FRESH baseline a re-armed wave starts from) and by the
+  `SAMPLING_NO_PROGRESS_STREAK` cases in `src/server/loop/phase1-hill-climb.test.ts`; the origin split and
+  minimality are pinned by the ranking cases in `src/server/loop/sample-select.test.ts` and asserted on the
+  wire by `src/server/api/phase1-view.test.ts`. The H4 plateau is pinned by
+  `src/server/loop/phase1-plateau.test.ts` (written 2026-11-24 for the coverage that file's namesake
+  never had — the audit written for every accepted revision and the
+  3 non-improvements that stop real work, not just the status text; a strict reduction as progress, a
+  repeat as none, and a regression never raising the bar, with the minor-dial and Editor-verdict halves;
+  the one plateau question and its clear into a fresh wave with a fresh baseline; and the audit reset with
+  the sampling counters on a Seed edit or a backtrack). **Update, same date:** the STOP and the audit
+  stand for a legacy book, but the plateau's Author escalation (`SAMPLING_PLATEAU_PREFIX`) and its wave
+  bump were removed when the grouped model landed, so the "one plateau question … into a fresh wave"
+  case in that file is now the legacy-half behaviour and has no group-book equivalent — on a grouped
+  Story the escalation is the open finding (§17.4), and the plateau leg of `phase1Unmet` is skipped
+  entirely.
+
+- **T3 — the Seed is a commitment, not an outline, and every pass is told so where it cannot be
+  clipped away (2026-11-24).** The contracts this document started with read as checklists AGAINST the
+  Seed: §8's screening prompt called a `high` "a promised element the draft fails to deliver", the
+  deep-review cost ladder called `major` "a promised element broken or missing", and §5.2's C-14 asked
+  whether "nothing central to `stories.idea` is missing from it". A Summary is a set of facts about the
+  book, not a plan for the whole book, so all three turned a Seed SILENCE into an unmet promise. The
+  Author's two screenshots were exactly that shape — a refuge with no earlier planting, and `the
+  Overview never says what the bird loses` — and each one was confirmed, auto-approved, turned into a
+  `fix` task and paid for with a sampling round. The rule now runs the other way, in one wording
+  everywhere a model reads it: the Seed and its Brief commit what they STATE, and where they are silent
+  — or name a gap in `open_questions` — the Writer supplies any specific that contradicts nothing,
+  invention included. The gates do not move: a contradiction of the Seed, of critical Knowledge or of
+  the artifact's own promise, a real contradiction inside the artifact, and a commitment the Seed states
+  EXPLICITLY that the draft plainly does not carry (`shared/criteria.ts:C-14`, whose label is now that
+  test — `checker: judge` and `hard: true` are untouched) all still cost what they costed, and the
+  chapter/plotline setup-and-payoff review (C-4, C-5, C-6) still runs in phases ② and ③. Proof is a
+  QUOTATION, so a finding that can quote only an absence is inadmissible and the Editor `dispute`s it.
+  Placement is the whole design: the rule is carried by the two engine-owned, never-clipped texts a
+  Reviewer is guaranteed to read (`run/brief.ts:READER_REVIEW_MODE` and its `check_unit` reader job
+  line), by `run/brief.ts:jobStatement` for `write_unit`, `structure_seed`, `verify_findings` and
+  `confirm_finding`, by the tool-less paths (`run/phase1-prompt.ts:SCREEN_INSTRUCTION` and the
+  `SEED_CONTRACT_NOTE` appended to the SEED BRIEF section of both compiled prompts), and inside the
+  FIRST 600 characters of the sweep note (`loop/work.ts`) because `run/brief.ts:renderJob` clips that
+  note — the shipped note put `THIS IS THE OVERVIEW, NOT PROSE` at character 950 and the phrasing rule
+  at 1,320, so the passes that kept costing rounds were never sent the sentence that would have stopped
+  them. The four angle templates are Author-editable copies (§4.12), which is why the durable wording
+  is engine-owned, and why each of them states the stand-down under
+  `When the artifact under review is a SUMMARY (phase ①)` with the later phases named in the same
+  breath. One storage-visible consequence stays source-only: a required Seed Brief field the Seed leaves
+  silent is recorded as `''` plus an `open_questions` row and renders as `OPEN_SCALAR_MARKER`'s "the
+  Seed states nothing here" line, because `stakes:` followed by nothing is what a Reader read as a
+  broken promise. Pinned by `src/shared/criteria.test.ts` (the §5.2 mirror and the contradiction
+  wording), the T3 cases in `src/server/templates/templates.test.ts` (the sampler's licence, the
+  screening gates, the four angles' phase isolation, the Editor's dispute of an absence, the
+  Seed-structuring Editor's open-field recording), `src/server/run/phase1-prompt.test.ts` (the screening
+  contract, the engine-owned SEED BRIEF note surviving an Author-written role prompt, the open-field
+  render), `src/server/run/brief.ts`'s own test file (the unclipped job line and banner, the note's
+  surviving window with the store's short AND long ids, and both verification gates) and the rig-level
+  case in `src/server/loop/phase1-verdict-contract.test.ts`.
+
+- **T4 — the Summary is authored GROUP by GROUP, and this pipeline's steps 4–9 changed with it
+  (2026-11-24).** The unit of phase-① work is no longer the whole Summary: it is a **phrase GROUP**,
+  and every part of the loop that was written against "one text, N competing drafts" was rewritten
+  against "five parts, each with its own revision line". The reason is the one this document's own
+  economics could not fix: under sampling, one sentence of criticism costs a rewrite of all six prose
+  fields and the deletion of the other N−1 attempts (D-22), a Writer budget is spent re-drafting a whole
+  book to fix one clause, and a "Revision 1 … N" rail cannot say *Tone is fixed and Premise still isn't*.
+  Steps 1–3 — the Seed, the Seed Brief, the Researcher, the gates — are **untouched and still current**;
+  so are `toolMode: 'none'` and its structured transport (§4.2), the citation and evidence rules, the
+  deep-review cost ladder, and the dial that decides what becomes a task. Steps 4–9, restated as they run
+  on a `summary_mode: 'groups'` Story (normative form: `specifications.md` §17):
+
+   4. **The compiler builds one prompt per Writer BATCH, not per sample.** §5's compiler gains a group
+      branch: `run/phase1-prompt.ts:compileGroupDraftPrompt` assembles the Seed section, the `critical`/
+      `high` Knowledge filter, the FIX TASKS block **only when the batch carries any** (a first draft is
+      handed none, because there is nothing to answer yet and an empty heading reads as an unanswered
+      demand), and **`## GROUPS` — the batch's groups in catalog order, each with its duty line
+      (`phrase_groups.description`, the group saying in its own words what it owes) and its CURRENT text**,
+      followed by the engine-owned `GROUP_DRAFT_INSTRUCTION`. Current text is not decoration: a group
+      revision is a revision OF a specific text (R2), and a Writer handed only fix tasks would rewrite a
+      group it cannot see. The open findings reach the batch as the fix tasks they became (D-34/D-35). The
+      system turn is the sampler's role prompt plus the `GroupDraft` answer contract, and group ids, group
+      count and round number never enter it — two batches that share the state share the cacheable prefix,
+      and the digest lands on the revision row (`prompt_hash`, §5's cache rule). The rules that MUST hold
+      (the exact-set answer, "content not restatement", revise-don't-rewrite) are engine-owned text, so an
+      Author's rewrite of the template cannot quietly drop them.
+   5. **A Writer writes the batch.** `draft_groups`, `role: 'writer'`, `toolMode: 'none'`, one turn,
+      answering `GroupDraftSchema` (`{group_ref, content}` per group plus `knowledge_used`). The batch is
+      `max(1, stories.summary_sampling)` groups, chosen from the groups that OWE text — unwritten, or
+      named by an open finding no revision of that group resolves — after the live-hold exclusion. An
+      invalid answer fails the **whole batch** (`phrase/revisions.ts:parseGroupDraftAnswer`), because half
+      an installed Overview is not an Overview. **Acceptance installs**: `engine.ts:1445-1528` calls
+      `installGroupRevisions` in the commit that closes the run — one new `latest` revision per written
+      group, the rows they replace go `archived` and are never deleted, the Overview recomposes from the
+      catalog's order, and §4.2's five prose fields are re-mirrored from the same texts through the identity
+      map in `shared/phrase.ts:SUMMARY_MIRROR_FIELDS`. The install is the mirror's ONLY writer on a grouped
+      book: the crew's `editSummary` answers `R6` there (hardening, D-61), so no run can put prose into those
+      fields behind the groups' backs — and the permission that used to make a hand write legal (T-3c's
+      Writer-only §4.2 write) now only explains why a `'sampling'` book keeps the tool.
+   6. **Readers review the whole vector, and the review is keyed by it.** `review_groups`, `role: 'reader'`,
+      `toolMode: 'none'`, `summary_readers` seats, each reading EVERY group — a defect that crosses groups
+      has to be able to name all the groups it crosses. Their prompt
+      (`run/phase1-prompt.ts:compileGroupReviewPrompt`) is the mirror image of a screening pass: a screen
+      judged one CANDIDATE against its siblings before a winner was chosen, a group review judges the
+      INSTALLED Overview, all five groups with their revision numbers — the combination under review, which
+      is the key the job was claimed under. The work item is claimed as
+      `wi_review_groups_<vectorHash>_<pass>`, where the vector is the sorted `<groupId>:<revision>` pairs
+      hashed by `phrase/revisions.ts:groupVectorHash`; an install moves the vector, so the reading seats
+      re-arm by themselves and the projection reports `reviews_on_current_vector` rather than guessing.
+      The answer is `GroupReviewSchema`, every issue naming its groups, and a pass handed fix tasks is the
+      only pass entitled to certify them — the same silence-is-not-a-pass grading a screening row used
+      (`records.ts:sampleFixDemand`), so the group path invents no weaker evidence standard.
+   7. **There is no step 7.** No selection, no minimality rule, no truncation, no `selectRevision`, no
+      merge — a `draft_groups` run never calls any report verb, and the §6.5 selector and §6.6 truncation
+      are skipped for a grouped book (`engine.ts:1606`, `1994`, `2073`). The Writer's answer IS the record.
+      The retired step is now closed from the crew's side as well: an Editor that calls `selectRevision` on a
+      grouped Summary is refused `R5`, and an Editor that asks for a Summary `requestMerge` gets the `D-23`
+      refusal with a `fix` that names `raiseFinding` + `group_refs` instead of the selection workflow (hardening,
+      D-61) — a hint pointing at a removed tool is a hang the Author has to diagnose.
+   8. **The real review comes after every seat has reported on that vector.** `check_unit`, tool-carrying,
+      `reader`, claimed as `wi_group_check_<vectorHash>_<pass>` for as many passes as there are seats, the
+      same four angles as before. The one thing it must now do is say **which groups** a complaint is about:
+      `raiseFinding` on a grouped Summary that omits `group_refs` is refused, as is an id the catalog does
+      not know (`tools/checker.ts`, and the dedupe rule D-16 is not allowed to swallow a complaint that
+      names more groups than the one already open). The advice that comes back with an unknown id now
+      BRANCHES by book: a legacy Story is told it may omit the list — there, an empty list really does mean
+      the whole Overview — and a grouped Story is told to name every group the defect crosses, because a
+      grouped Summary has no unscoped path to omit into (hardening, D-61). The D-33 rule that a phase-①
+      Summary finding must name the draft it describes is skipped on this book: there is no competing draft
+      to name (R5).
+   9. **The refinement loop is per group.** An approved finding queues its `fix` task, and the next batch is
+      exactly the groups the finding names (`phrase/findings.ts:findingGroupsStillOwed` — a finding with NO
+      `group_refs` means "the whole Overview", the legacy reading, so an old complaint still routes work, it
+      just routes more of it). A group is "resolved" only by the **explicit claim** on the row: a
+      `group_revisions` row whose `finding_refs` names the finding. `findingResolution` reports
+      `{targeted, resolved, missing, resolved_all}`, and the finding goes `fixed` only when `resolved_all`
+      is true and the row is `approved` — an unconfirmed finding does not close over the Author's gate
+      (D-33/D-34), and a replayed install cannot re-close a closed finding. **A finding about Premise and
+      Ending is owed until BOTH have a newer revision claiming it**: a group cannot settle a cross-group
+      complaint by rewriting itself.
+      **The budget is the escalation — per TEXT, not per lifetime.** `GROUP_WRITE_ATTEMPT_CAP = 2` rewrite
+      attempts per group, counted over CLOSED holding runs whose JOURNAL POSITION is after the write that
+      produced the group's current text (`writeBaselineOf`: that text's `latest` row when there is one, else
+      the last create-or-update event on the group row). It never counts a live run, never counts a reading
+      seat, and RESETS when an install succeeds — so a group that was rewritten cleanly and is criticised
+      again has a fresh pair against the NEW text, a rewritten Seed re-baselines with the reset, and nothing
+      about the number caps how many revisions a group can ever have. When the pair is spent the loop stops
+      paying for that group: **no Author escalation, no wave bump, no least-bad install** — the open finding,
+      in the review rail with its attempts visible, is the question, and the Author's moves are to decide it
+      or rewrite the group by hand (`POST …/phrases/groups/:groupId/revise`, refused with `409` naming the
+      holding runs while a Writer pass is in flight). That removal is deliberate: asking the Author to re-say
+      what the crew already said spends an agent to produce an echo. A spent group is PARKED, and a parked
+      group is deliberately NOT counted as owed, or a provider that cannot answer the schema would make the
+      Story undrainable.
+      **Closure and the sweep.** Closure is a join on claims in both orderings: an install closes an
+      `approved` finding once every group it names carries a claiming revision, and because the planner cuts
+      batches off OPEN findings, a Writer can install the answer BEFORE the approval lands — so the sweep
+      re-runs the same read every round (`engine.ts:560-595`, `loop_reconcile_findings` →
+      `closeFindingAnsweredByInstalls`) and closes the fix tasks that named the now-`fixed` finding. The step
+      runs on group books only, because with no phrase rows `findingResolution` answers `resolved_all: true`
+      vacuously and acting on that would delete a sampling round's fix work (hardening, D-64).
+      **What the drain and the sign-off wait for.** A grouped book's §6.7 drain reasons come from
+      `phrase/exclusion.ts:groupPipelineOwed`, not from the sampling rows it never writes: group-pipeline runs
+      still in flight, groups owing the Overview a draft or a fix pass, Reader passes still owed on the
+      installed vector, then deep-review passes owed for it — and `decideStory` withholds the
+      `pending / phase_signoff` offer over the same owed passes, so an install re-arms a full reading cycle
+      before the Story may read `drained` (§6.7 as restated in `specifications.md` §17.8; the HTTP lock's own
+      gate — Ideas tray, then Goal — is unchanged).
+
+  **What a grouped Story never writes:** `sampling_round`, `sampling_wave`, `sampling_history`, the six
+  §4.15 `revisions` rows, `origin: 'sampled'`, `selected_sample_id`, the plateau audit's escalation row, and
+  any Author task from the sampling path. **What stays identical:** the Seed Brief and its one claim family,
+  the Researcher jobs and the D-40/D-51 gates (`records.ts:researchGate`, `researchKeyOf`), the citation
+  rules, `toolMode: 'none'` and the structured transport, the deep-review angles and the dial (D-34/D-35),
+  the lock gate (Ideas tray first, then the phase Goal), and phases ② and ③.
+
+  **The two honest gaps this pass found are closed, and they are named here with their provenance rather
+  than quietly deleted.** (a) `deleteStory`'s purge list did not name `phrases`, `phrase_groups` or
+  `group_revisions`, so deleting a Story left one phrase row and five group rows behind; the measurement
+  survives — `Temp/create-storyline-orchestrator/T4/phrase-delete-probe.ts`, run through `yarn vite-node`,
+  reported `phrases=1 phrase_groups=5`. `engine.ts:2673-2675` now deletes all three in the same
+  `delete_story` commit, after the live runs are killed and settled, and `api/story-delete.test.ts` seeds a
+  group book through `installGroupRevisions` to assert it. (b) Nothing group-shaped was reset by a Seed edit
+  or a backtrack: `editSeed` (D-25a, "the Summary goes") cleared the mirror and left all five texts and all
+  five revision numbers standing, so the next batch saw a fully written Overview and the archived history
+  kept its claim on the attempt baseline and on R3's closure join. Both flows now do their own honest work:
+  `invalidation.ts:scrapPhasesAfter` deletes the story's `group_revisions` rows and reports the number as
+  `counts.groupRevisions`; `engine.ts:editSeed` resets the five `phrase_groups` rows IN PLACE — `''` / `0` /
+  null, **same UUIDs**, so R1's addresses outlive the text — and clears the Overview and the mirror with
+  them; `engine.ts:backtrack('summary')` keeps L-31's split instead, preserving the reopened phase's own
+  artifact (the texts and their mirror, as the base for another round) while the revision history goes with
+  the scrapped work. `loop/group-seed-reset.test.ts` pins all of it, including the sibling Story whose
+  catalog must not move. The write allowance rides a JOURNAL baseline (`writeBaselineOf`) precisely so these
+  resets are resets: counting from the group row's create would charge the old Seed's passes to the new one
+  and park every group, which would let an EMPTY Overview read as drained.

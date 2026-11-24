@@ -59,7 +59,7 @@ function seedIdea(store: Store, storyId: string, phase: StoryPhase, state: IdeaS
 function survivors(store: Store): Array<[string, IdeaState]> {
     return store.ideas
         .list()
-        .filter((idea) => idea.story_id === 'story_1')
+        .filter((idea) => idea.story_id === 'story_0')
         .map((idea) => [idea.id, idea.state] as [string, IdeaState]);
 }
 
@@ -69,15 +69,15 @@ describe('D-36 / U-2 — the lock empties the Ideas tray, selected rows included
         const story = seedStory(store, 'plotlines');
 
         // Four states of the phase being locked. `selected` is the row the old copy spared.
-        seedIdea(store, story.id, 'summary', 'proposed'); // idea_1
-        seedIdea(store, story.id, 'summary', 'selected'); // idea_2
-        seedIdea(store, story.id, 'summary', 'discarded'); // idea_3
-        seedIdea(store, story.id, 'summary', 'deferred'); // idea_4
+        seedIdea(store, story.id, 'summary', 'proposed'); // idea_0
+        seedIdea(store, story.id, 'summary', 'selected'); // idea_1
+        seedIdea(store, story.id, 'summary', 'discarded'); // idea_2
+        seedIdea(store, story.id, 'summary', 'deferred'); // idea_3
         // One row of the phase being ENTERED — it is not part of this tray (D-32's memory is per-phase).
-        seedIdea(store, story.id, 'plotlines', 'selected'); // idea_5
+        seedIdea(store, story.id, 'plotlines', 'selected'); // idea_4
 
         expect(deletePhaseIdeas(store, story.id, 'summary')).toBe(4);
-        expect(survivors(store)).toEqual([['idea_5', 'selected']]);
+        expect(survivors(store)).toEqual([['idea_4', 'selected']]);
     });
 
     it('every delete is journaled with the D-36 why, so the audit shows the tray was emptied by the lock', () => {
@@ -94,11 +94,11 @@ describe('D-36 / U-2 — the lock empties the Ideas tray, selected rows included
                 .map((event) => ({ id: event.id, attribution: event.attribution }))
         ).toEqual([
             {
-                id: 'idea_1',
+                id: 'idea_0',
                 attribution: { run_ref: null, why: 'locking phase summary empties the Ideas tray (D-36)' }
             },
             {
-                id: 'idea_2',
+                id: 'idea_1',
                 attribution: { run_ref: null, why: 'locking phase summary empties the Ideas tray (D-36)' }
             }
         ]);
@@ -108,15 +108,15 @@ describe('D-36 / U-2 — the lock empties the Ideas tray, selected rows included
         const store = Store.empty();
         const story = seedStory(store, 'chapters');
 
-        seedIdea(store, story.id, 'chapters', 'selected'); // idea_1 — the row the old copy kept alive
-        seedIdea(store, story.id, 'chapters', 'discarded'); // idea_2
-        seedIdea(store, story.id, 'summary', 'selected'); // idea_3 — an older phase's decided row
+        seedIdea(store, story.id, 'chapters', 'selected'); // idea_0 — the row the old copy kept alive
+        seedIdea(store, story.id, 'chapters', 'discarded'); // idea_1
+        seedIdea(store, story.id, 'summary', 'selected'); // idea_2 — an older phase's decided row
 
         // L-25a: `completed` is phase ③'s lock, and there is no fourth phase.
         expect(lockWrites(store, story, 'chapters', '2026-11-11T10:00:00.000Z')).toEqual({
             deleted_ideas: 2,
             next_phase: null
         });
-        expect(survivors(store)).toEqual([['idea_3', 'selected']]);
+        expect(survivors(store)).toEqual([['idea_2', 'selected']]);
     });
 });

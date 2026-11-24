@@ -31,6 +31,7 @@ import {
     STORY_STATUSES,
     TASK_STATES,
     TRENDS,
+    UID_ADDRESSED_COLLECTIONS,
     UNIT_KINDS,
     VERDICT_RECOMMENDATIONS,
     type CollectionName
@@ -114,8 +115,11 @@ describe('§4 enums', () => {
 });
 
 describe('§4 collection registry', () => {
-    it('lists the 20 collections in §4 order', () => {
-        expect(COLLECTION_NAMES).toHaveLength(20);
+    it('lists the 23 collections in registry order', () => {
+        // F2 — 20 §4 names, 3 the phase-① pipeline appended, and the 3 SUMMARY PHRASE records R1 adds.
+        // Appending (never inserting) is the load-bearing half: every snapshot reader walks THIS list,
+        // so an old `store.json` still loads and simply has no rows in the new collections.
+        expect(COLLECTION_NAMES).toHaveLength(23);
         expect(COLLECTION_NAMES).toEqual([
             'stories',
             'summaries',
@@ -138,7 +142,13 @@ describe('§4 collection registry', () => {
             // first seventeen are pinned §4 names, and old snapshots were written in that order.
             'knowledge',
             'seed_briefs',
-            'sample_reviews'
+            'sample_reviews',
+            // SUMMARY PHRASE (R1/R2), appended the same way. The ORDER of these three is not free:
+            // `phrase_groups` follows `phrases` so `_resolveId` reports the most specific family (the
+            // rule pinned in the next test).
+            'phrases',
+            'phrase_groups',
+            'group_revisions'
         ]);
     });
 
@@ -149,16 +159,60 @@ describe('§4 collection registry', () => {
 
         for (const name of names) expect(COLLECTION_SINGULARS[name]).toMatch(/^[a-z]+(_[a-z]+)*$/);
 
-        // No singular may be a strict id-prefix of another collection's ids: the store resolves
-        // a bare id to its collection by prefix (T-4's cross-collection `expects`), and an
-        // ambiguous prefix would silently check the wrong record's rev.
-        for (const left of names) {
-            for (const right of names) {
+        // F2 — the prefix rule, at the level the store actually depends on. `store.ts:_resolveId`
+        // recognises a record's family by id PREFIX, so two collections whose MINTED ids nest
+        // (`task_1` inside `task_group_1`) would make a cross-collection `expects` (T-4) compare the
+        // wrong record's rev. That is a rule about COUNTER families, and the registry now contains two
+        // families outside the counter by contract: `UID_ADDRESSED_COLLECTIONS` — `phrases` and
+        // `phrase_groups`, whose rows carry a UUID minted by `persist.ts:newRecordUid` and preserved by
+        // `store.ts:createWithId` (R1: a group id is an ADDRESS a route, a finding and a Run row all
+        // quote). Neither ever mints `phrase_3`, so the two families cannot claim one id shape.
+        const uidAddressed = UID_ADDRESSED_COLLECTIONS as readonly string[];
+        const counterMinted = names.filter((name) => !uidAddressed.includes(name));
+
+        for (const left of counterMinted) {
+            for (const right of counterMinted) {
                 if (left === right) continue;
 
                 expect(`${COLLECTION_SINGULARS[right]}_1`.startsWith(`${COLLECTION_SINGULARS[left]}_`)).toBe(false);
             }
         }
+
+        // The exemption is STATED rather than assumed: the only nested pair in the registry is the
+        // phrase pair R1 added, so a third collection whose singular starts with `phrase_` cannot join
+        // it without this assertion growing — and the ordering rule below then has to cover it too.
+        const nested: Array<[CollectionName, CollectionName]> = names.flatMap((left) =>
+            names
+                .filter(
+                    (right) =>
+                        left !== right &&
+                        `${COLLECTION_SINGULARS[right]}_1`.startsWith(`${COLLECTION_SINGULARS[left]}_`)
+                )
+                .map((right) => [left, right] as [CollectionName, CollectionName])
+        );
+
+        expect(nested).toEqual([['phrases', 'phrase_groups']]);
+
+        // And when a family IS nested, `_resolveId`'s answer stays correct by construction: with no
+        // record under either family it reports the LAST prefix match it walked — the most specific
+        // family — and it walks COLLECTION_NAMES in order. So the longer singular must sit LATER in
+        // the registry. Pinned here because the store's correctness depends on this order; the
+        // behaviour itself is pinned in `src/server/store/record-identity.test.ts`.
+        const registryOrder = (name: CollectionName) => COLLECTION_NAMES.indexOf(name);
+
+        for (const [left, right] of nested) {
+            expect(COLLECTION_SINGULARS[right].startsWith(`${COLLECTION_SINGULARS[left]}_`)).toBe(true);
+            expect(registryOrder(right) > registryOrder(left)).toBe(true);
+        }
+
+        // The contract itself, pinned so the exemption above cannot quietly widen: exactly these two,
+        // with these singulars, and `group_revisions` deliberately NOT among them (an Author reading a
+        // group's history wants `group_revision_3`, not a UUID — `shared/types.ts` says why).
+        expect(UID_ADDRESSED_COLLECTIONS).toEqual(['phrases', 'phrase_groups']);
+        expect(COLLECTION_SINGULARS.phrases).toBe('phrase');
+        expect(COLLECTION_SINGULARS.phrase_groups).toBe('phrase_group');
+        expect(uidAddressed.includes('group_revisions')).toBe(false);
+        expect(COLLECTION_SINGULARS.group_revisions).toBe('group_revision');
 
         // The names that are not plain de-pluralisations (a cast row is a character, a ledger row
         // is an entry, a knowledge row is an entry) — pinned because the store's ids are

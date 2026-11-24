@@ -45,7 +45,7 @@ import { seedHashOf } from '../../shared/seed-hash';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
-import type { IssueList, SummarySample } from '../../shared/schemas';
+import type { GroupDraft, GroupReview, IssueList, SummarySample } from '../../shared/schemas';
 import type { Cost, Finding, SampledFixVerification, Story } from '../../shared/types';
 import type { LoopEngineConfig, SweepReport } from './types';
 
@@ -103,6 +103,32 @@ export interface CrewBehaviour {
      */
     checkerFinds?: Array<{ cost: Cost; title: string; criterion?: string }>;
     /**
+     * G1 — what the phase-① DEEP-REVIEW Reader files (§6.4 step 6, D-30). Absent means the review is
+     * clean, which is what every existing phase-① fixture assumes and what lets a Story install a
+     * Summary with nothing to fix.
+     *
+     * This is a SEPARATE knob from `checkerFinds` on purpose: `check_unit` with `roleName: 'reader'` is
+     * the deep review of the SELECTED revision (a tool-carrying Reader), while the checker's rows belong
+     * to the chapters' consistency pass (D-30's angles). One knob for both would arm a Summary round
+     * every time a test scripts a checker defect.
+     *
+     * The function form receives the draft under review, so a row can file a DIFFERENT cost per
+     * accepted revision — which is how a G1 row walks the plateau (3 revisions that do not lower the
+     * blocking count) and how the dial rows prove a `minor` inside `auto_approve` counts while a taste
+     * note never does (`records.ts:summaryBlockingCost`).
+     *
+     * WHY THE ARGS LOOK LIKE THIS: `raiseFinding` is the REAL tool here (the rig doubles only
+     * `editChapter`/`selectRevision`), so the call must satisfy its guards or the run silently files
+     * nothing — a phase-① finding on the Summary must name the CARRIED revision in `related_refs`
+     * (T6/R2c), and a Reader finding must carry `detail` (D-30). The default title names the revision
+     * because the tool's fingerprint is `target|criterion|title` (D-16): a title that varied only in
+     * prose would let a re-sighting dedupe into the previous revision's row and the audit would count
+     * nothing for it.
+     */
+    deepReviewFinds?:
+        | { cost: Cost; criterion?: string; title?: string }
+        | ((input: { item: WorkItem; revisionId: string; pass: number }) => { cost: Cost; criterion?: string; title?: string } | undefined);
+    /**
      * What a `sample_unit` run answers (§6.4 step 3). The default derives the six prose fields from
      * the Seed Brief the compiled prompt carries, so the installed Summary provably came from the
      * round's prompt. Return a STRING to answer with raw text instead — an invalid JSON answer is how
@@ -129,6 +155,20 @@ export interface CrewBehaviour {
         prompt: string;
         fixIds: string[];
     }) => SampledFixVerification[];
+    /**
+     * What a `draft_groups` run answers (R2 — the Summary Phrase's per-group Writer). The default
+     * writes ONE phrase per targeted group, worded so a test can tell which group a Group Revision
+     * came from; the hook is how a test scripts a REFUSED answer — an unknown group id, a group the
+     * Work Item was never dispatched for, prose that is not JSON.
+     */
+    groupDraft?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => GroupDraft | string;
+    /**
+     * What a `review_groups` run answers (the gate that decides whether a group draft becomes
+     * current). Default: clean. The hook is how a test files GROUP-SCOPED issues, which is the only
+     * way R3's multi-group closure gets driven end to end: an issue naming two groups stays open
+     * until BOTH groups have a resolving revision.
+     */
+    groupReview?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => GroupReview | string;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +186,17 @@ export interface RigOptions {
     summarySampling?: number;
     /** Phase ① Reader passes per sample for this rig's Story (default 1, same reason). */
     summaryReaders?: number;
+    /**
+     * SUMMARY PHRASE R1/R6 — which phase-① pipeline this rig's Story runs (default `'sampling'`).
+     *
+     * WHY THE RIG DEFAULT IS THE LEGACY VALUE: the whole existing loop suite (hill-climb, sampling
+     * progress, screening, selection, escalation) is written against whole-Summary sampling, and the
+     * redesign's switch is a Story SETTING rather than a derived fact. `'sampling'` puts those rigs
+     * exactly where they were; `summaryMode: 'groups'` is how a Summary Phrase test asks for the five
+     * catalog groups, the per-group Writer batch and the install-instead-of-select settlement. The real
+     * `createStory` default stays `'groups'` — the rig is a test fixture, not the product.
+     */
+    summaryMode?: 'groups' | 'sampling';
     /** The crew's scripted behaviour (above). */
     crew?: CrewBehaviour;
     /**
@@ -419,7 +470,10 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
             // Reader keeps each sweep deterministic and cheap. The product's standards (5/5)
             // are the Story defaults and are pinned against the real server.
             summary_sampling: options.summarySampling ?? options.attempts ?? 1,
-            summary_readers: options.summaryReaders ?? 1
+            summary_readers: options.summaryReaders ?? 1,
+            // R1/R6: the rig keeps the pre-redesign pipeline unless a Summary Phrase test asks for the
+            // group one, so the existing loop suite is unaffected by the new product default.
+            summary_mode: options.summaryMode ?? 'sampling'
         });
 
         storyId = created.story_id;
@@ -820,6 +874,41 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                         }
                     });
                 }
+            } else if (item.revisionRef !== undefined) {
+                // G1 — the deep-review Reader's own knob. The pass number comes from the claim key
+                // (`deepReviewKeyOf` mints `wi_review_<revision>_a<pass>`), so a row can script pass 1
+                // filing and pass 2 staying clean, and `records.ts:revisionReviewFindings` attributes the
+                // row to this revision's review through the run's `attribution.run_ref`.
+                const revisionId = item.revisionRef;
+                const spec =
+                    typeof crew.deepReviewFinds === 'function'
+                        ? crew.deepReviewFinds({
+                              item,
+                              revisionId,
+                              pass: Number(/_a(\d+)$/.exec(item.id)?.[1] ?? '1')
+                          })
+                        : crew.deepReviewFinds;
+
+                if (spec !== undefined) {
+                    const title = spec.title ?? `Deep review: ${revisionId} leaves the Seed's promise unpaid`;
+
+                    report.push({
+                        name: 'raiseFinding',
+                        args: {
+                            target_ref: item.unit?.ref ?? item.storyId,
+                            criterion_ref: spec.criterion ?? 'C-4',
+                            title,
+                            // D-30: the Reader's what-and-where line — the tool refuses without it.
+                            detail: `The promise field of ${revisionId} states an obligation the rest of the draft never pays; the ending is where it stops.`,
+                            evidence: `the deep-review pass read ${revisionId} against the Seed and found the promise unpaid`,
+                            cost: spec.cost,
+                            // T6/R2c: a phase-① Summary defect must name the draft it describes, which is
+                            // also exactly the id `findingRevisionScope` uses to keep it out of `superseded`.
+                            related_refs: [revisionId],
+                            why: 'The Reader angle: what a reader of this Author would object to (D-30).'
+                        }
+                    });
+                }
             }
 
             return report;
@@ -985,7 +1074,18 @@ function structuredAnswer(
     crew: CrewBehaviour
 ): string {
     const prompt = request.messages.map((message) => message.content).join('\n\n');
-    const kind: WorkItem['kind'] = request.responseFormat?.name === 'IssueList' ? 'screen_samples' : 'sample_unit';
+    // The answer contract names the job (T-11): `IssueList` is the screening pass, `GroupDraft` and
+    // `GroupReview` are the Summary Phrase's per-group Writer and Reviewer, and anything else in a
+    // schema-constrained request is the legacy whole-Summary sampler.
+    const formatName = request.responseFormat?.name;
+    const kind: WorkItem['kind'] =
+        formatName === 'IssueList'
+            ? 'screen_samples'
+            : formatName === 'GroupDraft'
+              ? 'draft_groups'
+              : formatName === 'GroupReview'
+                ? 'review_groups'
+                : 'sample_unit';
     const pool = store.runs
         .list()
         .filter((run) => LIVE_RUN_STATES.includes(run.state))
@@ -994,6 +1094,7 @@ function structuredAnswer(
 
     const chosen =
         pool.find((item) => item.sampleIndex !== undefined && item.sampleIndex === request.seed) ??
+        groupJobOf(pool, prompt) ??
         (pool.length === 1 ? pool[0] : pool[pool.length - 1]);
 
     // No live job of that kind: `{}` fails the schema on purpose, so the run's failure is visible in
@@ -1007,6 +1108,29 @@ function structuredAnswer(
             crew.sampleAnswer !== undefined
                 ? crew.sampleAnswer({ item: chosen, sampleIndex, prompt })
                 : defaultSampleAnswer(sampleIndex, logline);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // R2 — the Summary Phrase's per-group Writer. The group ids come from the WORK ITEM, not from the
+    // prompt: the job is the authority on what it asked for, and answering exactly that set is what
+    // `parseGroupDraftAnswer` accepts.
+    if (kind === 'draft_groups') {
+        const groupRefs = chosen.groupRefs ?? [];
+        const answer =
+            crew.groupDraft !== undefined
+                ? crew.groupDraft({ item: chosen, groupRefs, prompt })
+                : defaultGroupDraftAnswer(groupRefs);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // R5 — the Reviewer reads the group revision that is ALREADY current (an accepted result installs
+    // first), and every complaint names its groups so R3's closure rule has something to gate on.
+    if (kind === 'review_groups') {
+        const groupRefs = chosen.groupRefs ?? [];
+        const answer =
+            crew.groupReview !== undefined ? crew.groupReview({ item: chosen, groupRefs, prompt }) : { issues: [] };
 
         return typeof answer === 'string' ? answer : JSON.stringify(answer);
     }
@@ -1039,6 +1163,37 @@ function structuredAnswer(
 
     return typeof certified === 'string' ? certified : JSON.stringify(certified);
 }
+
+/**
+ * The group job this prompt belongs to (R2). A group Work Item's target ref is the STORY, so when a
+ * batch has more than one group in flight the prompt's GROUPS block is the only thing that names
+ * which group THIS turn was dispatched for — `### <Title> (group_ref=<id>, …)`
+ * (`run/phase1-prompt.ts:renderGroupEntry`). Matching it keeps two live group runs from answering
+ * each other; a prompt that names more than one live job (or none) falls through to the caller's
+ * ordinary tie-break.
+ */
+function groupJobOf(pool: WorkItem[], prompt: string): WorkItem | undefined {
+    const named = /group_ref=([A-Za-z0-9_-]+)/.exec(prompt)?.[1];
+
+    if (named === undefined) return undefined;
+
+    const matches = pool.filter((item) => (item.groupRefs ?? []).includes(named));
+
+    return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * The default group Writer answer: one entry per requested group, with content that names the group
+ * id so a test can trace which Group Revision an install created and prove an untouched group kept
+ * its exact bytes. `knowledge_used` is empty because the rig seeds no knowledge rows by default.
+ */
+const defaultGroupDraftAnswer = (groupRefs: string[]): GroupDraft => ({
+    groups: groupRefs.map((group_ref) => ({
+        group_ref,
+        content: `The ${group_ref} line this story refuses to lose.`
+    })),
+    knowledge_used: []
+});
 
 /**
  * The first line of the screen prompt's `## TARGET DRAFT` section — the quotation the default

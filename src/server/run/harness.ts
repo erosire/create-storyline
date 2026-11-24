@@ -83,7 +83,7 @@ export function resolveHarness(store: Store, item: WorkItem): ResolvedHarness {
 export function permissionLine(kind: RoleKind): string {
     switch (kind) {
         case 'writer':
-            return 'You are the Writer: you are the only thing that writes story artifacts — the Summary in phase ①, the plotlines in ②, the chapters and prose in ③ (P10, D-17b) — and a locked artifact is read-only for you (P5, D-3, D-6). Never `updateDigest`: the engine derives it (D-12a).';
+            return 'You are the Writer: you are the only thing that writes story artifacts — the Summary in phase ①, the plotlines in ②, the chapters and prose in ③ (P10, D-17b) — and a locked artifact is read-only for you (P5, D-3, D-6). Never `updateDigest`: the engine derives it (D-12a). On a book written group by group the Summary is written one phrase GROUP at a time: your accepted answer becomes that group’s next revision, the text it replaces is archived, and the Summary fields are the mirror of those five groups rather than a second text (R2, R6).';
         case 'editor':
             return 'You are the Editor: you may select, merge and verify, and you may never write prose (L-19, T-3b). Your writes land through `selectRevision`, `requestMerge`, `rejectAll`, `verifyIdea` and `verifyFinding` only (D-33, D-22).';
         case 'reader':

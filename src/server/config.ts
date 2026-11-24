@@ -3,8 +3,13 @@
 // WHY THERE IS ALMOST NOTHING HERE: P1 makes the Dashboard's store the only memory in the
 // system and L-3 makes the loop restart from it with no lost state, so the process needs no
 // session store, no queue backend, and no cache to configure. What a deployment genuinely
-// has to choose is where it listens and WHERE THE BOOK LIVES — `<storeRoot>/store.json` +
-// `<storeRoot>/journal.jsonl` (W1), the two files the whole product is built on.
+// has to choose is where it listens and WHERE THE BOOKS LIVE — one store root holding the app
+// book at `<root>/server/` (the harness catalogue, the roster and the host settings) and one
+// book PER Story at `<root>/stories/<uuid>/` (`store.json` is the memory, `journal.jsonl` is the
+// D-12a derivation source, `harness/` is that Story's knowledge articles and retained threads).
+// There is no flat `<root>/store.json` any more: `StoryStores.open` refuses that layout outright,
+// because one journal and one id counter shared by every Story is the bug the per-story layout
+// removes (no migration, no backward compatibility).
 //
 // WHY THE PROVIDER TRIPLE IS NOT HERE: §8's harness transport is a later wave's wiring, and
 // E-0 puts cost out of scope — a base URL, key and model belong with whatever spawns runs,
@@ -16,8 +21,9 @@
 //     CLI flag  ->  STORYLINE_* environment  ->  the built-in default
 //
 // An explicitly BLANK value means "off" rather than "fall through": for the store root that
-// is the difference between the default directory and an in-memory run (`Store.empty()`), and
-// the distinction is the whole switch — the same reasoning that makes `STORYLINE_STORE_ROOT=`
+// is the difference between the default directory and a run that writes nothing at all
+// (`StoryStores.inMemory()` + `ServerConfig.inMemory()`, `api/server.ts:openStorylineRuntime`),
+// and the distinction is the whole switch — the same reasoning that makes `STORYLINE_STORE_ROOT=`
 // different from leaving it unset.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -33,9 +39,10 @@ export const DEFAULT_PORT = 5000;
 export const DEFAULT_HOST = '127.0.0.1';
 
 /**
- * Durable state under this package. The store keeps exactly two files here (W1: `store.json`
- * is the memory, `journal.jsonl` is the D-12a derivation source), so this one path is the
- * Author's book — a backup of it is a backup of the product.
+ * Durable state under this package. This is the store ROOT, not one book: it holds the app book at
+ * `server/` (the harness catalogue, the roster and the host settings every Story is seeded from) and
+ * one book per Story at `stories/<uuid>/` — each with its own `store.json`, `journal.jsonl` and
+ * `harness/` directory. A backup of the root is a backup of every Story the product has.
  */
 export const DEFAULT_STORE_DIRECTORY = 'temporary/storyline';
 
@@ -55,6 +62,7 @@ export const STATIC_ROOT_ENVIRONMENT = 'STORYLINE_STATIC_ROOT';
 export type StorylineFlags = {
     port?: string;
     host?: string;
+    /** `--store-root ""` is legal and means "write nothing anywhere"; see `resolveStoreRoot`. */
     storeRoot?: string;
     /** `--no-static` — API-only. The store is never optional, so there is no `--no-store`. */
     noStatic: boolean;
@@ -64,7 +72,11 @@ export type StorylineFlags = {
 export type StorylineServerConfig = {
     port: number;
     host: string;
-    /** Where `store.json` + `journal.jsonl` live; `null` = in-memory (`Store.empty()`, no persistence). */
+    /**
+     * The store root: the app book at `<storeRoot>/server/` plus one Story book at
+     * `<storeRoot>/stories/<uuid>/`. `null` = the in-memory workspace (`StoryStores.inMemory()` and
+     * `ServerConfig.inMemory()`), which behaves identically and writes no files anywhere.
+     */
     storeRoot: string | null;
     /** Absolute directory served at `/`, or `null` for an API-only server. */
     staticRoot: string | null;
@@ -130,7 +142,8 @@ export const parsePort = (raw: string | undefined, source: string): number => {
 /**
  * The store root, resolved with the blank-means-in-memory rule (see the file header): an
  * explicit `--store-root ""` or `STORYLINE_STORE_ROOT=` is the operator asking for a run with
- * no durable book, which is exactly `Store.empty()`, so it maps to `null` and not to `''`.
+ * no durable books at all, which is exactly the in-memory workspace `openStorylineRuntime`
+ * builds (`StoryStores.inMemory()` + `ServerConfig.inMemory()`), so it maps to `null` and not to `''`.
  */
 export const resolveStoreRoot = (
     flags: Partial<StorylineFlags>,

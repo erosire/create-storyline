@@ -37,6 +37,7 @@ import type {
     SeedBrief,
     Story,
     StoryPhase,
+    SummaryReviewHistoryEntry,
     Task,
     Template,
     Verdict
@@ -46,7 +47,7 @@ import type { Store } from '../store';
 // H1: the round's screening evidence becomes numbers in ONE place, and `./sample-select` owns that
 // rule. The direction matters — `sample-select` imports only `shared/types`, so this import cannot
 // cycle, and the selector stays readable without a store in it.
-import { requiresFixCertification, scoreSample, type ScoredSample } from './sample-select';
+import { bestUnresolvedBlocking, eligibleSamples, requiresFixCertification, scoreSample, selectSample, type ScoredSample } from './sample-select';
 
 // ---------------------------------------------------------------------------
 // Attribution for the engine's own writes (P11, T-5)
@@ -325,9 +326,12 @@ export function findingRevisionScope(store: Store, story: Story, finding: Findin
 }
 
 /**
- * The findings that still block a Summary from being final: critical or major findings on the
+ * The findings that still block a Summary from being final: the blocking-cost findings on the
  * SELECTED draft. Findings on a discarded sibling are history, not work — the next Reader round
- * reads the kept draft fresh. Minor and taste findings never block (they are not show-stoppers).
+ * reads the kept draft fresh. Which costs block is `records.ts:summaryBlockingCost`: critical and major
+ * always, and minor only when the Story's dial makes minor authorised work — so a dial that EXCLUDES
+ * minor lets the Summary be signed with minors sitting open, and a dial that INCLUDES minor does not.
+ * `taste` never blocks a Summary, in any phase (phase ③ owns the prose it would prefer between).
  */
 export function summaryBlockingFindings(store: Store, story: Story, unitRef: string): Finding[] {
     const selected = selectedSummaryRevision(store, story.id, unitRef);
@@ -341,7 +345,9 @@ export function summaryBlockingFindings(store: Store, story: Story, unitRef: str
         // those findings is the acceptance that arms the next round. The classic pipeline's extra
         // per-finding confirmation thread was removed with it, so requiring the flag here would
         // make every finding invisible to the phase gate.
-        if (finding.cost !== 'critical' && finding.cost !== 'major') return false;
+        // The Summary's phase-independent bar (`records.ts:summaryBlockingCost`): critical/major always,
+        // minor only when the Author's dial makes minor real work, taste never.
+        if (!summaryBlockingCost(story, finding.cost)) return false;
 
         // T6/R2c: the SAME attribution the verification queue and the raising tool read
         // (`records.ts:findingRevisionScope`). Only the two non-superseded answers keep blocking
@@ -407,10 +413,49 @@ export const unconfirmedFindings = (store: Store, storyId: string): Finding[] =>
     storyFindings(store, storyId).filter((finding) => finding.state === 'unconfirmed');
 
 /**
- * Phase ①'s bar is critical/major (D-30, D-34): a Reader may file clarity and description notes
- * at `minor`/`taste`, and the Editor records them, but they are not show-stoppers. Those notes
- * must not hold the Editor's choice, the fix pass or the phase sign-off — only a suspicion that
- * would actually cost the Writer a pass does. Every other phase keeps D-33's all-costs rule.
+ * Phase ①'s blocking bar, as ONE predicate every reader of "does this defect stop the round?" shares
+ * (D-30, D-34, D-35, and the hill-climb's minor rule).
+ *
+ * critical and major are blocking whatever the dial says — the Summary is a contract of facts, and a
+ * broken fact costs a Writer round in any phase.
+ *
+ * `minor` is DIAL-DRIVEN, and dial-driven the SAME WAY on every path (the sweep's auto-approve, the
+ * Editor's `approveFinding`, the arming rule, the sign-off and the drain): when the Story's
+ * `auto_approve` covers minor, a confirmed Summary minor is authorised work — it creates fix tasks, it
+ * arms the next revision, and the round may not stop with it outstanding. When the dial does NOT cover
+ * minor, the note stays `confirmed` and NON-blocking: it never arms a revision, never holds the
+ * sign-off, and the Story drains with it sitting there. Before this, the engine's sweep skipped
+ * phase-① minors unconditionally while the Editor's tool approved them whenever the dial said so, so
+ * the same finding was work on one path and a dead end on the other.
+ *
+ * `taste` is never blocking in phase ①, dial or no dial: the prose does not exist yet (phase ③ writes
+ * it), so a preference between two phrasings of one commitment cannot cost a sampling round (R6).
+ * Later phases keep D-33's all-costs rule.
+ */
+export const isBlockingCost = (story: Story, cost: Cost): boolean =>
+    story.phase !== 'summary' || summaryBlockingCost(story, cost);
+
+/**
+ * THE SUMMARY'S OWN BAR, and it is deliberately PHASE-INDEPENDENT: the Summary is signed once, and its
+ * blocking rows keep being read after the Story moved on (the phase sign-off, the Accept tick in
+ * `story-nav.ts`, and phase ②'s chapter work all ask "does the carried Summary still hold a blocker?").
+ * Reading `isBlockingCost` there would newly hold a signed Summary on a `taste` note the moment the Story
+ * left phase ① — a cross-phase change nothing asked for.
+ *
+ * So: `critical` and `major` always; `minor` exactly when the Author's dial makes minor authorised work
+ * (D-35's one dial, read the same way as `isBlockingCost`); `taste` never, because the prose it would
+ * prefer between does not exist until phase ③.
+ */
+export const summaryBlockingCost = (story: Story, cost: Cost): boolean =>
+    cost === 'critical' || cost === 'major' || (cost === 'minor' && dialCovers(story, 'minor'));
+
+/**
+ * Phase ①'s bar is critical/major — plus `minor` when the Author's dial makes minor real work
+ * (`records.ts:summaryBlockingCost`): a Reader may file clarity and description notes at `minor`/`taste`,
+ * and the Editor records them, but they are not show-stoppers unless the dial authorises them. Those notes
+ * must not hold the Editor's choice, the fix pass or the phase sign-off — only a suspicion that would
+ * actually cost the Writer a pass does. Every other phase keeps D-33's all-costs rule, and keeps counting
+ * a suspicion about a set-aside draft, exactly as it did before.
  *
  * T6/R2c adds the other half of the same question: in phase ① a suspicion that names a draft the
  * loop has ALREADY set aside (`records.ts:findingRevisionScope` → `superseded`) cannot hold this
@@ -423,8 +468,8 @@ export const unconfirmedBlockingFindings = (store: Store, story: Story): Finding
     unconfirmedFindings(store, story.id).filter(
         (finding) =>
             story.phase !== 'summary' ||
-            (finding.cost === 'critical' || finding.cost === 'major') &&
-                findingRevisionScope(store, story, finding) !== 'superseded'
+            (summaryBlockingCost(story, finding.cost) &&
+                findingRevisionScope(store, story, finding) !== 'superseded')
     );
 
 // ---------------------------------------------------------------------------
@@ -446,11 +491,25 @@ export const verifyFindingPrefixOf = (findingId: string): string => `wi_verify_f
  *
  * Both the budget count and the live check read THIS list, so "has the finding been sent `CAP` times"
  * and "is the last pass still in flight" cannot be computed from two different families (T10/F3).
+ *
+ * S-RUNTIME: scoped to the Story that OWNS the finding, read from the finding row itself. The family
+ * name is built from a LOCAL id — one Story's `finding_3` and another Story's `finding_3` mint the same
+ * `wi_verify_finding_finding_3_` prefix — so in a book holding several Stories one Story's passes would
+ * spend another Story's budget, and the cap (and the escalation that follows it) would answer for the
+ * wrong defect. A per-Story book (`store/story-stores.ts`) has one Story, where the scope is a no-op.
+ *
+ * The scope comes from the ROW rather than from a parameter because the finding's Story is a fact the
+ * store already holds, and every caller (engine, work, projections) already has the finding in hand. A
+ * missing row — the Story is being deleted, the book was edited by hand — answers "cannot tell", and the
+ * scan stays unscoped so a post-delete audit read still returns the runs it is being asked about.
  */
 export function verifyFindingRuns(store: Store, findingId: string): Run[] {
     const prefix = verifyFindingPrefixOf(findingId);
+    const owner = store.findings.get(findingId)?.story_id;
 
-    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix));
+    return store.runs.list().filter(
+        (run) => (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix)
+    );
 }
 
 /**
@@ -724,6 +783,30 @@ export function creationSeq(store: Store, id: string): number {
 }
 
 /**
+ * Whether `left` was created after a resolved journal POSITION (`rightSeq`), with `rightCreatedAt`
+ * as the timestamp fallback — the ordering rule of {@link createdAfter} with the right-hand side
+ * already resolved.
+ *
+ * The position is passed in rather than looked up because some "current text" markers are not rows
+ * that were CREATED at that moment: `phrase/exclusion.ts:writeBaselineOf` anchors a group's write
+ * allowance on the journal event that LAST wrote its text, which after a Seed reset
+ * (`loop/engine.ts:editSeed`) is an `update` of the group row, not a create. Ids cannot express that,
+ * and the same trimming rule applies: no journal, no answer from seq.
+ */
+export function createdAfterSeq(
+    store: Store,
+    left: { id: string; created_at: string },
+    rightSeq: number,
+    rightCreatedAt: string
+): boolean {
+    const leftSeq = creationSeq(store, left.id);
+
+    if (leftSeq >= 0 && rightSeq >= 0) return leftSeq > rightSeq;
+
+    return left.created_at > rightCreatedAt;
+}
+
+/**
  * Whether `left` was created after `right` — the freshness question across COLLECTIONS (a verdict
  * against a draft, one chapter's verdict against another's).
  *
@@ -739,12 +822,7 @@ export function createdAfter(
 ): boolean {
     if (left.id === right.id) return false;
 
-    const leftSeq = creationSeq(store, left.id);
-    const rightSeq = creationSeq(store, right.id);
-
-    if (leftSeq >= 0 && rightSeq >= 0) return leftSeq > rightSeq;
-
-    return left.created_at > right.created_at;
+    return createdAfterSeq(store, left, creationSeq(store, right.id), right.created_at);
 }
 
 /**
@@ -1059,7 +1137,10 @@ export const samplingLegClosed = (store: Store, story: Story, round: number): bo
     if (summary === undefined) return false;
 
     return (
-        sampleAttempts(store, summary.id, round, samplingWaveOf(story)) >= samplingCapOf(story) ||
+        // HILL CLIMB: the arm is the wave's CEILING, not the static cap — the ceiling grows while the
+        // round keeps proving a lower unresolved count, and the no-progress streak closes the leg even
+        // with attempts left, so a stalled round stops buying instead of burning the allowance.
+        samplingBudgetSpent(store, story, round) ||
         (!samplingArmed(store, story, round) && samplingRoundStarted(store, story, round))
     );
 };
@@ -1264,20 +1345,32 @@ export const researchPrerequisitePrefixOf = (taskId: string): string => `wi_rese
 export const researchPrerequisiteKeyOf = (taskId: string, attempt: number): string =>
     `${researchPrerequisitePrefixOf(taskId)}a${attempt}`;
 
-/** How many research passes this task has already bought — live and closed, the same counter as every family. */
+/**
+ * How many research passes this task has already bought — live and closed, the same counter as every family.
+ *
+ * S-RUNTIME: scoped to the Story that owns the task. The family is named after a LOCAL id (`task_187`
+ * in one book is a different job from `task_187` in another), and this counter feeds
+ * `researchPrerequisiteExhausted` — an unscoped count in a shared book would tell one Story its
+ * Researcher's budget was spent by another Story's passes, and the task would escalate without ever
+ * being asked. Both readers below take the same scope so the cap and the "answered?" gate cannot drift.
+ */
 export function researchPrerequisiteAttempts(store: Store, taskId: string): number {
     const prefix = researchPrerequisitePrefixOf(taskId);
+    const owner = store.tasks.get(taskId)?.story_id;
 
-    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+    return store.runs.list().filter(
+        (run) => (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix)
+    ).length;
 }
 
-/** The run rows of one task's research family, oldest first. */
+/** The run rows of one task's research family, oldest first. Scoped like `researchPrerequisiteAttempts`. */
 export function researchPrerequisiteRuns(store: Store, taskId: string): Run[] {
     const prefix = researchPrerequisitePrefixOf(taskId);
+    const owner = store.tasks.get(taskId)?.story_id;
 
     return store.runs
         .list()
-        .filter((run) => (run.work_item_ref ?? '').startsWith(prefix))
+        .filter((run) => (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix))
         .sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -1373,11 +1466,21 @@ export function stalledResearchPrerequisites(store: Store, storyId: string): Tas
  *
  * `round` is passed in so the same predicate serves work generation, the drain preconditions and
  * the selection sweep (the caller always knows which round it is asking about).
+ *
+ * G1 — the fourth leg: an ACCEPTED-REVISION PLATEAU also disarms the round, and it disarms it HERE
+ * rather than only in the queue, because three readers call this one predicate (the sampling queue,
+ * `samplingLegClosed`, and the drain's unmet list). The plateau is not about THIS round's attempts —
+ * those are bounded by `samplingProgressOf` — it is about the loop having installed revision after
+ * revision that its own deep review never improved (F1's unbounded path: each candidate certifies the
+ * old fix, introduces nothing, and the review files a fresh blocking finding with new wording). Open
+ * fix tasks WILL exist in that state, so the three legs above would happily arm another round forever;
+ * this is the leg that stops the actual work, not just the status text (requirement 3).
  */
 export function samplingArmed(store: Store, story: Story, round: number): boolean {
     if (round <= 1) return true;
 
     return (
+        !revisionReviewPlateau(store, story) &&
         openWriterFixTasks(store, story.id).length > 0 &&
         unconfirmedBlockingFindings(store, story).length === 0 &&
         openResearchFixPrerequisites(store, story.id).length === 0
@@ -1400,11 +1503,24 @@ export function roundRevisions(store: Store, storyId: string, round: number): Re
     return summaryRevisions(store, storyId).filter((revision) => (revision.round ?? 1) === round);
 }
 
-/** One draft's screening reviews, oldest first — the selector's evidence (§6.5). */
+/**
+ * One draft's screening reviews, oldest first — the selector's evidence (§6.5).
+ *
+ * S-RUNTIME: scoped to the Story that owns the draft (the review row carries `story_id`, and the draft
+ * row says who owns it). `revision_1` exists in EVERY book, so in a book that holds several Stories an
+ * unscoped read would let one Story's Reader reviews satisfy another Story's screening set — and
+ * `isFullyScreened` selects a draft on a review set it never collected. One Story per book is what makes
+ * the scope a no-op in production; the scope is what keeps the phase-① selection honest in a shared one.
+ */
 export function screensFor(store: Store, revisionId: string): SampleReview[] {
+    const owner = store.revisions.get(revisionId)?.story_id;
+
     return store.sampleReviews
         .list()
-        .filter((review) => review.revision_ref === revisionId)
+        .filter(
+            (review) =>
+                review.revision_ref === revisionId && (owner === undefined || review.story_id === owner)
+        )
         .sort(recency);
 }
 
@@ -1443,18 +1559,37 @@ export const screenPrefixOf = (revisionId: string): string => `wi_screen_${revis
 export const samplePrefixOf = (summaryRef: string, round: number, wave = 0): string =>
     wave > 0 ? `wi_sample_${summaryRef}_${round}_w${wave}_` : `wi_sample_${summaryRef}_${round}_`;
 
-/** How many screening runs one draft's claim family has already dispatched (the retry counter). */
+/**
+ * How many screening runs one draft's claim family has already dispatched (the retry counter).
+ *
+ * S-RUNTIME: scoped to the Story that owns the revision (see `verifyFindingRuns` for the reasoning —
+ * `wi_screen_revision_1_` is the same family name in two books, and this is the counter that decides
+ * whether a draft is "treated as screened" without its full review set).
+ */
 export function screenAttempts(store: Store, revisionId: string): number {
     const prefix = screenPrefixOf(revisionId);
+    const owner = store.revisions.get(revisionId)?.story_id;
 
-    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+    return store.runs.list().filter(
+        (run) => (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix)
+    ).length;
 }
 
-/** How many sampling runs the in-flight round's CURRENT WAVE has already dispatched (the retry counter). */
+/**
+ * How many sampling runs the in-flight round's CURRENT WAVE has already dispatched (the retry counter).
+ *
+ * S-RUNTIME: scoped to the Story that owns the Summary the round samples (`summaryRef` is that row's
+ * id — `work.ts:storySummary`), for the same reason as the screening family. This is also the number
+ * H2's hill state reads (`samplingProgressOf`), so an unscoped count would let one Story's spent wave
+ * stop another Story's round from buying the attempts it is owed.
+ */
 export function sampleAttempts(store: Store, summaryRef: string, round: number, wave = 0): number {
     const prefix = samplePrefixOf(summaryRef, round, wave);
+    const owner = store.summaries.get(summaryRef)?.story_id;
 
-    return store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith(prefix)).length;
+    return store.runs.list().filter(
+        (run) => (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix)
+    ).length;
 }
 
 /**
@@ -1641,6 +1776,17 @@ export function sampleFixDemand(store: Store, storyId: string, revision: Revisio
 }
 
 /**
+ * The ACCEPTED Summary text — the draft the Summary row currently carries, i.e. Revision N (§6.2a).
+ *
+ * Every refinement candidate is measured against THIS text: it is the base the Writer was handed, the
+ * draft the screening Reader is shown next to the candidate, and the thing a new critical/major would
+ * be new IN. `undefined` means the Story has no accepted revision yet — round 1 — which is the one
+ * state where nothing can regress and §6.5's initial-creation semantics still apply (R5).
+ */
+export const acceptedSummaryRevision = (store: Store, storyId: string): Revision | undefined =>
+    selectedSummaryRevision(store, storyId);
+
+/**
  * H1 — every candidate of one sampling round, scored (R3/R5).
  *
  * The single place the round's screening evidence becomes numbers: `engine.ts:trySelectSample` ranks
@@ -1648,17 +1794,52 @@ export function sampleFixDemand(store: Store, storyId: string, revision: Revisio
  * `roundHasEligibleCandidate` answers, from the queue, the same question the selection answers at the
  * commit. One predicate, three readers — which is how generation and selection cannot disagree about
  * what "fixed" means, and neither can buy work the other one would refuse.
+ *
+ * The ACCEPTED base rides along (`scoreSample`'s `base`), and that is what makes a refinement round a
+ * HILL rather than a fresh competition: with it, an unclassified blocking issue counts as something
+ * this draft created, and the candidate's minimality against the accepted text becomes measurable. In
+ * round 1 there is no selected revision, so there is no base, and nothing is a regression (R5).
  */
 export function roundSampleScores(store: Store, storyId: string, round: number): ScoredSample[] {
+    const base = acceptedSummaryRevision(store, storyId)?.body;
+
     return roundRevisions(store, storyId, round)
         .filter((revision) => revision.state === 'drafted')
         .map((revision) =>
             scoreSample({
                 revision,
                 reviews: screensFor(store, revision.id),
-                fixRefs: sampleFixDemand(store, storyId, revision)
+                fixRefs: sampleFixDemand(store, storyId, revision),
+                ...(base === undefined ? {} : { base })
             })
         );
+}
+
+/**
+ * The best candidate this round may INSTALL — the selection's pool, stated once for the engine and
+ * the queue (R3, and requirement 7's "no eligible candidate means no install").
+ *
+ * A round WITH an accepted base selects from the eligible set or from NOTHING. §6.5's least-bad path
+ * was written for the First Revision, where there is no incumbent to protect; once the Author has
+ * signed a text, installing the least bad of a round whose candidates all failed means accepting a
+ * draft the round's own Readers rejected — and it used to close the very tasks it failed. That is the
+ * ratchet this change removes, and the retry allowance (`samplingProgressOf`) is what bounds the
+ * re-sampling instead.
+ *
+ * A round WITHOUT a base (round 1) keeps the old behaviour, including the T12/C partial-screening
+ * degrade and the clean-first-round case (R5): the first Summary is chosen from what the seed
+ * produced, worst-to-best, because there is nothing to be worse than.
+ */
+export function roundInstallableCandidate(store: Store, storyId: string, round: number): ScoredSample | undefined {
+    const scored = roundSampleScores(store, storyId, round);
+
+    if (scored.length === 0) return undefined;
+
+    // The base is what decides the mode; `roundSampleScores` already read it, so the two readers
+    // cannot disagree about whether this round is protecting an incumbent.
+    if (acceptedSummaryRevision(store, storyId) === undefined) return selectSample(scored);
+
+    return selectSample(eligibleSamples(scored));
 }
 
 /**
@@ -1691,6 +1872,194 @@ export function roundHasEligibleCandidate(store: Store, story: Story, round: num
     return roundSampleScores(store, story.id, round)
         .filter((scored) => isFullyScreened(store, story, scored.revision.id))
         .some((scored) => scored.eligible);
+}
+
+// ---------------------------------------------------------------------------
+// The hill's retry allowance — retry WHILE the round measurably improves, stop when it stops improving
+// ---------------------------------------------------------------------------
+
+/**
+ * How many completed, measured attempts in a row that failed to lower the best unresolved-blocking-fix
+ * count stop the round and ask the Author (3, as the request sets it).
+ *
+ * WHY A STREAK AND NOT A NUMBER OF ATTEMPTS: the old static cap (`samplingSize + SAMPLING_RETRY_ALLOW-
+ * ANCE`) stopped a round that was still climbing — a candidate that fixed one of three defects and
+ * introduced nothing is progress, and stopping there throws the climb away — while the same cap let a
+ * round burn attempts on candidates that changed nothing. The streak measures the thing that actually
+ * matters (is the next attempt earning its keep?) and the ceiling below keeps the provider-failure
+ * path bounded exactly as it was.
+ */
+export const SAMPLING_NO_PROGRESS_STREAK = 3;
+
+/** What one wave of the hill has proved so far — the retry scheduling state, read from the ledger. */
+export interface SamplingProgress {
+    round: number;
+    wave: number;
+    /** True when the round has an accepted Revision N to climb from. A first round has no streak. */
+    refinement: boolean;
+    /** Sampling attempts this WAVE has dispatched — the counter every cap reads (`sampleAttempts`). */
+    attempts: number;
+    /** This wave's candidates whose screening leg has closed, oldest first (`isFullyScreened`). */
+    completed: ScoredSample[];
+    /** Attempts that produced no readable candidate: no screening row at all, or only schema-invalid ones. */
+    invalidAttempts: number;
+    /**
+     * The lowest unresolved-blocking-fix count any regression-free, readable candidate has proved, or
+     * `undefined` while no candidate has proved anything. THE BASELINE: the first such candidate sets
+     * it (it is not counted as an improvement — nothing was beaten) and every later attempt has to
+     * beat it to keep buying work.
+     */
+    bestUnresolved?: number;
+    /** Improvements this wave has proved. Each one buys one attempt beyond the static cap. */
+    improvements: number;
+    /** Completed, measured attempts in a row that did NOT lower `bestUnresolved` (regressions included). */
+    noImprovement: number;
+    /** Attempts the wave may still spend: `samplingCapOf(story) + improvements`. */
+    ceiling: number;
+    /** True when the no-progress streak has stopped this round. */
+    stalledForProgress: boolean;
+    /** True when nothing more may be bought — the streak was spent, or the ceiling was. */
+    spent: boolean;
+}
+
+/**
+ * The Summary drafts one WAVE's sampling attempts produced, oldest first.
+ *
+ * Attribution goes through the sample RUN, not through the draft row: `Revision.run_ref` names the run
+ * that wrote it, and the run's `work_item_ref` carries the wave (`wi_sample_<summary>_<round>_w<wave>_
+ * <n>`). Reading it off the ledger rather than off a counter is what makes the progress state survive
+ * a restart — and the reason wave 0 cannot use `samplePrefixOf(…, 0)`: that prefix is the WHOLE
+ * round's family, so it also matches every later wave's key (T12/E).
+ */
+function waveSampleRevisions(store: Store, storyId: string, summaryRef: string, round: number, wave: number): Revision[] {
+    const roundPrefix = sampleRoundPrefixOf(summaryRef, round);
+    const mine = new Set(
+        store.runs
+            .list()
+            .filter((run) => {
+                const key = run.work_item_ref ?? '';
+
+                if (!key.startsWith(roundPrefix)) return false;
+
+                // The wave segment sits between the round and the attempt, so a wave-0 key has none of
+                // it — and `samplePrefixOf(…, 0)` cannot be used here because it is the whole round.
+                return wave === 0
+                    ? !/_w\d+_/.test(key.slice(roundPrefix.length))
+                    : key.startsWith(samplePrefixOf(summaryRef, round, wave));
+            })
+            .map((run) => run.id)
+    );
+
+    return roundRevisions(store, storyId, round).filter(
+        (revision) => revision.run_ref !== undefined && mine.has(revision.run_ref)
+    );
+}
+
+/**
+ * What the hill has proved in one wave, derived from the ledger on every read (P11/L-3: the engine
+ * keeps no memory, so a restart recomputes exactly this).
+ *
+ * THE WALK, and the three ways an attempt can land:
+ *   * NO READABLE CANDIDATE (no screening row, or only rows persisted `valid: false`) — a provider
+ *     failure. It never sets a baseline and never extends the streak: those attempts are bounded by
+ *     the existing static cap (`samplingCapOf`), which is the bound the provider-failure escalation
+ *     already speaks of, so a provider that never answers cannot loop forever.
+ *   * A MEASURED, REGRESSION-FREE CANDIDATE — the first one sets the baseline; a later one with a
+ *     LOWER unresolved-blocking count is an improvement (streak → 0, ceiling +1); one that ties or
+ *     worsens it is a no-improvement.
+ *   * A CANDIDATE WITH A NEW CRITICAL/MAJOR — a regression. It cannot set or lower the baseline (the
+ *     count it proved belongs to a draft the loop would never install), so it counts as
+ *     no-improvement, exactly as the request asks.
+ *
+ * Only a round with an ACCEPTED base is measured at all: a first round is producing the sample set the
+ * Author asked for, not retrying a climb, so it keeps §6.5's cap and its least-bad install (R5).
+ *
+ * The wave is what resets the state. The Author's clear of the failure escalation bumps
+ * `sampling_wave` (`engine.ts:rearmSamplingWave`) and every number here is scoped to one wave, so the
+ * fresh wave starts with no baseline and no streak — a fresh wave IS a fresh baseline, and the loop
+ * never re-arms a no-progress stop by itself.
+ */
+export function samplingProgressOf(store: Store, story: Story, round: number, wave = samplingWaveOf(story)): SamplingProgress {
+    const summary = storySummary(store, story.id);
+    const summaryRef = summary?.id ?? '';
+    const refinement = acceptedSummaryRevision(store, story.id) !== undefined;
+    const attempts = summaryRef === '' ? 0 : sampleAttempts(store, summaryRef, round, wave);
+    const scored = roundSampleScores(store, story.id, round);
+    const mine = new Set(
+        summaryRef === '' ? [] : waveSampleRevisions(store, story.id, summaryRef, round, wave).map((revision) => revision.id)
+    );
+    const completed = scored.filter(
+        (sample) => mine.has(sample.revision.id) && isFullyScreened(store, story, sample.revision.id)
+    );
+
+    let bestUnresolved: number | undefined;
+    let improvements = 0;
+    let noImprovement = 0;
+    let invalidAttempts = 0;
+
+    for (const sample of completed) {
+        // No readable screening set: the provider owes this attempt, the streak does not.
+        if (!sample.gradeable) {
+            invalidAttempts += 1;
+            continue;
+        }
+
+        const regressionFree = sample.blockingIntroduced === 0;
+
+        if (bestUnresolved === undefined) {
+            // The first regression-free candidate MEASURES the hill; it does not climb it.
+            if (regressionFree) bestUnresolved = sample.unresolvedBlocking;
+            else noImprovement += 1;
+
+            continue;
+        }
+
+        if (regressionFree && sample.unresolvedBlocking < bestUnresolved) {
+            bestUnresolved = sample.unresolvedBlocking;
+            improvements += 1;
+            noImprovement = 0;
+            continue;
+        }
+
+        noImprovement += 1;
+    }
+
+    // The best-ever count, not just this walk's last value — the baseline must never move back up, so
+    // a later regression cannot re-open a hill the round already climbed (a lower bar is a fact).
+    const proven = bestUnresolvedBlocking(completed);
+    const ceiling = samplingCapOf(story) + improvements;
+    const stalledForProgress = refinement && noImprovement >= SAMPLING_NO_PROGRESS_STREAK;
+
+    return {
+        round,
+        wave,
+        refinement,
+        attempts,
+        completed,
+        invalidAttempts,
+        bestUnresolved: proven ?? bestUnresolved,
+        improvements,
+        noImprovement,
+        ceiling,
+        stalledForProgress,
+        spent: stalledForProgress || attempts >= ceiling
+    };
+}
+
+/**
+ * Can this round buy nothing more? Either its wave spent the ceiling — the static cap, extended only
+ * by proven improvements — or the no-progress streak stopped it while it still had attempts left.
+ *
+ * Every reader of "is this round done trying" goes through here (`samplingLegClosed`, the sampling
+ * queue, the exhaustion escalation, and the drain's precondition), so a round cannot look finished to
+ * one of them and still owe samples to another.
+ */
+export function samplingBudgetSpent(store: Store, story: Story, round: number): boolean {
+    const summary = storySummary(store, story.id);
+
+    if (summary === undefined) return false;
+
+    return samplingProgressOf(store, story, round).spent;
 }
 
 /**
@@ -1754,6 +2123,226 @@ export function deepReviewPassesOwed(store: Store, story: Story, revision: Revis
  */
 export const deepReviewComplete = (store: Store, story: Story, revision: Revision | undefined): boolean =>
     deepReviewPassesOwed(store, story, revision) === 0;
+
+// ---------------------------------------------------------------------------
+// G1 — the ACCEPTED-REVISION plateau: the same no-progress rule, one level up
+// ---------------------------------------------------------------------------
+
+/**
+ * The Story's accepted-revision audit rows, oldest first (§3.6's `summary_review_history`).
+ *
+ * It reads the field through `Story` (shared/types.ts declares it there, beside `sampling_history`, so
+ * `LoopStory` in ./types sees it through the augmentation too): an absent field means "no accepted
+ * revision of this Story has been reviewed yet", which is the state before the first selection AND the
+ * state a backtrack or a Seed edit leaves behind (`engine.ts:backtrack` / `editSeed` clear it with the
+ * sampling counters, because the revisions it described no longer exist).
+ */
+export const summaryReviewHistoryOf = (story: Story): SummaryReviewHistoryEntry[] =>
+    story.summary_review_history ?? [];
+
+/**
+ * The anchored claim family of one revision's DEEP REVIEW — trailing `_a` included.
+ *
+ * `deepReviewKeyOf` mints `wi_review_<revision>_a<pass>`; revision ids come from one counter, so
+ * `wi_review_revision_3` alone would also match `revision_30`'s passes (the same trap
+ * `records.ts:screenPrefixOf` documents). The `_a` is the anchor: `revision_3`'s family is
+ * `wi_review_revision_3_a…`, which `revision_30`'s `wi_review_revision_30_a1` is not.
+ */
+export const deepReviewPrefixOf = (revisionId: string): string => `wi_review_${revisionId}_a`;
+
+/**
+ * The findings one accepted revision's DEEP REVIEW raised — attributed by RUN, not by title.
+ *
+ * `deepReviewPrefixOf` gives the runs that judged this draft, and a finding's create event carries
+ * `attribution.run_ref`, so this answers "what did the review of THIS text file?" from the ledger.
+ * Attribution goes through the journal rather than through `related_refs` because `related_refs` says
+ * what a finding is ABOUT (which is `findingRevisionScope`'s question) and can name a draft the finding
+ * was re-raised against; the run that filed it is the fact this audit needs. It is the same mechanism
+ * `records.ts:researchPrerequisiteEvidence` uses for a Researcher pass's Knowledge.
+ *
+ * LIMIT, stated honestly: a re-sighting of a fingerprint that is STILL open is a `seen_count` bump on
+ * the older row (D-16) and therefore stays attributed to the review that first filed it, so it adds
+ * nothing here. That is safe rather than optimistic — the open finding's fix task is what armed the
+ * round, so the round cannot install a candidate that has not certified it, and the next review's
+ * filing of a CLOSED defect is a fresh row (D-16's dedupe skips `fixed`/`discarded`).
+ */
+export function revisionReviewFindings(store: Store, revision: Revision): Finding[] {
+    const owner = store.revisions.get(revision.id)?.story_id;
+    const prefix = deepReviewPrefixOf(revision.id);
+    const runIds = new Set(
+        store.runs
+            .list()
+            .filter(
+                (run) =>
+                    (owner === undefined || run.story_id === owner) && (run.work_item_ref ?? '').startsWith(prefix)
+            )
+            .map((run) => run.id)
+    );
+
+    if (runIds.size === 0) return [];
+
+    return store.journal
+        .filter(
+            (event) =>
+                event.collection === 'findings' &&
+                event.op === 'create' &&
+                event.attribution?.run_ref !== undefined &&
+                event.attribution.run_ref !== null &&
+                runIds.has(event.attribution.run_ref)
+        )
+        .map((event) => store.findings.get(event.id))
+        .filter(
+            (finding): finding is Finding =>
+                finding !== undefined && (owner === undefined || finding.story_id === owner)
+        )
+        .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/**
+ * The review-raised findings that COUNT as blocking work on this revision.
+ *
+ * THREE FILTERS, all of them the loop's own existing answers — nothing new is decided here:
+ *   * `confirmed`/`approved` — the Editor's verdict. A `disputed` claim was never a defect, a
+ *     `discarded` one will not be acted on, and an `unconfirmed` one is not decided yet (the caller
+ *     waits for that, requirement 5), so none of them may become a permanent number in the audit;
+ *   * `summaryBlockingCost` — THE dial-aware Summary bar (`records.ts:summaryBlockingCost`, D-35):
+ *     critical and major always, `minor` only when `auto_approve` covers it, `taste` never. Counting a
+ *     taste note would let wording preferences stop the loop, which is the failure T-11/R6 removes;
+ *   * not `superseded` — a defect describing a draft the Summary no longer holds is history, not work
+ *     (T6/R2c), and it cannot be decided by a review that reads the carried text.
+ */
+export function revisionBlockingFindings(store: Store, story: Story, revision: Revision): Finding[] {
+    return revisionReviewFindings(store, revision).filter(
+        (finding) =>
+            (finding.state === 'confirmed' || finding.state === 'approved') &&
+            summaryBlockingCost(story, finding.cost) &&
+            findingRevisionScope(store, story, finding) !== 'superseded'
+    );
+}
+
+/** What one WAVE's accepted revisions have proved, read from the persisted audit (G1). */
+export interface RevisionReviewProgress {
+    /** The wave these entries belong to (`samplingWaveOf` unless a caller asks for another). */
+    wave: number;
+    /** This wave's audit rows, oldest first — the numbers the policy walks. */
+    entries: SummaryReviewHistoryEntry[];
+    /** How many accepted revisions this wave has had reviewed. */
+    reviewed: number;
+    /**
+     * The LOWEST blocking count any reviewed revision of this wave has proved, or `undefined` while
+     * nothing has been reviewed. THE BAR: the first entry SETS it and is not an improvement (nothing was
+     * beaten), and it never moves back up — a later regression cannot re-open ground already won.
+     */
+    bestBlockingFound?: number;
+    /** Entries that strictly lowered the bar. */
+    improvements: number;
+    /** Reviewed entries in a row that did NOT strictly lower it (equal counts included — requirement 2). */
+    noImprovement: number;
+    /** True when the streak has stopped this Story: the Author has to act. */
+    plateaued: boolean;
+}
+
+/**
+ * The hill, one level up — and deliberately derived from the STORED audit rather than re-derived from
+ * live finding rows (contrast `samplingProgressOf`, which derives from `runs` because a candidate's
+ * screening rows outlive its round).
+ *
+ * WHY STORED: the numbers this policy branches on describe the review of a text the loop HAS installed,
+ * and the next selection destroys the evidence — it marks the certified findings `fixed`, truncates
+ * drafts, and a later Editor downgrade can re-cost a row. Re-counting live rows would let the count
+ * drift after the decision, so a plateau could be argued away (or invented) by a write that happened
+ * afterwards. The entry is the loop's best judgement AT SETTLE TIME, frozen (requirement 5).
+ *
+ * THE WALK is the same shape as the candidate walk, one entry per accepted revision instead of one per
+ * attempt, and it reuses `SAMPLING_NO_PROGRESS_STREAK` rather than inventing a second number: the
+ * request's own words — "the same policy, applied across reviewed accepted revisions" — make it the same
+ * constant. Entries are partitioned by WAVE, so the Author's clear of the plateau escalation
+ * (`engine.ts:rearmSamplingWave` bumps `sampling_wave`) is a fresh baseline and not a longer streak;
+ * reading an old wave after a bump is an audit read, not policy.
+ */
+export function revisionReviewProgressOf(
+    store: Store,
+    story: Story,
+    wave = samplingWaveOf(story)
+): RevisionReviewProgress {
+    const entries = summaryReviewHistoryOf(story).filter((entry) => entry.wave === wave);
+
+    let bestBlockingFound: number | undefined;
+    let improvements = 0;
+    let noImprovement = 0;
+
+    for (const entry of entries) {
+        // The first reviewed revision MEASURES the hill; it does not climb it.
+        if (bestBlockingFound === undefined) {
+            bestBlockingFound = entry.blocking_found;
+            continue;
+        }
+
+        if (entry.blocking_found < bestBlockingFound) {
+            bestBlockingFound = entry.blocking_found;
+            improvements += 1;
+            noImprovement = 0;
+            continue;
+        }
+
+        noImprovement += 1;
+    }
+
+    return {
+        wave,
+        entries,
+        reviewed: entries.length,
+        bestBlockingFound,
+        improvements,
+        noImprovement,
+        plateaued: noImprovement >= SAMPLING_NO_PROGRESS_STREAK
+    };
+}
+
+/**
+ * Is the Story on an accepted-revision plateau? One predicate, read by the arming rule, the queue and
+ * the drain probe, so generation cannot buy a revision the audit has already refused (requirement 3's
+ * "stop actual automated work, not just the status text").
+ */
+export const revisionReviewPlateau = (store: Store, story: Story): boolean =>
+    revisionReviewProgressOf(store, story).plateaued;
+
+/**
+ * The audit entry this sweep owes, or `undefined` when nothing may be recorded yet.
+ *
+ * THE THREE GATES, and why each one is load-bearing:
+ *   * the carried revision is the CURRENT round's selection (`isDeepReviewSelection`, T10/F7) —
+ *     `deepReviewComplete` answers "owed nothing" for an older-round selection, so without this guard an
+ *     Author-selected draft from a previous round would be audited a second time (requirement 1's
+ *     "exclude superseded/old revision reviews");
+ *   * its deep review has FULLY closed (`deepReviewComplete`) — a half-read draft has not been judged
+ *     yet, and counting it would put a pass that has not run on the record as a clean revision;
+ *   * no blocking suspicion is still `unconfirmed` (`unconfirmedBlockingFindings`) — requirement 5's
+ *     reconciliation. The Readers file UNCONFIRMED findings and the Editor's verification decides them
+ *     (D-33); counting a suspicion before that decision is over, then having the Editor dispute it or
+ *     re-cost it below the bar, would leave a permanent blocking regression in the audit for a defect
+ *     nobody believes. This is also not a stall: those same unconfirmed rows already refuse the sampler
+ *     (`samplingArmed`), so the loop is already waiting here, and the guard therefore triggers BEFORE
+ *     the next sampler in the adversarial scenario — the round only arms once the verification has
+ *     settled, and this step runs earlier in the same sweep.
+ *
+ * The entry is keyed by `revision_id`, which is what makes the write idempotent across sweeps and across
+ * a restart: the audit is append-only, so the loop can never re-count a revision it has already judged.
+ */
+export function pendingRevisionReviewEntry(
+    store: Store,
+    story: Story
+): { revision: Revision; blocking: Finding[] } | undefined {
+    const selected = selectedSummaryRevision(store, story.id);
+
+    if (selected === undefined) return undefined;
+    if (!isDeepReviewSelection(story, selected)) return undefined;
+    if (!deepReviewComplete(store, story, selected)) return undefined;
+    if (unconfirmedBlockingFindings(store, story).length > 0) return undefined;
+    if (summaryReviewHistoryOf(story).some((entry) => entry.revision_id === selected.id)) return undefined;
+
+    return { revision: selected, blocking: revisionBlockingFindings(store, story, selected) };
+}
 
 /**
  * Open the Author-facing escalation row for a failure the loop cannot fix itself, or return the
@@ -1846,9 +2435,18 @@ export function liveRuns(store: Store, storyId?: string): Run[] {
  * The Work Item id is deterministic (see `WorkCandidate.key`), so this single query answers "has a
  * crew already got this job?" — including after a restart, where the run row outlived the process.
  * The lease itself is the run row's `updated_at`, checked by `lapsedRuns`.
+ *
+ * S-RUNTIME: `storyId` scopes the read to one Story, because some claim families carry no local id at
+ * all (`wi_verify_ideas`, `wi_whole_check`, `wi_probe_reader_chapters_1`) and are therefore the SAME
+ * string in two books. Under the per-Story layout a store holds one Story and the scope is a no-op;
+ * in a book holding several, an unscoped read lets one Story's live run claim another Story's job, and
+ * the second Story never gets the work it owes. Omitted means "any Story", which is what a caller that
+ * has no Story in hand (a projection asking "is this item taken?") wants.
  */
-export const isClaimed = (store: Store, workItemId: string): boolean =>
-    store.runs.list().some((run) => isLiveRun(run) && run.work_item_ref === workItemId);
+export const isClaimed = (store: Store, workItemId: string, storyId?: string): boolean =>
+    store.runs.list().some(
+        (run) => isLiveRun(run) && run.work_item_ref === workItemId && (storyId === undefined || run.story_id === storyId)
+    );
 
 /** The closed run rows for one Work Item — `undefined` when the item has never been dispatched. */
 export function runsForItem(store: Store, workItemId: string): Run[] {

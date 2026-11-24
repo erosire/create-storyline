@@ -38,6 +38,10 @@ import {
     type ResolvedRef
 } from './artifacts';
 import { SUMMARY_PROSE_FIELDS } from '../../shared/summary';
+// HARDENING (R6): on a group-managed book the five prose fields are the MIRROR that
+// `installGroupRevisions` writes — `editSummary` must refuse there so the mirror is never a
+// second write path (see the guard in `editSummary.execute`).
+import { isGroupManagedStory } from '../phrase';
 import { guardAuthorSpans, guardPlotlineWritable, guardSummaryWritable } from './permissions';
 import { arr, bool, enumOf, EXPECTS_ARG, num, obj, str, whyArg, type PropertySchema } from './schema';
 import {
@@ -99,11 +103,17 @@ function requireFields(fields: Record<string, string | number>, names: readonly 
  * §8.1 `editSummary`: writes the Summary's prose fields. `chapter_count` is Author truth and is
  * not in the schema at all, so a Writer that sends it is refused naming T-11 with the accepted
  * field set (D-3b: "it cannot touch `chapter_count`").
+ *
+ * HARDENING (R6): on a group-managed book this tool is REFUSED outright. The five fields are the
+ * mirror `phrase/revisions.ts:syncSummaryMirror` writes inside `installGroupRevisions`; a hand
+ * write here created a second write path the group model was built to remove (the Overview drifts
+ * from the group rows, and stale text then drives every downstream unit). Legacy sampling books
+ * are untouched, including the divergence-draft branch below.
  */
 const editSummary: ToolDefinition = {
     name: 'editSummary',
     description:
-        "Write the Summary's prose fields — premise, promise, theme, tone, ending, world_rules. Available in phase `summary` only, and only until the Author locks it; after the lock the Summary is read-only for every agent and a change needs a backtrack.",
+        "Write the Summary's prose fields — premise, promise, theme, tone, ending, world_rules. On a book whose Summary is written group by group these fields are the MIRROR of its five phrase groups (R6) and this tool is refused there: the grouped draft_groups job installs whole-group revisions and the install recomposes this Overview, so use it on a whole-Summary book only. Available in phase `summary` only, and only until the Author locks it; after the lock the Summary is read-only for every agent and a change needs a backtrack.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -127,6 +137,22 @@ const editSummary: ToolDefinition = {
     async execute(ctx, expects): Promise<ToolResult> {
         const guard = guardSummaryWritable(ctx, editSummary);
         if (guard) throw guard;
+
+        // SUMMARY PHRASE R6 (hardening) — the mirror is written by the install, never by hand.
+        // Placed after the lock/phase guard (those answers are unchanged for every book) and
+        // before any argument parsing: the refusal is about the BOOK, not about what was sent,
+        // and a refusal must not depend on the args being valid. The route named in the message
+        // is the per-group door (`src/server/api/routes.ts`, `POST /stories/:id/phrases/groups/
+        // {groupId}/revise`) and `draft_groups` is the loop's grouped draft job (`loop/work.ts`).
+        if (isGroupManagedStory(ctx.story))
+            throw new ToolRefusal(
+                'R6',
+                `this book writes its Summary group by group, so these prose fields are the MIRROR of its phrase groups — the install writes them, and a hand write would put the Overview out of step with the groups it composes (R6). Draft the groups with the \`draft_groups\` job, or revise one group: POST /stories/${ctx.storyId}/phrases/groups/{group_id}/revise.`,
+                {
+                    summary_mode: 'groups',
+                    fix: 'run the grouped draft_groups job, or call the per-group revise route — the mirror follows the installed group texts'
+                }
+            );
 
         const fields = pickFields(ctx.args, SUMMARY_FIELDS);
         const missing = requireFields(fields, SUMMARY_FIELDS, 'editSummary');

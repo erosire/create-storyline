@@ -51,14 +51,32 @@ import { listProviderModels } from '../run/provider-models';
 // its task opener: the Editor's `selectRevision`/`requestMerge` read the SAME functions, so an
 // Author's choice and a Checker's choice cannot disagree about what a stored draft says (D-22, D-23).
 import { openTask, revisionBodyFields, revisionBodySections } from '../tools/artifacts';
+// SUMMARY PHRASE (R2/R5/R6) — the group domain, for the three routes that expose it and for the two
+// legacy routes that must REFUSE a group-managed book. The refusal matters: `revisions/:id/select` and
+// `revisions/merge` are decisions about a COMPETING DRAFT SET, and a group book has no draft set (an
+// accepted result installs immediately — R5). Answering them with 409 keeps the dashboard from
+// silently installing a `revisions` row the group loop never created.
+import {
+    importLegacySummary,
+    installGroupRevisions,
+    isGroupManagedStory,
+    // F8 — the Author's edit and the Writer's install race on ONE group row. The rail disables the
+    // button off the same read the route refuses with (`projections.ts:writer_busy`), so the 409 is the
+    // server's answer to a request the UI already tried to prevent, not a surprise.
+    liveGroupWriters,
+    phraseGroupById,
+    type GroupInstallResult,
+    type PhraseImportResult
+} from '../phrase';
 import type { Store } from '../store';
 import type { Context } from 'hono';
 import type { WorkItem } from '../run/types';
 import type { RunExecutor } from '../run/executor';
 import type { DigestBuilder } from '../digest/digest';
 import type { CriteriaEngine } from '../criteria/engine';
-import type { GoalPatch as EngineGoalPatch } from '../loop/types';
-import type { LoopEngine } from '../loop/engine';
+import type { EngineApi, GoalPatch as EngineGoalPatch, ResolvedEngineConfig } from '../loop/types';
+import type { StoryRuntimeContext, StoryRuntimes } from '../runtime';
+import type { ServerConfig } from '../runtime/server-config';
 import {
     SUMMARY_REVIEW_LIMIT,
     type Cost,
@@ -72,7 +90,21 @@ import {
 import type { GoalCriterionOp } from '../../dashboard/api';
 import type { StoryKnowledge } from '../knowledge';
 import type { StoryThreadLog } from '../run/thread-log';
-import { agentThreads, feedEvents, goalSurface, queueItems, storyRow, storyRows, storyView } from './projections';
+import {
+    agentThreads,
+    agentThreadsAcross,
+    feedEvents,
+    goalSurface,
+    mergeAgentStatuses,
+    phraseView,
+    queueItems,
+    queueItemsAcross,
+    runsAcross,
+    storyRow,
+    storyRows,
+    storyRowsAcross,
+    storyView
+} from './projections';
 import type { FeedEvent, ProjectionDeps } from './projections';
 
 /** §8.6 — the Author-invoked harness. Seeded at boot by `./server` (D-17: built-in, duplicate-only). */
@@ -85,10 +117,45 @@ const COSTS: string[] = ['critical', 'major', 'minor', 'taste'];
 /** §6.3a L-32 — the only two backtrack targets (phase ③ is where the Story already is). */
 const BACKTRACK_PHASES: string[] = ['summary', 'plotlines'];
 
+/**
+ * S-RUNTIME: the loop the routes call, in its two shapes.
+ *
+ * A single-store server passes the one `LoopEngine` it built — every test does this, and the shape is
+ * unchanged. A workspace of per-Story books passes `StoryRuntimes`, which implements the same verbs and
+ * chooses the context by the Story id the path names (`runtime/story-runtimes.ts`). Widening the type to
+ * `EngineApi` plus the two reads the route table makes is what lets both shapes share one route table:
+ * no handler knows which topology it is serving.
+ */
+export type StoryLoop = EngineApi & {
+    /** L-1's switch, as the dashboard's loop control reads it. */
+    readonly started: boolean;
+    /** The ceiling and cadence the sweep is running under (`/loop`). */
+    readonly config: ResolvedEngineConfig;
+    /** S-5: moving the one ceiling (`PATCH /loop`). */
+    setGlobalMaxConcurrent(limit: number): void;
+};
+
 /** Everything the routes need. Built once per process by `./server`. */
 export interface StorylineRoutesDeps extends ProjectionDeps {
-    engine: LoopEngine;
-    executor: RunExecutor;
+    engine: StoryLoop;
+    /**
+     * The spawner of the single-store shape — the run-kill route and the retained-thread route read its
+     * harness. In registry mode each Story has its own executor (`runtimes.contexts_()`), so there is no
+     * one to name here and the routes take it from the Story's context instead.
+     */
+    executor?: RunExecutor;
+    /**
+     * S-RUNTIME: the per-Story runtimes, present when the server has more than one book (registry mode).
+     * Absent means the single-store shape: `store` is the whole workspace, and every Story id is looked up
+     * in it — which is exactly how this file behaved before the per-Story layout.
+     */
+    runtimes?: StoryRuntimes;
+    /**
+     * S-RUNTIME: the app book (`<root>/server/`), where the crew catalogue and the host settings live.
+     * When present, `/templates*` and the roster write HERE and the change is then mirrored into every
+     * Story book (`StoryRuntimes.syncConfig`); when absent they write `store`, as before.
+     */
+    config?: ServerConfig;
     /** The Story's durable knowledge projection (harness knowledge engine, outside every session). */
     knowledge: StoryKnowledge;
     /** The retained thread log (request + answer for every thread that ever ran). */
@@ -122,6 +189,21 @@ const errorResponse = (c: Context, status: 400 | 404 | 409, message: string) => 
 const refusal = (c: Context, error: unknown) =>
     errorResponse(c, 409, error instanceof Error ? error.message : String(error));
 
+/**
+ * S-RUNTIME — a run id is book-LOCAL (`run_0` exists in every Story's book), so the lookup that finds the
+ * book to stop a run IN can come back with more than one holder. This sentinel is how that lookup says so,
+ * and `POST /runs/:runId/kill` answers it with the 409 that names the missing `story_id` rather than
+ * aborting one of the holders because it was first in book order.
+ */
+const AMBIGUOUS = Symbol('more than one Story holds this run id');
+
+/** The book a run id lives in: its ledger, the executor that can abort it, and the Story the row belongs to. */
+interface RunScope {
+    store: Store;
+    executor: RunExecutor;
+    storyId: string;
+}
+
 /** Reads a JSON body, or answers 400 for the caller (a body that is not an object is not a body). */
 async function readBody<T>(c: Context): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
     const raw = await c.req.json().catch(() => undefined);
@@ -149,6 +231,15 @@ interface StoryCreateBody {
     summary_sampling?: unknown;
     /** Phase ①'s Reader passes per sample (defaults to the standard five). */
     summary_readers?: unknown;
+    /**
+     * SUMMARY PHRASE R1/R6 — `'groups'` (the default for a NEW Story: five catalog groups, one Writer
+     * batch at a time, an accepted result installed immediately) or `'sampling'` (the pre-redesign
+     * whole-Summary hill-climb). The existing suites and any client that has not heard about the
+     * redesign pass `'sampling'` to stay exactly where they were; omitting it is the new product
+     * default, not the old behaviour — an EXISTING book with no `summary_mode` on its row is legacy by
+     * definition and needs no migration.
+     */
+    summary_mode?: unknown;
 }
 
 interface StoryPatchBody {
@@ -255,10 +346,160 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     const debounceMs = deps.streamDebounceMs ?? 100;
     const app = new Hono();
 
-    /** The Story a path names, or the 404 this layer answers before any engine call. */
-    const storyOf = (id: string): Story | undefined => store.stories.get(id);
+    // -------------------------------------------------------------------------
+    // S-RUNTIME — which BOOK a request acts on
+    // -------------------------------------------------------------------------
+    //
+    // A Story is a book (`store/story-stores.ts`), and one server now serves several of them. Two rules
+    // make that invisible to the handlers below:
+    //
+    //   1. a Story-scoped handler shadows `store` with the book its `:id` names, so every read and write in
+    //      its body — including the direct `store.commit` writes this file uses for the Author's edits —
+    //      lands in that Story's book and cannot touch a sibling's rows;
+    //   2. an id this server does not hold resolves to the deps book, so the handler's own lookup misses and
+    //      answers the 404 sentence this file already owns. A foreign Story is therefore absent, not wrong:
+    //      the same answer the store's `story_id` fence gives at the row level.
+    //
+    // In the single-store shape `runtimes` is absent and both rules are identity: one book, every id in it.
+    const runtimes = deps.runtimes;
+    // S-RUNTIME: host configuration is a separate book in registry mode (the app book at `<root>/server/`),
+    // and `deps.store` IS that book. In single-store/adopted mode it is the Story's own book, which makes
+    // `synced()` below a plain persist of the one book the caller just wrote.
+    const config = deps.config;
+
+    /**
+     * S-RUNTIME: flush a HOST-CONFIGURATION write and re-copy it into every Story's runtime.
+     *
+     * A configuration row (the harness catalogue, a per-agent model, the loop ceiling) belongs to the app book:
+     * journaled into one Story it would sit in that Story's journal and mark every other Story's Digest stale
+     * forever. But each Story's runtime reads its OWN copy — that is what an agent's turn and a harness brief
+     * actually resolve — so the write is mirrored down. Both halves are best effort on the mirror only: a book
+     * that refuses the copy (a revision conflict) keeps the previous one and says so, and the next write retries.
+     */
+    const synced = async (): Promise<void> => {
+        if (config !== undefined) await config.persist();
+
+        // A hand-wired host may mount this route table without a coordinator (one injected book, no
+        // registry); then there is no set of books to mirror into, and the app-level write above is the
+        // whole of the sync.
+        await runtimes?.syncConfig();
+    };
+
+    /** The aggregate's books, read fresh so a Story created after boot joins every cross-Story listing. */
+    const books = (): Store[] => (runtimes !== undefined ? runtimes.stores() : [store]);
+
+    /** The projection inputs for ONE book: the criteria engine and Digest builder are pure, the book is not. */
+    const projections = (book: Store): ProjectionDeps => ({ store: book, criteria, digest });
+
+    /** The book a Story id lives in (see the note above for what a miss answers as). */
+    const bookOfId = (storyId: string): Store => runtimes?.storeFor(storyId) ?? store;
+
+    /** The same resolution from the request's `:id` — what a Story-scoped handler shadows `store` with. */
+    const bookOf = (c: Context): Store => bookOfId(param(c, 'id'));
+
+    /** The Story a path names, in the book that holds it, or the 404 this layer answers before any engine call. */
+    const storyOf = (book: Store, id: string): Story | undefined => book.stories.get(id);
+
+    /**
+     * The Story's knowledge projection. Per-Story books each own a projection rooted in their own directory
+     * (`<root>/stories/<uuid>/harness/knowledge/`), so an article read here is the article THIS Story's
+     * crews would read in a run's prompt. Single-store mode keeps the one projection the server opened.
+     */
+    const knowledgeFor = (storyId: string): StoryKnowledge =>
+        runtimes?.contextOf(storyId)?.knowledge ?? deps.knowledge;
+
+    /** The thread log of the book a Story lives in — the same per-Story file, for `GET /agents/:kind/threads`. */
+    const threadLogFor = (book: Store): StoryThreadLog =>
+        (runtimes !== undefined
+            ? runtimes.contexts_().find((context: StoryRuntimeContext) => context.store === book)?.threadLog
+            : undefined) ?? deps.threadLog;
+
+    /**
+     * The book a run id lives in, WITH the executor that can stop it — optionally narrowed to one Story.
+     *
+     * The executor half is not decoration: `RunExecutor.kill` looks up the controller of a run THIS
+     * executor started, so a kill routed through the wrong book's executor would abort nothing and answer
+     * 200 anyway. `undefined` is the 404 the caller answers with.
+     *
+     * WHY THE SCOPE: a run id is book-LOCAL (`run_0` exists in every Story's book), so an unscoped lookup
+     * over several books can find more than one holder. Guessing — "the first book that holds it", which is
+     * what this did — silently aborts a thread the Author never pointed at, so the lookup now reports the
+     * ambiguity instead and the caller names the Story with `?story_id=`.
+     *
+     * A per-Story book is addressed by its own id; one AGGREGATE book (the adopted/hand-injected shape,
+     * keyed by `runtime/story-runtimes.ts:SHARED_STORE_ID`) is addressed by the `story_id` the row itself
+     * carries, which is how a scoped kill still reaches the one executor in that shape.
+     */
+    const bookOfRun = (runId: string, storyId?: string): RunScope | typeof AMBIGUOUS | undefined => {
+        /** Does this book's row answer to the Story the caller named (or to no Story at all)? */
+        const answers = (row: Run | undefined, bookStoryId: string): boolean =>
+            row !== undefined && (storyId === undefined || bookStoryId === storyId || row.story_id === storyId);
+
+        if (runtimes === undefined) {
+            // The single-store shape still needs an executor to abort with; a route table built without one
+            // can read a run row but cannot stop it, which is the honest answer rather than a silent no-op.
+            // One book means one holder, so an unscoped kill is never a guess in this shape.
+            if (executor === undefined) return undefined;
+
+            const row = store.runs.get(runId);
+
+            if (!answers(row, store.storyId ?? '')) return undefined;
+
+            return { store, executor, storyId: row?.story_id ?? store.storyId ?? '' };
+        }
+
+        const holders = runtimes.contexts_().flatMap((context: StoryRuntimeContext) => {
+            const row = context.store.runs.get(runId);
+
+            return answers(row, context.storyId)
+                ? [{ store: context.store, executor: context.executor, storyId: row?.story_id ?? context.storyId }]
+                : [];
+        });
+
+        if (holders.length === 0) return undefined;
+
+        // More than one holder is only possible when the caller named no Story: one Story can live in only
+        // one book, so a scope matches at most one holder and the kill is exact.
+        if (holders.length > 1) return AMBIGUOUS;
+
+        return holders[0];
+    };
     const missing = (c: Context, kind: string, id: string) =>
         errorResponse(c, 404, `no ${kind} named ${id} is in the book (P1: the store is the memory)`);
+
+    /**
+     * S-RUNTIME — the ONE purge path a Story deletion takes, so nothing else can delete the same Story
+     * twice and nothing can write to a book whose folder is already gone.
+     *
+     * Under the coordinator, `runtime/story-runtimes.ts:removeStory` owns the whole order — pause the Story
+     * so no sweep starts a run behind the delete, kill and settle the runs in flight, delete the §4 rows and
+     * forget the harness session in one commit, prune the retained thread log, remove and close the Story's
+     * knowledge projection, drop the runtime, then close the book and remove `<root>/stories/<uuid>/`. The
+     * route therefore must NOT also call `engine.deleteStory`: that would be a second `delete_story` commit,
+     * and after the folder is gone the commit's debounced snapshot would re-create the directory the Author
+     * just deleted, which restarts as a ghost book.
+     *
+     * The fallback is a hand-wired host that mounts this table with a bare store and no coordinator: the same
+     * order, minus the folder (no registry to remove it), and the book's own projection and thread log are
+     * PRUNED rather than closed, because they belong to every Story in the book.
+     */
+    const purgeStory = async (storyId: string): Promise<void> => {
+        if (runtimes !== undefined) {
+            await runtimes.removeStory(storyId);
+
+            return;
+        }
+
+        // The pieces the fallback prunes: in this shape both resolve to `deps`, i.e. the one book's own.
+        const book = bookOfId(storyId);
+        const knowledge = knowledgeFor(storyId);
+
+        await engine.deleteStory(storyId);
+
+        knowledge.removeStory(storyId);
+        await knowledge.flush();
+        threadLogFor(book).removeStory(storyId);
+    };
 
     /**
      * Reads a path param from a handler whose route types Hono cannot infer (the two route factories
@@ -279,11 +520,15 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * §4.15's unit of a draft, resolved from a bare id (D-21). A revision row names its unit only by
      * `unit_ref`, so the two U-13 routes need the kind back — and the three collections are the whole
      * vocabulary §4.15 allows. T-3 holds: a row from another Story reads as a miss, not as a unit.
+     *
+     * S-RUNTIME: the lookup runs in the book the Story lives in. `chapter_3` exists in every book, so the
+     * T-3 rule ("another Story's row is a miss") needs the book to be the right one to be enforceable at all.
      */
     const revisionUnit = (
         storyId: string,
         unitRef: string
     ): { unit_kind: Revision['unit_kind']; id: string; rev: number } | undefined => {
+        const store = bookOfId(storyId);
         const chapter = store.chapters.get(unitRef);
 
         if (chapter !== undefined)
@@ -308,7 +553,13 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         return undefined;
     };
 
-    /** Runs one engine verb and returns the fresh row — the shape every Story mutation answers with. */
+    /**
+     * Runs one engine verb and returns the fresh row — the shape every Story mutation answers with.
+     *
+     * S-RUNTIME: the fresh row is read from the Story's OWN book, because that is the book the verb (routed
+     * by Story id through `StoryRuntimes`) just wrote. Reading it from the deps book would answer a Story
+     * mutation with the app catalogue's rows, which hold no Stories at all in registry mode.
+     */
     const verb = async (c: Context, storyId: string, run: () => Promise<unknown>): Promise<Response> => {
         try {
             await run();
@@ -316,15 +567,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(storyId)), 200);
+        const book = bookOfId(storyId);
+
+        return c.json(storyRow(projections(book), book.stories.require(storyId)), 200);
     };
 
     // -------------------------------------------------------------------------
     // Stories (U-1, U-4…U-17)
     // -------------------------------------------------------------------------
 
-    /** U-1 — the Stories panel, awaiting-the-Author first. */
-    app.get('/stories', (c) => c.json(storyRows(projectionDeps), 200));
+    /**
+     * U-1 — the Stories panel, awaiting-the-Author first.
+     *
+     * S-RUNTIME: one row per Story ACROSS books, ranked exactly as one book's rows are ranked
+     * (`projections.storyRowsAcross`). A Story created after this route table was built still appears,
+     * because the book list is read per request.
+     */
+    app.get('/stories', (c) => c.json(storyRowsAcross(books().map(projections)), 200));
 
     /** §15 step 0 — the Seed, the declared count, and the default Goal (D-3b: the count is Author truth). */
     app.post('/stories', async (c) => {
@@ -332,7 +591,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (!parsed.ok) return parsed.response;
 
-        const { title, idea, chapter_count, summary_sampling, summary_readers } = parsed.body;
+        const { title, idea, chapter_count, summary_sampling, summary_readers, summary_mode } = parsed.body;
 
         if (typeof idea !== 'string' || idea.trim().length === 0) {
             return errorResponse(
@@ -369,6 +628,21 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             }
         }
 
+        // SUMMARY PHRASE R1/R6: the switch is validated here rather than defaulted, because the two
+        // values name two different pipelines and a typo ('group', 'grouping') would otherwise be
+        // quietly accepted as the new default and book the Author into work they did not ask for.
+        if (
+            summary_mode !== undefined &&
+            summary_mode !== 'groups' &&
+            summary_mode !== 'sampling'
+        ) {
+            return errorResponse(
+                c,
+                400,
+                '`summary_mode` must be `\'groups\'` (the five Summary groups, revised one batch at a time) or `\'sampling\'` (the whole-Summary sampler).'
+            );
+        }
+
         let storyId: string;
 
         try {
@@ -377,7 +651,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 idea,
                 ...(chapter_count === undefined ? {} : { chapter_count }),
                 ...(summary_sampling === undefined ? {} : { summary_sampling: summary_sampling as number }),
-                ...(summary_readers === undefined ? {} : { summary_readers: summary_readers as number })
+                ...(summary_readers === undefined ? {} : { summary_readers: summary_readers as number }),
+                ...(summary_mode === undefined ? {} : { summary_mode: summary_mode as 'groups' | 'sampling' })
             });
 
             storyId = created.story_id;
@@ -385,16 +660,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(storyId)), 200);
+        // S-RUNTIME: the row is read from the book the Story was just created IN. `POST /stories` is the one
+        // verb that has no Story id to route on: in registry mode the coordinator allocates the book and the
+        // id, so this is the first read of a book that did not exist a moment ago.
+        const book = bookOfId(storyId);
+
+        return c.json(storyRow(projections(book), book.stories.require(storyId)), 200);
     });
 
     /** U-4…U-17 — the whole Story region in one read (W9: one round trip, not fifteen). */
     app.get('/stories/:id', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
-        return c.json(storyView(projectionDeps, story), 200);
+        return c.json(storyView(projections(store), story), 200);
     });
 
     /**
@@ -409,15 +691,216 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     app.get('/stories/:id/knowledge', async (c) => {
         const storyId = c.req.param('id');
 
-        if (storyOf(storyId) === undefined) return missing(c, 'story', storyId);
+        if (storyOf(bookOfId(storyId), storyId) === undefined) return missing(c, 'story', storyId);
 
-        const tree = deps.knowledge.tree(storyId);
+        // S-RUNTIME: the projection of THIS Story's book, which is the directory under its own folder.
+        const knowledge = knowledgeFor(storyId);
+        const tree = knowledge.tree(storyId);
 
         if (tree === null) return missing(c, 'story', storyId);
 
-        await deps.knowledge.flush();
+        await knowledge.flush();
 
         return c.json(tree, 200);
+    });
+
+    // -------------------------------------------------------------------------
+    // SUMMARY PHRASE — the group surface (R1, R2, R3, R6)
+    // -------------------------------------------------------------------------
+
+    /**
+     * R6 — the Summary Phrase view: the five groups with their current text and retained history, the
+     * composed Overview, every finding with its group scope and R3's resolution, the open group tasks,
+     * and whether the legacy `summaries` mirror still agrees with the groups.
+     *
+     * A pure read, so it is safe on a legacy book: one with no `summary_mode` answers `mode:'sampling'`
+     * with empty groups rather than 404 — the rail then shows that book its old sampling panel, and
+     * nothing about the redesign has touched its rows (R6's "readable, not migrated").
+     */
+    app.get('/stories/:id/phrases', (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        return c.json(phraseView(store, story), 200);
+    });
+
+    /**
+     * R6 — the one-step upgrade of a legacy flat Summary into groups.
+     *
+     * This is the ONLY way a book written before the redesign becomes group-managed: a read never
+     * migrates anything, and the redesign's rule is that the Author decides when their prose moves into
+     * a group history. It is idempotent by SKIPPING — a group that already has a revision is left
+     * exactly as it is — so a second press writes nothing, and a partial first attempt is safe to
+     * retry. Each group whose legacy field is non-empty gets revision 1 (`state:'latest'`, `run_ref:
+     * null`, because no run wrote it: the Author's existing text is preserved, not re-authored); an
+     * empty group stays at revision 0, which the loop reads as first-draft work.
+     */
+    app.post('/stories/:id/phrases/import', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        try {
+            // `Store.commit` answers "did the write happen", not what it produced, so the result is
+            // captured in the closure and read after the commit lands (the same shape the merge route
+            // uses). The closure runs synchronously inside the commit, so `imported` is set whenever the
+            // commit did.
+            let imported: PhraseImportResult | undefined;
+
+            await store.commit('phrase_legacy_import', () => {
+                imported = importLegacySummary(
+                    store,
+                    requireStory(store, story.id),
+                    authorAttr(authorWhy('POST /stories/:id/phrases/import', story.id, 'the flat Summary became five groups (R6)'))
+                );
+            });
+
+            if (imported === undefined) {
+                return errorResponse(
+                    c,
+                    409,
+                    'the Summary Phrase catalog has no enabled group, so there is nothing to import into (R1).'
+                );
+            }
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    phrase_id: imported.phrase.id,
+                    imported: imported.seeded.length,
+                    seeded: imported.seeded,
+                    story_switched: imported.story_switched,
+                    view: phraseView(store, requireStory(store, story.id))
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
+     * R2 — the Author rewrites ONE group by hand.
+     *
+     * The same install the loop uses (`phrase/revisions.ts:installGroupRevisions`), so an Author edit
+     * gets the identical guarantees: a new revision row at the group's next number, the text it replaces
+     * archived and retained, the siblings untouched with their own numbers unchanged, the Overview
+     * recomposed, and the legacy mirror rewritten in the SAME commit (R6).
+     *
+     * It deliberately claims to resolve NOTHING: `finding_refs` and `task_refs` stay off the row, so a
+     * hand edit cannot close a finding on R3's evidence rule (that claim belongs to the pass that was
+     * dispatched to answer the finding). A `summary_mode:'sampling'` book is a 409 rather than a
+     * surprise: it has no group rows, and importing is an explicit decision (R6).
+     */
+    app.post('/stories/:id/phrases/groups/:groupId/revise', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        if (!isGroupManagedStory(story)) {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R6).`
+            );
+        }
+
+        const parsed = await readBody<{ content?: unknown; note?: unknown }>(c);
+
+        if (!parsed.ok) return parsed.response;
+
+        const content = typeof parsed.body.content === 'string' ? parsed.body.content.trim() : '';
+
+        if (content === '') {
+            return errorResponse(
+                c,
+                400,
+                '`content` is the group\'s new text and must be a non-empty string (R2: an empty group text is a refusal, not a revision).'
+            );
+        }
+
+        const groupId = c.req.param('groupId');
+        const group = phraseGroupById(store, story.id, groupId);
+
+        if (group === undefined) return missing(c, 'phrase group', groupId);
+
+        // F8 / R4 — the Author's hand edit IS a Writer op on that group row: it installs a new revision
+        // and archives the one it replaces. A live `draft_groups` run on the same group would install
+        // over it (or be installed over) with neither pass having read the other's text, and R4 forbids
+        // exactly that race for the loop's own writers. Refusing is honest where "last write wins" is
+        // not: the group's history would keep both texts, but only one Overview, and nobody could say
+        // which sentences the review actually read. The rail disables the button off the same read
+        // (`projections.ts:writer_busy`), so a 409 here answers a request the UI already tried to stop.
+        const holders = liveGroupWriters(store, story.id, groupId);
+
+        if (holders.length > 0) {
+            return errorResponse(
+                c,
+                409,
+                `the Writer is rewriting ${group.key} right now (${holders
+                    .map((run) => run.id)
+                    .join(', ')}), so a hand edit would install over text it has not finished with — the same edit lands once that run closes (R4: one Writer op per group, and this route is one).`
+            );
+        }
+
+        const note = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
+
+        try {
+            // Captured in the closure for the same reason as the import route above: `Store.commit`
+            // returns nothing, and the install's per-group report is what the Author's rail needs to
+            // show WHICH row is current now and which one moved into history (R2).
+            let install: GroupInstallResult | undefined;
+
+            await store.commit('phrase_group_revise', () => {
+                install = installGroupRevisions(
+                    store,
+                    requireStory(store, story.id),
+                    [{ group: store.phraseGroups.require(groupId), content }],
+                    authorAttr(
+                        authorWhy(
+                            'POST /stories/:id/phrases/groups/:groupId/revise',
+                            story.id,
+                            `${group.key} was rewritten by hand${note === '' ? '' : `: ${note}`} (R2)`
+                        )
+                    ),
+                    // `runRef: null` is the honest attribution: no run produced this text. The install
+                    // stamps it onto the revision row and onto the group's `updated_by`, so the rail can
+                    // still tell an Author edit from a Writer pass.
+                    { runRef: null }
+                );
+            });
+
+            if (install === undefined) return refusal(c, new Error('the group install produced no result'));
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    phrase_id: install.phrase.id,
+                    revision: install.phrase.revision,
+                    installed: install.installed.map((row) => ({
+                        group_id: row.group_id,
+                        group_key: row.group_key,
+                        revision_id: row.id,
+                        number: row.number
+                    })),
+                    archived: install.archived.map((row) => ({
+                        group_id: row.group_id,
+                        group_key: row.group_key,
+                        revision_id: row.id,
+                        number: row.number
+                    })),
+                    mirror: install.mirror,
+                    view: phraseView(store, requireStory(store, story.id))
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
     });
 
     /**
@@ -426,7 +909,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * decision (`changeChapterCount`, D-3c); the title and the dial are plain row edits.
      */
     app.patch('/stories/:id', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -546,24 +1031,27 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     });
 
     /**
-     * §10 / P1 — delete a Story and everything its harness owns. Stop first (P8: no phrase may keep
-     * writing a book that is about to disappear), then the knowledge directory (a projection outside
-     * §4), then the Story and every story-scoped record in one commit; `engine.deleteStory` finally
-     * disposes the harness, which tears down its sessions and threads.
+     * §10 / P1 — delete a Story and everything its harness owns.
+     *
+     * One call, one owner: `purgeStory` (the coordinator's `StoryRuntimes.removeStory`) pauses the Story so
+     * no sweep starts a run behind the delete, kills and settles the runs in flight, deletes the §4 rows and
+     * disposes the harness session in the engine's one commit, prunes the retained thread log, removes and
+     * closes the Story's knowledge projection, takes the runtime out of the set, and only then closes the
+     * book and removes `<root>/stories/<uuid>/` — `store.json`, `journal.jsonl` and the whole `harness/`
+     * directory with it. A restarted workspace therefore never reopens a Story the Author deleted (§10, P1).
+     *
+     * Nothing else moves: the app book at `<root>/server/` keeps its catalogue, roster and ceiling, and every
+     * sibling Story keeps its own folder, journal, threads and rows. The receipt names the Story that is gone.
      */
     app.delete('/stories/:id', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in; `storyOf` answering `undefined` is the 404 this layer
+        // owns, checked before any verb so a typo cannot reach a teardown and answer 409.
+        const story = storyOf(bookOf(c), c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
         try {
-            await engine.pauseStory(story.id);
-            deps.knowledge.removeStory(story.id);
-            await deps.knowledge.flush();
-            await engine.deleteStory(story.id);
-            // P1: the retained thread log is harness state, so deleting the Story deletes its
-            // threads too — nothing outlives the book it belongs to.
-            deps.threadLog.removeStory(story.id);
+            await purgeStory(story.id);
         } catch (error) {
             return refusal(c, error);
         }
@@ -573,7 +1061,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** D-37 / U-17 — Pause & edit: the only thing that opens the prose pane. */
     app.post('/stories/:id/stop', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -582,7 +1072,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** D-37a/D-37b — the hand-back: re-derives the Digest and marks dependents for recheck. */
     app.post('/stories/:id/resume', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -595,9 +1087,25 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * dispatches the writers. Accepting instead is the ordinary phase lock.
      */
     app.post('/stories/:id/summary/revise', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        // F6 / R5 — the verb queues a rewrite task on the selected Summary, and the ONLY thing that ever
+        // consumed one was the whole-Summary sampler. A group-managed book has no sampler, so the task
+        // would sit open forever: the rail would show work nobody can do, and the Author would wait for
+        // a round that cannot arrive. Refusing names the verb that DOES exist; translating it into
+        // "rewrite all five groups" would be a bigger claim than the Author made (they asked for another
+        // round, not for five new drafts), and R2's whole point is that one rewrite touches one group.
+        if (isGroupManagedStory(story)) {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is written group by group, so there is no whole-Summary round to ask for — a Writer result installs when it is accepted, and one group is rewritten with POST /stories/${story.id}/phrases/groups/:groupId/revise (R2, R5).`
+            );
+        }
 
         const parsed = await readBody<NoteBody>(c);
 
@@ -610,7 +1118,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** L-36 / U-1b — the one click that clears the tasks keeping a `pending` Story waiting. */
     app.post('/stories/:id/clear-pending', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -627,7 +1137,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      *      failing criteria the Goal panel already shows (G-2).
      */
     app.post('/stories/:id/lock', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -655,7 +1167,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** L-31/L-32 — the only way a lock opens; the client confirms first and the engine does the scrap. */
     app.post('/stories/:id/backtrack', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -682,7 +1196,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** D-34/D-35 — the approval that starts Writer work; `by: author` keeps it out of the auto lane (D-41c). */
     app.post('/stories/:id/findings/:findingId/approve', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -723,7 +1239,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * silently" asks for — the journal shows one approve per finding, not one anonymous bulk write.
      */
     app.post('/stories/:id/chapters/:chapterId/findings/approve-all', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -761,7 +1279,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(story.id)), 200);
+        // S-RUNTIME: the row is projected from the Story's own book (the shadowed `store`).
+        return c.json(storyRow(projections(store), store.stories.require(story.id)), 200);
     });
 
     /**
@@ -770,7 +1289,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * what L-15a/L-16a read, so loop detection sees the closure without any further bookkeeping.
      */
     app.post('/stories/:id/findings/:findingId/discard', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -833,7 +1354,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * given the explicit "I know" — which, on this pinned body, is a non-blank `note`.
      */
     app.post('/stories/:id/ideas/:ideaId/select', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -869,7 +1392,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** U-15 — the two other tray decisions (delta 2: direct state moves with Author attribution). */
     const ideaDecision = (state: 'discarded' | 'deferred') => async (c: Context) => {
-        const story = storyOf(param(c, 'id'));
+        // S-RUNTIME: the book this Story lives in (the route factories take a plain `Context`).
+        const store = bookOf(c);
+        const story = storyOf(store, param(c, 'id'));
 
         if (story === undefined) return missing(c, 'story', param(c, 'id'));
 
@@ -931,7 +1456,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * note, because §4.15's states exist to make this restore path expressible.
      */
     app.post('/stories/:id/chapters/:chapterId/sections/:sectionId', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1007,7 +1534,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             }
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(story.id)), 200);
+        // S-RUNTIME: the row is projected from the Story's own book (the shadowed `store`).
+        return c.json(storyRow(projections(store), store.stories.require(story.id)), 200);
     });
 
     /**
@@ -1030,14 +1558,29 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * direct Author write, attributed `author: true` with no run behind it (D-20a).
      */
     app.post('/stories/:id/revisions/:revisionId/select', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
+        // SUMMARY PHRASE R5/R6: the same refusal as `revisions/merge`, narrowed to the Summary unit for
+        // the same reason — a group-managed book still runs phases ②/③, where competing chapter drafts
+        // and the Author's choice between them remain the design. Only the Summary stopped having a
+        // draft set: an accepted Writer result installs on acceptance and its predecessor is archived in
+        // the same commit, so a Summary select would install a `revisions` row the loop never reads.
         const draft = store.revisions.get(c.req.param('revisionId'));
 
         if (draft === undefined || draft.story_id !== story.id)
             return missing(c, 'revision', c.req.param('revisionId'));
+
+        if (isGroupManagedStory(story) && draft.unit_kind === 'summary') {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is written group by group, so there is no Summary draft set to select from — a Writer result is installed when it is accepted, and the Author edits one group with POST /stories/${story.id}/phrases/groups/:groupId/revise (R5, R6).`
+            );
+        }
 
         const parsed = await readBody<RevisionSelectBody>(c);
 
@@ -1159,7 +1702,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(story.id)), 200);
+        // S-RUNTIME: the row is projected from the Story's own book (the shadowed `store`).
+        return c.json(storyRow(projections(store), store.stories.require(story.id)), 200);
     });
 
     /**
@@ -1172,7 +1716,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * so the unit keeps waiting rather than pretending one draft won.
      */
     app.post('/stories/:id/revisions/merge', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1208,6 +1754,18 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
             if (draft === undefined || draft.story_id !== story.id) return missing(c, 'revision', id);
 
+            // SUMMARY PHRASE R5/R6: the same refusal as `revisions/:id/select`, narrowed to the Summary
+            // unit — a group-managed book still writes chapters and plotlines through phases ②/③, where
+            // competing drafts and D-23's merge remain the design. Only the Summary stopped having a
+            // draft set, so only a Summary merge is a question this book cannot answer.
+            if (isGroupManagedStory(story) && draft.unit_kind === 'summary') {
+                return errorResponse(
+                    c,
+                    409,
+                    `this Story's Summary is written group by group, so there are no Summary drafts to merge — its text is the group vector, and the Author rewrites one group with POST /stories/${story.id}/phrases/groups/:groupId/revise (R5, R6).`
+                );
+            }
+
             if (draft.unit_ref !== unitRef)
                 return errorResponse(
                     c,
@@ -1241,12 +1799,15 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
-        return c.json(storyRow(projectionDeps, store.stories.require(story.id)), 200);
+        // S-RUNTIME: the row is projected from the Story's own book (the shadowed `store`).
+        return c.json(storyRow(projections(store), store.stories.require(story.id)), 200);
     });
 
     /** L-10 — the Author's word outranks the criteria: the chapter wakes the crew. */
     app.post('/stories/:id/chapters/:chapterId/unapprove', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1260,7 +1821,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** G-1 / §14 item 2 — the per-chapter bar, as the one text field §4.4 stores. */
     app.patch('/stories/:id/chapters/:chapterId/bar', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1290,7 +1853,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** D-20/D-20a — the propose-only tray. Same decision surface as an Idea (the engine says so). */
     const decideProposals = (verdict: 'accepted' | 'rejected') => async (c: Context) => {
-        const story = storyOf(param(c, 'id'));
+        // S-RUNTIME: the book this Story lives in (the route factories take a plain `Context`).
+        const store = bookOf(c);
+        const story = storyOf(store, param(c, 'id'));
 
         if (story === undefined) return missing(c, 'story', param(c, 'id'));
 
@@ -1307,7 +1872,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
     /** P11 / U-5 — undo one write. Delta 4: the engine's undo is per chapter (L-17a). */
     app.post('/stories/:id/undo', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1343,7 +1910,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * Not a chat.
      */
     app.post('/stories/:id/directives', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1385,7 +1954,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * nothing proposed is a 409 from the engine's own words.
      */
     app.post('/stories/:id/complete', (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1399,7 +1970,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * `confirm_required` answer cannot be produced by this contract.
      */
     app.post('/stories/:id/templates', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1426,7 +1999,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         if (errors.length > 0)
             return errorResponse(c, 409, `that assignment is refused: ${errors.join('; ')} (T-0, D-17b)`);
 
-        return c.json(storyRow(projectionDeps, store.stories.require(story.id)), 200);
+        // S-RUNTIME: the row is projected from the Story's own book (the shadowed `store`).
+        return c.json(storyRow(projections(store), store.stories.require(story.id)), 200);
     });
 
     /**
@@ -1434,7 +2008,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * the pinned ORDERED OPS are folded into the Story's evaluated criteria here.
      */
     app.patch('/stories/:id/goal', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1489,7 +2065,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         // The pinned client types this response as `GoalSurface`, not a Story row: the Goal panel
         // re-reads its own surface after the write (U-6).
-        return c.json(goalSurface(projectionDeps, store.stories.require(story.id)), 200);
+        return c.json(goalSurface(projections(store), store.stories.require(story.id)), 200);
     });
 
     /**
@@ -1497,7 +2073,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * real run, so the response is the RUN ROW (U-7's crew panel is where the Author watches it).
      */
     app.post('/stories/:id/assistant', async (c) => {
-        const story = storyOf(c.req.param('id'));
+        // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
@@ -1540,16 +2118,27 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         let run: Run | undefined;
 
+        // S-RUNTIME: the Author's ask spawns THROUGH THE STORY'S OWN executor. `RunExecutor` writes its run
+        // row into the book it was built over, and in the workspace shape `deps.executor` is built over the APP
+        // book (`<root>/server/`), which holds no Story to attach the run to: spawning there produced a row no
+        // Story book could read, and this route answered 409 for a run that had in fact started. In the
+        // single-store shape there is one executor and this is the one the route always used.
+        const spawner =
+            runtimes?.contexts_().find((context: StoryRuntimeContext) => context.store === store)?.executor ??
+            executor;
+
         try {
             // Fire-and-forget ON PURPOSE: `RunExecutor.execute` creates the run row synchronously before
             // its first await (D-18: the row exists before the first token so Stop has something to point
             // at), so the row can be read back here while the run works behind the response. The run
             // closes its own row in `finally` whatever happens (S-3), so nothing may be thrown by dropping
             // the promise.
-            const running = executor.execute(item);
+            if (spawner !== undefined) {
+                const running = spawner.execute(item);
 
-            running.catch(() => undefined);
-            run = store.runs.list().find((candidate) => candidate.work_item_ref === item.id);
+                running.catch(() => undefined);
+                run = store.runs.list().find((candidate) => candidate.work_item_ref === item.id);
+            }
         } catch (error) {
             return refusal(c, error);
         }
@@ -1580,8 +2169,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * projection `GET /agents` answers": two sorts would let the tiles re-order under the Author's
      * click.
      */
+    /**
+     * The roster, merged across books (S-RUNTIME). One harness per book (`run/story-engine.ts` is built
+     * over one store), so the five tiles are the merge of what each book's harness reports — an employee is
+     * `running` if it has a live thread in ANY Story, and the threads keep their `story_id` so a click can
+     * still scope to the Story that ran it.
+     *
+     * THE EMPTY WORKSPACE STILL HAS A ROSTER: the five employees come from the catalogue, not from a Story,
+     * and U-8 says the Author sees them without selecting a Story. A workspace with no book open has no
+     * per-Story harness to ask, so the app-level harness (`deps.executor.harness`, built over the app book's
+     * catalogue) answers the tiles idle — which is the same answer the single-store shape always gave.
+     */
     const agentRoster = () =>
-        [...deps.executor.harness.statuses()].sort((left, right) => left.kind.localeCompare(right.kind));
+        mergeAgentStatuses(
+            runtimes !== undefined && runtimes.contexts_().length > 0
+                ? runtimes.contexts_().map((context: StoryRuntimeContext) => context.executor.harness.statuses())
+                : [deps.executor?.harness.statuses() ?? []]
+        ).sort((left, right) => left.kind.localeCompare(right.kind));
 
     /**
      * U-8 — the GLOBAL employee roster, alphabetically (see `agentRoster`). Each row carries every
@@ -1607,13 +2211,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
-        return c.json(
-            {
-                kind,
-                threads: agentThreads(store, kind, deps.executor.harness.threads(kind), deps.threadLog.list(kind))
-            },
-            200
-        );
+        // S-RUNTIME: one book's threads are already correct for that book (its run-row folding keys on
+        // book-local run ids, and its retained log is the file under that Story's own `harness/`). The
+        // aggregate is the merge of those answers, oldest first, keyed by `story_id` + `thread_id` so two
+        // Stories' `run_7` bars stay two bars.
+        const perBook =
+            runtimes !== undefined
+                ? runtimes.contexts_().map((context: StoryRuntimeContext) =>
+                      agentThreads(
+                          context.store,
+                          kind,
+                          context.executor.harness.threads(kind),
+                          context.threadLog.list(kind)
+                      )
+                  )
+                : [agentThreads(store, kind, deps.executor?.harness.threads(kind) ?? [], deps.threadLog.list(kind))];
+
+        return c.json({ kind, threads: agentThreadsAcross(perBook) }, 200);
     });
 
     /**
@@ -1688,6 +2302,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return refusal(c, error);
         }
 
+        // S-RUNTIME: the roster is host configuration and lives in the app book; each Story's runtime reads
+        // its OWN copy (that is what an agent's turn actually resolves), so the write is mirrored.
+        await synced();
+
         // The SAME projection GET /agents answers — including its alphabetical order (T12/F1).
         return c.json(agentRoster(), 200);
     });
@@ -1743,6 +2361,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 );
             }
 
+            // S-RUNTIME: the catalogue is APP configuration — the same row is handed to every Story's
+            // context, so it is written to the app book and mirrored, never into one Story's journal.
             // An Author's own template is always editable and never built-in, whatever the client sent.
             candidate = { ...candidate, builtin: false, editable: true };
         }
@@ -1776,6 +2396,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                         : `the Author duplicated ${duplicate_of} to edit it (D-17)`
                 )
             );
+
+            await synced();
 
             return c.json(row, 200);
         } catch (error) {
@@ -1824,37 +2446,78 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 [{ id: template.id, rev: template.rev }]
             );
 
+            await synced();
+
             return c.json(row, 200);
         } catch (error) {
             return refusal(c, error);
         }
     });
 
-    /** U-7 — the crew panel. `story_id` omitted lists every Story's runs. */
+    /**
+     * U-7 — the crew panel. `story_id` omitted lists every Story's runs.
+     *
+     * S-RUNTIME: books in book order, each book's rows in their own order — deliberately NOT re-sorted,
+     * because the panel is a list of run rows and run ids are local to a book: two Stories' `run_7` are two
+     * rows, distinguished by the `story_id` the caller filtered on or the row itself carries.
+     */
     app.get('/runs', (c) => {
         const storyId = c.req.query('story_id');
 
-        return c.json(storyId ? store.runs.list().filter((run) => run.story_id === storyId) : store.runs.list(), 200);
+        return c.json(runsAcross(books(), storyId), 200);
     });
 
     /**
      * P8 / U-7 — the Author's cord. `RunExecutor.kill` aborts the run's own controller and the row closes
      * in the executor's `finally` (S-3: teardown is unconditional), so the row returned here is the
      * `killed`-in-flight row; the `runs` SSE event carries the closed one a moment later.
+     *
+     * S-RUNTIME: a run id is LOCAL to one book, so the route finds the book that holds the row and stops the
+     * run THROUGH THAT BOOK's executor — the executor owns the controller map of the runs it started, and a
+     * sibling's executor killing `run_7` would abort another Story's thread. Three answers:
+     *
+     *   * `?story_id=` given — that Story's executor, exactly, and a Story the workspace does not hold is
+     *     the same 404 the single-book shape answers;
+     *   * no scope and exactly one book holds the id — the kill is unambiguous, so it stays valid (a
+     *     workspace with one Story, and every host that predates the scope);
+     *   * no scope and SEVERAL books hold the id — 409, and nothing is killed. Guessing by book order used
+     *     to abort whichever `run_0` happened to be first, with a 200 and the other Story none the wiser.
      */
     app.post('/runs/:runId/kill', (c) => {
         const runId = c.req.param('runId');
-        const run = store.runs.get(runId);
+        const scope = c.req.query('story_id');
+        const found = bookOfRun(runId, scope);
 
-        if (run === undefined) return missing(c, 'run', runId);
+        if (found === undefined) return missing(c, 'run', runId);
 
-        executor.kill(runId);
+        if (found === AMBIGUOUS) {
+            return errorResponse(
+                c,
+                409,
+                `\`run ${runId}\` is a Story-local id and more than one Story in this workspace holds it, while the ` +
+                    'request named none — send `?story_id=` with the Story the run belongs to, so the kill stops that ' +
+                    'thread and no other (S-RUNTIME: one book per Story).'
+            );
+        }
 
-        return c.json(store.runs.get(runId) ?? run, 200);
+        const { store: book, executor: owner } = found;
+
+        owner.kill(runId);
+
+        return c.json(
+            book.runs.get(runId) ?? book.runs.list().find((run) => run.id === runId) ?? { id: runId, story_id: found.storyId },
+            200
+        );
     });
 
-    /** U-10 — the cross-Story desk, the dashboard's home screen. */
-    app.get('/queue', (c) => c.json(queueItems(store), 200));
+    /**
+     * U-10 — the cross-Story desk, the dashboard's home screen.
+     *
+     * S-RUNTIME: every book's desk, in `queueOrder` (Story, then creation, then row id). The item's id is
+     * local to its Story, and every row already carries `story_id`, so a `finding_0` from one Story and a
+     * `finding_0` from another stay two clickable rows — which is the whole reason the merge is per book.
+     */
+    app.get('/queue', (c) => c.json(queueItemsAcross(books()), 200));
 
     // -------------------------------------------------------------------------
     // The loop's own ceiling (S-5)
@@ -1866,9 +2529,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * (the ceiling belongs to the process, not to a Story), so it has no Story row to PATCH and the
      * projection here is the only read of it.
      */
+    // S-RUNTIME: the live count is the sum over every book, because the ceiling is one number for the whole
+    // workspace and the tile that shows it is a workspace tile. The shape of the response is unchanged.
     const loopSettings = () => ({
-        global_max_concurrent: engine.config.globalMaxConcurrent,
-        live_runs: liveRuns(store).length
+        global_max_concurrent: runtimes !== undefined ? runtimes.ceilingView.limit : engine.config.globalMaxConcurrent,
+        live_runs: runtimes !== undefined ? runtimes.liveRuns() : liveRuns(store).length
     });
 
     app.get('/loop', (c) => c.json(loopSettings(), 200));
@@ -1909,6 +2574,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             // this is host configuration, not a fact about the book, so it rides the store's `settings`
             // section and never the journal — the same seam the roster's model choices use (U-8).
             rememberGlobalMaxConcurrent(store, limit);
+            // S-RUNTIME: one ceiling for the whole workspace, so the number is mirrored into every context's
+            // book too — each engine reads its OWN setting, and a context created next minute reads the
+            // app book. `setGlobalMaxConcurrent` has already moved the shared counter and every engine's copy.
+            await synced();
         } catch (error) {
             return refusal(c, error);
         }
@@ -1947,13 +2616,25 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 }
             };
 
-            const unsubscribe = store.onCommit((events) => {
-                for (const frame of feedEvents(events)) {
-                    queue.push(frame);
-                }
+            // S-RUNTIME: every book, including the ones created while this stream is open. A Story created
+            // after the client connected would otherwise be a pane that never moves until the Author
+            // reloaded, and the dashboard's own fallback (a 5s poll, L-24) would mask that for days.
+            // The frame's Story id is derived from the events themselves (`projections.ts:feedEvents`), which
+            // is the id the writing book owns, so a shared feed still says which Story moved.
+            const unsubscribe =
+                runtimes !== undefined
+                    ? runtimes.subscribeCommits((commit) => {
+                          for (const frame of feedEvents([...commit.events])) queue.push(frame);
 
-                if (timer === undefined) timer = setTimeout(() => void flush(), debounceMs);
-            });
+                          if (timer === undefined) timer = setTimeout(() => void flush(), debounceMs);
+                      })
+                    : store.onCommit((events) => {
+                          for (const frame of feedEvents(events)) {
+                              queue.push(frame);
+                          }
+
+                          if (timer === undefined) timer = setTimeout(() => void flush(), debounceMs);
+                      });
 
             await stream.writeSSE({ event: 'ready', data: '' });
 

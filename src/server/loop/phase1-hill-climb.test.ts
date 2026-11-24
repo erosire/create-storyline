@@ -12,6 +12,11 @@
 //      machinery: no new round cap, no retry loop, one extra sample per sweep (R3).
 //   3. A spent cap escalates to the Author, and clearing the escalation re-arms a fresh WAVE instead
 //      of installing the draft that failed. Nothing closes until a draft certifies it (R4).
+//   4. THE STREAK, not only the cap, ends a wave (the Author's chosen policy): a refinement round that
+//      proves nothing better than the accepted draft `SAMPLING_NO_PROGRESS_STREAK` attempts in a row
+//      stops there, REGRESSIONS included, and its escalation says so. A round that keeps climbing buys
+//      past the static cap (each improvement extends it), and a round the provider never answered keeps
+//      its own bound — the static cap, because an unread draft proves nothing either way.
 import { describe, expect, it } from 'vitest';
 
 import { createRig, seedFinding, seedTask } from './mock';
@@ -30,6 +35,9 @@ import {
     sampleFixDemand,
     samplingArmed,
     samplingCapOf,
+    // H2/R2 — the streak that stops a wave early. The escalation text quotes the number, so the test
+    // that pins that text reads it from the same constant rather than hard-coding a third copy.
+    SAMPLING_NO_PROGRESS_STREAK,
     samplingRoundOf,
     samplingWaveOf,
     selectedSummaryRevision,
@@ -171,9 +179,9 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         await rig.step();
 
         expect(roundRequiresCertification(rig.store, rig.storyId, 2)).toBe(true);
-        await settleUntil(rig, () => rig.store.sampleReviews.list().some((review) => review.revision_ref === 'revision_2'));
+        await settleUntil(rig, () => rig.store.sampleReviews.list().some((review) => review.revision_ref === 'revision_1'));
 
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected', 'revision_2:r2:refined:drafted']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_1:r2:refined:drafted']);
         // The review row carries BOTH halves of the certificate: the list the job handed the Reader and
         // the verdict it returned. That pairing is what makes the demand gradeable (§4, H1). Round 1's
         // row declares an empty list and carries no verdicts at all — the difference between "nothing
@@ -191,27 +199,27 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
                                 : review.fix_verifications.map((verdict) => `${verdict.fix_ref}=${verdict.status}`).join('+') || 'empty'
                         }`
                 )
-        ).toEqual(['revision_1:[]:silent', 'revision_2:[task_1]:task_1=unresolved']);
+        ).toEqual(['revision_0:[]:silent', 'revision_1:[task_0]:task_0=unresolved']);
         expect(
-            sampleFixDemand(rig.store, rig.storyId, rig.store.revisions.require('revision_2'))
-        ).toEqual(['task_1']);
+            sampleFixDemand(rig.store, rig.storyId, rig.store.revisions.require('revision_1'))
+        ).toEqual(['task_0']);
         expect(roundHasEligibleCandidate(rig.store, storyOf(rig), 2)).toBe(false);
 
         // …and the queue's answer to a stalled round: ANOTHER sample, even though the round already
         // holds the one sample the Author asked for. `have < size` is false here, so this offer comes
         // from the hill-climb clause alone, inside the same cap (`work.ts:phase1Candidates`).
-        expect(offers(rig, 'wi_sample_')).toEqual(['wi_sample_summary_1_2_2']);
+        expect(offers(rig, 'wi_sample_')).toEqual(['wi_sample_summary_0_2_2']);
 
         // Climb until the allowance is spent, then wait for the last screening pass to answer: the
         // escalation only opens once the round is complete and holds nobody it is allowed to pick.
-        await settleUntil(rig, () => runs(rig, 'wi_sample_summary_1_2_').filter((row) => row.endsWith(':torn_down')).length >= cap);
+        await settleUntil(rig, () => runs(rig, 'wi_sample_summary_0_2_').filter((row) => row.endsWith(':torn_down')).length >= cap);
 
         // Four attempts, and no fifth: the retry is an allowance, not a round cap.
-        expect(runs(rig, 'wi_sample_summary_1_2_')).toEqual([
-            'wi_sample_summary_1_2_1:torn_down',
-            'wi_sample_summary_1_2_2:torn_down',
-            'wi_sample_summary_1_2_3:torn_down',
-            'wi_sample_summary_1_2_4:torn_down'
+        expect(runs(rig, 'wi_sample_summary_0_2_')).toEqual([
+            'wi_sample_summary_0_2_1:torn_down',
+            'wi_sample_summary_0_2_2:torn_down',
+            'wi_sample_summary_0_2_3:torn_down',
+            'wi_sample_summary_0_2_4:torn_down'
         ]);
         expect(offers(rig, 'wi_sample_')).toEqual([]);
 
@@ -225,7 +233,7 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         expect(escalation?.title).toBe(
             `${SAMPLING_FAILURE_PREFIX} 4 attempts — no draft answered the fixes this round was armed with`
         );
-        expect(escalation?.detail).toContain('task_1 (unresolved on revision_2)');
+        expect(escalation?.detail).toContain('task_0 (unresolved on revision_1)');
 
         // R4: nothing moved. Four drafts were read and refused; the Summary is still round 1's, the
         // task is still open, the finding is still approved, and the round never advanced.
@@ -235,11 +243,11 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         expect(rig.store.findings.require(finding.id).state).toBe('approved');
         expect(rig.store.summaries.require(summaryOf(rig).id).premise).toBe(installedPremiseOf(rig));
         expect(revisionRows(rig)).toEqual([
-            'revision_1:r1:sampled:selected',
+            'revision_0:r1:sampled:selected',
+            'revision_1:r2:refined:drafted',
             'revision_2:r2:refined:drafted',
             'revision_3:r2:refined:drafted',
-            'revision_4:r2:refined:drafted',
-            'revision_5:r2:refined:drafted'
+            'revision_4:r2:refined:drafted'
         ]);
 
         // The Author's clear (L-36/U-1b) closes the escalation, and the sweep re-arms a fresh wave.
@@ -258,23 +266,23 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         await rig.run();
 
         expect(samplingWaveOf(storyOf(rig))).toBe(1);
-        expect(runs(rig, 'wi_sample_summary_1_2_w1_')).toEqual(['wi_sample_summary_1_2_w1_1:torn_down']);
+        expect(runs(rig, 'wi_sample_summary_0_2_w1_')).toEqual(['wi_sample_summary_0_2_w1_1:torn_down']);
         expect(storyOf(rig).sampling_round).toBe(2);
         expect(rig.store.tasks.require(task.id).state).toBe('done');
         expect(rig.store.findings.require(finding.id).state).toBe('fixed');
         // The four rejected drafts are gone (P13's hard truncation) — which is precisely why the
         // history line of the round that DID select records what each candidate left outstanding.
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected', 'revision_6:r2:refined:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_5:r2:refined:selected']);
         // The history line names every candidate the round held, including the four it refused — which
         // is the only surviving record once §6.6 deletes their drafts and their reviews (R4).
         expect((storyOf(rig).sampling_history ?? []).map((line) => line.samples.map((sample) => `${sample.revision_id}:${((sample.unresolved_fixes ?? []).join('+')) || 'clear'}`))).toEqual([
-            ['revision_1:clear'],
+            ['revision_0:clear'],
             [
-                'revision_2:task_1',
-                'revision_3:task_1',
-                'revision_4:task_1',
-                'revision_5:task_1',
-                'revision_6:clear'
+                'revision_1:task_0',
+                'revision_2:task_0',
+                'revision_3:task_0',
+                'revision_4:task_0',
+                'revision_5:clear'
             ]
         ]);
     });
@@ -310,10 +318,10 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
 
         expect(storyOf(rig).sampling_round).toBe(1);
         // The clean sibling won on the counts; the loser and its review were truncated (§6.6).
-        expect(revisionRows(rig)).toEqual(['revision_2:r1:sampled:selected']);
-        expect(rig.store.revisions.require('revision_2').issue_counts).toEqual({ critical: 0, high: 0 });
+        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected']);
+        expect(rig.store.revisions.require('revision_1').issue_counts).toEqual({ critical: 0, high: 0 });
         expect(rig.store.sampleReviews.list().map((review) => `${review.revision_ref}:${review.issues.length}`)).toEqual([
-            'revision_2:0'
+            'revision_1:0'
         ]);
         // Nothing owed, so nothing to certify — and the round still selected. `sampling_round` is the
         // round that COMPLETED; `samplingRoundOf` is the one now in flight (the parity table in
@@ -366,15 +374,15 @@ describe('H1-C1/F1 — the demand counts only what is STILL owed, so the Author 
             `${SAMPLING_FAILURE_PREFIX} 4 attempts — no draft answered the fixes this round was armed with`
         );
         // The durable audit of the refusal, which survives the task it names (P11).
-        expect(escalation?.detail).toContain('task_1 (unresolved on revision_2)');
+        expect(escalation?.detail).toContain('task_0 (unresolved on revision_1)');
         // The deadlock's shape, before the Author acts: four refused drafts, the round not advanced, and
         // a queue with nothing left to buy.
         expect(revisionRows(rig)).toEqual([
-            'revision_1:r1:sampled:selected',
+            'revision_0:r1:sampled:selected',
+            'revision_1:r2:refined:drafted',
             'revision_2:r2:refined:drafted',
             'revision_3:r2:refined:drafted',
-            'revision_4:r2:refined:drafted',
-            'revision_5:r2:refined:drafted'
+            'revision_4:r2:refined:drafted'
         ]);
         expect(offers(rig, 'wi_sample_')).toEqual([]);
 
@@ -408,20 +416,20 @@ describe('H1-C1/F1 — the demand counts only what is STILL owed, so the Author 
         // selectable the moment the task was settled: the wave exists to buy retries the round can still
         // spend, and this one had nothing left to buy. Hence no `_w1_` family at all.
         expect(samplingWaveOf(storyOf(rig))).toBe(0);
-        expect(runs(rig, 'wi_sample_summary_1_2_w1_')).toEqual([]);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected', 'revision_2:r2:refined:selected']);
-        expect(rig.store.revisions.require('revision_2').issue_counts).toEqual({ critical: 0, high: 0 });
+        expect(runs(rig, 'wi_sample_summary_0_2_w1_')).toEqual([]);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_1:r2:refined:selected']);
+        expect(rig.store.revisions.require('revision_1').issue_counts).toEqual({ critical: 0, high: 0 });
         // The INCUMBENT no longer holds the Summary: the draft this round had refused is now the selected
         // one, and §4.2's prose blocks come off its body. The sentence itself reads the same as round 1's,
         // and that is the pipeline's design rather than a bug — the sampler is a byte-identical, seeded
         // prompt whose only diversity knob is `sampleIndex` (§5), and this is round 2's first sample. So
         // the assertion names the record that matters: provenance, not wording.
-        expect(selectedSummaryRevision(rig.store, rig.storyId)?.id).toBe('revision_2');
+        expect(selectedSummaryRevision(rig.store, rig.storyId)?.id).toBe('revision_1');
         const installed = String(rig.store.summaries.require(summaryOf(rig).id).premise ?? '');
 
         expect(installed).toBe(
             String(
-                (rig.store.revisions.require('revision_2').body as { fields?: Record<string, unknown> }).fields
+                (rig.store.revisions.require('revision_1').body as { fields?: Record<string, unknown> }).fields
                     ?.premise ?? ''
             )
         );
@@ -453,7 +461,7 @@ describe('H1-C1/F1 — the demand counts only what is STILL owed, so the Author 
             (storyOf(rig).sampling_history ?? []).map((line) =>
                 line.samples.map((sample) => `${sample.revision_id}:${(sample.unresolved_fixes ?? []).join('+') || 'clear'}`)
             )
-        ).toEqual([['revision_1:clear'], ['revision_2:clear', 'revision_3:clear', 'revision_4:clear', 'revision_5:clear']]);
+        ).toEqual([['revision_0:clear'], ['revision_1:clear', 'revision_2:clear', 'revision_3:clear', 'revision_4:clear']]);
     });
 });
 
@@ -475,7 +483,7 @@ describe('H1-C1/F2 — a refined round that cannot verify never replaces the inc
         // degrade installs its draft and reports the partial screening. F2 tightens rounds that owe fixes
         // — the distinction is pinned here as well as in `sample-select.test.ts`.
         expect(storyOf(rig).sampling_round).toBe(1);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected']);
         expect(rig.store.sampleReviews.list()).toEqual([]);
 
         const { finding, task } = armRefinementRound(rig);
@@ -501,26 +509,26 @@ describe('H1-C1/F2 — a refined round that cannot verify never replaces the inc
         expect(rig.store.tasks.require(task.id).state).toBe('open');
         expect(rig.store.findings.require(finding.id).state).toBe('approved');
         expect(revisionRows(rig)).toEqual([
-            'revision_1:r1:sampled:selected',
+            'revision_0:r1:sampled:selected',
+            'revision_1:r2:refined:drafted',
             'revision_2:r2:refined:drafted',
             'revision_3:r2:refined:drafted',
-            'revision_4:r2:refined:drafted',
-            'revision_5:r2:refined:drafted'
+            'revision_4:r2:refined:drafted'
         ]);
         // Bounded, and surfaced to the Author: four sampling attempts (size 1 + the allowance), no fifth,
         // and one screening family spent per draft — the retry allowance is still the only bound, and the
         // escalation is the existing Author-facing one, so there is no silent competing-draft stall.
-        expect(runs(rig, 'wi_sample_summary_1_2_')).toEqual([
-            'wi_sample_summary_1_2_1:torn_down',
-            'wi_sample_summary_1_2_2:torn_down',
-            'wi_sample_summary_1_2_3:torn_down',
-            'wi_sample_summary_1_2_4:torn_down'
+        expect(runs(rig, 'wi_sample_summary_0_2_')).toEqual([
+            'wi_sample_summary_0_2_1:torn_down',
+            'wi_sample_summary_0_2_2:torn_down',
+            'wi_sample_summary_0_2_3:torn_down',
+            'wi_sample_summary_0_2_4:torn_down'
         ]);
-        expect(runs(rig, 'wi_screen_revision_2')).toEqual([
-            'wi_screen_revision_2_1:failed',
-            'wi_screen_revision_2_2:failed',
-            'wi_screen_revision_2_3:failed',
-            'wi_screen_revision_2_4:failed'
+        expect(runs(rig, 'wi_screen_revision_1')).toEqual([
+            'wi_screen_revision_1_1:failed',
+            'wi_screen_revision_1_2:failed',
+            'wi_screen_revision_1_3:failed',
+            'wi_screen_revision_1_4:failed'
         ]);
         expect(offers(rig, 'wi_sample_')).toEqual([]);
 
@@ -534,12 +542,12 @@ describe('H1-C1/F2 — a refined round that cannot verify never replaces the inc
         );
         expect(
             escalations.find((row) => (row.title ?? '').startsWith(SAMPLING_FAILURE_PREFIX))?.detail
-        ).toContain(`${task.id} (never screened on revision_2)`);
+        ).toContain(`${task.id} (never screened on revision_1)`);
         // N-1: the draft did not answer `unresolved`, it was never GRADED — and the row says so, because
         // the Author's lever is the provider here, not the draft or the task.
         expect(
             escalations.find((row) => (row.title ?? '').startsWith(SAMPLING_FAILURE_PREFIX))?.detail
-        ).not.toContain(`${task.id} (unresolved on revision_2)`);
+        ).not.toContain(`${task.id} (unresolved on revision_1)`);
         // The demand here is the OPEN fix task — the fallback branch, because no screening row was ever
         // written to declare one — so the row can name exactly what each draft failed to answer.
         expect(roundSampleScores(rig.store, rig.storyId, 2).map((scored) => scored.fixesUnresolved)).toEqual([
@@ -608,11 +616,14 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
                 legacyScreening: scored.legacyScreening,
                 eligible: scored.eligible
             }))
+        // THREE attempts, not the cap's four: a candidate that introduces a blocking issue is a
+        // REGRESSION, and a regression never measures the hill — it is a no-progress attempt
+        // (`samplingProgressOf`). Three of those in a row stop the wave (`SAMPLING_NO_PROGRESS_STREAK`),
+        // which is the user-chosen policy: retry while the hill climbs, stop when it does not.
         ).toEqual([
+            'revision_1',
             'revision_2',
-            'revision_3',
-            'revision_4',
-            'revision_5'
+            'revision_3'
         ].map((id) => ({
             id,
             fixRefs: [task.id],
@@ -630,9 +641,18 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         // (both `openEscalationTask` and `engine.ts:rearmSamplingWave` read only the prefix and `wave:`).
         expect(escalation?.title.startsWith(SAMPLING_FAILURE_PREFIX)).toBe(true);
         expect(escalation?.title).toBe(
-            `${SAMPLING_FAILURE_PREFIX} 4 attempts — no draft was both fixed and free of critical/high screening issues`
+            `${SAMPLING_FAILURE_PREFIX} 3 attempts — no draft was both fixed and free of critical/high screening issues`
         );
         expect(escalation?.detail).toContain('wave: 0');
+        // The hill, in the numbers the ledger proved: no candidate ever measured it (every one of them
+        // introduced a blocking high), three attempts in a row bought nothing, and the static cap of 4
+        // is still shown so the Author can see the wave stopped EARLY.
+        expect(escalation?.detail).toContain(
+            'Hill progress in wave 0: 3 of 4 attempts, best unresolved blocking fix not yet proved, 3 consecutive attempts without improvement.'
+        );
+        expect(escalation?.detail).toContain(
+            `The round stopped because ${SAMPLING_NO_PROGRESS_STREAK} attempts in a row proved nothing better than the accepted draft`
+        );
         expect(escalation?.detail).toContain(
             'cleared every fix it was handed, with evidence, and was rejected for its screening issues'
         );
@@ -641,10 +661,9 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         );
         expect(escalation?.detail).toContain(
             [
-                'Rejected on screening issues: revision_2 (0 critical, 1 high);',
-                'revision_3 (0 critical, 1 high);',
-                'revision_4 (0 critical, 1 high);',
-                'revision_5 (0 critical, 1 high).'
+                'Rejected on screening issues: revision_1 (0 critical, 1 high);',
+                'revision_2 (0 critical, 1 high);',
+                'revision_3 (0 critical, 1 high).'
             ].join(' ')
         );
         // The lever names the drafts, not the work list — and it does NOT invite the Author to discard a
@@ -656,13 +675,13 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         expect(escalation?.detail).not.toContain('never screened');
         expect(escalation?.title).not.toContain('no draft answered the fixes');
 
-        // The behaviour the text describes is unchanged: bounded attempts, nothing installed, nothing
-        // closed, and the fix task still open (which is what keeps the next round armed).
-        expect(runs(rig, 'wi_sample_summary_1_2_')).toEqual([
-            'wi_sample_summary_1_2_1:torn_down',
-            'wi_sample_summary_1_2_2:torn_down',
-            'wi_sample_summary_1_2_3:torn_down',
-            'wi_sample_summary_1_2_4:torn_down'
+        // The behaviour the text describes is unchanged in kind — bounded attempts, nothing installed,
+        // nothing closed, and the fix task still open (which is what keeps the next round armed) — but the
+        // bound that bit here is the no-progress streak, not the cap: three refused drafts and no fourth.
+        expect(runs(rig, 'wi_sample_summary_0_2_')).toEqual([
+            'wi_sample_summary_0_2_1:torn_down',
+            'wi_sample_summary_0_2_2:torn_down',
+            'wi_sample_summary_0_2_3:torn_down'
         ]);
         expect(offers(rig, 'wi_sample_')).toEqual([]);
         expect(storyOf(rig).sampling_round).toBe(1);
@@ -670,11 +689,10 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         expect(rig.store.findings.require(finding.id).state).toBe('approved');
         expect(installedPremiseOf(rig)).toBe(incumbent);
         expect(revisionRows(rig)).toEqual([
-            'revision_1:r1:sampled:selected',
+            'revision_0:r1:sampled:selected',
+            'revision_1:r2:refined:drafted',
             'revision_2:r2:refined:drafted',
-            'revision_3:r2:refined:drafted',
-            'revision_4:r2:refined:drafted',
-            'revision_5:r2:refined:drafted'
+            'revision_3:r2:refined:drafted'
         ]);
         // The history of the refusal names what each draft left outstanding — nothing — on every line,
         // because the rejection is the screening counts and those are recorded per candidate on the
@@ -700,8 +718,10 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         await settleUntil(rig, () => storyOf(rig).sampling_round === 2, 20);
 
         expect(samplingWaveOf(storyOf(rig))).toBe(1);
-        expect(runs(rig, 'wi_sample_summary_1_2_w1_')).toEqual(['wi_sample_summary_1_2_w1_1:torn_down']);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:sampled:selected', 'revision_6:r2:refined:selected']);
+        expect(runs(rig, 'wi_sample_summary_0_2_w1_')).toEqual(['wi_sample_summary_0_2_w1_1:torn_down']);
+        // `revision_4`: the ids count creates, not survivors, so the wave-1 draft follows the THREE
+        // refused drafts of wave 0 (test 1's winner is `revision_5` because that wave spent four).
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_4:r2:refined:selected']);
         expect(rig.store.tasks.require(task.id).state).toBe('done');
         expect(rig.store.findings.require(finding.id).state).toBe('fixed');
         expect(
@@ -709,18 +729,43 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
                 line.samples.map((sample) => `${sample.revision_id}:${(sample.unresolved_fixes ?? []).join('+') || 'clear'}`)
             )
         ).toEqual([
-            ['revision_1:clear'],
+            ['revision_0:clear'],
             // Every candidate that competed in round 2 keeps its line, refused or not — and every one of
-            // them cleared the fix, so the audit says `clear` on all five while the escalation row above
-            // records the counts that actually refused them.
-            [
-                'revision_2:clear',
-                'revision_3:clear',
-                'revision_4:clear',
-                'revision_5:clear',
-                'revision_6:clear'
-            ]
+            // them cleared the fix, so the audit says `clear` on all four while the escalation row above
+            // records the screening counts that actually refused them.
+            ['revision_1:clear', 'revision_2:clear', 'revision_3:clear', 'revision_4:clear']
         ]);
+
+        // H2 — the same line carries WHY each candidate is on it. The selection commit deletes the refused
+        // drafts AND their `sample_reviews` rows (P13/§6.6), so `outcome` + `reject_reason` are the only
+        // surviving answer, and they are the selector's own words (`sample-select.ts:scoreSample`), not a
+        // paraphrase: these three refused the round for introducing a major the accepted draft did not
+        // carry, and the winner is the installed draft, which owed no explanation. The line is stamped
+        // with wave 1 — the wave that installed it, after the Author's clear re-armed the hill.
+        const hillLine = (storyOf(rig).sampling_history ?? [])[1];
+
+        expect(hillLine.wave).toBe(1);
+        expect(
+            hillLine.samples.map(
+                (sample) => `${sample.revision_id}:${sample.outcome}:${sample.reject_reason ?? 'no reason asked'}`
+            )
+        ).toEqual([
+            'revision_1:rejected:introduced 0 critical / 1 major the accepted draft did not have',
+            'revision_2:rejected:introduced 0 critical / 1 major the accepted draft did not have',
+            'revision_3:rejected:introduced 0 critical / 1 major the accepted draft did not have',
+            'revision_4:accepted:no reason asked'
+        ]);
+        // And the hill's own numbers on the entry: one attempt bought the install, and the bar the install
+        // leaves behind (`0` — the certified fix was the round's only blocking row). `improvements` is 0
+        // even though this draft finally climbed: the FIRST regression-free candidate of a wave MEASURES
+        // the hill, it does not climb above a bar that did not exist yet (`records.ts:samplingProgressOf`,
+        // `sample-select.ts:bestUnresolvedBlocking`) — only a later candidate that beats a proved bar is
+        // credited, and that credit is what extends the ceiling.
+        expect({
+            attempts: hillLine.attempts,
+            improvements: hillLine.improvements,
+            unresolved_blocking: hillLine.unresolved_blocking
+        }).toEqual({ attempts: 1, improvements: 0, unresolved_blocking: 0 });
     });
 });
 
@@ -792,22 +837,22 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
         const rig = await createRig();
         const draft = seedDraft(rig, { round: 2, origin: 'refined' });
 
-        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_1' });
-        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'name the informant', finding_ref: 'finding_2' });
+        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_0' });
+        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'name the informant', finding_ref: 'finding_1' });
 
-        // The round went out before `task_1` was confirmed for this draft's pass, so only `task_2` was
+        // The round went out before `task_0` was confirmed for this draft's pass, so only `task_1` was
         // ever promised to it. An open task nobody handed the Writer cannot disqualify a draft that
         // ever saw it — and it is what arms the NEXT round (`records.ts:samplingArmed`).
         seedScreen(rig, draft.id, {
-            fixRefs: ['task_2'],
-            verdicts: [{ fix_ref: 'task_2', status: 'resolved', evidence: 'ending: the informant signs on page 4.' }]
+            fixRefs: ['task_1'],
+            verdicts: [{ fix_ref: 'task_1', status: 'resolved', evidence: 'ending: the informant signs on page 4.' }]
         });
 
-        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_2']);
+        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_1']);
         expect(roundRequiresCertification(rig.store, rig.storyId, 2)).toBe(true);
         expect(certificateOf(rig, 2)).toEqual({
-            fixRefs: ['task_2'],
-            fixesCleared: ['task_2'],
+            fixRefs: ['task_1'],
+            fixesCleared: ['task_1'],
             fixesUnresolved: [],
             eligible: true,
             legacyScreening: false
@@ -818,19 +863,19 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
         const rig = await createRig();
         const draft = seedDraft(rig, { round: 2, origin: 'refined' });
 
-        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_1' });
+        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_0' });
         seedScreen(rig, draft.id, {
-            verdicts: [{ fix_ref: 'task_1', status: 'unresolved', evidence: 'ending: the map is never opened again.' }]
+            verdicts: [{ fix_ref: 'task_0', status: 'unresolved', evidence: 'ending: the map is never opened again.' }]
         });
 
-        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_1']);
+        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_0']);
         expect(roundRequiresCertification(rig.store, rig.storyId, 2)).toBe(true);
         // A pass that answered about the fix is not a legacy pass: its failing verdict keeps the draft
         // off the round, which is the rejection that triggers the retry rather than a least-bad install.
         expect(certificateOf(rig, 2)).toEqual({
-            fixRefs: ['task_1'],
+            fixRefs: ['task_0'],
             fixesCleared: [],
-            fixesUnresolved: ['task_1'],
+            fixesUnresolved: ['task_0'],
             eligible: false,
             legacyScreening: false
         });
@@ -840,14 +885,14 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
         const rig = await createRig();
         const draft = seedDraft(rig, { round: 2, origin: 'refined' });
 
-        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_1' });
-        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'name the informant', finding_ref: 'finding_2' });
+        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'pay off the 1911 map', finding_ref: 'finding_0' });
+        seedTask(rig.store, rig.storyId, { kind: 'fix', title: 'name the informant', finding_ref: 'finding_1' });
         // The screening leg answered with issues only — the rows a pre-H1 store holds, or a provider that
         // dropped the certificate. The arming rule only ran this round because those tasks existed, so
         // they remain the demand.
         seedScreen(rig, draft.id, {});
 
-        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_1', 'task_2']);
+        expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_0', 'task_1']);
         expect(roundRequiresCertification(rig.store, rig.storyId, 2)).toBe(true);
         // H1-C1/F2 — ungradeable is INELIGIBLE, not clean. This row used to read `eligible: true` on the
         // argument that silence from a Reader who never held a list cannot VETO; it cannot, but it also
@@ -855,9 +900,9 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
         // The engine's closure gate is the second lock: `fixesCleared` is empty, so both tasks and both
         // findings stay open and auditable whatever the round decides (R4).
         expect(certificateOf(rig, 2)).toEqual({
-            fixRefs: ['task_1', 'task_2'],
+            fixRefs: ['task_0', 'task_1'],
             fixesCleared: [],
-            fixesUnresolved: ['task_1', 'task_2'],
+            fixesUnresolved: ['task_0', 'task_1'],
             eligible: false,
             legacyScreening: true
         });
@@ -1065,7 +1110,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
         // sample; the grounding pass is the whole answer once the sampler is gone, which rows (b) and
         // (c) drive end to end (the pass runs on the `wi_research_fix_<task>_a<n>` family, records
         // Knowledge through the task it is handed, and settles or escalates from there).
-        expect(offers(rig, 'wi_sample_')).toEqual(['wi_sample_summary_1_1_1']);
+        expect(offers(rig, 'wi_sample_')).toEqual(['wi_sample_summary_0_1_1']);
         // The grounding pass is offered in the SAME sweep, not instead of the sample: routing does not
         // stall the round, it adds the work that can actually settle the row.
         expect(offers(rig, 'wi_research_fix_')).toEqual([`wi_research_fix_${ground.id}_a1`]);
@@ -1086,7 +1131,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
         // `renderSelectedIdeas` scopes on `item.unit?.ref`. A string unit matched neither, and the
         // Researcher was dispatched with an empty artifact section (pinned in
         // `run/brief.test.ts`, which shows the Summary fields reaching the brief).
-        expect(job?.item.unit).toEqual({ kind: 'summary', ref: 'summary_1' });
+        expect(job?.item.unit).toEqual({ kind: 'summary', ref: 'summary_0' });
     });
 
     // (b) the prerequisite settles on EVIDENCE: the pass records the fact and its ROW closes. F3 — the

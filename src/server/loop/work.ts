@@ -105,6 +105,10 @@ import {
     storySummary,
     summaryRevisions,
     summaryRevisionRounds,
+    // SUMMARY PHRASE R3: the fix rows one finding armed. The batch hands its tasks to the settlement
+    // through `WorkItem.taskRefs`, and `engine.ts:settleJob` consumes them only when the finding they
+    // name is resolved in every group it targets.
+    tasksForFinding,
     templatesFor,
     unconfirmedBlockingFindings,
     unconfirmedFindings,
@@ -118,15 +122,54 @@ import { dialKeyOf, drainPreconditions, probeIsLive } from './status';
 import type { WorkCandidate } from './types';
 import {
     type RoleKind,
+    type SeedBrief,
     type StoryPhase,
     type Story,
     type Finding,
+    type PhraseGroup,
     type Task,
     type Template,
     type UnitKind,
     type Chapter
 } from '../../shared/types';
-import { ISSUE_LIST_SCHEMA_NAME, IssueListSchema, SUMMARY_SAMPLE_SCHEMA_NAME, SummarySampleSchema } from '../../shared/schemas';
+import {
+    GROUP_DRAFT_SCHEMA_NAME,
+    GroupDraftSchema,
+    GROUP_REVIEW_SCHEMA_NAME,
+    GroupReviewSchema,
+    ISSUE_LIST_SCHEMA_NAME,
+    IssueListSchema,
+    SUMMARY_SAMPLE_SCHEMA_NAME,
+    SummarySampleSchema
+} from '../../shared/schemas';
+// SUMMARY PHRASE (R1-R5) — the group domain, imported from its ONE surface (`../phrase/index`).
+// `isGroupManagedStory` is the switch (`story.summary_mode`, NOT the presence of rows),
+// `phraseGroupsOf`/`storyPhrase` are the book's catalog rows, `findingGroupsStillOwed` routes an
+// open finding into the groups it still needs rewritten (R3), `partitionGroups` is R4's deferral, and
+// the vector hash is what makes a review pass re-arm on an install rather than on a clock.
+import {
+    allReviewSeatsRun,
+    findingGroupsStillOwed,
+    GROUP_DRAFT_ITEM_PREFIX,
+    // HARDENING: the write allowance, the target set and the seat read now live in
+    // `phrase/exclusion.ts` (the one home for the group pipeline's READS), because `status.ts` needs
+    // them too and cannot import `work.ts` back — `work.ts` already imports `status.ts`. F1's rule is
+    // unchanged: the allowance counts exactly the runs `isGroupHoldingRun` accepts and no others.
+    GROUP_WRITE_ATTEMPT_CAP,
+    groupWorkTargets,
+    groupWriteAttempts,
+    groupRevisionVector,
+    groupVectorHash,
+    isGroupHoldingRun,
+    isGroupManagedStory,
+    partitionGroups,
+    phraseGroupsOf,
+    storyPhrase
+} from '../phrase';
+// F1: the allowance read and its cap are Author-facing and were exported from THIS module; the
+// re-export keeps `loop/phase1-groups*.test.ts` and any rail-side import site resolving while the
+// definition lives with the rest of the group-pipeline reads.
+export { GROUP_WRITE_ATTEMPT_CAP, groupWriteAttempts } from '../phrase/exclusion';
 import { seedHashOf } from '../../shared/seed-hash';
 import type { WorkItem, WorkUnitRef } from '../run/types';
 import type { Store } from '../store';
@@ -880,6 +923,226 @@ function phase1FixPrerequisites(store: Store, story: Story, summaryRef: string):
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// SUMMARY PHRASE — the group pipeline (R2/R3/R4/R5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The group pipeline's jobs (§6.4's shape, R5's content), in dispatch order:
+ *
+ *   1. `draft_groups`  — ONE Writer pass over a batch of groups (a structured, no-tool turn whose
+ *                        answer is installed whole by `engine.ts:settleJob`);
+ *   2. `review_groups` — one structured Reader pass per seat over the INSTALLED Overview, keyed by the
+ *                        group vector, which is the redesign's replacement for screening N candidates;
+ *   3. `check_unit`    — the deep cross-group review, the tool-carrying pass that turns what the
+ *                        Reader noticed into findings with `group_refs` on them (R3). It stays because
+ *                        R5 keeps the deep review; only the whole-Summary sampling and the draft
+ *                        selection are gone.
+ *
+ * WHY THERE IS NO SAMPLING HERE AT ALL: in this model an accepted Writer result IS the state, so the
+ * round of N competing drafts, their screening, and the Editor's pick have nothing to choose between
+ * (R5). The retry knob is the per-group allowance above, and the "is it better now?" question is
+ * answered by the next review, not by a score.
+ */
+function phase1GroupCandidates(
+    store: Store,
+    story: Story,
+    summaryRef: string,
+    brief: SeedBrief | undefined
+): WorkCandidate[] {
+    const out: WorkCandidate[] = [];
+    const groups = phraseGroupsOf(store, story.id);
+
+    if (groups.length === 0) return [];
+
+    const allRefs = groups.map((group) => group.id);
+    const phrase = storyPhrase(store, story.id);
+
+    // -- 1. The Writer batch -------------------------------------------------------------------
+    // The batch is the owed set cut three ways, in this order, because each cut is a different rule:
+    //   a. R4 — a group a live Writer already holds is DEFERRED, not cancelled: a batch of
+    //      {premise, tone} with premise live offers {tone}. Two disjoint batches run at once, which is
+    //      the concurrency the redesign exists to buy;
+    //   b. the per-group allowance (`GROUP_WRITE_ATTEMPT_CAP`), measured against each group's own
+    //      current text;
+    //   c. the Author's batch size, read from the SAME dial phase ① always had: `summary_sampling`
+    //      was "how many competing drafts", and for a group book it is "how many groups one pass may
+    //      rewrite". Reusing it keeps one Author-facing knob and no new setting.
+    const targets = groupWorkTargets(store, story);
+    // R5 keeps phase ①'s gates exactly where they were: the Writer batch does not open until an
+    // accepted Seed Brief exists and its research leg is settled. This is the SAME
+    // `researchGate` predicate the sampler reads (`phase1PipelineCandidates`'s step 3), so the two
+    // pipelines can never tell different stories about whether a round is grounded — the redesign
+    // changed what a Writer is asked to write, not what it has to be able to answer first.
+    const gatesOpen = brief !== undefined && researchGate(store, story, brief) !== 'needed';
+
+    if (gatesOpen && targets.length > 0) {
+        const { free } = partitionGroups(store, story.id, targets.map((target) => target.group));
+
+        if (free.length > 0) {
+            const batchSize = Math.max(1, summarySamplingOf(story));
+            const batch = free.slice(0, batchSize);
+            const batchRefs = batch.map((group) => group.id);
+            const batchIds = new Set(batchRefs);
+            const findingRefs = targets
+                .filter((target) => batchIds.has(target.group.id))
+                .flatMap((target) => target.findingRefs);
+
+            // The claim family is `wi_draft_groups_<summaryRef>_<group-set hash>_<attempt>` (see
+            // `phrase/exclusion.ts:GROUP_DRAFT_ITEM_PREFIX` for why the shape is owned there): the
+            // group-set hash makes one batch a claim FAMILY rather than one claim, so a failed pass
+            // retries under the next attempt number while a restart reproduces the family exactly.
+            // The exclusion does not read the key — it reads the Run row's persisted `group_refs`,
+            // which `run/executor.ts` copies from the Work Item — so the key is ledger identity, not
+            // the lock itself.
+            const family = `${GROUP_DRAFT_ITEM_PREFIX}_${summaryRef}_${groupVectorHash(Object.fromEntries(batchRefs.map((ref) => [ref, 0])))}`;
+            const attempts = store.runs
+                .list()
+                .filter((run) => run.story_id === story.id && (run.work_item_ref ?? '').startsWith(`${family}_`)).length;
+
+            const built = candidate(
+                store,
+                story,
+                'draft_groups',
+                'writer',
+                { kind: 'summary', ref: summaryRef },
+                claimKey(family, attempts + 1),
+                `rewrite ${batch.length} Summary group(s) — ${batch.map((group) => group.key).join(', ')} — in one structured pass (R2, R5)`,
+                2,
+                {
+                    toolMode: 'none',
+                    responseSchema: { name: GROUP_DRAFT_SCHEMA_NAME, schema: GroupDraftSchema },
+                    groupRefs: batchRefs,
+                    // The findings this batch answers ride on the job twice, on purpose: `findingRefs`
+                    // is what the brief renders with their evidence, and it is also the list the
+                    // install stamps onto the new revisions (`GroupInstallOptions.findingRefs`), which
+                    // is the anchor R3's closure is judged on. `taskRefs` is the fix rows themselves —
+                    // held open by `settleJob` until the findings they name are actually resolved.
+                    findingRefs,
+                    taskRefs: findingRefs
+                        .map((id) => store.findings.get(id))
+                        .flatMap((finding) =>
+                            finding === undefined
+                                ? []
+                                : tasksForFinding(store, story.id, finding.id).map((task) => task.id)
+                        )
+                        .filter((id, index, all) => all.indexOf(id) === index),
+                    // The answer contract and the "write these groups, in this order, revise don't
+                    // rewrite" rules are NOT in this note: they are engine-owned text the prompt
+                    // compiler appends (`run/phase1-prompt.ts:compileGroupDraftPrompt` →
+                    // `GROUP_DRAFT_INSTRUCTION`), because §5's cache rule wants the binding sentences
+                    // in one place for every batch. The template's own prose stays generic (R7).
+                    templateRef: 'writer-summary-sampler',
+                    roleName: 'writer'
+                }
+            );
+
+            if (built !== undefined) out.push(built);
+        }
+    }
+
+    // -- 2. The structured review of the installed Overview ---------------------------------------
+    // Keyed by the GROUP VECTOR (`{groupId: number}` hashed — `phrase/revisions.ts:groupVectorHash`),
+    // which is the whole point of the redesign's review: an install moves the vector, so the seats
+    // re-arm by themselves, and the N passes of one vector are N different seats (the rotation) rather
+    // than N drafts of one text. A restart re-reads the vector from the rows and reproduces the keys.
+    const vectorHash = groupVectorHash(groupRevisionVector(store, story.id));
+    const hasText = groups.some((group) => group.revision > 0);
+    const readers = summaryReadersOf(story);
+
+    if (hasText) {
+        for (let pass = 1; pass <= readers; pass += 1) {
+            const key = `wi_review_groups_${vectorHash}_${pass}`;
+
+            // One run per seat per vector: `runsForItem` counts CLOSED runs, so a seat that has
+            // already reported on this state is not bought again, and the live seat is caught by
+            // `candidate()`'s own claim check.
+            if (runsForItem(store, key).length > 0) continue;
+
+            const built = candidate(
+                store,
+                story,
+                'review_groups',
+                'reader',
+                { kind: 'summary', ref: summaryRef },
+                key,
+                `Reader ${pass}/${readers} reviews the installed Overview at group vector ${vectorHash} (R3, R5)`,
+                2,
+                {
+                    toolMode: 'none',
+                    responseSchema: { name: GROUP_REVIEW_SCHEMA_NAME, schema: GroupReviewSchema },
+                    // Every group, because the Reader judges the Overview as installed — the batch that
+                    // moved the vector is not the only text it has to read, and a defect that crosses
+                    // groups must be able to name every group it crosses.
+                    groupRefs: allRefs,
+                    fixRefs: openFixTaskIds(store, story.id),
+                    // Again no note: `run/phase1-prompt.ts:compileGroupReviewPrompt` appends
+                    // `GROUP_REVIEW_INSTRUCTION` (name the groups, quote the line, grade the fixes), so
+                    // the seat's brief and the cache key come from one compiler.
+                    templateRef: 'reader-screening',
+                    roleName: 'reader'
+                },
+                pass - 1
+            );
+
+            if (built !== undefined) out.push(built);
+        }
+    }
+
+    // -- 3. The deep cross-group review (§6.4 step 6, R5) -----------------------------------------
+    // The tool-carrying pass, offered once the structured seats for this vector have all run: it is
+    // the pass that turns "the Reader noticed something" into a FINDING with `group_refs` on it
+    // (`tools/checker.ts:raiseFinding`), and R3's whole closure rule runs on that attribution.
+    // `revisionRef` is deliberately absent — there is no draft row in this model; the brief carries
+    // the composed Overview and the run reads the book with tools (R6's mirror keeps `readSummary`
+    // honest).
+    if (hasText && phrase !== undefined) {
+        const reviewsFiled = groups.length > 0 && allReviewSeatsRun(store, vectorHash, readers);
+
+        if (reviewsFiled) {
+            for (let pass = 1; pass <= readers; pass += 1) {
+                const key = `wi_group_check_${vectorHash}_${pass}`;
+
+                if (runsForItem(store, key).length > 0) continue;
+
+                const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
+
+                const built = candidate(
+                    store,
+                    story,
+                    'check_unit',
+                    'reader',
+                    { kind: 'summary', ref: summaryRef },
+                    key,
+                    `Reader ${pass}/${readers} reviews the group Overview at vector ${vectorHash} against the Seed (R3, R5)`,
+                    2,
+                    {
+                        groupRefs: allRefs,
+                        templateRef: template,
+                        roleName: 'reader',
+                        // The group model's deep review (R3/R5): the artifact is the COMPOSED Overview,
+                        // there is no draft row to name, and the one thing this pass must do that the
+                        // legacy one never had to is say WHICH GROUPS each complaint is about. Without
+                        // `group_refs` a finding means "the whole Overview" (the legacy reading) and the
+                        // next Writer batch rewrites all five — the exact cost R2 exists to remove.
+                        note:
+                            `Reader pass ${pass}/${readers} on the installed group Overview at vector ${vectorHash}. THIS IS THE OVERVIEW, NOT PROSE, and it is composed from the book's Summary groups: ${groups
+                                .map((group) => group.key)
+                                .join(', ')}. THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the Overview's own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. Word choice, sentence shape and register are taste or minor, because phase ③ writes the sentences. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
+                            "`group_refs` naming every group the defect is about, as the group ids in the brief. " +
+                            `A premise contradiction belongs to the premise group; a promise the ending does not keep names both. Cross-group incoherence is the review this pass exists for: judge the groups AGAINST EACH OTHER, not five times in isolation. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict with submitVerdict at target_ref ${summaryRef}; there is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`,
+                    },
+                    pass - 1
+                );
+
+                if (built !== undefined) out.push(built);
+            }
+        }
+    }
+
+    return out;
+}
+
 /**
  * Phase ①'s jobs, in the pipeline's own order (§6.4 steps 1-6):
  *
@@ -985,6 +1248,21 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // No Summary row means there is nothing to sample into; phase ① opens one in `createStory`
     // (§4.2: one Summary per Story), so this is a defensive read rather than a real state.
     if (summaryRef === '') return out;
+
+    // SUMMARY PHRASE (R1/R5/R6): the switch is the STORY SETTING, not a derived fact —
+    // `story.summary_mode === 'groups'` (and a row with no `summary_mode` is a legacy book, so
+    // `phrase/catalog.ts:isGroupManagedStory` answers false and nothing here changes). A group-managed
+    // book takes `phase1GroupCandidates` and never reaches the sampler below: no N competing drafts,
+    // no screening set to rank, no Editor pick — an accepted Writer result is installed and its
+    // predecessor becomes history in the same commit.
+    //
+    // Steps 0-2 above (the round's research fix owners, the Seed Brief, the research gate) are SHARED:
+    // the redesign changed how the Summary gets written, not what the Seed Brief has to answer first.
+    if (isGroupManagedStory(story)) {
+        out.push(...phase1GroupCandidates(store, story, summaryRef, brief));
+
+        return out;
+    }
 
     const round = samplingRoundOf(story);
     const size = summarySamplingOf(story);
@@ -1176,7 +1454,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                     revisionRef: selected.id,
                     templateRef: template,
                     roleName: 'reader',
-                    note: `Reader pass ${pass} of ${readers} on the selected Summary draft ${selected.id}. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview. THIS IS THE OVERVIEW, NOT PROSE: cost critical or major only for a defect the Summary can actually carry — a contradiction of the Seed or of critical Knowledge, a causal chain that does not cause, a timeline that cannot happen, a world rule the Summary states and then breaks, a motive that does not ground the acts it explains, or an ending that fails the Seed\u2019s goal. Word choice, sentence structure, grammar, register and a preference for another phrasing of the same commitment are taste or minor: they must not cost a sampling round, because the sentences were never written — phase ③ writes them, and a round restarted over a rewording has no best answer to converge on. Rate the draft with submitVerdict against ${selected.unit_ref}, and never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                    note: `Reader pass ${pass}/${readers} on the selected Summary draft ${selected.id}. File TWO verdicts with submitVerdict: the goal verdict at target_ref ${selected.unit_ref} (the Goal’s own row) and the draft\u2019s own line at target_ref ${selected.id} (the crew panel\u2019s row). THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the draft\u2019s own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. A Summary is a set of facts, not prose: word choice, sentence shape and register are taste or minor, because phase ③ writes the sentences. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview; the draft line never replaces the Summary line. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
                 },
                 pass - 1
             );

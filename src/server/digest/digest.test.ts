@@ -22,8 +22,8 @@ import type {
 import { DIGEST_CHAR_BUDGET, DIGEST_GAP_CRITERION, DigestBuilder } from './digest';
 
 const AUTHOR: Attribution = { run_ref: null, author: true, why: 'author seeds the story' };
-const WRITER: Attribution = { run_ref: 'run_1', why: 'writer produces the artifact' };
-const CHECKER: Attribution = { run_ref: 'run_2', why: 'checker reports the finding' };
+const WRITER: Attribution = { run_ref: 'run_0', why: 'writer produces the artifact' };
+const CHECKER: Attribution = { run_ref: 'run_1', why: 'checker reports the finding' };
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -87,7 +87,9 @@ function createChapter(store: Store, storyId: string, order: number, title: stri
     return store.chapters.create(
         {
             story_id: storyId,
-            plotline_ref: `plotline_${order}`,
+            // plotline ids mint story-locally from 0 (Store.nextId), so chapter `order` n is governed
+            // by `plotline_${n - 1}` — the ref the criteria check (L-22) and the crew both follow.
+            plotline_ref: `plotline_${order - 1}`,
             order,
             title,
             summary,
@@ -96,7 +98,7 @@ function createChapter(store: Store, storyId: string, order: number, title: stri
                     id: `section_${order}`,
                     text: 'The water is still moving.',
                     origin: 'writer',
-                    last_run_ref: 'run_1',
+                    last_run_ref: 'run_0',
                     last_why: 'drafted the approach'
                 }
             ],
@@ -129,7 +131,7 @@ function createFinding(
     criterionRef: string,
     cost: Cost,
     state: FindingState,
-    targetRef = 'chapter_1'
+    targetRef = 'chapter_0'
 ): Finding {
     return store.findings.create(
         {
@@ -176,9 +178,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         builder = new DigestBuilder();
         story = seedStory(store);
 
-        createLedger(store, story.id, 'setup', 'the mentor knows', 'open', 'chapter_1');
-        createLedger(store, story.id, 'setup', 'The Pistol', 'open', 'chapter_2');
-        createLedger(store, story.id, 'payoff', 'The Pistol', 'paid', 'chapter_2');
+        createLedger(store, story.id, 'setup', 'the mentor knows', 'open', 'chapter_0');
+        createLedger(store, story.id, 'setup', 'The Pistol', 'open', 'chapter_1');
+        createLedger(store, story.id, 'payoff', 'The Pistol', 'paid', 'chapter_1');
         createLedger(store, story.id, 'fact', 'the flood date', 'conflict');
 
         createCast(store, story.id, 'Vera', 'on the valley road, map in hand', 'from mapmaker to witness');
@@ -193,7 +195,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         const body = builder.buildBody(store, story.id, 7);
 
         expect(body.split('\n')).toEqual([
-            'digest · story_1 · rev 7',
+            'digest · story_0 · rev 7',
             '',
             '## bible',
             'declared chapters: 2 · Summary locked (P5: read-only, backtrack only)',
@@ -210,9 +212,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             '',
             '## open threads',
             'open findings: 1 critical, 1 minor',
-            'ledger conflicts: ledger_entry_4 "the flood date"',
-            'open setup · the mentor knows: ledger_entry_1@chapter_1',
-            'open setup · The Pistol: ledger_entry_2@chapter_2',
+            'ledger conflicts: ledger_entry_3 "the flood date"',
+            'open setup · the mentor knows: ledger_entry_0@chapter_0',
+            'open setup · The Pistol: ledger_entry_1@chapter_1',
             '',
             '## cast',
             'Cole — now: (not recorded)',
@@ -221,40 +223,40 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             '## last changes',
             // 15 writes have happened, and §4.8 asks for LAST change notes: the newest 12, oldest
             // first, so seq 1–3 have already aged out of the brief (they are still in the journal).
-            '4 · create plotline_2 — writer produces the artifact (by run run_1)',
-            '5 · create chapter_1 — writer produces the artifact (by run run_1)',
-            '6 · create chapter_2 — writer produces the artifact (by run run_1)',
-            '7 · create ledger_entry_1 — writer produces the artifact (by run run_1)',
-            '8 · create ledger_entry_2 — writer produces the artifact (by run run_1)',
-            '9 · create ledger_entry_3 — writer produces the artifact (by run run_1)',
-            '10 · create ledger_entry_4 — writer produces the artifact (by run run_1)',
-            '11 · create cast_member_1 — writer produces the artifact (by run run_1)',
-            '12 · create cast_member_2 — writer produces the artifact (by run run_1)',
-            '13 · create finding_1 — checker reports the finding (by run run_2)',
-            '14 · create finding_2 — checker reports the finding (by run run_2)',
-            '15 · create finding_3 — checker reports the finding (by run run_2)'
+            '4 · create plotline_1 — writer produces the artifact (by run run_0)',
+            '5 · create chapter_0 — writer produces the artifact (by run run_0)',
+            '6 · create chapter_1 — writer produces the artifact (by run run_0)',
+            '7 · create ledger_entry_0 — writer produces the artifact (by run run_0)',
+            '8 · create ledger_entry_1 — writer produces the artifact (by run run_0)',
+            '9 · create ledger_entry_2 — writer produces the artifact (by run run_0)',
+            '10 · create ledger_entry_3 — writer produces the artifact (by run run_0)',
+            '11 · create cast_member_0 — writer produces the artifact (by run run_0)',
+            '12 · create cast_member_1 — writer produces the artifact (by run run_0)',
+            '13 · create finding_0 — checker reports the finding (by run run_1)',
+            '14 · create finding_1 — checker reports the finding (by run run_1)',
+            '15 · create finding_2 — checker reports the finding (by run run_1)'
         ]);
     });
 
     it('names who moved the story last, in whose run, and for what stated why (D-8, P11)', () => {
         store.chapters.update(
-            story.id === 'story_1' ? 'chapter_2' : 'chapter_2',
+            story.id === 'story_0' ? 'chapter_1' : 'chapter_1',
             { title: 'The Keeper of the Low Road' },
-            { run_ref: 'run_7', why: 'editor retitles to separate the two keepers' },
-            [{ id: 'chapter_2', rev: 1 }]
+            { run_ref: 'run_6', why: 'editor retitles to separate the two keepers' },
+            [{ id: 'chapter_1', rev: 1 }]
         );
         store.chapters.update(
-            'chapter_1',
+            'chapter_0',
             { author_locked: true },
             { run_ref: null, author: true, assistant: true, why: 'author locks the chapter while paused' },
-            [{ id: 'chapter_1', rev: 1 }]
+            [{ id: 'chapter_0', rev: 1 }]
         );
 
         const notes = builder.buildBody(store, story.id, 1).split('\n').slice(-2);
 
         expect(notes).toEqual([
-            '16 · update chapter_2 — editor retitles to separate the two keepers (by run run_7)',
-            '17 · update chapter_1 — author locks the chapter while paused (by assistant)'
+            '16 · update chapter_1 — editor retitles to separate the two keepers (by run run_6)',
+            '17 · update chapter_0 — author locks the chapter while paused (by assistant)'
         ]);
     });
 
@@ -266,7 +268,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
 
         expect(bare.digests.list()[0].body).toBe(
             [
-                'digest · story_1 · rev 1',
+                'digest · story_0 · rev 1',
                 '',
                 '## bible',
                 'no Summary record yet — this Story is still pre-Phase-1',
@@ -283,7 +285,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
                 'no cast recorded',
                 '',
                 '## last changes',
-                '1 · create story_1 — author seeds the story (by author)'
+                '1 · create story_0 — author seeds the story (by author)'
                 // One blank line between sections — the same shape the first test pins by splitting
                 // the body on '\n'. A bare Story has nothing to thin, so nothing is elided.
             ].join('\n')
@@ -310,10 +312,10 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         const first = builder.rebuild(store, story.id);
 
         expect(store.stories.require(story.id).digest_rev).toBe(1);
-        expect(first.id).toBe('digest_1');
+        expect(first.id).toBe('digest_0');
         expect(first.current).toBe(true);
         expect(first.stale).toBe(false);
-        expect(first.body.startsWith('digest · story_1 · rev 1\n')).toBe(true);
+        expect(first.body.startsWith('digest · story_0 · rev 1\n')).toBe(true);
 
         builder.rebuild(store, story.id);
 
@@ -321,11 +323,11 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         expect(
             store.digests.list().map((row) => ({ id: row.id, current: row.current, stale: row.stale, rev: row.rev }))
         ).toEqual([
-            { id: 'digest_1', current: false, stale: false, rev: 2 },
-            { id: 'digest_2', current: true, stale: false, rev: 1 }
+            { id: 'digest_0', current: false, stale: false, rev: 2 },
+            { id: 'digest_1', current: true, stale: false, rev: 1 }
         ]);
-        expect(store.digests.list()[1].body.startsWith('digest · story_1 · rev 2\n')).toBe(true);
-        expect(builder.currentDigest(store, story.id)?.id).toBe('digest_2');
+        expect(store.digests.list()[1].body.startsWith('digest · story_0 · rev 2\n')).toBe(true);
+        expect(builder.currentDigest(store, story.id)?.id).toBe('digest_1');
     });
 
     it('is attributed to the engine with no run and no author — no agent writes the Digest (D-12a)', () => {
@@ -335,9 +337,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         const digestEvents = store.journal.filter((event) => event.collection === 'digests');
 
         expect(digestEvents.map((event) => `${event.op}:${event.id}`)).toEqual([
-            'create:digest_1',
-            'update:digest_1',
-            'create:digest_2'
+            'create:digest_0',
+            'update:digest_0',
+            'create:digest_1'
         ]);
         expect(
             digestEvents.every(
@@ -348,10 +350,10 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             )
         ).toBe(true);
 
-        const created = digestEvents.find((event) => event.op === 'create' && event.id === 'digest_2')!;
+        const created = digestEvents.find((event) => event.op === 'create' && event.id === 'digest_1')!;
 
         expect(created.attribution.why).toBe(
-            `engine-derived: derived digest rev 2 from journal through seq ${store.digests.require('digest_2').journal_seq} (D-12a)`
+            `engine-derived: derived digest rev 2 from journal through seq ${store.digests.require('digest_1').journal_seq} (D-12a)`
         );
     });
 
@@ -402,9 +404,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         expect(builder.isStale(store, store.stories.require(story.id))).toBe(false);
 
         store.chapters.delete(
-            'chapter_2',
+            'chapter_1',
             { run_ref: null, author: true, why: 'author backtracks to phase 2 and scraps the prose' },
-            [{ id: 'chapter_2', rev: 1 }]
+            [{ id: 'chapter_1', rev: 1 }]
         );
 
         expect(builder.isStale(store, store.stories.require(story.id))).toBe(true);
@@ -428,7 +430,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
 
         // The bump is in the journal (P11 requires every write) but it is the Digest's own
         // bookkeeping, so it must not re-arm staleness — otherwise D-14 would block every review.
-        expect(storyEvents.map((event) => event.id)).toEqual(['story_1', 'story_1']);
+        expect(storyEvents.map((event) => event.id)).toEqual(['story_0', 'story_0']);
         expect(before.stale).toBe(false);
         expect(builder.isStale(store, store.stories.require(story.id))).toBe(false);
     });
@@ -450,7 +452,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         // 20 lines: head + bible + both chapters with their two contract lines each, up to and
         // including the next section header. The contract lines are the whole D-13 repair.
         expect(expanded.split('\n').slice(0, 20)).toEqual([
-            'digest · story_1 · rev 2 · expanded detail (open digest_gap, D-13)',
+            'digest · story_0 · rev 2 · expanded detail (open digest_gap, D-13)',
             '',
             '## bible',
             'declared chapters: 2 · Summary locked (P5: read-only, backtrack only)',
@@ -477,7 +479,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         store.findings.update(
             gap.id,
             { state: 'fixed' },
-            { run_ref: 'run_3', why: 'loop closes the gap after the rebuild' },
+            { run_ref: 'run_2', why: 'loop closes the gap after the rebuild' },
             [{ id: gap.id, rev: 1 }]
         );
 
@@ -486,7 +488,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
     });
 
     it('names a chapter whose contract is missing instead of inventing one (C-1)', () => {
-        store.chapters.update('chapter_2', { plotline_ref: '' }, WRITER, [{ id: 'chapter_2', rev: 1 }]);
+        store.chapters.update('chapter_1', { plotline_ref: '' }, WRITER, [{ id: 'chapter_1', rev: 1 }]);
         createFinding(store, story.id, DIGEST_GAP_CRITERION, 'minor', 'confirmed');
 
         expect(builder.buildBody(store, story.id, 1).split('\n')).toContain(
@@ -503,7 +505,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
 
         expect(clamped.length).toBe(160);
 
-        store.chapters.update('chapter_2', { summary: long }, WRITER, [{ id: 'chapter_2', rev: 1 }]);
+        store.chapters.update('chapter_1', { summary: long }, WRITER, [{ id: 'chapter_1', rev: 1 }]);
 
         expect(builder.buildBody(store, story.id, 1).split('\n')).toContain(
             `2 · The Keeper — ${clamped} [1 section(s), drafting]`
@@ -511,8 +513,8 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
     });
 
     it('collapses a multi-paragraph field into one line rather than breaking the section', () => {
-        store.summaries.update('summary_1', { premise: 'A mapmaker\n\nreturns\nto   a drowned valley.' }, WRITER, [
-            { id: 'summary_1', rev: 1 }
+        store.summaries.update('summary_0', { premise: 'A mapmaker\n\nreturns\nto   a drowned valley.' }, WRITER, [
+            { id: 'summary_0', rev: 1 }
         ]);
 
         expect(builder.buildBody(store, story.id, 1)).toContain('premise: A mapmaker returns to a drowned valley.');
@@ -542,7 +544,10 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
         expect(body).toContain('## open threads');
         expect(body).toContain('## cast');
         expect(body).toContain('39 · Chapter 39');
-        expect(body).not.toContain('1 · create story_1');
+        // The journal's oldest row names THIS Story (`create story_0`), and it is the first change note
+        // the slimmer drops when the book outgrows the budget — pinned as a `not` so a regression that
+        // keeps the newest rows and truncates the section cannot pass it.
+        expect(body).not.toContain('1 · create story_0');
         expect(body.endsWith('…')).toBe(false);
     });
 
@@ -572,7 +577,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
                 .replace(/z{40,}/g, 'Z')
                 .split('\n')
         ).toEqual([
-            'digest · story_1 · rev 1',
+            'digest · story_0 · rev 1',
             '',
             '## bible',
             'declared chapters: 2 · Summary locked (P5: read-only, backtrack only)',
@@ -589,9 +594,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             '',
             '## open threads',
             'open findings: 1 critical, 1 minor',
-            'ledger conflicts: ledger_entry_4 "the flood date"',
-            'open setup · the mentor knows: ledger_entry_1@chapter_1',
-            'open setup · The Pistol: ledger_entry_2@chapter_2',
+            'ledger conflicts: ledger_entry_3 "the flood date"',
+            'open setup · the mentor knows: ledger_entry_0@chapter_0',
+            'open setup · The Pistol: ledger_entry_1@chapter_1',
             '',
             '## cast',
             'Cole — now: (not recorded)',
@@ -606,7 +611,7 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             '… 24 cast line(s) elided to hold the Digest budget (T-7)',
             '',
             '## last changes',
-            '45 · create cast_member_32 — writer produces the artifact (by run run_1)',
+            '45 · create cast_member_31 — writer produces the artifact (by run run_0)',
             '… 11 change note(s) elided to hold the Digest budget (T-7)'
         ]);
 

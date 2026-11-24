@@ -25,7 +25,7 @@ const storyOf = (store: Store, title: string) => {
 };
 
 const contextFor = (store: Store, runtime: MockToolRuntime, storyId: string) =>
-    runtime.createContext({ storyId, runId: 'run_1', roleName: 'writer', roleKind: 'writer' });
+    runtime.createContext({ storyId, runId: 'run_0', roleName: 'writer', roleKind: 'writer' });
 
 describe('StoryHarnessManager — one harness per Story', () => {
     it('keeps two stories in separate harnesses and reports their threads by phase', async () => {
@@ -187,7 +187,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const result = await manager.run({
             storyId: story.id,
             phase: 'summary',
-            label: 'run_1',
+            label: 'run_0',
             roleName: 'writer',
             roleKind: 'writer',
             model: 'mock',
@@ -227,7 +227,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const running = manager.run({
             storyId: story.id,
             phase: 'summary',
-            label: 'run_1',
+            label: 'run_0',
             roleName: 'writer',
             roleKind: 'writer',
             model: 'mock',
@@ -275,9 +275,9 @@ describe('StoryHarnessManager — one harness per Story', () => {
                               {
                                   name: 'editChapter',
                                   args: {
-                                      chapter_id: 'chapter_1',
+                                      chapter_id: 'chapter_0',
                                       summary: 'the lamp keeps its own log',
-                                      expects: [{ id: 'chapter_1', rev: 1 }],
+                                      expects: [{ id: 'chapter_0', rev: 1 }],
                                       why: 'the chapter pays the ledger entry'
                                   }
                               }
@@ -293,7 +293,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const result = await manager.run({
             storyId: story.id,
             phase: 'chapters',
-            label: 'run_1',
+            label: 'run_0',
             roleName: 'writer',
             roleKind: 'writer',
             model: 'mock',
@@ -308,7 +308,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         expect(result.turns).toBe(2);
         expect(tally.executed).toEqual(['editChapter']);
         expect(tally.tokens).toBe(20);
-        expect(store.chapters.get('chapter_1')).toMatchObject({
+        expect(store.chapters.get('chapter_0')).toMatchObject({
             rev: 2,
             summary: 'the lamp keeps its own log'
         });
@@ -334,7 +334,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         await manager.run({
             storyId: story.id,
             phase: 'chapters',
-            label: 'run_1',
+            label: 'run_0',
             roleName: 'checker',
             roleKind: 'checker',
             model: 'mock',
@@ -407,7 +407,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         expect(checker?.recent).toHaveLength(1);
         expect(checker?.recent[0]).toMatchObject({
-            run_id: 'run_1',
+            run_id: 'run_0',
             story_title: 'Hollow Sea',
             work_item: 'wi_check_chapters_1',
             state: 'failed',
@@ -432,7 +432,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         store.runs.create(
             {
                 story_id: story.id,
-                work_item_ref: 'wi_draft_chapter_1',
+                work_item_ref: 'wi_draft_chapter_0',
                 role: 'writer',
                 state: 'working',
                 started_at: '2026-11-23T10:00:00.000Z',
@@ -456,8 +456,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
                 story_title: 'Hollow Sea',
                 phase: 'chapters',
                 role_name: 'writer',
-                work_item: 'wi_draft_chapter_1',
-                thread_id: 'run_row:run_1',
+                work_item: 'wi_draft_chapter_0',
+                thread_id: 'run_row:run_0',
                 started_at: Date.parse('2026-11-23T10:00:00.000Z')
             }
         ]);
@@ -502,8 +502,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
             );
 
         // Newest written first: the projection's `working` promise is oldest first regardless.
-        liveRow(second.id, 'wi_draft_chapter_2', '2026-11-23T10:05:00.000Z');
-        liveRow(first.id, 'wi_draft_chapter_1', '2026-11-23T10:01:00.000Z');
+        liveRow(second.id, 'wi_draft_chapter_1', '2026-11-23T10:05:00.000Z');
+        liveRow(first.id, 'wi_draft_chapter_0', '2026-11-23T10:01:00.000Z');
         liveRow(second.id, 'wi_seed_structure', '2026-11-23T10:03:00.000Z');
 
         store.runs.create(
@@ -531,8 +531,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
                 story_title: 'Hollow Sea',
                 phase: 'chapters',
                 role_name: 'writer',
-                work_item: 'wi_draft_chapter_1',
-                thread_id: 'run_row:run_2',
+                work_item: 'wi_draft_chapter_0',
+                thread_id: 'run_row:run_1',
                 started_at: Date.parse('2026-11-23T10:01:00.000Z')
             },
             {
@@ -541,7 +541,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
                 phase: 'chapters',
                 role_name: 'writer',
                 work_item: 'wi_seed_structure',
-                thread_id: 'run_row:run_3',
+                thread_id: 'run_row:run_2',
                 started_at: Date.parse('2026-11-23T10:03:00.000Z')
             },
             {
@@ -549,13 +549,13 @@ describe('StoryHarnessManager — one harness per Story', () => {
                 story_title: 'Salt Year',
                 phase: 'chapters',
                 role_name: 'writer',
-                work_item: 'wi_draft_chapter_2',
-                thread_id: 'run_row:run_1',
+                work_item: 'wi_draft_chapter_1',
+                thread_id: 'run_row:run_0',
                 started_at: Date.parse('2026-11-23T10:05:00.000Z')
             }
         ]);
         // The closed row is history, not a live thread: it belongs to `recent` (S-3).
-        expect(writer?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_4', 'torn_down']]);
+        expect(writer?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_3', 'torn_down']]);
 
         manager.dispose();
     });
@@ -580,7 +580,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         store.runs.create(
             {
                 story_id: story.id,
-                work_item_ref: 'wi_draft_chapter_1',
+                work_item_ref: 'wi_draft_chapter_0',
                 role: 'writer',
                 state: 'working',
                 started_at: '2026-11-23T10:00:00.000Z',
@@ -595,9 +595,9 @@ describe('StoryHarnessManager — one harness per Story', () => {
         const running = manager.run({
             storyId: story.id,
             phase: 'chapters',
-            label: 'run_1',
+            label: 'run_0',
             // `executor.ts` passes the journaled id, so the thread and the row name the same run.
-            runId: 'run_1',
+            runId: 'run_0',
             roleName: 'writer',
             roleKind: 'writer',
             model: 'mock',
@@ -620,7 +620,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
             story_title: 'Hollow Sea',
             phase: 'chapters',
             role_name: 'writer',
-            work_item: 'run_1'
+            work_item: 'run_0'
         });
         expect(during?.working.map((thread) => thread.thread_id)).toEqual([threadId]);
 
@@ -631,10 +631,10 @@ describe('StoryHarnessManager — one harness per Story', () => {
         // result is committed): the journal still says a run is live, so the tile still says running.
         expect(
             manager.statuses().find((row) => row.kind === 'writer')?.working.map((thread) => thread.thread_id)
-        ).toEqual(['run_row:run_1']);
+        ).toEqual(['run_row:run_0']);
 
         store.runs.update(
-            'run_1',
+            'run_0',
             { state: 'torn_down', ended_at: '2026-11-23T10:00:09.000Z', tokens: 0 },
             { run_ref: null, author: true, why: 'close the run the way the executor does' }
         );
@@ -644,7 +644,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         expect(closed?.status).toBe('idle');
         expect(closed?.working).toEqual([]);
-        expect(closed?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_1', 'torn_down']]);
+        expect(closed?.recent.map((row) => [row.run_id, row.state])).toEqual([['run_0', 'torn_down']]);
 
         manager.dispose();
     });

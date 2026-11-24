@@ -42,7 +42,17 @@ import type {
     Template,
     Verdict
 } from '../../shared/types';
-import type { GoalSurface } from '../api';
+import type {
+    GoalSurface,
+    PhraseFindingRow,
+    PhraseGroupRow,
+    PhraseRevisionRow,
+    PhraseTaskRow,
+    PhraseView
+} from '../api';
+// R6 — the five Summary groups come from the catalog module, not from a copy: the rail, the panes and these
+// fixtures all read the same product data, so a test cannot pin a group set the server does not send (R1).
+import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
 import type { CompletionPreview, StoryActions, StoryViewData } from './story-contract';
 
 /** Frozen "now" — every relative figure in the story surface is measured against this instant. */
@@ -899,7 +909,221 @@ export function fixtureCompletion(): CompletionPreview {
  * The whole `getStory` payload the panels render. `completion_preview` is `null` by default
  * (the panel must be absent, not empty), and `fixtureCompletion()` supplies it when a test needs it.
  */
-export function fixtureView(options: { completion?: CompletionPreview | null } = {}): StoryViewData {
+/**
+ * R6 — the `GET /stories/:id/phrases` read, built from `shared/phrase`'s OWN catalog so the five groups, their
+ * titles, their descriptions and their composition order cannot drift from the product data (and so a test can
+ * assert that World rules is NOT one of the five — R1).
+ *
+ * The default state is a grouped book mid-review, chosen so the group surface's whole range is on screen at once
+ * without a test assembling rows itself:
+ *
+ *   - Premise  — written twice, clean, with TWO superseded rows (so `2 archived` is a count a reader can check).
+ *   - Promise  — open findings: one CRITICAL it shares with Theme (the cross-group chip) and one MINOR alone.
+ *   - Theme    — `writer_busy`: the Writer is replacing its text now, and the revise control must shut (R4/F8).
+ *   - Tone     — written, and the target of the finding the Reviewer never scoped to a group (`unscoped`), which
+ *                by R3's rule therefore stands against ALL FIVE groups (the U5 case a flat list hides).
+ *   - Ending   — `revision: 0`: never written, so the pane shows its purposeful empty state and the Overview
+ *                reports one of five unwritten (R1/U4).
+ *   - Findings — the three open rows above PLUS one `fixed` row against Premise, which must appear NOWHERE:
+ *                a fixed finding is archived out of every active list (U5).
+ *
+ * The ids are readable (`grp-premise`, `f-cross`) rather than random. That is deliberate: the dashboard addresses
+ * a group by its id STRING, so a readable id asserts the same contract a uuid does — and every ref in a test
+ * (`summary-group:grp-premise`) stays readable (U2).
+ */
+export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
+    const definitions = orderedPhraseGroupDefinitions();
+    const group = (key: string, row: Partial<PhraseGroupRow>): PhraseGroupRow => {
+        const definition = definitions.find((candidate) => candidate.key === key);
+
+        return {
+            id: `grp-${key}`,
+            key,
+            title: definition?.title ?? key,
+            description: definition?.description ?? `The ${key} group of the Summary.`,
+            order: definition?.order ?? 0,
+            content: '',
+            revision: 0,
+            updated_by: null,
+            history: [],
+            owed_by_findings: [],
+            writer_busy: false,
+            ...row
+        };
+    };
+
+    /** One revision-history row: metadata and `chars`, because the projection sends no archived prose (R2). */
+    const revision = (key: string, number: number, state: string, chars: number): PhraseRevisionRow => ({
+        id: `rev-${key}-${number}`,
+        number,
+        state,
+        at: ago(30 - number * 5),
+        run_ref: `run_${key}_${number}`,
+        finding_refs: [],
+        task_refs: [],
+        chars
+    });
+
+    const allIds = definitions.map((definition) => `grp-${definition.key}`);
+
+    const groups: PhraseGroupRow[] = [
+        group('premise', {
+            content: 'A keeper of a lighthouse begins lying to the sea, and the sea believes her.',
+            revision: 3,
+            updated_by: 'writer',
+            // Newest first, `latest` INCLUDED (R2) — the pane counts the archived rows and never opens them.
+            history: [
+                revision('premise', 3, 'latest', 74),
+                revision('premise', 2, 'archived', 61),
+                revision('premise', 1, 'archived', 40)
+            ]
+        }),
+        group('promise', {
+            content: 'The reader is promised that the lie will cost her the light itself.',
+            revision: 2,
+            updated_by: 'writer',
+            history: [revision('promise', 2, 'latest', 68), revision('promise', 1, 'archived', 52)]
+        }),
+        group('theme', {
+            content: 'What the book is about: the price of a story told to keep the dark out.',
+            revision: 1,
+            updated_by: 'writer',
+            history: [revision('theme', 1, 'latest', 66)],
+            // R4/F8: the same read the revise route 409s on, so a disabled control cannot disagree with the wire.
+            writer_busy: true,
+            // R3: the finding this group's NEXT text has to answer.
+            owed_by_findings: ['f-cross']
+        }),
+        group('tone', {
+            content: 'Plain sentences, salt in every image, and no authorial wink.',
+            revision: 1,
+            updated_by: 'writer',
+            history: [revision('tone', 1, 'latest', 47)]
+        }),
+        group('ending', {
+            // R1: `revision: 0` IS "never written" — the empty state's authority, not a missing field.
+            content: '',
+            revision: 0,
+            history: []
+        })
+    ];
+
+    const findings: PhraseFindingRow[] = [
+        {
+            id: 'f-cross',
+            title: 'the promise names a cost the premise never sets up',
+            cost: 'critical',
+            state: 'confirmed',
+            seen_count: 3,
+            group_refs: ['grp-promise', 'grp-theme'],
+            unscoped: false,
+            targeted: ['grp-promise', 'grp-theme'],
+            resolved: ['grp-promise'],
+            // R3: Theme's text has not answered it yet, which is the fact the chip beside the finding states.
+            missing: ['grp-theme'],
+            resolved_all: false
+        },
+        {
+            id: 'f-wide',
+            // A legacy row that named NO group: `unscoped` is spelled out by the projection so a pane never
+            // infers it from an empty array, and R3 resolves it against every group of this Story.
+            title: 'the Overview never says who the keeper is lying for',
+            cost: 'major',
+            state: 'unconfirmed',
+            seen_count: 1,
+            group_refs: [],
+            unscoped: true,
+            targeted: [...allIds],
+            resolved: [],
+            missing: [...allIds],
+            resolved_all: false
+        },
+        {
+            id: 'f-minor',
+            // A note, not a blocker: it costs the group an `open`, never a `blocking` (U4's badges).
+            title: 'the promise restates the premise in other words',
+            cost: 'minor',
+            state: 'approved',
+            seen_count: 1,
+            group_refs: ['grp-promise'],
+            unscoped: false,
+            targeted: ['grp-promise'],
+            resolved: [],
+            missing: ['grp-promise'],
+            resolved_all: false
+        },
+        {
+            id: 'f-fixed',
+            // Archived out: a `fixed` row is in no active list, so it must appear in NO pane and NO badge (U5).
+            title: 'the lighthouse was a different colour in the first draft',
+            cost: 'major',
+            state: 'fixed',
+            seen_count: 2,
+            group_refs: ['grp-premise'],
+            unscoped: false,
+            targeted: ['grp-premise'],
+            resolved: ['grp-premise'],
+            missing: [],
+            resolved_all: true
+        }
+    ];
+
+    const tasks: PhraseTaskRow[] = [
+        { id: 't-theme', title: 'rewrite Theme to answer the promise it borrows', state: 'claimed', owner_role: 'writer', attempts: 1, finding_ref: 'f-cross' },
+        { id: 't-ending', title: 'write the Ending group', state: 'open', owner_role: 'writer', attempts: 0, finding_ref: null },
+        { id: 't-tone', title: 'set the tone the premise implies', state: 'done', owner_role: 'writer', attempts: 1, finding_ref: null }
+    ];
+
+    const open = findings.filter((finding) => ['unconfirmed', 'confirmed', 'approved'].includes(finding.state));
+    const blocking = open.filter((finding) => finding.cost === 'critical' || finding.cost === 'major');
+
+    return {
+        story_id: 's1',
+        mode: 'groups',
+        phrase_id: 'ph-1',
+        revision: 3,
+        overview: groups
+            .filter((row) => row.content.length > 0)
+            .map((row) => row.content)
+            .join('\n\n'),
+        groups,
+        findings,
+        tasks,
+        review: {
+            mode: 'groups',
+            // CATALOG KEYS, not ids (R1) — the panes convert them to titles for the Author (U6).
+            unwritten_groups: ['ending'],
+            written_groups: groups.filter((row) => row.revision > 0).length,
+            vector: Object.fromEntries(groups.map((row) => [row.id, row.revision])),
+            vector_hash: 'vh-3',
+            review_seats: 3,
+            reviews_on_current_vector: 3,
+            deep_reviews_on_current_vector: 1,
+            open_findings: open.length,
+            blocking_findings: blocking.length,
+            open_tasks: tasks.filter((task) => task.state !== 'done').length,
+            mirror: { summary_id: 'sum-1', in_sync: true, locked: false, fields: ['premise', 'promise', 'theme', 'tone'] }
+        },
+        ...overrides
+    };
+}
+
+/**
+ * The whole view the story panes render. `phrase` opts the book INTO the group workspace: the phrase read and
+ * `story.summary_mode` are one fact on the wire (`projections.ts` echoes the mode), so passing rows without the
+ * mode would render a pane the server can never produce.
+ */
+export function fixtureView(options: { completion?: CompletionPreview | null; phrase?: PhraseView } = {}): StoryViewData {
+    const base = fixtureViewBase(options);
+
+    if (options.phrase === undefined) {
+        return base;
+    }
+
+    return { ...base, story: { ...base.story, summary_mode: 'groups' }, phrase: options.phrase };
+}
+
+function fixtureViewBase(options: { completion?: CompletionPreview | null } = {}): StoryViewData {
     return {
         story: fixtureStory(),
         summary: fixtureSummary(),
@@ -1006,7 +1230,10 @@ export function fixtureActions() {
         // U-13a — the merge request the Author raises from the comparison pane (D-23).
         mergeRevisions: record('mergeRevisions'),
         // L-23 — the stalled screen's directive exit (U-1a).
-        sendDirective: record('sendDirective')
+        sendDirective: record('sendDirective'),
+        // R6 / R2 — the Author's rewrite of ONE Summary group. Recorded like every other verb, so a test asserts
+        // the exact `(storyId, groupId, {content, note})` the pane's Send produced — the UUID, never an index.
+        revisePhraseGroup: record('revisePhraseGroup')
     };
 
     return { actions, calls };

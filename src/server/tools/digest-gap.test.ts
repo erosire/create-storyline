@@ -142,9 +142,9 @@ describe('the digest_gap filing path (U-3a, D-13, D-12a)', () => {
         expect(store.findings.list().length).toBe(1);
         // D-16: a filed finding lands `unconfirmed` for triage, and §4.6's open-thread ref is the
         // criterion id the builder reads back.
-        expect(store.findings.require('finding_1')).toMatchObject({
+        expect(store.findings.require('finding_0')).toMatchObject({
             story_id: story.id,
-            target_ref: 'chapter_1',
+            target_ref: 'chapter_0',
             criterion_ref: 'digest_gap',
             title: 'The Digest cannot tell which chapters changed',
             cost: 'major',
@@ -244,7 +244,7 @@ describe('the digest_gap filing path (U-3a, D-13, D-12a)', () => {
         const retry = await fileGap();
 
         expect(retry.ok).toBe(true);
-        expect(store.findings.require('finding_1').criterion_ref).toBe('digest_gap');
+        expect(store.findings.require('finding_0').criterion_ref).toBe('digest_gap');
         expect(store.tasks.list().length).toBe(0);
     });
 

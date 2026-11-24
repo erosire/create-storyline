@@ -71,11 +71,11 @@ describe('T12/B — scrapping a Summary revision leaves no orphaned sample revie
         await rig.run();
 
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected'
+            'revision_0:selected'
         ]);
         expect(rig.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual([
-            'revision_1',
-            'revision_1'
+            'revision_0',
+            'revision_0'
         ]);
 
         await rig.engine.editSeed(rig.storyId, 'A cartographer burns every map she draws.', { confirm: true });
@@ -93,16 +93,16 @@ describe('T12/B — scrapping a Summary revision leaves no orphaned sample revie
         await kept.run();
 
         expect(kept.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual([
-            'revision_1',
-            'revision_1'
+            'revision_0',
+            'revision_0'
         ]);
 
         await kept.engine.backtrack(kept.storyId, 'chapters');
 
-        expect(kept.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+        expect(kept.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_0']);
         expect(kept.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual([
-            'revision_1',
-            'revision_1'
+            'revision_0',
+            'revision_0'
         ]);
 
         // The same Story backtracked to `summary` scraps the revision, so the reviews must go too.
@@ -131,24 +131,55 @@ describe('T12/C — a round whose screening attempts are spent selects on the pa
 
         // The cap is `summary_readers + 3` failed runs; the round then degrades instead of waiting.
         expect(screeningCapOf(rig.story())).toBe(5);
-        expect(runs(rig, 'wi_screen_revision_1')).toEqual([
-            'wi_screen_revision_1_1:failed',
-            'wi_screen_revision_1_2:failed',
-            'wi_screen_revision_1_3:failed',
-            'wi_screen_revision_1_4:failed',
-            'wi_screen_revision_1_5:failed'
+        expect(runs(rig, 'wi_screen_revision_0')).toEqual([
+            'wi_screen_revision_0_1:failed',
+            'wi_screen_revision_0_2:failed',
+            'wi_screen_revision_0_3:failed',
+            'wi_screen_revision_0_4:failed',
+            'wi_screen_revision_0_5:failed'
         ]);
         expect(rig.store.sampleReviews.list()).toEqual([]);
 
         // The selection DID run: the only draft is selected, on zero reviews, and the round advanced.
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected'
+            'revision_0:selected'
         ]);
         expect(rig.story().sampling_round).toBe(1);
-        // §6.5's audit is still honest about what the reviews were: none, so `valid: false`.
-        expect(rig.store.stories.require(rig.storyId).sampling_history?.[0]?.samples).toEqual([
-            { revision_id: 'revision_1', critical: 0, high: 0, valid: false, unresolved_fixes: [] }
-        ]);
+        // §6.5's audit is still honest about what the reviews were: none, so `valid: false` — and honest
+        // about the OUTCOME: this draft was installed, so it is the `accepted` line whatever the screens
+        // said (H1: the reason a candidate was refused lives here, because the truncation below deletes
+        // its draft and its reviews). An eligible line carries no `reject_reason`; only a refusal does.
+        // `sample-select.ts:387` writes the reason on the `!eligible` branch alone, and a FIRST round is
+        // never disqualified by an ungradeable screening set (`:345 ungradeable = refinement && !gradeable`
+        // — there is no accepted draft to put at risk, which is what the T12/C degrade depends on), so
+        // this row has no reason to carry even though `valid` is false. The refusals that DO name a
+        // reason are pinned in `phase1-research.test.ts`, `phase1-hill-climb.test.ts` and
+        // `api/phase1-view.test.ts`.
+        // The wave's ledger rides on the entry: wave 0, the one attempt this size-1 round spent, and the
+        // static ceiling (`samplingCapOf` = 1 + the retry allowance) that a clean round never extends.
+        expect(rig.store.stories.require(rig.storyId).sampling_history?.[0]).toEqual(
+            expect.objectContaining({
+                round: 1,
+                wave: 0,
+                attempts: 1,
+                improvements: 0,
+                ceiling: samplingCapOf(rig.story()),
+                unresolved_blocking: 0,
+                samples: [
+                    {
+                        revision_id: 'revision_0',
+                        critical: 0,
+                        high: 0,
+                        valid: false,
+                        unresolved_fixes: [],
+                        // It IS the accepted line, and it still says the screens answered nothing: the
+                        // degrade installs on the partial set, and `valid: false` is the half of that
+                        // fact the audit keeps. There is no `reject_reason`, because nothing refused it.
+                        outcome: 'accepted'
+                    }
+                ]
+            })
+        );
 
         // ONE escalation, for the Author, naming the round and the partial screening.
         const escalations = rig.store.tasks.list().filter((task) => task.kind === 'escalation');
@@ -167,7 +198,7 @@ describe('T12/C — a round whose screening attempts are spent selects on the pa
         });
         // The detail states what happened and that selection proceeded (§6.4 step 4).
         expect(escalations[0].detail).toBe(
-            'round 1: revision_1 reached the 5-attempt screening cap with 2-or-fewer valid reviews each. Selection proceeded with the partial reviews (§6.5); the next round screens its own samples afresh (§6.4 step 4).'
+            'round 1: revision_0 reached the 5-attempt screening cap with 2-or-fewer valid reviews each. Selection proceeded with the partial reviews (§6.5); the next round screens its own samples afresh (§6.4 step 4).'
         );
 
         // Generation stops buying screens: the cap is spent and the revision is no longer `drafted`.
@@ -195,41 +226,63 @@ describe('T12/D — a round selects only when its sample set exists or sampling 
         // Sweep 1: the first sample only.
         await rig.step();
 
-        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+        expect(rig.store.revisions.list().map((revision) => revision.id)).toEqual(['revision_0']);
 
-        // Sweep 2: sample 2 fails AND revision_1's screening pass lands. Two revisions are not the
+        // Sweep 2: sample 2 fails AND revision_0's screening pass lands. Two revisions are not the
         // round's set, and the attempt cap is nowhere near spent, so nothing may be selected.
         await rig.step();
 
-        expect(rig.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual(['revision_1']);
+        expect(rig.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual(['revision_0']);
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:drafted'
+            'revision_0:drafted'
         ]);
         expect(rig.story().sampling_round ?? 0).toBe(0);
         // The round still owes a sample, under the next attempt key.
-        expect(offered(rig).filter((key) => key.startsWith('wi_sample_'))).toEqual(['wi_sample_summary_1_1_3']);
+        expect(offered(rig).filter((key) => key.startsWith('wi_sample_'))).toEqual(['wi_sample_summary_0_1_3']);
 
         // Drive the rest: sample index 2 stays invalid, so the remaining attempt keys all fail, and
         // only when the CAP is reached may the round degrade to the one sample it has.
         await rig.run();
 
         expect(samplingCapOf(rig.story())).toBe(6);
-        expect(runs(rig, 'wi_sample_summary_1_1')).toEqual([
-            'wi_sample_summary_1_1_1:torn_down',
-            'wi_sample_summary_1_1_2:failed',
-            'wi_sample_summary_1_1_3:failed',
-            'wi_sample_summary_1_1_4:failed',
-            'wi_sample_summary_1_1_5:failed',
-            'wi_sample_summary_1_1_6:failed'
+        expect(runs(rig, 'wi_sample_summary_0_1')).toEqual([
+            'wi_sample_summary_0_1_1:torn_down',
+            'wi_sample_summary_0_1_2:failed',
+            'wi_sample_summary_0_1_3:failed',
+            'wi_sample_summary_0_1_4:failed',
+            'wi_sample_summary_0_1_5:failed',
+            'wi_sample_summary_0_1_6:failed'
         ]);
 
         // The survivors were selected only after the sixth attempt spent the cap, and the audit line
         // names exactly the sample that existed (a single survivor, not three).
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected'
+            'revision_0:selected'
         ]);
-        expect(rig.store.stories.require(rig.storyId).sampling_history?.map((entry) => entry.samples)).toEqual([
-            [{ revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] }]
+        // The audit line names exactly the sample that existed (a single survivor, not three), and it
+        // says what the wave spent to get here: six attempts against a ceiling of six (size 3 + the
+        // retry allowance), the last five of them the invalid answer. The retry allowance is a RUN
+        // counter, not a row count, so the ledger has to carry it — after the truncation the failed
+        // drafts are gone and this line is the only trace they left (H1/R4).
+        expect(rig.store.stories.require(rig.storyId).sampling_history).toEqual([
+            expect.objectContaining({
+                round: 1,
+                wave: 0,
+                attempts: 6,
+                improvements: 0,
+                ceiling: 6,
+                unresolved_blocking: 0,
+                samples: [
+                    {
+                        revision_id: 'revision_0',
+                        critical: 0,
+                        high: 0,
+                        valid: true,
+                        unresolved_fixes: [],
+                        outcome: 'accepted'
+                    }
+                ]
+            })
         ]);
         expect(rig.story().sampling_round).toBe(1);
 
@@ -283,17 +336,17 @@ describe('T12/E — clearing the sampling-failure escalation re-arms the round a
         // One bump, from the recorded-wave guard: the Story now samples wave 1, whose keys reset the
         // attempt counter the spent wave left behind.
         expect(rig.store.stories.require(rig.storyId).sampling_wave).toBe(1);
-        expect(runs(rig, 'wi_sample_summary_1_1')).toEqual([
-            'wi_sample_summary_1_1_1:failed',
-            'wi_sample_summary_1_1_2:failed',
-            'wi_sample_summary_1_1_3:failed',
-            'wi_sample_summary_1_1_4:failed',
-            'wi_sample_summary_1_1_w1_1:torn_down'
+        expect(runs(rig, 'wi_sample_summary_0_1')).toEqual([
+            'wi_sample_summary_0_1_1:failed',
+            'wi_sample_summary_0_1_2:failed',
+            'wi_sample_summary_0_1_3:failed',
+            'wi_sample_summary_0_1_4:failed',
+            'wi_sample_summary_0_1_w1_1:torn_down'
         ]);
 
         // The fresh wave's sample completed the round: drafted, screened, selected, round advanced.
         expect(rig.store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected'
+            'revision_0:selected'
         ]);
         expect(rig.story().sampling_round).toBe(1);
         // The cleared row is NOT re-opened: sampling is no longer exhausted, so the sweep offers work.
@@ -361,7 +414,11 @@ describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed b
 
         expect(samplingArmed(rig.store, story(), 2)).toBe(false);
 
-        // A MINOR unconfirmed note is not "blocking": it is recorded, never a Writer round.
+        // A MINOR unconfirmed note is blocking ONLY when the Author's dial makes minor real work, and the
+        // default dial (`DEFAULT_AUTO_APPROVE_COSTS` = critical, major, minor) does — so here it holds the
+        // round exactly like the major note above did (D-30's bar, read by ONE predicate: the sweep, the
+        // Editor's `approveFinding`, the sign-off and this gate cannot disagree). The companion case below
+        // narrows the dial and the SAME note stops holding anything.
         const second = seedTask(rig.store, rig.storyId, {
             kind: 'fix',
             title: 'probe fix 2',
@@ -379,6 +436,88 @@ describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed b
         });
 
         expect(rig.store.tasks.require(second.id).state).toBe('open');
+        expect(samplingArmed(rig.store, story(), 2)).toBe(false);
+    });
+
+    it('lets the same minor note through when the dial leaves minor out of the Author’s work', async () => {
+        // The dial-driven half of the rule (D-35's one switch, now read by the blocking-cost predicate
+        // instead of only by the auto-approve split). Everything else is the rig above: an approved
+        // finding with its open fix task, plus an UNCONFIRMED minor note on the carried draft. With the
+        // dial narrowed to critical/major the note is recorded and blocks nothing, so the round arms —
+        // the loop does not spend a sampling round on a clarity note the Author said is not work.
+        const rig = await createRig({
+            summarySampling: 1,
+            summaryReaders: 1,
+            story: { auto_approve: ['critical', 'major'] }
+        });
+
+        await rig.run();
+
+        const summary = summaryOf(rig);
+        const selected = rig.store.revisions.list().find((revision) => revision.state === 'selected');
+
+        if (selected === undefined) throw new Error('the rig has no selected Summary revision');
+
+        const story = () => rig.store.stories.require(rig.storyId);
+
+        expect(story().auto_approve).toEqual(['critical', 'major']);
+
+        const finding = seedFinding(rig.store, rig.storyId, {
+            target_ref: summary.id,
+            criterion_ref: 'C-14',
+            cost: 'major',
+            state: 'approved',
+            fingerprint: 'probe|C-14',
+            related_refs: [selected.id]
+        });
+
+        seedTask(rig.store, rig.storyId, {
+            kind: 'fix',
+            title: 'probe fix: pay the promise',
+            detail: `C-14 on ${summary.id} · ${summary.id}`,
+            owner_role: 'writer',
+            finding_ref: finding.id
+        });
+
+        // The open fix task arms the round, and nothing else is outstanding yet.
         expect(samplingArmed(rig.store, story(), 2)).toBe(true);
+
+        seedFinding(rig.store, rig.storyId, {
+            target_ref: summary.id,
+            criterion_ref: 'C-15',
+            cost: 'minor',
+            state: 'unconfirmed',
+            fingerprint: 'probe|C-15',
+            related_refs: [selected.id]
+        });
+
+        // A `minor` the dial does not cover is not a blocking finding (`records.ts:summaryBlockingCost`),
+        // so the negative gate still passes. A `taste` note is never blocking in phase ① at all, dial or
+        // no dial — the prose it would prefer between is not written until phase ③.
+        expect(samplingArmed(rig.store, story(), 2)).toBe(true);
+
+        seedFinding(rig.store, rig.storyId, {
+            target_ref: summary.id,
+            criterion_ref: 'C-16',
+            cost: 'taste',
+            state: 'unconfirmed',
+            fingerprint: 'probe|C-16',
+            related_refs: [selected.id]
+        });
+
+        expect(samplingArmed(rig.store, story(), 2)).toBe(true);
+
+        // The same Story with a `major` suspicion instead is held again: the costs the dial cannot waive
+        // are exactly the ones the gate keeps enforcing.
+        seedFinding(rig.store, rig.storyId, {
+            target_ref: summary.id,
+            criterion_ref: 'C-17',
+            cost: 'major',
+            state: 'unconfirmed',
+            fingerprint: 'probe|C-17',
+            related_refs: [selected.id]
+        });
+
+        expect(samplingArmed(rig.store, story(), 2)).toBe(false);
     });
 });

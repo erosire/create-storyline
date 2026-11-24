@@ -23,6 +23,12 @@ import type {
     CompletionPreview,
     CostDistribution,
     FailingCriterion,
+    PhraseFindingRow,
+    PhraseGroupRow,
+    PhraseRevisionRow,
+    PhraseReviewState,
+    PhraseTaskRow,
+    PhraseView,
     StoryView,
     UndoTarget
 } from '../api';
@@ -51,10 +57,15 @@ import type {
 import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
 
 export type { CompletionPreview, CostDistribution, FailingCriterion };
+// R6 — the group rows the Summary rail and its panes render. Aliased here (rather than imported at every
+// call site) so the panels keep reading ONE module for their view contract, and so the shapes the panes
+// assert are the shapes `../api` pins to the wire.
+export type { PhraseFindingRow, PhraseGroupRow, PhraseReviewState, PhraseView };
 
 /**
- * The pinned `getStory(id)` payload (U-4…U-17) with ONE widening: `templates` carries the
- * RESOLVED records rather than the assigned id list.
+ * The pinned `getStory(id)` payload (U-4…U-17) with TWO widenings: `templates` carries the
+ * RESOLVED records rather than the assigned id list, and `phrase` carries the SUMMARY PHRASE read
+ * (`GET /stories/:id/phrases`, R6) the shell merges in beside it.
  *
  * WHY: the pinned wire carries ids (D-17b — assignment is a list of ids), but every panel that
  * draws a template needs the RECORD (U-8d needs `roles[].agents`/`aggregate`, U-8b needs
@@ -62,8 +73,24 @@ export type { CompletionPreview, CostDistribution, FailingCriterion };
  * `GET /templates` before rendering (`assignedTemplates`/`storyViewData` in `../shell-binding.ts`,
  * whose `ShellStoryView` is structurally this type), so no panel has to reach for the catalogue
  * itself and no panel invents a second read.
+ *
+ * `phrase` is OPTIONAL because it is a SECOND read on its own route: absent means the caller has no
+ * group surface for this Story (a legacy fixture, or the read has not landed), and the Summary panes
+ * render that as their loading/unavailable state. It is never inferred from `view.summary` — a
+ * group-managed book's legacy mirror is a compatibility copy, not the rail's source (R6).
+ *
+ * `phraseError` is R-T2/F2's half of that story: the store caches the FAILED phrase read per Story
+ * (`state.ts:phraseErrors`), so a frame can tell "still in flight" (absent, no error) from "the route
+ * answered 503" (absent, with the server's own sentence). Without it a failed read looks like a slow one
+ * forever: the panes would say `reading the Summary groups…` over a book whose groups will not arrive
+ * until the Author reloads. The Story payload stays current either way — the failure is the phrase read's,
+ * not the Story's, so only the Summary area changes what it says.
  */
-export type StoryViewData = Omit<StoryView, 'templates'> & { templates: Template[] };
+export type StoryViewData = Omit<StoryView, 'templates'> & {
+    templates: Template[];
+    phrase?: PhraseView | null;
+    phraseError?: string | null;
+};
 
 /**
  * G-2's failing line, verbatim from the server (`criterion` + `fix_hint` + `evidence`). It is
@@ -161,6 +188,16 @@ export interface StoryActions {
     lockPhase?: (storyId: string) => Promise<unknown> | unknown;
     /** Phase ① — "not final yet": queue another three-draft Summary round from the selected revision. */
     requestSummaryRevision?: (storyId: string, note?: string) => Promise<unknown> | unknown;
+    /**
+     * R2 — the Author rewrites ONE SUMMARY GROUP by hand. This is the ONLY Author prose write the group
+     * rail offers, and the group is addressed by its UUID (the rail's selection ref), never by key or
+     * index. `writer_busy` 409s — the pane disables the control off the same projected flag.
+     */
+    revisePhraseGroup?: (
+        storyId: string,
+        groupId: string,
+        input: { content: string; note?: string }
+    ) => Promise<unknown> | unknown;
     /** L-31/L-32 — the only way a lock opens; deletes every later phase's artifacts. */
     backtrack?: (storyId: string, phase: BacktrackTarget) => Promise<unknown> | unknown;
     /** D-37 / D-20a — a direct Author write, refused while the Story runs (naming D-37). */
@@ -313,13 +350,13 @@ export interface LockCheck {
 // ---------------------------------------------------------------------------
 
 /**
- * D-30/D-34 — the two costs that can hold a sign-off. A `minor`/`taste` note is recorded and never
- * blocks; phase ①'s whole bar is this pair (the server's `records.ts:summaryBlockingFindings` and
- * `unconfirmedBlockingFindings` filter on exactly these).
+ * D-30/D-34 — the two costs that can hold a sign-off WHATEVER the dial says. A `taste` note is recorded
+ * and never blocks; `minor` joins the pair below when the Author's dial makes minor real work. Kept
+ * exported because it is the dial-free core of both predicates and the answer the rail lists per cost.
  */
 export const BLOCKING_FINDING_COSTS: Cost[] = ['critical', 'major'];
 
-/** Is this finding at a cost that can hold the phase? (D-30, D-34) */
+/** Is this finding at a cost that can hold the phase regardless of the dial? (D-30, D-34) */
 export function isBlockingCostFinding(finding: Finding): boolean {
     return BLOCKING_FINDING_COSTS.includes(finding.cost);
 }
@@ -331,6 +368,27 @@ export function isBlockingCostFinding(finding: Finding): boolean {
  */
 export function dialCoversCost(story: Story, cost: Cost): boolean {
     return (story.auto_approve ?? []).includes(cost);
+}
+
+/**
+ * THE SUMMARY'S BAR, the mirror of `records.ts:summaryBlockingCost`, and — like the server's — phase-
+ * INDEPENDENT: the Summary is signed once and its blockers keep being read after the Story moved on
+ * (the Accept tick, the pane, the lock). `critical`/`major` always; `minor` exactly when the projected
+ * dial covers minor, because a dial that authorises minor makes a confirmed minor fix work that the
+ * round may not stop on; `taste` never (phase ③ owns the prose it would prefer between).
+ */
+export function summaryBlockingCost(story: Story, cost: Cost): boolean {
+    return cost === 'critical' || cost === 'major' || (cost === 'minor' && dialCoversCost(story, 'minor'));
+}
+
+/**
+ * The loop's phase-aware bar, the mirror of `records.ts:isBlockingCost`: outside phase ① EVERY cost
+ * blocks (D-33's all-costs rule), inside phase ① only the Summary's own set does. Read by
+ * `unconfirmedBlockingFindings` below so the lock's "still unconfirmed" clause cannot drift from the
+ * sign-off clause at `records.ts:unconfirmedBlockingFindings`.
+ */
+export function isBlockingCost(story: Story, cost: Cost): boolean {
+    return story.phase !== 'summary' || summaryBlockingCost(story, cost);
 }
 
 /**
@@ -545,8 +603,9 @@ export function selectedSummaryRevision(view: StoryViewData): Revision | undefin
 }
 
 /**
- * The findings that still hold the final Summary: `confirmed`/`approved` critical or major rows that
- * apply to the SELECTED revision. This is the dashboard mirror of `records.ts:summaryBlockingFindings`,
+ * The findings that still hold the final Summary: `confirmed`/`approved` rows at a blocking cost
+ * (`summaryBlockingCost`: critical/major, plus minor when the dial covers it) that apply to the SELECTED
+ * revision. This is the dashboard mirror of `records.ts:summaryBlockingFindings`,
  * the set the loop holds `phase_signoff` for (`status.ts:508-531`), so the Accept button can neither
  * invent a blocker the engine ignores nor hide one it enforces.
  *
@@ -563,7 +622,9 @@ export function summaryBlockingFindings(view: StoryViewData, selected: Revision 
     return view.findings.filter(
         (finding) =>
             (finding.state === 'confirmed' || finding.state === 'approved') &&
-            isBlockingCostFinding(finding) &&
+            // The Summary's own bar, dial included — the server's `summaryBlockingCost`, not the phase-
+            // aware one, because these rows keep blocking after the Story leaves phase ①.
+            summaryBlockingCost(view.story, finding.cost) &&
             // T11/F4: a row that names ONLY drafts the loop has already set aside is history, not work —
             // `records.ts:summaryBlockingFindings` answers `scope === 'superseded'` with `false`, and a
             // whole-artifact row keeps blocking only when its TARGET is this Summary.
@@ -574,7 +635,8 @@ export function summaryBlockingFindings(view: StoryViewData, selected: Revision 
 
 /**
  * D-33 / L-37's second condition, as projected: every suspicion nobody has confirmed or disputed. Phase
- * ① counts critical/major only (the same cost filter `records.ts:unconfirmedBlockingFindings` applies),
+ * ① counts the Summary's blocking costs (critical/major, plus minor when the dial covers it — the same
+ * filter `records.ts:unconfirmedBlockingFindings` applies),
  * and the sign-off waits for that set (`status.ts:494,529`). `view.findings` carries every state, so no
  * new endpoint is needed to say it out loud.
  *
@@ -595,7 +657,8 @@ export function unconfirmedBlockingFindings(view: StoryViewData): Finding[] {
             // `&&` binds tighter than `||`, exactly as the server's filter reads: outside phase ① every
             // cost counts, inside phase ① only a blocking cost that is not superseded does.
             (story.phase !== 'summary' ||
-                (isBlockingCostFinding(finding) && findingRevisionScope(finding, context) !== 'superseded'))
+                (summaryBlockingCost(story, finding.cost) &&
+                    findingRevisionScope(finding, context) !== 'superseded'))
     );
 }
 
@@ -738,7 +801,17 @@ export function lockCheck(view: StoryViewData): LockCheck {
     // enforces that this panel used to hide (an undecided suspicion, and §6.4 step 6's deep review).
     // `status.ts:524-535` is the engine's gate; every line below names one of its clauses, and nothing
     // here adds a wait the engine does not have.
-    if (phase === 'summary' && story.summary_locked === false && view.summary) {
+    // R6 — THE GROUP MODEL REPLACES THIS WHOLE BAR. A grouped Story never runs the sampler pipeline: the
+    // loop writes one group at a time (`loop/work.ts:draft_groups`), the deterministic selection installs no
+    // whole-Summary draft, and §6.4 step 6's deep review is dispatched against the group VECTOR
+    // (`wi_review_groups_<hash>`), not against `wi_review_<revision_id>`. Reading the sampling clauses for
+    // a grouped book is how the gate invents a blocker the engine does not have ("no Summary revision is on
+    // record yet" over a five-group Overview that is fully written), and how a real blocker — an unwritten
+    // group, a finding that names one, a Writer holding a group — stays invisible. So the group bar answers
+    // instead, and it is derived only from rows the phrase read sent.
+    if (phase === 'summary' && story.summary_locked === false && isGroupSummary(view)) {
+        reasons.push(...groupSignOffBlockers(view));
+    } else if (phase === 'summary' && story.summary_locked === false && view.summary) {
         const summary = view.summary;
         // One scope read for the whole gate (T11/F2, F4): the competition count, the blocker set and the
         // unconfirmed count all answer from the same round/draft map the rail's list uses.
@@ -783,6 +856,17 @@ export function lockCheck(view: StoryViewData): LockCheck {
         // this revision yet".
         const blocking = summaryBlockingFindings(view, selected);
 
+        // WHY THE LABEL IS DERIVED, NOT FIXED: the copy used to say "critical/major finding" because
+        // those were the only costs that could block. The dial-driven minor rule (D-35's one dial, read
+        // by `summaryBlockingCost`) lets a confirmed `minor` hold the Summary on a dial that covers
+        // minor — and naming the wrong cost next to a row the rail labels `minor` is exactly the
+        // contradiction this section exists to remove. Nothing moves when no minor is in the set: the
+        // words, and every string the existing panels assert, are byte-for-byte what they were.
+        const blockingWords = (rows: Finding[]): { one: string; many: string } =>
+            rows.some((finding) => finding.cost === 'minor')
+                ? { one: 'critical/major/minor finding', many: 'critical/major/minor findings' }
+                : { one: 'critical/major finding', many: 'critical/major findings' };
+
         if (blocking.length > 0) {
             // D-34/D-35: the WAIT differs per state, so the copy differs. An `approved` row has already
             // armed the Writer work; a `confirmed` row the dial covers is approved on the next sweep;
@@ -798,17 +882,17 @@ export function lockCheck(view: StoryViewData): LockCheck {
 
             if (armed.length > 0) {
                 reasons.push(
-                    `${reasonCount(armed.length, 'approved critical/major finding', 'approved critical/major findings')} on the selected Summary — the next Summary round writes fresh drafts to clear them (D-34)`
+                    `${reasonCount(armed.length, `approved ${blockingWords(armed).one}`, `approved ${blockingWords(armed).many}`)} on the selected Summary — the next Summary round writes fresh drafts to clear them (D-34)`
                 );
             }
             if (dialArmed.length > 0) {
                 reasons.push(
-                    `${reasonCount(dialArmed.length, 'critical/major finding', 'critical/major findings')} on the selected Summary at a cost your dial auto-approves — the sweep approves them and the next Summary round clears them (D-35)`
+                    `${reasonCount(dialArmed.length, blockingWords(dialArmed).one, blockingWords(dialArmed).many)} on the selected Summary at a cost your dial auto-approves — the sweep approves them and the next Summary round clears them (D-35)`
                 );
             }
             if (awaitingApproval.length > 0) {
                 reasons.push(
-                    `${reasonCount(awaitingApproval.length, 'critical/major finding', 'critical/major findings')} on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)`
+                    `${reasonCount(awaitingApproval.length, blockingWords(awaitingApproval).one, blockingWords(awaitingApproval).many)} on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)`
                 );
             }
         }
@@ -819,7 +903,7 @@ export function lockCheck(view: StoryViewData): LockCheck {
 
         if (unconfirmed.length > 0) {
             reasons.push(
-                `${reasonCount(unconfirmed.length, 'critical/major finding', 'critical/major findings')} on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)`
+                `${reasonCount(unconfirmed.length, blockingWords(unconfirmed).one, blockingWords(unconfirmed).many)} on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)`
             );
         }
 
@@ -846,6 +930,267 @@ export function lockCheck(view: StoryViewData): LockCheck {
     };
 
     return { phase, canLock: reasons.length === 0, reasons, statement: statements[phase] };
+}
+
+// ---------------------------------------------------------------------------
+// SUMMARY PHRASE — the group derivations (R1-R6)
+//
+// WHY THESE LIVE HERE AND NOT IN THE PANES: the rail's badges, the Overview's per-group state, the
+// group detail's finding chips and the sign-off gate all answer from the SAME rows, and a rule that
+// is a function of the view can be pinned without a DOM (this file's standing reason). Two rules matter
+// most, and both were the reported defect class elsewhere in this package:
+//
+//   - IDENTITY IS THE UUID, NEVER THE ORDER (U2). `order` is composition order; a group that is
+//     retitled, reordered or retired keeps its id, and a selection that stored an index would point at
+//     a different group after that. So every lookup here takes an id, and the sort is only ever what
+//     the rail DISPLAYS in that order.
+//
+//   - A FINDING'S GROUPS ARE `targeted`, NOT A REVISION MATCH (U5). `projections.ts` resolves each
+//     finding against the group vector (R3), and an unscoped legacy row means "the whole Overview" —
+//     which for a grouped book is every group, so it must show against all five rather than vanish or
+//     claim one. Nothing here re-derives scope from `revision` numbers.
+//
+// ARCHIVED IS ARCHIVED AWAY (U3). `history` is newest-first and INCLUDES the `latest` row; the panes
+// may count the `archived` rows and print the current text, and the projection sends no archived prose
+// (`PhraseRevisionRow.chars`, not `.content`), so no pane may offer to open one.
+// ---------------------------------------------------------------------------
+
+/** Whether this Story's Summary is group-managed, as the wire says (R6's echo, with the row as backup). */
+export function isGroupSummary(view: Pick<StoryViewData, 'story'> & Partial<Pick<StoryViewData, 'phrase'>>): boolean {
+    const mode = view.phrase?.mode;
+
+    // The projection echoes `story.summary_mode`; the phrase read lags the Story payload by one flight,
+    // so the row answers the question in the frame before the group rows arrive. Neither source may make
+    // a legacy book (`summary_mode` absent) look grouped.
+    if (mode !== undefined) return mode === 'groups';
+
+    return view.story.summary_mode === 'groups';
+}
+
+/**
+ * Whether the phrase read has LANDED for this Story. The one honest answer to "is the group surface
+ * loaded", and the only thing that separates a load in flight from a book with no rows (U6): `phraseGroups`
+ * answers `[]` for both, and only this predicate may tell them apart.
+ *
+ * It lives here, next to the derivations that need it, because `groupSignOffBlockers` must not claim a
+ * ready gate over rows that never arrived (R-T2/F1); `story-nav.ts` re-exports it as `phraseLoaded` for the
+ * rail, which is where the loading line is drawn.
+ */
+export const phraseReadLanded = (view: Pick<StoryViewData, 'phrase'>): boolean =>
+    view.phrase !== undefined && view.phrase !== null;
+
+/** The cached failure sentence for this Story's phrase read; `undefined` when the read has not failed (R-T2/F2). */
+export const phraseReadError = (view: Pick<StoryViewData, 'phraseError'>): string | undefined =>
+    view.phraseError ?? undefined;
+
+/** The phrase read's finding rows, or `[]` when the read has not landed. */
+export function phraseFindings(view: Pick<StoryViewData, 'phrase'>): PhraseFindingRow[] {
+    return view.phrase?.findings ?? [];
+}
+
+/** The composed Overview the server reads off the group rows (R2) — `''` when nothing is written. */
+export function phraseOverview(view: Pick<StoryViewData, 'phrase'>): string {
+    return view.phrase?.overview ?? '';
+}
+
+/**
+ * The groups in composition order, with a stable id tie-break so a refetch never reshuffles the rail.
+ * `[]` for a sampling-mode Story (its rail has no groups to list) and for a phrase read that has not
+ * landed — the rail then renders its loading state, which is a different sentence from "no groups".
+ */
+export function phraseGroups(view: Pick<StoryViewData, 'phrase' | 'story'>): PhraseGroupRow[] {
+    if (!isGroupSummary(view)) return [];
+
+    return [...(view.phrase?.groups ?? [])].sort(
+        (left, right) => left.order - right.order || left.key.localeCompare(right.key) || left.id.localeCompare(right.id)
+    );
+}
+
+/** One group by its UUID — the address the rail's selection ref carries. */
+export function phraseGroupById(
+    view: Pick<StoryViewData, 'phrase' | 'story'>,
+    groupId: string | undefined
+): PhraseGroupRow | undefined {
+    if (groupId === undefined) return undefined;
+
+    return phraseGroups(view).find((group) => group.id === groupId);
+}
+
+/** A finding is open while it is not settled: R6's own open set, mirror of `projections.ts`'s filter. */
+export const OPEN_PHRASE_FINDING_STATES: FindingState[] = ['unconfirmed', 'confirmed', 'approved'];
+
+export function isOpenPhraseFinding(finding: PhraseFindingRow): boolean {
+    return OPEN_PHRASE_FINDING_STATES.includes(finding.state);
+}
+
+/** A finding archived out of every active list: fixed, discarded or disputed (U5). */
+export function isArchivedPhraseFinding(finding: PhraseFindingRow): boolean {
+    return !isOpenPhraseFinding(finding);
+}
+
+/**
+ * Does this finding aim at this group? `targeted` is the server's resolved scope (R3), and an UNSCOPED
+ * legacy row — one that named no group — is a statement about the whole Overview, which on a grouped
+ * book is every group. A pane that matched on `group_refs.length` alone would hide exactly the finding
+ * the report called invisible.
+ */
+export function findingTargetsGroup(
+    finding: PhraseFindingRow,
+    groupId: string,
+    groups: readonly PhraseGroupRow[] = []
+): boolean {
+    if (finding.targeted.includes(groupId)) return true;
+
+    if (finding.group_refs.includes(groupId)) return true;
+
+    return finding.unscoped && groups.some((group) => group.id === groupId);
+}
+
+/** Every group a finding is aimed at, resolved the same way, in composition order. */
+export function findingGroups(finding: PhraseFindingRow, groups: readonly PhraseGroupRow[]): PhraseGroupRow[] {
+    return groups.filter((group) => findingTargetsGroup(finding, group.id, groups));
+}
+
+/** The open findings that name this group — the rail badge and the detail's finding list. */
+export function groupOpenFindings(view: StoryViewData, groupId: string): PhraseFindingRow[] {
+    const groups = phraseGroups(view);
+
+    return phraseFindings(view).filter(
+        (finding) => isOpenPhraseFinding(finding) && findingTargetsGroup(finding, groupId, groups)
+    );
+}
+
+/**
+ * The open findings on this group that hold the sign-off: the Summary's own cost bar
+ * (`summaryBlockingCost`, dial included), so the badge, the pane and the Accept gate cannot disagree
+ * about which rows are work.
+ */
+export function groupBlockingFindings(view: StoryViewData, groupId: string): PhraseFindingRow[] {
+    return groupOpenFindings(view, groupId).filter((finding) => summaryBlockingCost(view.story, finding.cost));
+}
+
+/**
+ * The open STORY tasks the sign-off waits on (R3's other half) — NOT a group-scoped queue.
+ *
+ * R-T2/F3, from the server: `projections.ts:1208` builds the phrase read's `tasks` rows as
+ * `store.tasks.list().filter(task => task.story_id === story.id && task.state !== 'done')` — every open task
+ * of the Story, whatever phase or kind it belongs to — and `PhraseTaskRow` carries no group attribution at
+ * all, so the client COULD NOT scope them even if it wanted to. The engine does gate the phase on queued
+ * work (`loop/status.ts`'s `${n} task(s) still queued` and phase ①'s fix/rewrite/merge clause), so an open
+ * task is a true wait; what would be a lie is calling it a "group" task. The copy says `Story task` for
+ * that reason, and the count stays equal to `review.open_tasks` because the filter is the projection's own.
+ */
+export function groupOpenTasks(view: Pick<StoryViewData, 'phrase'>): PhraseTaskRow[] {
+    return (view.phrase?.tasks ?? []).filter((task) => task.state !== 'done');
+}
+
+/** The revisions superseded on this group — countable, never expandable (the API sends no archived text). */
+export function groupArchivedRevisions(group: PhraseGroupRow): PhraseRevisionRow[] {
+    return group.history.filter((revision) => revision.state === 'archived');
+}
+
+/** The `latest` row of a group, when the history carries one (it does, once `revision > 0`). */
+export function groupLatestRevision(group: PhraseGroupRow): PhraseRevisionRow | undefined {
+    return group.history.find((revision) => revision.state === 'latest') ?? group.history[0];
+}
+
+/** A group is written once it has a revision — `revision: 0` is the loop's "never written" (R1). */
+export const isGroupWritten = (group: PhraseGroupRow): boolean => group.revision > 0;
+
+/** A group whose text a live Writer pass is replacing right now (F8/R4). */
+export const isGroupWriterBusy = (group: PhraseGroupRow): boolean => group.writer_busy;
+
+/** Every group with no revision yet — the sign-off's first blocker (R1: an unwritten group is not an Overview). */
+export function unwrittenGroups(view: Pick<StoryViewData, 'phrase' | 'story'>): PhraseGroupRow[] {
+    return phraseGroups(view).filter((group) => !isGroupWritten(group));
+}
+
+/**
+ * The sign-off blockers the GROUP model adds to the phase gate (U5's last test).
+ *
+ * The route itself still gates on the phase Goal and the Ideas tray (`routes.ts:POST /stories/:id/lock`),
+ * and the dashboard may not invent a blocker the engine ignores — but it may not ACCEPT a ready-looking
+ * gate over a Summary the group rows say is incomplete either. Each reason below is a fact off the phrase
+ * read, phrased as the wait it is, and an empty list means the group surface has nothing outstanding.
+ */
+export function groupSignOffBlockers(view: StoryViewData): string[] {
+    if (!isGroupSummary(view)) return [];
+
+    const reasons: string[] = [];
+
+    // R-T2/F1 + F2 — THE READ COMES FIRST. `phraseGroups` answers `[]` for a read that has not landed, and
+    // every clause below counts rows, so an in-flight or failed read would produce NO reasons and the gate
+    // would claim a five-group Overview that is complete and clean. Absent groups are not an empty valid
+    // Phrase: the phrase read is the only source of this gate's facts, so its state is itself the blocker.
+    // The two cases get different sentences, because only one of them is fixed by waiting (F2).
+    if (!phraseReadLanded(view)) {
+        const failure = phraseReadError(view);
+
+        return [
+            failure === undefined
+                ? 'the Summary group rows have not been read yet — the sign-off waits for the phrase read to answer'
+                : `the Summary group rows could not be read: ${failure} — reload the Story before signing the Summary off`
+        ];
+    }
+
+    const unwritten = unwrittenGroups(view);
+
+    if (unwritten.length > 0) {
+        reasons.push(
+            `${reasonCount(unwritten.length, 'Summary group', 'Summary groups')} still unwritten (${unwritten
+                .map((group) => group.title)
+                .join(', ')}) — an unwritten group is not part of the Overview yet (R1)`
+        );
+    }
+
+    const groups = phraseGroups(view);
+    const blocking = phraseFindings(view).filter(
+        (finding) => isOpenPhraseFinding(finding) && summaryBlockingCost(view.story, finding.cost)
+    );
+
+    if (blocking.length > 0) {
+        const names = (rows: PhraseFindingRow[]): string =>
+            rows
+                .slice(0, 3)
+                .map((finding) => findingGroups(finding, groups).map((group) => group.title).join('/') || 'the Overview')
+                .join(', ');
+
+        reasons.push(
+            `${reasonCount(blocking.length, 'open finding', 'open findings')} on the Summary groups — ${names(
+                blocking
+            )} still ${
+                blocking.some((finding) => finding.state === 'approved')
+                    ? 'await the revision that answers them (R3)'
+                    : 'await your decision (D-34)'
+            }`
+        );
+    }
+
+    const openTasks = groupOpenTasks(view);
+
+    if (openTasks.length > 0) {
+        // R-T2/F3: the read's task rows are every open task of the STORY (`projections.ts:1208`) and carry no
+        // group attribution, so the sentence may not call them the groups' — a chapter repair task waiting in
+        // the queue holds the Summary sign-off too, and that IS the engine's rule (`loop/status.ts`'s queued-
+        // work clause), not a blocker this gate invented.
+        reasons.push(
+            `${reasonCount(
+                openTasks.length,
+                'Story task',
+                'Story tasks'
+            )} still open in the queue — the crew has work it has not closed, on this Summary or anywhere in the Story`
+        );
+    }
+
+    const busy = groups.filter(isGroupWriterBusy);
+
+    if (busy.length > 0) {
+        reasons.push(
+            `the Writer is rewriting ${busy.map((group) => group.title).join(', ')} right now — the text on screen is about to move (R4)`
+        );
+    }
+
+    return reasons;
 }
 
 // ---------------------------------------------------------------------------

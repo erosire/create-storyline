@@ -11,7 +11,10 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { StoryOutline } from './StoryOutline';
 import { DEFAULT_STORY_SELECTION } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
+import { fixturePhrase, fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
+// R-T2/F1 + F2: the rail's ready tick and its phrase-read line are driven by the same frame the gate reads,
+// so the regression is pinned on the real rail — the five clean rows coming from the wire-shaped projection.
+import { groupedPhraseView } from '../testing/shell-fakes';
 import type { Cost, Finding, FindingState } from '../../shared/types';
 
 /**
@@ -75,21 +78,30 @@ function discardRound() {
 }
 
 describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
-    it('lists the four phrases and the supporting folders, with no knowledge copy', () => {
+    // R6 / U1 — the rail is the desk's table of contents, and a grouped book's desk opens the Summary Overview,
+    // one of its groups, or a folder. The other three phrases are PHASES the crew works through, not panes the
+    // Author navigates to from here, and a rail row that opened nothing is the defect the acceptance names
+    // ("no nav to hidden phrases"). So the rail carries exactly one phrase row, and the folders and Seed are
+    // untouched — which is what this test now pins, in place of the four phrase rows it used to require.
+    it('lists the Summary phrase and the supporting folders, and nothing the content column cannot open (U1)', () => {
         render(<StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />);
 
         expect(screen.getByText('Phrase 1')).toBeTruthy();
-        expect(screen.getByText('Phrase 2')).toBeTruthy();
-        expect(screen.getByText('Phrase 3')).toBeTruthy();
-        expect(screen.getByText('Phrase 4')).toBeTruthy();
+        expect(screen.getAllByText('Summary').length).toBeGreaterThan(0);
+        // ONE phrase header, and it is the Summary's: the count is the assertion, because a second header would
+        // be a row whose pane the rail can no longer reach.
+        expect(document.querySelectorAll('.outline-item--phrase')).toHaveLength(1);
 
-        for (const heading of ['Summary', 'Characters', 'Plotlines', 'Chapters']) {
-            expect(screen.getAllByText(heading).length).toBeGreaterThan(0);
+        for (const hidden of ['Characters', 'Plotlines', 'Chapters']) {
+            expect(screen.queryByText(hidden)).toBeNull();
         }
 
         for (const folder of ['Continuity', 'Goal', 'Ideas', 'Findings', 'Digest', 'Settings']) {
             expect(screen.getAllByText(folder).length).toBeGreaterThan(0);
         }
+
+        // Seed stays, exactly as it was (U1: folders and Seed are unchanged by the redesign).
+        expect(screen.getByText("The Author's idea")).toBeTruthy();
 
         // The removed clutter: a harness-memory subtitle, a note count and the per-folder sentence.
         expect(screen.queryByText(/its own harness memory/)).toBeNull();
@@ -176,10 +188,9 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
             />
         );
 
+        // A sampling book's rows are its Revisions (U1 keeps that rail for books the group model never took
+        // over), and the row's ref is the draft's own id — the address the pane and the override both use.
         fireEvent.click(getByText('Revision 1'));
-        fireEvent.click(getByText('Hale'));
-        fireEvent.click(getByText('Plotline 2 — Ghost Index'));
-        fireEvent.click(getByText('Chapter 3 — The Water Line'));
         const findingsFolder = Array.from(container.querySelectorAll<HTMLElement>('.outline-item--folder')).find(
             (element) => element.textContent?.includes('Findings')
         )!;
@@ -187,9 +198,6 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
 
         expect(selections).toEqual([
             { panel: 'summary', ref: 'revision:rv-sum-a' },
-            { panel: 'characters', ref: 'cast_member_1' },
-            { panel: 'plotlines', ref: 'p2' },
-            { panel: 'chapters', ref: 'c3' },
             { panel: 'findings' }
         ]);
     });
@@ -311,18 +319,104 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
         expect(row.querySelector('.outline-badge')).toBeNull();
     });
 
-    it('keeps an empty Characters phrase clickable and childless', () => {
-        const view = { ...fixtureView(), cast: [] };
+    // R6 / U6 — the loading state of a phrase that IS group-managed. The Story row carries `summary_mode` (it
+    // arrives on `GET /stories/:id`); the group rows arrive on the phrase route. Until they do, the rail must not
+    // print five rows saying "unwritten": that is a claim about the book, and the honest statement is that the
+    // rows are on their way. The header itself stays navigation — its pane (the Overview) exists immediately.
+    it('keeps a childless phrase clickable, and says the group rows are on their way (U6)', () => {
+        const grouped = { ...fixtureView(), story: { ...fixtureStory(), summary_mode: 'groups' as const } };
+        const selections: StorySelection[] = [];
         const { container } = render(
-            <StoryOutline view={view} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+            <StoryOutline view={grouped} selection={DEFAULT_STORY_SELECTION} onSelect={(next) => selections.push(next)} />
         );
 
         const phrase = Array.from(container.querySelectorAll<HTMLElement>('.outline-phase')).find((element) =>
-            element.textContent?.includes('Characters')
+            element.textContent?.includes('Summary')
         )!;
-        expect(phrase.querySelectorAll('.outline-child').length).toBe(0);
-        expect(phrase.querySelector<HTMLButtonElement>('.outline-item--phrase')?.disabled).toBe(false);
-        expect(phrase.querySelector('.outline-start')).toBeTruthy();
+
+        // No rows, and no row-shaped lie about the five groups.
+        expect(phrase.querySelectorAll('.outline-child')).toHaveLength(0);
+        expect(phrase.querySelector('[data-testid="outline-phrase-pending"]')?.textContent).toBe(
+            'reading the Summary groups…'
+        );
+
+        const header = phrase.querySelector<HTMLButtonElement>('.outline-item--phrase')!;
+
+        expect(header.disabled).toBe(false);
+        // Nothing is in the list, so no IDREF is carried (a pointer at an id that was never rendered is the
+        // dangling-IDREF case this suite already pins for a folded phrase).
+        expect(header.getAttribute('aria-controls')).toBeNull();
+
+        fireEvent.click(header);
+
+        expect(selections).toEqual([{ panel: 'summary' }]);
+    });
+
+    // R-T2/F1 + F2 — THE RAIL'S OWN HALF of the sign-off gate. `summaryReadyForReview` counts GROUP ROWS, and
+    // `phraseGroups` answers `[]` while the phrase read is in flight, so the rail used to tick "ready for
+    // review" over a Summary it had never read — with Accept/Lock live under it, because the gate counts the
+    // same rows. A FAILED read is the same absence with a different sentence, and the rail is where that
+    // sentence has to appear: the top bar reports the Story payload's failures (L-13), not the phrase read's.
+    it('withholds the ready tick until the group rows arrive, and says so when the read failed (F1, F2)', () => {
+        const frame = (overrides: Record<string, unknown> = {}) => {
+            const view = fixtureView({ phrase: groupedPhraseView('s1') });
+
+            return {
+                ...view,
+                ...overrides,
+                story: {
+                    ...fixtureStory(),
+                    summary_mode: 'groups' as const,
+                    phase: 'summary' as const,
+                    summary_locked: false
+                },
+                goal: { ...view.goal, failing: [] },
+                ideas: []
+            };
+        };
+
+        // The book WITH its rows: five group children and the tick, because the Overview is complete and
+        // nothing is open. This is the frame the two below are measured against.
+        const arrived = render(
+            <StoryOutline view={frame()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        expect(arrived.container.querySelector('.outline-ready')?.getAttribute('title')).toBe('ready for review');
+        arrived.unmount();
+
+        // In flight: no tick, and the rail's one loading line — not a verdict about an empty Summary.
+        const inFlight = render(
+            <StoryOutline
+                view={frame({ phrase: undefined })}
+                selection={DEFAULT_STORY_SELECTION}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(inFlight.container.querySelector('.outline-ready')).toBeNull();
+        expect(inFlight.container.querySelector('[data-testid="outline-phrase-pending"]')?.textContent).toBe(
+            'reading the Summary groups…'
+        );
+        expect(inFlight.container.querySelector('[data-testid="outline-phrase-error"]')).toBeNull();
+        inFlight.unmount();
+
+        // Failed: the loading line is gone, and the server's own sentence is in the rail with the warning
+        // class the stylesheet keys. The Story's other rows are untouched (the failure is the read's).
+        const failed = render(
+            <StoryOutline
+                view={frame({ phrase: undefined, phraseError: '503: the phrase read is offline (maintenance)' })}
+                selection={DEFAULT_STORY_SELECTION}
+                onSelect={() => undefined}
+            />
+        );
+        const line = failed.container.querySelector('[data-testid="outline-phrase-error"]');
+
+        expect(failed.container.querySelector('.outline-ready')).toBeNull();
+        expect(failed.container.querySelector('[data-testid="outline-phrase-pending"]')).toBeNull();
+        expect(line?.textContent).toBe('Summary groups unread: 503: the phrase read is offline (maintenance)');
+        // The class the stylesheet colours amber (`.outline-pending--error`), so the rail's failure reads as
+        // one state without the colour carrying the meaning alone.
+        expect(line?.classList.contains('outline-pending--error')).toBe(true);
     });
 
     // -----------------------------------------------------------------------
@@ -564,76 +658,222 @@ describe('StoryOutline — the phrase header is a disclosure control (R8)', () =
         expect(selections).toEqual([{ panel: 'summary' }, { panel: 'summary' }]);
     });
 
-    it('folds one phrase without touching the others, and keeps each phrase’s own state', () => {
+    // R6 retitles this test rather than weakening it. The rail no longer holds four phrases, so "the others" are
+    // the rows that ARE still there — Seed and the six folders — and U1 says explicitly they are unchanged. What
+    // the fold may still not do is leak: it removes the Summary's rows and nothing else, and it is not undone by
+    // navigating to a folder.
+    it('folds the Summary phrase without touching the Seed or the folders, and keeps its own state', () => {
         const { container } = render(
             <StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
         );
 
         const summary = phraseHeader(container, 'Summary');
-        const characters = phraseHeader(container, 'Characters');
 
         expect(summary.getAttribute('aria-expanded')).toBe('true');
-        expect(characters.getAttribute('aria-expanded')).toBe('true');
+        expect(summary.getAttribute('aria-controls')).toBe('outline-children-summary');
+
+        const folderRows = () => Array.from(container.querySelectorAll<HTMLElement>('.outline-item--folder')).map(
+            (element) => element.textContent
+        );
+        const foldersBefore = folderRows();
+
+        expect(container.querySelectorAll('.outline-item--folder')).toHaveLength(6);
+        expect(container.querySelector('.outline-item--seed')).toBeTruthy();
 
         fireEvent.click(summary);
 
+        // The Summary's list is gone, and it took its rows with it — while every row the rail still offers is
+        // untouched: same six folders, same order, same names, and Seed still in place.
         expect(summary.getAttribute('aria-expanded')).toBe('false');
-        expect(characters.getAttribute('aria-expanded')).toBe('true');
-        // Folded Summary carries no IDREF at all, while open Characters still points at its own list: the two
-        // states are per phrase, and an IDREF is only ever carried by the header whose list exists.
         expect(summary.hasAttribute('aria-controls')).toBe(false);
-        expect(characters.getAttribute('aria-controls')).toBe('outline-children-characters');
         expect(container.querySelector('#outline-children-summary')).toBeNull();
-        expect(container.querySelector('#outline-children-characters')).toBeTruthy();
+        expect(folderRows()).toEqual(foldersBefore);
+        expect(container.querySelector('.outline-item--seed')).toBeTruthy();
 
-        // Folding Characters leaves Summary folded: the state is per phrase, never one switch for the rail.
-        fireEvent.click(characters);
+        // Navigating to a folder does not unfold the phrase: the fold is the rail's own view state, and the
+        // selection is a separate one (the same separation `aria-current` is pinned behind in the test above).
+        // Which folder is irrelevant — the point is that ANY navigation leaves the fold alone.
+        const aFolder = container.querySelectorAll<HTMLElement>('.outline-item--folder')[1]!;
 
-        expect(characters.getAttribute('aria-expanded')).toBe('false');
+        fireEvent.click(aFolder);
+
         expect(summary.getAttribute('aria-expanded')).toBe('false');
-        expect(characters.hasAttribute('aria-controls')).toBe(false);
-        expect(container.querySelector('#outline-children-characters')).toBeNull();
+        expect(container.querySelector('#outline-children-summary')).toBeNull();
 
-        // And each phrase opens on its own.
+        // And the second click on the header brings the rows back.
         fireEvent.click(summary);
 
         expect(summary.getAttribute('aria-expanded')).toBe('true');
         expect(summary.getAttribute('aria-controls')).toBe('outline-children-summary');
-        expect(characters.getAttribute('aria-expanded')).toBe('false');
-        expect(container.querySelector('#outline-children-summary')).toBeTruthy();
-        expect(container.querySelector('#outline-children-characters')).toBeNull();
+        expect(container.querySelector('#outline-children-summary')?.querySelectorAll('.outline-child').length)
+            .toBeGreaterThan(0);
     });
 
-    it('leaves a childless phrase a plain row, and a row with a ref still opens on click', () => {
+    // R6 / U1 + U2 — a group row is the pane's address, and the address is the row's id, not its position. The
+    // ref the rail emits is `summary-group:<id>`; the pane, the directive bar and the revise route all take that
+    // same id, so a rail click and a group write cannot drift apart.
+    it('opens the group a row addresses, and the header still drops the ref and opens the Overview', () => {
         const selections: StorySelection[] = [];
         const { container } = render(
             <StoryOutline
-                view={{ ...fixtureView(), cast: [] }}
+                view={fixtureView({ phrase: fixturePhrase() })}
                 selection={DEFAULT_STORY_SELECTION}
                 onSelect={(next) => selections.push(next)}
             />
         );
 
-        const characters = phraseHeader(container, 'Characters');
+        // The row's accessible name is its title, then the findings badge's own label (R6's rule for a row: the
+        // name is composed from its text, never an `aria-label` that would swallow the badge). Premise is written
+        // and holds nothing of its own, so the ONLY words after its title are the one blocking finding the
+        // Reviewer never scoped to a group — which by R3 stands against every group of this book.
+        fireEvent.click(
+            screen.getByRole('button', { name: 'Premise 1 open Critical or Major finding open findings to answer' })
+        );
 
-        // Nothing to disclose: with no children the list is not rendered, so the header carries NO `aria-controls`
-        // (naming an id that never exists would be a dangling IDREF) while `aria-expanded` stays present and
-        // current — it is still a disclosure row, there is simply nothing in it. The row is still navigation,
-        // still enabled, with the "can be started" affordance it had before R8.
-        expect(characters.getAttribute('aria-expanded')).toBe('true');
-        expect(characters.hasAttribute('aria-controls')).toBe(false);
-        expect(container.querySelector('#outline-children-characters')).toBeNull();
-        expect(characters.disabled).toBe(false);
-        expect(characters.querySelector('.outline-start')).toBeTruthy();
+        expect(selections).toEqual([{ panel: 'summary', ref: 'summary-group:grp-premise' }]);
 
-        fireEvent.click(characters);
-
-        expect(selections).toEqual([{ panel: 'characters' }]);
-
-        // A row inside another phrase is unaffected by Summary being folded, and still opens its entry.
+        // The header is the Overview: clicking it clears the row ref, exactly as it clears a revision ref, so a
+        // folded-and-reopened phrase never strands the content column on a group the Author left.
         fireEvent.click(phraseHeader(container, 'Summary'));
-        fireEvent.click(screen.getByText('Chapter 3 — The Water Line'));
 
-        expect(selections).toEqual([{ panel: 'characters' }, { panel: 'summary' }, { panel: 'chapters', ref: 'c3' }]);
+        expect(selections).toEqual([
+            { panel: 'summary', ref: 'summary-group:grp-premise' },
+            { panel: 'summary' }
+        ]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R6 / U1+U2+U6 — the rail of a GROUP-managed book: the Summary phrase, and its five groups.
+//
+// `fixturePhrase()` is the phrase read as `server/api/projections.ts` sends it: the five groups from
+// `shared/phrase`'s own catalog (composition order, and World rules deliberately absent), readable ids — a
+// selection ref is the id STRING, so the dashboard never parses a uuid — three open findings (one shared by two
+// groups, one the Reviewer never scoped, which R3 resolves against all five, and one minor), one `fixed` finding
+// that must appear NOWHERE, one group the Writer is holding, and one never written.
+//
+// The numbers below are exact on purpose: the badge is `groupBlockingFindings` (the same read the Accept gate
+// uses), so a badge that counted differently from the gate is the defect this file exists to catch. Promise has
+// THREE open findings and badges TWO — the minor note is filed, not raised — and that pair is the assertion.
+// ---------------------------------------------------------------------------
+describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
+    function groupView() {
+        return fixtureView({ phrase: fixturePhrase() });
+    }
+
+    /** The Summary phrase's rows as (title, state mark, badge) triples — the whole list, so a reorder fails. */
+    function rowsOfSummary(container: HTMLElement): Array<Array<string | null>> {
+        const summary = Array.from(container.querySelectorAll<HTMLElement>('.outline-phase')).find((element) =>
+            element.textContent?.includes('Summary')
+        )!;
+
+        return Array.from(summary.querySelectorAll<HTMLElement>('.outline-child')).map((row) => [
+            row.querySelector('.outline-name')?.textContent ?? null,
+            row.querySelector('[data-testid="outline-group-state"]')?.textContent ?? null,
+            row.querySelector('.outline-badge')?.textContent ?? null
+        ]);
+    }
+
+    it('lists the five groups as the phrase’s children, in composition order, and no Revision row (U1, U2)', () => {
+        const { container } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        expect(rowsOfSummary(container)).toEqual([
+            ['Premise', null, '1'],
+            ['Promise', null, '2'],
+            ['Theme', 'writer', '2'],
+            ['Tone', null, '1'],
+            ['Ending', 'to write', '1']
+        ]);
+
+        // U2 — the sampling rail's shape is gone for a grouped book: no `Revision N` row, and no row carries the
+        // engine's draft state (the struck-out parked history was that rail's mark, and a group row has no such
+        // state to strike).
+        expect(container.textContent).not.toContain('Revision');
+        expect(container.querySelectorAll('[data-state]')).toHaveLength(0);
+        // U1 — five children, under the ONE phrase header the rail offers.
+        expect(container.querySelectorAll('.outline-item--phrase')).toHaveLength(1);
+        expect(container.querySelectorAll('#outline-children-summary .outline-child')).toHaveLength(5);
+        // The catalog's own order (premise → promise → theme → tone → ending), not a client-side sort: the row
+        // order is what the Overview composes in.
+        expect(
+            Array.from(container.querySelectorAll('.outline-child .outline-name')).map((row) => row.textContent)
+        ).toEqual(['Premise', 'Promise', 'Theme', 'Tone', 'Ending']);
+    });
+
+    it('names each group row by its title plus only the state the wire reports (U6)', () => {
+        render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        // The accessible name is composed from the row's text (title, then one state word, then the badge's own
+        // label) — never an `aria-label`, which would replace the name and swallow the badge. An unwritten group
+        // says `to write`; a group the Writer is replacing says `writer`; a written group says NOTHING, because a
+        // state word it has not earned would be decoration.
+        // The full accessible name of each row, exactly: the group's TITLE, then one state word where the wire
+        // reports one, then the badge's own label, then the attention mark's direction. No id, no revision
+        // number, and no run-together words (the separators are pinned by the strings below — an accessible name
+        // is text, so flex `gap` cannot supply the boundary).
+        expect(screen.getByRole('button', { name: 'Premise 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Promise 2 open Critical or Major findings open findings to answer' })).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Theme writer 2 open Critical or Major findings open findings to answer' })).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Tone 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Ending to write 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
+
+        // The state word exists once, and nowhere else: no duplicate copy that a screen reader would say twice.
+        expect(document.querySelectorAll('[data-testid="outline-group-state"]')).toHaveLength(2);
+    });
+
+    it('badges a group only with the findings that hold the sign-off (U6)', () => {
+        const { container } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        // Promise carries three OPEN findings and badges two: `f-minor` is a note at a cost the Story's dial
+        // tolerates, so it is filed rather than raised — and the rail counts exactly what the Accept gate counts
+        // (`groupBlockingFindings` → `summaryBlockingCost`, dial included).
+        const promise = rowsOfSummary(container)[1];
+
+        expect(promise[2]).toBe('2');
+
+        // A `fixed` finding is archived out of every active list: it is in no badge and no row. The count is the
+        // proof (a group with one finding that is fixed shows no badge at all), so a rendering that leaked it
+        // would move Premise's badge from 1 to 2.
+        const premise = rowsOfSummary(container)[0];
+
+        expect(premise[2]).toBe('1');
+    });
+
+    it('keeps the group rows inside the disclosure the phrase header governs (R8 + U1)', () => {
+        const { container } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        const summary = Array.from(container.querySelectorAll<HTMLButtonElement>('.outline-item--phrase')).find(
+            (element) => element.querySelector('.outline-name')?.textContent === 'Summary'
+        )!;
+
+        expect(summary.getAttribute('aria-expanded')).toBe('true');
+        expect(summary.getAttribute('aria-controls')).toBe('outline-children-summary');
+
+        fireEvent.click(summary);
+
+        expect(summary.getAttribute('aria-expanded')).toBe('false');
+        expect(container.querySelector('#outline-children-summary')).toBeNull();
+        expect(rowsOfSummary(container)).toEqual([]);
+
+        // Re-expanding restores the same five rows, in the same order, with the same marks and badges: folding a
+        // phrase hides the groups, it never recomputes or drops them.
+        fireEvent.click(summary);
+
+        expect(summary.getAttribute('aria-expanded')).toBe('true');
+        expect(rowsOfSummary(container)).toEqual([
+            ['Premise', null, '1'],
+            ['Promise', null, '2'],
+            ['Theme', 'writer', '2'],
+            ['Tone', null, '1'],
+            ['Ending', 'to write', '1']
+        ]);
     });
 });

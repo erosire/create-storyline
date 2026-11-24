@@ -21,6 +21,7 @@ import type {
     Proposal,
     Revision,
     Story,
+    StoredRecord,
     Summary,
     Task,
     Verdict
@@ -82,7 +83,16 @@ const RESOLVABLE: RefKind[] = [
     // `inStoryScope`/`rowsInStoryScope` path `findings`/`revisions` use applies unchanged.
     'knowledge',
     'seed_briefs',
-    'sample_reviews'
+    'sample_reviews',
+    // The Summary Phrase collections (R3). `phrase_groups` is the one a §7.1 tool NAMES by id today:
+    // `raiseFinding`'s `group_refs` argument carries `phrase_groups.id` values, and an invented id
+    // has to be refused with the label this list produces ("that id is a phrase group") rather than
+    // stored as an attribution nothing can ever close. `phrases` and `group_revisions` join the list
+    // for the same reason a later tool (a group editor, a history read) will name them, and because
+    // a partially-resolvable registry is the kind of half-rule that costs a debugging session.
+    'phrases',
+    'phrase_groups',
+    'group_revisions'
 ];
 
 /** A label for one collection, singular, for refusal prose ("that id is a chapter"). */
@@ -124,7 +134,12 @@ const COLLECTION_ACCESSOR: Record<
     // `seed_briefs`/`sample_reviews` are the two registry keys whose Store field is camelCase
     // (store.ts:482-484), which is the whole reason the map exists.
     seed_briefs: (store) => store.seedBriefs,
-    sample_reviews: (store) => store.sampleReviews
+    sample_reviews: (store) => store.sampleReviews,
+    // The Summary Phrase collections (R3): a finding's `group_refs` are resolved through here, so an
+    // id naming no group of this Story is a refusal with a label instead of a dangling attribution.
+    phrases: (store) => store.phrases,
+    phrase_groups: (store) => store.phraseGroups,
+    group_revisions: (store) => store.groupRevisions
 };
 
 /** Reads the store's typed collection by name without a per-collection switch. */
@@ -365,6 +380,57 @@ export function isDivergenceMode(store: Store, story: Story): boolean {
 
 // ── typed reads (all Story-scoped, T-3) ─────────────────────────────────────
 
+/**
+ * The minted suffix of a story-local id (`revision_10` → 10), or `undefined` for an id the store
+ * did not mint (`store/store.ts:Collection.create` writes `${singular}_${n}`, zero-based).
+ *
+ * WHY THIS IS THE CREATION-ORDER SIGNAL: §4 rows carry no ordering column and `rev` is the CAS
+ * token, not a sequence. The suffix IS a per-collection monotonic counter, so it is the only field
+ * that says which of two rows a run wrote first. A suffix like `1a` or `0_1` is not the store's, so
+ * it declines to answer rather than guessing.
+ */
+const mintedSuffix = (id: string): number | undefined => {
+    const cut = id.lastIndexOf('_');
+
+    if (cut < 0) return undefined;
+
+    const suffix = id.slice(cut + 1);
+
+    // `Number('')` is 0, which would silently rank a hand-written `revision_` as the oldest mint.
+    return /^\d+$/.test(suffix) ? Number(suffix) : undefined;
+};
+
+/**
+ * The ordering the newest-first row readers below promise: `created_at` DESC, and for rows minted in
+ * the same millisecond — which phase ①'s sampling and screening produce constantly, because the
+ * engine writes a whole fan-out inside one sweep — the minted id DESC.
+ *
+ * WHY NOT A BARE `b.id.localeCompare(a.id)` FOR THE TIE:
+ *   * local ids are ZERO-BASED counters that pass 9 on the first sampling round, and lexically
+ *     `revision_2` sorts above `revision_10` — so a lexical tie-break puts the THIRD-OLDEST draft of a
+ *     round of eleven first and reports it as the newest one. The minted suffix is compared as a
+ *     NUMBER to keep creation order intact (see `mintedSuffix`).
+ *   * where the suffix cannot answer (a hand-minted id such as `revision_1a`), the fallback is the
+ *     id's UTF-16 CODE UNITS rather than `localeCompare`, whose collation is locale- and
+ *     ICU-version-dependent: the row order a Reader sees must not depend on the host's locale.
+ *
+ * Rows are read per collection, so a tie is always between two ids of one prefix and the two rules
+ * above cannot disagree about which one came later. Exported for the focused same-millisecond test
+ * (`artifacts.test.ts`), which is the only way to pin a tie without racing the clock.
+ */
+export function compareNewestFirst(a: StoredRecord, b: StoredRecord): number {
+    const byCreated = b.created_at.localeCompare(a.created_at);
+
+    if (byCreated !== 0) return byCreated;
+
+    const left = mintedSuffix(a.id);
+    const right = mintedSuffix(b.id);
+
+    if (left !== undefined && right !== undefined && left !== right) return right - left;
+
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
 export const storyRows = (store: Store, storyId: string): Story | undefined =>
     scopedGet(store.stories.get(storyId), storyId);
 export const summaryRow = (store: Store, storyId: string): Summary | undefined =>
@@ -375,22 +441,17 @@ export const chapterRows = (store: Store, storyId: string): Chapter[] =>
     [...scopedRows(store.chapters.list(), storyId)].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 export const castRows = (store: Store, storyId: string): CastMember[] => scopedRows(store.cast.list(), storyId);
 export const ledgerRows = (store: Store, storyId: string): LedgerEntry[] => scopedRows(store.ledger.list(), storyId);
+// D-3d/D-21/D-38a/D-17d: ideas, revisions, verdicts and findings all read newest-first, so the
+// comparator is shared rather than re-spelled four times (each of the four once had a tie-break that
+// compared a row's id with itself, which answered 0 and left same-ms rows in CREATION order).
 export const ideaRows = (store: Store, storyId: string): Idea[] =>
-    [...scopedRows(store.ideas.list(), storyId)].sort(
-        (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(b.id)
-    );
+    [...scopedRows(store.ideas.list(), storyId)].sort(compareNewestFirst);
 export const revisionRows = (store: Store, storyId: string): Revision[] =>
-    [...scopedRows(store.revisions.list(), storyId)].sort(
-        (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(b.id)
-    );
+    [...scopedRows(store.revisions.list(), storyId)].sort(compareNewestFirst);
 export const verdictRows = (store: Store, storyId: string): Verdict[] =>
-    [...scopedRows(store.verdicts.list(), storyId)].sort(
-        (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(b.id)
-    );
+    [...scopedRows(store.verdicts.list(), storyId)].sort(compareNewestFirst);
 export const findingRows = (store: Store, storyId: string): Finding[] =>
-    [...scopedRows(store.findings.list(), storyId)].sort(
-        (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(b.id)
-    );
+    [...scopedRows(store.findings.list(), storyId)].sort(compareNewestFirst);
 export const taskRows = (store: Store, storyId: string): Task[] =>
     [...scopedRows(store.tasks.list(), storyId)].sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
 export const proposalRows = (store: Store, storyId: string): Proposal[] => scopedRows(store.proposals.list(), storyId);

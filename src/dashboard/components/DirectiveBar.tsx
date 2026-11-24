@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { useDashboard, useDashboardStore } from '../state';
 import { DEFAULT_STORY_SELECTION, directiveFocus } from './story-nav';
-import type { StorySelection } from './story-nav';
+import type { DirectiveFocusView, StorySelection } from './story-nav';
 import type { HomeTab } from './HomeDesk';
 
 export interface DirectiveBarProps {
@@ -26,11 +26,28 @@ export interface DirectiveBarProps {
 
 export function DirectiveBar({ selection = DEFAULT_STORY_SELECTION, homeTab = 'requests' }: DirectiveBarProps) {
     const store = useDashboardStore();
-    const { activeStoryId, storyViews } = useDashboard();
+    const { activeStoryId, storyViews, phrases } = useDashboard();
     const [text, setText] = useState('');
     const [busy, setBusy] = useState(false);
     const view = activeStoryId ? storyViews[activeStoryId] : undefined;
-    const focus = view ? directiveFocus(view, selection) : undefined;
+    // R6: the directive's artifact refs come from the phrase read, because a Summary GROUP is addressed by its
+    // uuid — the Story payload alone cannot name one. So the bar reads the phrase the store cached beside the
+    // Story, and `directiveFocus` resolves the rail's `summary-group:<uuid>` ref into the group's title, sentence
+    // and id. Without the phrase the label still describes the pane; only the group ref is missing.
+    const phrase = activeStoryId ? phrases[activeStoryId] : undefined;
+    // Built field by field (not spread) so the bar depends on the five slices the focus actually reads, and a
+    // payload change in any other slice cannot silently change what a directive is addressed to.
+    const focusView: DirectiveFocusView | undefined = view
+        ? {
+              story: view.story,
+              summary: view.summary,
+              cast: view.cast,
+              plotlines: view.plotlines,
+              chapters: view.chapters,
+              ...(phrase === undefined ? {} : { phrase })
+          }
+        : undefined;
+    const focus = focusView ? directiveFocus(focusView, selection) : undefined;
     const label = activeStoryId
         ? (focus?.label ?? 'Directive')
         : homeTab === 'create'

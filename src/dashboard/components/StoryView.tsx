@@ -21,6 +21,8 @@ import { IdeasTray } from './IdeasTray';
 import { PlotlineChapters } from './PlotlineChapters';
 import { PlotlinesPane } from './PlotlinesPane';
 import { StalledReview } from './story-stalled-review';
+import { SummaryGroupPane } from './SummaryGroupPane';
+import { SummaryOverviewPane } from './SummaryOverviewPane';
 import { SummaryPane } from './SummaryPane';
 import { PhaseControls } from './story-phase-controls';
 import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
@@ -28,13 +30,14 @@ import {
     DEFAULT_STORY_SELECTION,
     recommendedRevisionId,
     selectionExists,
+    summaryGroupFocus,
     summaryReadyForReview,
     summaryRevisionFocus,
     summaryRevisions,
     summaryRevisionUnit
 } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, selectedSummaryRevision, storyStatusLabel } from './story-contract';
+import { isGroupSummary, isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, selectedSummaryRevision, storyStatusLabel } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 
 /** D-2a/L-34/L-37a: awaiting the Author is calm, stalled is urgent — and neither is an error. */
@@ -64,9 +67,20 @@ export interface StoryViewProps {
     ledgerState?: string;
     /** The rail's selection; absent means the Summary, which is the phrase a Story opens on. */
     selection?: StorySelection;
+    /**
+     * R6 — the group rows in the Summary panes navigate, so the content column needs the rail's verb. Absent
+     * (a pane rendered without a shell) leaves the rows as text: the panes still read, they just cannot move.
+     */
+    onSelect?: (selection: StorySelection) => void;
 }
 
-export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT_STORY_SELECTION }: StoryViewProps) {
+export function StoryView({
+    view,
+    actions = {},
+    ledgerState,
+    selection = DEFAULT_STORY_SELECTION,
+    onSelect
+}: StoryViewProps) {
     const { story } = view;
     const active: StorySelection = selectionExists(view, selection) ? selection : { panel: selection.panel };
 
@@ -101,6 +115,16 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
     const onSelectRevision = actions.selectRevision
         ? (unitRef: string, revisionId: string) => void actions.selectRevision?.(unitRef, revisionId)
         : undefined;
+    // R6 — the one question that decides which Summary SURFACE the column holds: a group-managed book opens the
+    // compiled Overview and its five group panes, a sampling book keeps the round. `isGroupSummary` answers from
+    // `story.summary_mode` (the Setting the server echoes), so the surface cannot drift from the wire, and a
+    // legacy book with no `summary_mode` on its row is never made to look grouped.
+    const grouped = isGroupSummary(view);
+    // The group the rail's ref addresses, resolved against the live rows; `undefined` means the Overview. A stale
+    // ref is already gone by here — `active` applied `selectionExists`, which drops a ref that names no live
+    // group once the phrase read has landed — and a ref whose read has NOT landed resolves to `undefined` too, so
+    // the Overview's own pending line is what the Author reads while the rows are on their way (U6).
+    const groupFocus = grouped ? summaryGroupFocus(view, active) : undefined;
 
     return (
         <div className="sv-story">
@@ -110,8 +134,11 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                     {story.status_reason ? <span className="sv-story-reason">{story.status_reason}</span> : null}
                     {/* §10 / §6.6 — phase ①'s sampling round, the one number that tells the Author
                         which round the Summary panes are showing. Only phase ① samples, so the line
-                        stays off later phases (and off a payload that predates the projection). */}
-                    {story.phase === 'summary' && view.sampling !== undefined ? (
+                        stays off later phases (and off a payload that predates the projection).
+                        R6: and off a GROUP-managed book, which runs no sampler at all — the loop writes
+                        five groups, so a round number over its Overview would be a number the engine
+                        never produced (U3). */}
+                    {story.phase === 'summary' && view.sampling !== undefined && !grouped ? (
                         <span className="sv-story-sampling">Sampling round {view.sampling.round}</span>
                     ) : null}
                 </p>
@@ -119,43 +146,69 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                 {active.panel === 'seed' ? <SeedPane view={view} /> : null}
 
                 {active.panel === 'summary' ? (
-                    // U1 — the MAIN Summary item's own column: the stalled screen, the Summary pane, and the
+                    // U1 — the MAIN Summary item's own column: the stalled screen, the Summary surface, and the
                     // phase-level controls that belong to that surface. The wrapper is what makes "on the
                     // main Summary item" a DOM fact rather than a reading: `.sv-summary-column` is the scope
                     // the acceptance tests count the phase controls inside. It is a flex column with the same
                     // gap as `.sv-story-main` (styles/story.css), so nesting the pair changes the spacing not
                     // at all — the reported defect is about WHICH surface renders the block, not where it sits.
+                    //
+                    // R6 — THE COLUMN HOLDS ONE OF TWO SUMMARY SURFACES. A group-managed book shows the compiled
+                    // Overview and its five group rows, or the ONE group the rail's ref addresses; a sampling book
+                    // keeps the round (`SummaryPane`) exactly as it was. The group panes and the round are not
+                    // merged: the round's dials, candidate cards and selection verbs describe a pipeline a grouped
+                    // Story never runs (U3), and printing them over a five-group Overview would put numbers on
+                    // screen that the engine never produced.
                     <div className="sv-summary-column">
                         {story.status === 'pending' && story.pending_kind === 'stalled' ? (
                             <StalledReview view={view} actions={actions} />
                         ) : null}
 
-                        <SummaryPane
-                            story={story}
-                            summary={view.summary}
-                            revisions={revisions}
-                            onRecordRevisionId={onRecordRevision?.id}
-                            recommendedRevisionId={recommended}
-                            onSelectRevision={onSelectRevision}
-                            focus={revisionFocus}
-                            focusSelectable={focusSelectable}
-                            readyForReview={summaryReadyForReview(view)}
-                            sampling={story.summary_sampling}
-                            readers={story.summary_readers}
-                            onSetSummaryReview={
-                                actions.setSummaryReview
-                                    ? (sampling, readers) =>
-                                          void actions.setSummaryReview?.(story.id, sampling, readers)
-                                    : undefined
-                            }
-                            // U-4: the pane's own Backtrack, naming the deletions (L-32).
-                            backtrackNote={
-                                story.summary_locked ? backtrackStatement(story, 'summary', view) : undefined
-                            }
-                            onBacktrack={
-                                actions.backtrack ? (phase) => void actions.backtrack?.(story.id, phase) : undefined
-                            }
-                        />
+                        {grouped ? (
+                            groupFocus === undefined ? (
+                                // The Overview: the compiled text, and one honest row per group. `active` carries
+                                // the selection so the lit row is the one the rail is on.
+                                <SummaryOverviewPane view={view} selection={active} onSelect={onSelect} />
+                            ) : (
+                                // One group: its purpose, its current text, its revision number, its open findings
+                                // with the other groups they span. The revise verb is here, not on the Overview.
+                                <SummaryGroupPane
+                                    view={view}
+                                    actions={actions}
+                                    groupId={groupFocus.id}
+                                    onSelect={onSelect}
+                                />
+                            )
+                        ) : (
+                            <SummaryPane
+                                story={story}
+                                summary={view.summary}
+                                revisions={revisions}
+                                onRecordRevisionId={onRecordRevision?.id}
+                                recommendedRevisionId={recommended}
+                                onSelectRevision={onSelectRevision}
+                                focus={revisionFocus}
+                                focusSelectable={focusSelectable}
+                                readyForReview={summaryReadyForReview(view)}
+                                sampling={story.summary_sampling}
+                                readers={story.summary_readers}
+                                onSetSummaryReview={
+                                    actions.setSummaryReview
+                                        ? (sampling, readers) =>
+                                              void actions.setSummaryReview?.(story.id, sampling, readers)
+                                        : undefined
+                                }
+                                // U-4: the pane's own Backtrack, naming the deletions (L-32).
+                                backtrackNote={
+                                    story.summary_locked ? backtrackStatement(story, 'summary', view) : undefined
+                                }
+                                onBacktrack={
+                                    actions.backtrack
+                                        ? (phase) => void actions.backtrack?.(story.id, phase)
+                                        : undefined
+                                }
+                            />
+                        )}
 
                         {/* U1 (the reported defect) — these controls are PHASE-① SUMMARY-level: accepting the
                             final Summary, the lock gate and its failing Goal/revision/finding reasons, "Request
@@ -169,8 +222,16 @@ export function StoryView({ view, actions = {}, ledgerState, selection = DEFAULT
                             the report describes: the draft's fields, its Findings, its verdict rows, and its own
                             override — nothing else. `story.phase === 'summary'` and the wiring (`lock`, `actions`)
                             are untouched, so the main item keeps the same commands, disabled reasons and pending
-                            states, and later phases' `PhaseControls` (Plotlines/Chapters) are unaffected. */}
-                        {story.phase === 'summary' && revisionFocus === undefined ? (
+                            states, and later phases' `PhaseControls` (Plotlines/Chapters) are unaffected.
+
+                            R6: the same rule reads `groupFocus === undefined` for a grouped book — the gate signs
+                            off the WHOLE Summary, so it belongs under the Overview and not under one group. Its
+                            blockers come from `lockCheck`'s group branch (`groupSignOffBlockers`: unwritten groups,
+                            open findings at the Summary's blocking costs, open group tasks, a Writer holding a
+                            group), which is what keeps the button from claiming a five-group Overview is ready when
+                            two groups are empty (U5). The round verb inside the block is dropped for grouped books
+                            in `story-phase-controls`. */}
+                        {story.phase === 'summary' && revisionFocus === undefined && groupFocus === undefined ? (
                             <PhaseControls view={view} actions={actions} lock={lock} />
                         ) : null}
                     </div>

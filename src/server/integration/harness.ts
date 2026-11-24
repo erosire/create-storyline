@@ -33,12 +33,23 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { startStorylineServer, type StorylineRuntimeOptions, type StorylineServerHandle } from '../api/server';
+// THE PROJECTION A RESTARTED PANEL IS READ FROM. `api/projections.ts:storyRow` is the one function
+// `GET /stories` renders a Stories row with, and it is pure over `(store, criteria, digest)` — so the
+// restart step of §15's L-26 can render the row a SECOND Store over the same book answers, which is what
+// a restarted server paints, instead of reading the live server a second time.
+import { storyRow as projectStoryRow } from '../api/projections';
+import { CriteriaEngine } from '../criteria/engine';
+import { DigestBuilder } from '../digest/digest';
+// S-RUNTIME: the fixture exposes one Story's runtime and the app-config book, so a slice test can assert on
+// a Story's own files instead of on one shared book (`context`, `storyDir`, `appConfig`).
+import type { ServerConfig } from '../runtime/server-config';
+import type { StoryRuntimeContext, StoryRuntimes } from '../runtime/story-runtimes';
 import { MockChatClient, type MockHandler, calls, msg } from '../llm/mock';
 import type { ChatRequest, ChatResponse, ToolCall } from '../llm/client';
 import { Store } from '../store/store';
 import { seedHashOf } from '../../shared/seed-hash';
-import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME } from '../../shared/schemas';
-import type { IssueList, SummarySample } from '../../shared/schemas';
+import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME, GROUP_DRAFT_SCHEMA_NAME, GROUP_REVIEW_SCHEMA_NAME } from '../../shared/schemas';
+import type { GroupDraft, GroupReview, IssueList, SummarySample } from '../../shared/schemas';
 import type { Chapter, Cost, Idea, Plotline, Revision, SampledFixVerification, Story, Summary, Verdict } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -155,6 +166,36 @@ export interface CrewOptions {
      * candidate (`src/server/loop/sample-select.ts:scoreSample`).
      */
     screenFixes?: (turn: ScreenTurn) => SampledFixVerification[];
+    /**
+     * SUMMARY PHRASE R2/R5 — the JSON a `draft_groups` run answers. The default answers for EVERY group
+     * the prompt named, copying `group_ref` out of that group's heading and writing content derived from
+     * its KEY and the Seed's logline, so an installed group provably came from the prompt that asked for
+     * it — the same guarantee `defaultSampleAnswer` gives the sampler. Return a STRING to answer raw text
+     * (the schema-repair rows), or an answer naming a group outside the batch: that is a refusal the
+     * whole batch pays for (`phrase/revisions.ts:parseGroupDraftAnswer`), which is how a slice drives
+     * R2's all-or-none install.
+     */
+    groupDraft?: (turn: GroupDraftTurn) => GroupDraft | string;
+    /**
+     * SUMMARY PHRASE R3 — the JSON a `review_groups` run answers. Default `{issues: []}`, a clean
+     * Overview. A slice scripts an issue whose `group_refs` are ids from `turn.groups` — the attribution
+     * the loop routes the Writer batch by, and the anchor a multi-group finding closes on.
+     */
+    groupReview?: (turn: GroupReviewTurn) => GroupReview | string;
+    /**
+     * The group review's fix certificate, the same rule as {@link CrewOptions.screenFixes}: the default
+     * certifies every task the prompt named as `resolved`, quoting the first group's installed text.
+     */
+    groupFixes?: (turn: GroupReviewTurn) => SampledFixVerification[];
+    /**
+     * SUMMARY PHRASE R3 — the `group_refs` the deep-review Reader files its finding with. The default
+     * names every group of the Story: on a group-managed book the Checker REFUSES a phase-① Summary
+     * defect that names none (`tools/checker.ts`), and "the whole Overview" is the honest reading of a
+     * crew that reports a defect without scoping it. A slice that wants the work routed to ONE group
+     * resolves that id from `ctx.store.phraseGroups` and returns it; returning `[]` opts back into the
+     * legacy meaning on a legacy book.
+     */
+    readerGroupRefs?: (ctx: CrewContext) => string[] | undefined;
 }
 
 /** The compiled prompt a no-tool sampling run receives (§5); no brief exists in this mode. */
@@ -185,9 +226,91 @@ export interface ScreenTurn {
     prompt: string;
 }
 
+/**
+ * SUMMARY PHRASE — one group exactly as a group prompt prints it (`run/phase1-prompt.ts:renderGroupEntry`).
+ *
+ * THE HEADING IS THE INTERFACE: `group_ref` is the id the answer has to carry and the id the engine writes
+ * against, so a scripted answer reads its groups back out of the same bytes a model would, rather than
+ * being handed a fixture's private list. `currentText` is what a FIX has to revise; it is `''` for a group
+ * the prompt says was never written, because there is nothing there to keep.
+ */
+export interface GroupPromptEntry {
+    ref: string;
+    key: string;
+    revision: number;
+    currentText: string;
+}
+
+/** The compiled prompt a `draft_groups` run receives (R2): the batch's groups, in catalog order. */
+export interface GroupDraftTurn {
+    groups: GroupPromptEntry[];
+    system: string;
+    user: string;
+    prompt: string;
+}
+
+/** The compiled prompt a `review_groups` run receives (R3): the whole Overview, plus its fix list. */
+export interface GroupReviewTurn {
+    groups: GroupPromptEntry[];
+    /** The fix ids this pass's `## FIX TASKS` section names; empty when the pass carries none (H1/R2). */
+    fixIds: string[];
+    system: string;
+    user: string;
+    prompt: string;
+}
+
 // The criteria the engine aggregates over the Story row rather than the artifact: C-4's subject is
 // the whole set, and C-10/C-11/C-13 are whole-level checks (`criteria/engine.ts:scopeTargets`).
 export const STORY_SCOPED_CRITERIA = ['C-4', 'C-10', 'C-11', 'C-13'];
+
+/**
+ * SUMMARY PHRASE — the groups a GROUP prompt prints, read back out of its `### …` headings
+ * (`run/phase1-prompt.ts:renderGroupEntry`). This is a PARSER and not a fixture list on purpose: the
+ * mock crew answers a group job from the same bytes a real model would read, so a slice that scripts a
+ * fix over `premise` addresses the id the prompt actually offered, and a prompt that stopped printing
+ * ids produces an empty batch here exactly as it would leave a real model nothing to copy.
+ *
+ * The current text is the paragraph under `current text:` up to the blank line that ends the entry — the
+ * entry boundary and the instruction block that follows it both open with a blank line, so stopping
+ * there keeps the engine's answer contract out of the group's text.
+ */
+function groupEntriesOf(prompt: string): GroupPromptEntry[] {
+    const heading = /^### .+ \(group_ref=([^,]+), key=([a-z_]+), revision=(\d+)\)$/gm;
+    const entries: GroupPromptEntry[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = heading.exec(prompt)) !== null) {
+        const block = prompt.slice(match.index + match[0].length);
+        const marker = block.indexOf('current text:');
+        const rest = marker === -1 ? '' : block.slice(marker + 'current text:'.length);
+        const text = rest.split('\n\n')[0]?.trim() ?? '';
+
+        entries.push({
+            ref: match[1].trim(),
+            key: match[2],
+            revision: Number(match[3]),
+            // The stated absence is not a text: an unwritten group has nothing to revise (R2).
+            currentText: text.startsWith('(this group has never been written') ? '' : text
+        });
+    }
+
+    return entries;
+}
+
+/**
+ * The default `draft_groups` answer (R2): one entry per group the prompt named, in that order, content
+ * derived from the group's KEY and the Seed's logline. `sample N: <logline>` is the sampler's traceability
+ * guarantee; this is its group equivalent — an installed group says which group it is and came from the
+ * prompt that asked for it, and five different texts make a batch that wrote only two of them visible.
+ */
+export const defaultGroupDraftAnswer = (
+    groups: readonly GroupPromptEntry[],
+    logline: string,
+    knowledgeUsed: string[] = []
+): GroupDraft => ({
+    groups: groups.map((group) => ({ group_ref: group.ref, content: `${group.key}: ${logline}` })),
+    knowledge_used: knowledgeUsed
+});
 
 /**
  * The Seed Brief the scripted Editor derives (§1 step 2, §3.3). Every field is a pure function of
@@ -350,7 +473,12 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         findingIds: [...brief.matchAll(/^- (finding_\d+) \[/gm)].map((match) => match[1]),
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
-        reviewPass: /Reader pass \d+ of \d+/.test(brief),
+        // TWO job-note shapes mean "this is phase ①'s deep review": the sampling pipeline's
+        // `Reader pass N of M` (§6.4 step 6) and the group pipeline's `Reader pass N/M on the installed
+        // group Overview` (`loop/work.ts`'s group deep review, R3/R5). Missing the second one is how a
+        // group book ends up with a review run that submitted no verdict and filed no finding: the crew
+        // falls through to the chapter-Checker branch and the Summary level sits failing forever.
+        reviewPass: /Reader pass \d+ of \d+/.test(brief) || /Reader pass \d+\/\d+ on the installed group Overview/.test(brief),
         phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
     };
 }
@@ -831,9 +959,16 @@ const readerScript: CrewScript = (ctx) => {
     // draft), and files a defect when the story's seat finds one. It proposes no Ideas — an Idea
     // is the probe round's output (D-26/D-30), and a review that also restocks the tray never closes.
     if (ctx.reviewPass) {
-        const revisionId = ctx.draftIds[0];
+        // TWO targets, because the two pipelines review two different artifacts. The sampling pass is
+        // briefed on a draft (`revision_id=` in its note) and D-33 makes it cite that draft; the GROUP
+        // pass is briefed on the composed Overview and the Summary row, and there is NO draft row in that
+        // model (`loop/work.ts`'s group deep review says so in as many words). Treating the missing draft
+        // as an error is what sent the group pass down the chapter-Checker branch and left the Summary
+        // level failing with no verdict and no finding at all.
+        const revisionId = ctx.draftIds[0] ?? '';
+        const target = ctx.unitTarget ?? revisionId;
 
-        if (revisionId === undefined) return { content: `No draft named in the Reader brief (${ctx.template}).` };
+        if (target === undefined || target === '') return { content: `No artifact named in the Reader brief (${ctx.template}).` };
 
         const lines = ctx.criteria.map((id) => ({
             criterion: id,
@@ -842,13 +977,19 @@ const readerScript: CrewScript = (ctx) => {
                 ? `the Reader pass saw the Seed element missing — ${id} fails here.`
                 : 'the draft delivers this criterion against the Seed.'
         }));
+
         const specs: CrewCall[] = [
             {
                 name: 'submitVerdict',
                 args: {
-                    // The job note says "submitVerdict against <unit_ref>": a Summary draft's
-                    // criteria are aggregated at the Summary row (criteria/engine.ts:scopeTargets).
-                    target_ref: ctx.unitTarget ?? revisionId,
+                    // The GOAL verdict goes to the Summary unit: `criteria/engine.ts:scopeTargets`
+                    // grades every `summary`-level criterion (C-14) on that row. This double files the
+                    // decisive one of the two filings the deep-review brief now demands (CS-VERDICT-1:
+                    // a Summary-unit line AND a per-draft line for U-13's panel — `loop/mock.ts`'s crew
+                    // files both). It stays a valid answer on its own: the engine reads the selected
+                    // draft's line as Summary evidence too (criteria/engine.ts:summaryDraftEvidenceRefs),
+                    // and a unit-targeted line is the form that answers the Goal by itself.
+                    target_ref: target,
                     criteria_passed: lines,
                     recommendation: lines.some((line) => !line.result) ? 'fix' : 'advance'
                 }
@@ -859,17 +1000,32 @@ const readerScript: CrewScript = (ctx) => {
             typeof ctx.options.readerFinds === 'function' ? ctx.options.readerFinds(ctx) : ctx.options.readerFinds;
 
         if (cost !== undefined) {
+            // SUMMARY PHRASE R3 — on a GROUP-managed book the Checker refuses a phase-① Summary defect
+            // that names no group, because R3's closure is a join on those ids. The default copies every
+            // group of the Story, which is the honest reading of a fixture that simply says "this Overview
+            // has a defect" — a cross-cutting defect names them all. A slice that wants the work routed to
+            // ONE group resolves that group's id from `ctx.store.phraseGroups` and returns it.
+            const groupRefs =
+                ctx.options.readerGroupRefs !== undefined
+                    ? ctx.options.readerGroupRefs(ctx)
+                    : ctx.store.phraseGroups.list().filter((group) => group.story_id === ctx.story?.id).map((group) => group.id);
+
             specs.push({
                 name: 'raiseFinding',
                 args: {
-                    target_ref: ctx.unitTarget,
+                    target_ref: target,
                     criterion_ref: lines.find((line) => !line.result)?.criterion ?? 'C-14',
                     title: `Reader: the draft drifts from the Seed (${ctx.template})`,
-                    // D-30: the Editor needs the what-and-where line, not just the proof.
-                    detail: `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId}.`,
-                    evidence: `the Reader pass read ${revisionId} against the Seed and found the promise unpaid`,
+                    // D-30: the Editor needs the what-and-where line, not just the proof. In the group
+                    // model the artifact named is the Overview itself, because there is no draft row.
+                    detail: `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId === '' ? 'the installed group Overview' : revisionId}.`,
+                    evidence: `the Reader pass read ${revisionId === '' ? target : revisionId} against the Seed and found the promise unpaid`,
                     cost,
-                    related_refs: [revisionId],
+                    // D-33 makes a phase-① Summary finding cite the draft it describes; the group model
+                    // has no draft row, so the citation is simply absent and R3's `group_refs` below are
+                    // what make the defect addressable instead.
+                    ...(revisionId === '' ? {} : { related_refs: [revisionId] }),
+                    ...(groupRefs === undefined || groupRefs.length === 0 ? {} : { group_refs: groupRefs }),
                     why: 'The Reader angle: what a reader of this Author would object to (D-30).'
                 }
             });
@@ -958,13 +1114,23 @@ export const CREW_SCRIPTS: Record<string, CrewScript> = {
  * `llm/client.ts:ChatRequest` carries no run id, and `run/brief.ts` names the crew in its first
  * heading (`ROLE — <role> (<kind>) of <template>`). The turn index is the length of the conversation,
  * which is exactly what a stateless harness sees (S-1, P2).
+ *
+ * THE BOOK IS A THUNK IN THE WORKSPACE SHAPE: a Story's rows live in `<root>/stories/<uuid>/`, and that
+ * book does not exist until the first Story is created. A `Store` captured at boot would therefore be the
+ * app-config book, whose Story list is empty forever, and every crew would answer a brief about rows it
+ * cannot see. The thunk is handed the BRIEF text and picks the book the brief is about: the §5 brief quotes
+ * the Story's Seed verbatim (`run/brief.ts`'s `SEED —` block), so the book whose Story carries that Seed is
+ * the book whose ids, revisions and criteria the answer has to cite. With one Story it is that Story either
+ * way; with several, a shared double that read the first book would cite another Story's revisions and the
+ * optimistic-concurrency fence (T-4) would refuse writes that were correct.
  */
 export function createCrewClient(
-    store: Store,
+    store: Store | ((brief: string) => Store | undefined),
     options: CrewOptions = {}
 ): { client: MockChatClient; refusals: CrewRefusal[] } {
     const refusals: CrewRefusal[] = [];
     const scripts = { ...CREW_SCRIPTS, ...(options.scripts ?? {}) };
+    const bookOf = (text: string): Store | undefined => (typeof store === 'function' ? store(text) : store);
 
     const handler: MockHandler = (request): ChatResponse => {
         const brief = String(request.messages[0]?.content ?? '');
@@ -972,15 +1138,23 @@ export function createCrewClient(
         // §2 decision 3 / §6.4 steps 3-4: a `toolMode: 'none'` run asks for a schema-constrained
         // answer, not for tool calls. It carries no ROLE brief at all — its whole memory is the
         // compiled prompt (§5) — so it is answered BEFORE the brief machinery below and never joins
-        // a script's turn count: the one schema-repair retry must receive a real answer again.
+        // a script's turn count: the one schema-repair retry must receive a real answer again. The
+        // compiled prompt still quotes the Seed, so the same book lookup works on it.
+        const storeOfRequest = bookOf(brief);
+
         if (request.responseFormat !== undefined)
-            return { message: msg({ content: structuredAnswer(request, store, options) }) };
+            return {
+                message: msg({
+                    content: storeOfRequest === undefined ? '' : structuredAnswer(request, storeOfRequest, options)
+                })
+            };
 
         // A request with no brief in front of it is not a crew turn; answer empty and let the
-        // executor's normal path close the session.
-        if (!brief.includes('ROLE — ')) return { message: msg({ content: '' }) };
+        // executor's normal path close the session. Same answer for a workspace with no book yet: there
+        // is no Story to brief a crew about, so there is nothing to read.
+        if (!brief.includes('ROLE — ') || storeOfRequest === undefined) return { message: msg({ content: '' }) };
 
-        const parsed = readBrief(brief, store, options);
+        const parsed = readBrief(brief, storeOfRequest, options);
         const template = parsed.template;
 
         // A template the suite has no script for still gets answered by its KIND — a crew is a kind
@@ -1039,7 +1213,7 @@ export function createCrewClient(
             template,
             kind: parsed.kind,
             turn,
-            store,
+            store: storeOfRequest,
             story: parsed.story,
             summary: parsed.summary,
             summaryId: parsed.summaryId,
@@ -1125,6 +1299,36 @@ function structuredAnswer(request: ChatRequest, store: Store, options: CrewOptio
         // scripts a `screenAnswer` would silently lose its certificate and stall the round, and a
         // round-1 screen (no FIX TASKS) keeps answering the bare `{"issues":[…]}` it always did.
         const certificate = options.screenFixes?.(turn) ?? defaultFixVerifications(fixIds, fields.premise);
+        const certified =
+            typeof answer === 'string' || answer.fix_verifications !== undefined || certificate.length === 0
+                ? answer
+                : { ...answer, fix_verifications: certificate };
+
+        return typeof certified === 'string' ? certified : JSON.stringify(certified);
+    }
+
+    // SUMMARY PHRASE R2 — a `draft_groups` job. The groups are PARSED from the compiled prompt (see
+    // `groupEntriesOf`), so the answer is built from the batch the ENGINE asked for rather than from a
+    // fixture's guess: an answer for a group outside the batch, or one that leaves a named group out, is
+    // refused atomically, and that refusal is a behaviour a slice can drive from here.
+    if (name === GROUP_DRAFT_SCHEMA_NAME) {
+        const turn: GroupDraftTurn = { groups: groupEntriesOf(prompt), system, user, prompt };
+        const answer =
+            options.groupDraft !== undefined
+                ? options.groupDraft(turn)
+                : defaultGroupDraftAnswer(turn.groups, loglineOf(prompt), knowledgeFingerprintsOf(prompt));
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // SUMMARY PHRASE R3 — a `review_groups` job. Same certificate rule as the legacy screen (H1/R2): the
+    // pass answers for every fix id its prompt named, and the default quotes the Overview it was shown.
+    if (name === GROUP_REVIEW_SCHEMA_NAME) {
+        const groups = groupEntriesOf(prompt);
+        const fixIds = fixTaskIdsOf(prompt);
+        const turn: GroupReviewTurn = { groups, fixIds, system, user, prompt };
+        const answer = options.groupReview !== undefined ? options.groupReview(turn) : { issues: [] };
+        const certificate = options.groupFixes?.(turn) ?? defaultFixVerifications(fixIds, groups[0]?.currentText);
         const certified =
             typeof answer === 'string' || answer.fix_verifications !== undefined || certificate.length === 0
                 ? answer
@@ -1235,8 +1439,30 @@ function revisionIdOf(store: Store, fields: Record<string, string>): string {
 /** A live server plus the seams the slice drives: sweeps for the clock, the store for the ledger. */
 export interface StorylineFixture {
     handle: StorylineServerHandle;
-    store: Store;
+    /**
+     * The book the slice's Story lives in — `<root>/stories/<uuid>/`, an ACCESSOR rather than a captured
+     * Store, because in the workspace shape that book exists only once a Story has been created (which is
+     * the slice's first request). Before then it answers the app-config book, whose Story list is empty —
+     * the same "nothing has happened yet" a fresh flat store used to read as.
+     *
+     * With two Stories open it is the FIRST book; a test that means a particular Story asks for its own
+     * context below, and a test that means the workspace reads the routes (`fixture.api`), which merge.
+     */
+    readonly store: Store;
+    /**
+     * The workspace root: `<root>/server/` for configuration and `<root>/stories/<uuid>/` for one book per
+     * Story. This is NOT a store directory any more: reload a Story's book with
+     * `Store.loadStory(id, fixture.storyDir(id))`, not `Store.load(fixture.root)`.
+     */
     root: string;
+    /** The app-config book (`<root>/server/`): the crew catalogue and the host settings (`runtime/server-config.ts`). */
+    readonly appConfig: ServerConfig;
+    /** Every Story this workspace holds, one book each, as `{ id, dir }` in book order. */
+    stories(): { id: string; dir: string | null }[];
+    /** One Story's whole runtime — its loop, executor, tool catalogue, knowledge projection and thread log. */
+    context(storyId: string): StoryRuntimeContext | undefined;
+    /** The directory of one Story's book, or `null` when the book is in memory. */
+    storyDir(storyId: string): string | null;
     origin: string;
     /** Every tool refusal the crews were given, in call order. */
     refusals: CrewRefusal[];
@@ -1244,6 +1470,14 @@ export interface StorylineFixture {
     requests: readonly ChatRequest[];
     /** One Author action: a sweep, then every opened run to completion. */
     tick(): Promise<void>;
+    /**
+     * THE BARRIER a snapshot is taken behind: waits for the runs this process started — and the run
+     * bookkeeping chained behind them — to close, and refuses to return while the book still shows a live
+     * run row. A step that reads a Story row, a level string or an Ideas tray right after this point
+     * reads ONE coherent boundary; the same read taken while a crew holds the desk is a read of an
+     * arbitrary point of a write.
+     */
+    quiesce(): Promise<void>;
     /** Sweeps until `stop` holds; throws with the crew panel if the loop keeps running. */
     settle(stop: () => boolean | Promise<boolean>, max?: number): Promise<void>;
     api<T = unknown>(method: string, route: string, body?: unknown): Promise<{ status: number; body: T }>;
@@ -1257,26 +1491,70 @@ export type BootOptions = CrewOptions & {
 };
 
 export async function bootStoryline(options: BootOptions = {}): Promise<StorylineFixture> {
-    // A real root, because the restart test reloads this exact directory with `Store.load`.
+    // A real root, because the restart test reloads this exact directory — as a WORKSPACE now: the app book
+    // under `<root>/server/`, and one Story book per uuid under `<root>/stories/`. An empty directory is the
+    // first-boot case the registry accepts; a root that still carries a flat `store.json` would be refused.
     const root = mkdtempSync(path.join(tmpdir(), 'create-storyline-integration-'));
-    const store = await Store.load(root);
 
-    const { client, refusals } = createCrewClient(store, options);
+    // The crew double reads the Story's book, which does not exist until the first Story is created, so it
+    // gets a thunk over the coordinator rather than a Store captured before the server was built. The thunk
+    // picks the book by the Seed the brief quotes, so a Story whose state has diverged from its sibling's is
+    // answered from its OWN rows — ids, revisions and criteria and all.
+    let runtimes: StoryRuntimes | undefined;
+
+    const bookFor = (text: string): Store | undefined => {
+        const contexts = runtimes?.contexts_() ?? [];
+        const owner = contexts.find((context) =>
+            context.store.stories.list().some((story) => story.idea.length > 0 && text.includes(story.idea))
+        );
+
+        return (owner ?? contexts[0])?.store;
+    };
+
+    const { client, refusals } = createCrewClient(bookFor, options);
+
+    // THE CLOCK — the loop's own timer must never be a test's clock: every sweep is an explicit action.
+    //
+    // `autoSweep: false` IS the whole contract now. Under the coordinator a Story's `LoopEngine` never
+    // schedules at all (`runtime/story-runtimes.ts:build` forces `autoSweep: false` per context, and
+    // `loop/engine.ts:241` is the only place that flag is read); the ONE workspace timer is
+    // `StoryRuntimes.start()`'s, and `start()` gates it on the same flag
+    // (`runtime/story-runtimes.ts:autoSweeps`). `startStorylineServer` calls `engine.start()`
+    // (`api/server.ts:599`), so with the flag false there is no interval anywhere: no background sweep can
+    // land between two `await`s of a slice step and turn a "one sweep = one step" contract — a dispatch
+    // ledger, the level strings one lock produces, the state of the Ideas tray before its verify job — into a
+    // race against the scheduler. This used to need a second knob: the flag was read only per context, so the
+    // coordinator scheduled unconditionally and `sweepIntervalMs: 86_400_000` (one day, past even a starved
+    // run) was the only way to silence the clock. That workaround is gone; the flag means what this fixture
+    // has always claimed. The per-Story scheduling gates stay OPEN, which is what `quiesce`'s note relies on.
+    const engineConfig = {
+        autoSweep: false,
+        ...(options.runtime?.engineConfig ?? {})
+    };
 
     const handle = await startStorylineServer({
         port: 0,
         host: '127.0.0.1',
-        store,
+        storeRoot: root,
+        harnessRoot: root,
         chat: client,
         env: { ...TEST_PROVIDER_ENV, ...(options.env as Record<string, string | undefined>) },
-        // The loop's own timer must never be a test's clock: every sweep is an explicit action.
-        engineConfig: { autoSweep: false, ...(options.runtime?.engineConfig ?? {}) },
+        // `options.runtime` may name its own engine knobs (`slice-chapters.test.ts:44` sets the S-5
+        // ceiling), and the merged config above has to be the LAST word: had the caller's `engineConfig`
+        // replaced it wholesale, a caller that named only `autoSweep`/`globalMaxConcurrent` would quietly
+        // put the 500ms scheduler back inside the test.
+        ...(options.runtime ?? {}),
+        engineConfig,
         // The dashboard bundle is not built in a test checkout, so the static root stays null.
-        staticRoot: null,
-        ...(options.runtime ?? {})
+        staticRoot: null
     });
 
+    runtimes = handle.runtimes;
+
     const base = `http://127.0.0.1:${handle.port}/v1/storyline`;
+
+    /** The book the slice asserts on: its Story's, or the app book while no Story exists. */
+    const storyStore = (): Store => handle.runtimes.contexts_()[0]?.store ?? handle.store;
 
     async function api<T = unknown>(
         method: string,
@@ -1298,11 +1576,48 @@ export async function bootStoryline(options: BootOptions = {}): Promise<Storylin
         await handle.engine.sweep();
 
         // `settle()` drains the engine's in-flight map, and a tool call can open another run inside
-        // the same pass, so a sweep is not one call — it is however many passes the runs take.
+        // the same pass, so a sweep is not one call — it is however many passes the runs take. The live
+        // count is the workspace's, because the one ceiling is enforced across every book at once (S-5).
         for (let index = 0; index < 12; index += 1) {
             await handle.engine.settle();
-            if (liveRunRows(store).length === 0) break;
+            if (handle.runtimes.liveRuns() === 0) break;
         }
+    }
+
+    /**
+     * The quiescence barrier (see `StorylineFixture.quiesce`). Two things have to be empty before a
+     * snapshot is worth pinning, and they are not the same thing:
+     *
+     *   * `engine.settle()` — the runs THIS process started, including the `settleJob` bookkeeping chained
+     *     into the same promise (`loop/engine.ts:1052`), so a closed run row can still have a settlement
+     *     commit in flight behind it;
+     *   * `runtimes.liveRuns()` — the books' own answer for "a crew still holds the desk" (a run row in
+     *     `spawning|working|reporting`), which is what the panel's `active_runs` counts and what the next
+     *     sweep would read as a claim (L-5).
+     *
+     * With the workspace timer switched OFF (`autoSweep: false`, which is what `bootStoryline`'s clock note
+     * pins and what `StoryRuntimes.start()` now honours) nothing moves between
+     * this returning and the caller's read, which is what turns "the row we hope the lock produced" into
+     * "the row the lock produced". The loop is left running on purpose: `runtimes.stop()` would also flip
+     * each Story's scheduling gate and make the NEXT explicit sweep skip the book
+     * (`story-runtimes.ts:837`), so the fixture stays the clock rather than the Author's pause button.
+     */
+    async function quiesce(): Promise<void> {
+        // Two drains. `settle()` already loops until its in-flight map is empty, so a second pass only
+        // catches a settlement that itself opened a run — cheap insurance before a snapshot.
+        for (let pass = 0; pass < 2; pass += 1) {
+            await handle.engine.settle();
+
+            // A run row that outlives every in-flight promise has an owner this process never started (a
+            // lease a previous process left, adopted by the sweep). Past that the barrier reports rather
+            // than pinning a snapshot taken mid-write. It never SWEEPS: a sweep would dispatch new work,
+            // which is the opposite of the boundary a caller is about to snapshot.
+            if (handle.runtimes.liveRuns() === 0) return;
+        }
+
+        const live = handle.runtimes.contexts_().flatMap((context) => liveRunRows(context.store));
+
+        throw new Error(`The workspace never went quiet — the book still carries live runs:\n${live.join('\n')}`);
     }
 
     async function settle(stop: () => boolean | Promise<boolean>, max = 24): Promise<void> {
@@ -1322,17 +1637,28 @@ export async function bootStoryline(options: BootOptions = {}): Promise<Storylin
 
     return {
         handle,
-        store,
+        get store() {
+            return storyStore();
+        },
+        get appConfig() {
+            return handle.runtimes.appConfig;
+        },
         root,
         origin: base,
+        stories: () => handle.runtimes.contexts_().map((context) => ({ id: context.storyId, dir: context.root })),
+        context: (storyId: string) => handle.runtimes.contextOf(storyId),
+        storyDir: (storyId: string) => handle.runtimes.contextOf(storyId)?.root ?? null,
         refusals,
         // The mock client records every request it received; exposing them keeps a suite from
         // threading its own recorder through the crew options.
         requests: client.calls,
         tick,
+        quiesce,
         settle,
         api,
         close: async () => {
+            // `handle.close()` IS the whole shutdown now: the coordinator settles every Story's runs, disposes
+            // every harness, closes every knowledge projection and flushes every book plus the app book.
             await handle.close();
             rmSync(root, { recursive: true, force: true });
         }
@@ -1357,13 +1683,18 @@ export async function createSliceStory(
      * standard (five Writers, five Readers per draft) is the default the route applies when these
      * are omitted, and is pinned separately.
      */
-    review: { sampling?: number; readers?: number } = {}
+    review: { sampling?: number; readers?: number; mode?: 'groups' | 'sampling' } = {}
 ): Promise<string> {
     const { status, body } = await fixture.api<{ id: string }>('POST', '/stories', {
         idea: SLICE_SEED,
         chapter_count: chapterCount,
         summary_sampling: review.sampling ?? 3,
-        summary_readers: review.readers ?? 1
+        summary_readers: review.readers ?? 1,
+        // SUMMARY PHRASE R6: the slices walk the pipeline the scripted crews are written for — the
+        // whole-Summary sampler (N drafts, screening, one selection). The route's default is now the
+        // group pipeline, so the harness names the legacy mode EXPLICITLY rather than inheriting it;
+        // `{ mode: 'groups' }` is how a Summary Phrase slice asks for the five-group loop instead.
+        summary_mode: review.mode ?? 'sampling'
     });
 
     if (status !== 200) throw new Error(`POST /stories failed: ${status} ${JSON.stringify(body)}`);
@@ -1425,6 +1756,30 @@ export async function storyRow(fixture: StorylineFixture, storyId: string): Prom
     if (!row) throw new Error(`storyRow: ${storyId} is not in the panel.`);
 
     return row;
+}
+
+/**
+ * The SAME row, rendered out of a Store the caller names instead of over HTTP.
+ *
+ * This is the shipped projection, not a fixture invention: `GET /stories` builds every row with
+ * `api/projections.ts:storyRow(deps, story)` over the Story's own book, and a workspace's merged panel is
+ * just those rows concatenated (`projections.ts:storyRowsAcross`). So the row this returns IS the row a
+ * restarted server answers from the book it re-opened — which is what §15's L-26 claims, and what the HTTP
+ * `storyRow` above cannot answer about a SECOND Store (its `fixture.api` always reaches the live server).
+ *
+ * WHY FRESH ENGINES ARE CORRECT: `criteria` and `digest` hold no state and read nothing but the rows they
+ * are handed — `CriteriaEngine` has no constructor and keeps only call-local maps
+ * (`criteria/engine.ts:941` `levelStatus(store, story)`), and `runtime/story-runtimes.ts:207` says of them
+ * "pure over the rows they are handed (L-3): one each". The route hands the same pair to every book
+ * (`api/routes.ts:365` `projections(book)` swaps only the store), so a new pair over a journal-loaded book
+ * answers exactly what the live pair answered over the live one.
+ */
+export function storyRowFrom(store: Store, storyId: string): Record<string, any> {
+    const story = store.stories.get(storyId);
+
+    if (story === undefined) throw new Error(`storyRowFrom: ${storyId} is not in this book.`);
+
+    return projectStoryRow({ store, criteria: new CriteriaEngine(), digest: new DigestBuilder() }, story);
 }
 
 /** The Story's whole view as `GET /stories/:id` sends it. */

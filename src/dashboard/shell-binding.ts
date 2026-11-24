@@ -42,6 +42,8 @@ import type {
     CreateTemplateInput,
     GoalCriterionOp,
     GoalPatch,
+    PhraseGroupReviseInput,
+    PhraseView,
     StoryView as ApiStoryView,
     UndoTarget
 } from './api';
@@ -68,9 +70,33 @@ export function assignedTemplates(view: ApiStoryView, catalogue: Template[]): Te
     return view.templates.map((id) => byId.get(id)).filter((template): template is Template => template !== undefined);
 }
 
-/** The pinned payload, shaped for the panels that render it. */
-export function storyViewData(view: ApiStoryView, catalogue: Template[]): ShellStoryView {
-    return { ...view, templates: assignedTemplates(view, catalogue) };
+/**
+ * The pinned payload, shaped for the panels that render it.
+ *
+ * R6's third argument is the SUMMARY PHRASE read the store keeps beside the Story payload: the group rail
+ * and the Summary panes render group rows, and the wire sends them on their own route
+ * (`GET /stories/:id/phrases`), so the shell merges the two reads into the one object the panes take.
+ * `undefined` means that read has not landed (or failed) — the panes render their loading/unavailable
+ * state from it rather than treating a group-managed Story as an unwritten Summary. Absent means the
+ * caller has no phrase read at all, which is what keeps every existing `StoryViewData` fixture compiling.
+ *
+ * R-T2/F2's fourth argument is the CACHED FAILURE of that read (`state.ts:phraseErrors[storyId]`, the
+ * server's own sentence). Absent `phrase` on its own cannot say whether the route is still in flight or has
+ * already answered 503, and a pane that cannot tell draws a loading line over a failure forever; with the
+ * sentence threaded through, the Summary area states what failed while the Story payload stays on screen.
+ */
+export function storyViewData(
+    view: ApiStoryView,
+    catalogue: Template[],
+    phrase?: PhraseView | null,
+    phraseError?: string | null
+): ShellStoryView {
+    return {
+        ...view,
+        ...(phrase ? { phrase } : {}),
+        ...(phraseError === undefined ? {} : { phraseError }),
+        templates: assignedTemplates(view, catalogue)
+    };
 }
 
 /**
@@ -162,6 +188,12 @@ export interface ShellActions {
     sendDirective?(storyIdOrText?: string, text?: string, refs?: string[]): Promise<unknown>;
     /** Phase ① — "not final yet": the Story is the shell's scope, the note optional. */
     requestSummaryRevision?(storyId?: string, note?: string): Promise<unknown>;
+    /**
+     * R2 — the Author's hand edit of ONE GROUP. The pane calls it with the group UUID the rail carries;
+     * the Story is the shell's scope, exactly as with every other local call, and the tolerant shape means
+     * a `(groupId, content)` call and the pinned `(storyId, groupId, input)` call both land.
+     */
+    revisePhraseGroup?(storyIdOrGroupId?: string, groupIdOrInput?: string, input?: PhraseGroupReviseInput): Promise<unknown>;
 }
 
 /**
@@ -384,6 +416,37 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
             second === undefined
                 ? store.sendDirective(storyId, first ?? '', refs)
                 : store.sendDirective(first ?? storyId, second, refs),
-        requestSummaryRevision: (id, note) => store.requestSummaryRevision(scopeOf(id), note)
+        requestSummaryRevision: (id, note) => store.requestSummaryRevision(scopeOf(id), note),
+        // R2 — the group pane's hand edit. Two call shapes arrive here, as everywhere in this file: the
+        // pinned `(storyId, groupId, { content, note })`, and the pane's local `(groupId, content)` with
+        // the Story being the shell's scope. The GROUP is the addressed thing in both, so a one-argument
+        // object call still lands on the right row, and a missing group is a named refusal rather than a
+        // POST to `/phrases/groups/undefined/revise` (L-13).
+        revisePhraseGroup: (first, second, input) => {
+            /** The last argument that carries the text: a plain string is the content, an object is the body. */
+            const bodyOf = (value: unknown): PhraseGroupReviseInput | undefined => {
+                if (typeof value === 'string') return { content: value };
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    const body = value as PhraseGroupReviseInput;
+
+                    return { content: body.content ?? '', ...(body.note ? { note: body.note } : {}) };
+                }
+                return undefined;
+            };
+
+            const pinned = bodyOf(input);
+
+            if (pinned !== undefined && typeof second === 'string') {
+                return store.revisePhraseGroup(scopeOf(first), second, pinned);
+            }
+
+            const local = bodyOf(second);
+
+            if (local === undefined || typeof first !== 'string') {
+                return unaddressed('revisePhraseGroup');
+            }
+
+            return store.revisePhraseGroup(storyId, first, local);
+        }
     };
 }

@@ -175,7 +175,7 @@ describe('StoryKnowledge — the durable directory', () => {
                 key: 'research:empty',
                 title: 'Research',
                 body: 'No research yet — the Researcher gathers the facts, places and sources the book depends on in phase ①.',
-                tags: ['story:story_1', 'section:research', 'entry:research:empty', 'placeholder']
+                tags: ['story:story_0', 'section:research', 'entry:research:empty', 'placeholder']
             }
         ]);
     });
@@ -296,29 +296,29 @@ describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () =>
         expect(research?.title).toBe('Research');
         expect(research?.entries).toEqual([
             {
-                key: 'knowledge:knowledge_entry_2',
+                key: 'knowledge:knowledge_entry_1',
                 title: '[critical · world_rule] the lamp remembers',
                 body: 'The lamp keeps every keeper name. — The log outlives the keeper. (source: Keeper Codex)',
-                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_2']
+                tags: ['story:story_0', 'section:research', 'entry:knowledge:knowledge_entry_1']
             },
             {
                 // No detail and no source: the entry is ONE line, not a paragraph padded with blanks.
-                key: 'knowledge:knowledge_entry_3',
+                key: 'knowledge:knowledge_entry_2',
                 title: '[high · fact] the harbour bell',
                 body: 'The bell rings a name before a drowning.',
-                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_3']
+                tags: ['story:story_0', 'section:research', 'entry:knowledge:knowledge_entry_2']
             },
             {
-                key: 'knowledge:knowledge_entry_4',
+                key: 'knowledge:knowledge_entry_3',
                 title: '[high · tech] chart ink',
                 body: 'Chart ink fades in salt water. — Ships carry a waxed copy. (source: Chandlery Note)',
-                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_4']
+                tags: ['story:story_0', 'section:research', 'entry:knowledge:knowledge_entry_3']
             },
             {
-                key: 'knowledge:knowledge_entry_1',
+                key: 'knowledge:knowledge_entry_0',
                 title: '[normal · place] the tide road',
                 body: 'The tide road floods at dusk. (source: Tide Survey)',
-                tags: ['story:story_1', 'section:research', 'entry:knowledge:knowledge_entry_1']
+                tags: ['story:story_0', 'section:research', 'entry:knowledge:knowledge_entry_0']
             }
         ]);
     });
@@ -341,10 +341,13 @@ describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () =>
             ?.sections.find((section) => section.key === 'research');
 
         expect(research?.entries).toHaveLength(30);
-        // The tie-break is the id's own STRING order (`id.localeCompare`), which is what makes the
-        // article byte-stable: `..._10` sorts before `..._2`. Spelled out, not re-sorted here, so the
-        // test pins the order the sync writes instead of reproducing its comparator.
+        // The tie-break is CODE-UNIT order on the id (`knowledge/story-knowledge.ts:byCodeUnit`, chosen
+        // over `localeCompare` because ICU collation depends on the host's locale data and these bytes are
+        // the durable article). Code-unit order puts `..._10` before `..._2`, which is NOT numeric order.
+        // Spelled out, not re-sorted here, so the test pins the order the sync writes instead of
+        // reproducing its comparator.
         expect(research?.entries.slice(0, 29).map((entry) => entry.key)).toEqual([
+            'knowledge:knowledge_entry_0',
             'knowledge:knowledge_entry_1',
             'knowledge:knowledge_entry_10',
             'knowledge:knowledge_entry_11',
@@ -370,7 +373,6 @@ describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () =>
             'knowledge:knowledge_entry_3',
             'knowledge:knowledge_entry_30',
             'knowledge:knowledge_entry_31',
-            'knowledge:knowledge_entry_32',
             'knowledge:knowledge_entry_4',
             'knowledge:knowledge_entry_5',
             'knowledge:knowledge_entry_6'
@@ -379,7 +381,7 @@ describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () =>
             key: 'research:overflow',
             title: 'More…',
             body: '3 more entries are in the book; the knowledge article caps one section at 30 paragraphs.',
-            tags: ['story:story_1', 'section:research', 'entry:research:overflow']
+            tags: ['story:story_0', 'section:research', 'entry:research:overflow']
         });
     });
 });

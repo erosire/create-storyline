@@ -105,10 +105,11 @@ export const createStorylineRuntimeCache = (
             cached.map(async ({ runtime }) => {
                 const opened = await runtime;
 
-                opened.engine.stop();
-                opened.executor?.harness?.dispose?.();
-                await opened.store.close();
-                await opened.knowledge.close();
+                // S-RUNTIME: the coordinator IS the shutdown. It stops the one sweep, waits for the runs in
+                // flight, disposes every Story's harness, closes each Story's knowledge projection, then
+                // flushes every Story book and the app book — the ordering `StoryRuntimes.close` documents,
+                // applied per Story instead of per process.
+                await opened.runtimes.close();
             })
         );
     };

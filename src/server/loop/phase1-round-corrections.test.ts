@@ -133,7 +133,7 @@ describe('T10/F5 — a round that started stays started across a sampling-wave b
         await rig.step();
 
         expect(storyOf(rig).sampling_round).toBe(1);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_4:r2:drafted']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_3:r2:drafted']);
         expect(samplingWaveOf(storyOf(rig))).toBe(0);
         expect(samplingRoundStarted(rig.store, storyOf(rig), 2)).toBe(true);
 
@@ -152,7 +152,7 @@ describe('T10/F5 — a round that started stays started across a sampling-wave b
             fingerprint: 'C-14|wave-disarm',
             cost: 'critical',
             state: 'unconfirmed',
-            refs: ['revision_1']
+            refs: ['revision_0']
         });
 
         const story = storyOf(rig);
@@ -173,17 +173,17 @@ describe('T10/F5 — a round that started stays started across a sampling-wave b
         // fix the sweep returned at the "still owes samples" gate — the wave-scoped started-read said the
         // round had never sampled — and these rows sat `drafted` forever.
         expect(closed.sampling_round).toBe(2);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_4:r2:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_3:r2:selected']);
 
         // Exactly one round-2 attempt, and it is the OLD wave's key: the round was disarmed before the new
         // wave bought anything, so the wave bump neither re-counted the spent attempt nor faked a sample.
         expect(runKeys(rig, 'wi_sample_')).toEqual([
-            'wi_sample_summary_1_1_1',
-            'wi_sample_summary_1_1_2',
-            'wi_sample_summary_1_1_3',
-            'wi_sample_summary_1_2_1'
+            'wi_sample_summary_0_1_1',
+            'wi_sample_summary_0_1_2',
+            'wi_sample_summary_0_1_3',
+            'wi_sample_summary_0_2_1'
         ]);
-        expect(runKeys(rig, 'wi_screen_revision_4')).toEqual(['wi_screen_revision_4_1']);
+        expect(runKeys(rig, 'wi_screen_revision_3')).toEqual(['wi_screen_revision_3_1']);
 
         // The round's own work is finished and reported: the fix task it carried is consumed, and the
         // sign-off is offered — the strand used to leave this at `ready` with nothing to run.
@@ -225,12 +225,12 @@ describe('T10 R1+R2 — a waived research leg reaches the same clean Stop', () =
         // of the winner. No `wi_research_*` row at all: the waiver removed the Work Item, not just the wait.
         expect(runKeys(rig)).toEqual([
             `wi_structure_seed_${seedHashOf(rig.story().idea)}`,
-            'wi_sample_summary_1_1_1',
-            'wi_screen_revision_1_1',
-            'wi_review_revision_1_a1'
+            'wi_sample_summary_0_1_1',
+            'wi_screen_revision_0_1',
+            'wi_review_revision_0_a1'
         ]);
         expect(runKeys(rig, 'wi_research')).toEqual([]);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected']);
         expect(rig.store.knowledge.list()).toEqual([]);
 
         // R2's side of the composition: the selected draft IS the current round's review target, and its
@@ -280,9 +280,14 @@ describe('T10 — the pipeline at the default scale (3 samples, 5 Reader passes)
         // passes on the winner. Every count here is the configured number, not a range.
         expect(runKeys(rig)).toEqual([
             'wi_research_1',
-            'wi_sample_summary_1_1_1',
-            'wi_sample_summary_1_1_2',
-            'wi_sample_summary_1_1_3',
+            'wi_sample_summary_0_1_1',
+            'wi_sample_summary_0_1_2',
+            'wi_sample_summary_0_1_3',
+            'wi_screen_revision_0_1',
+            'wi_screen_revision_0_2',
+            'wi_screen_revision_0_3',
+            'wi_screen_revision_0_4',
+            'wi_screen_revision_0_5',
             'wi_screen_revision_1_1',
             'wi_screen_revision_1_2',
             'wi_screen_revision_1_3',
@@ -293,27 +298,22 @@ describe('T10 — the pipeline at the default scale (3 samples, 5 Reader passes)
             'wi_screen_revision_2_3',
             'wi_screen_revision_2_4',
             'wi_screen_revision_2_5',
-            'wi_screen_revision_3_1',
-            'wi_screen_revision_3_2',
-            'wi_screen_revision_3_3',
-            'wi_screen_revision_3_4',
-            'wi_screen_revision_3_5',
-            'wi_review_revision_1_a1',
-            'wi_review_revision_1_a2',
-            'wi_review_revision_1_a3',
-            'wi_review_revision_1_a4',
-            'wi_review_revision_1_a5'
+            'wi_review_revision_0_a1',
+            'wi_review_revision_0_a2',
+            'wi_review_revision_0_a3',
+            'wi_review_revision_0_a4',
+            'wi_review_revision_0_a5'
         ]);
 
         // Selection retired the losers (§16.6): the round's three drafts became one carried draft, and
         // `sampling_history` is the audit line that still names all three.
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected']);
-        expect(storyOf(rig).sampling_history?.map((entry) => `${entry.round}:${entry.selected}`)).toEqual(['1:revision_1']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected']);
+        expect(storyOf(rig).sampling_history?.map((entry) => `${entry.round}:${entry.selected}`)).toEqual(['1:revision_0']);
         expect(
             storyOf(rig).sampling_history?.[0].samples.map(
                 (sample) => `${sample.revision_id}:${sample.critical}/${sample.high}/${sample.valid}`
             )
-        ).toEqual(['revision_1:0/0/true', 'revision_2:0/0/true', 'revision_3:0/0/true']);
+        ).toEqual(['revision_0:0/0/true', 'revision_1:0/0/true', 'revision_2:0/0/true']);
 
         // The Stop: five reviews closed, so the deep review is complete, the drain is met, and the Story
         // waits on the Author's lock — the retirement/selection half and the clean-stop half in one round.
@@ -378,7 +378,7 @@ describe('T12/P3 — the drain counts the sampling retry cap in the wave the eng
         expect(sampleAttempts(rig.store, summary.id, 2, 0)).toBe(0);
 
         // Wave 0, nothing spent: the sampler is offered and the drain says the round owes its sample.
-        expect(offers(rig)).toEqual(['wi_sample_summary_1_2_1']);
+        expect(offers(rig)).toEqual(['wi_sample_summary_0_2_1']);
         expect(drainPreconditions(rig.store, storyOf(rig))).toEqual({
             met: false,
             unmet: ['1 task still queued', '0 of 1 sample exist for round 2 and retries remain (§6.4 step 3)']
@@ -387,7 +387,7 @@ describe('T12/P3 — the drain counts the sampling retry cap in the wave the eng
         // The wave spends its cap: four torn-down attempts under round 2's wave-0 claim keys. The leg is
         // closed (`samplingLegClosed`: armed no more once the cap is spent) and the sentence goes SILENT,
         // because the honest answer is "no sample is coming in this wave" — the escalation owns the round.
-        for (let attempt = 1; attempt <= 4; attempt += 1) seedSampleAttempt(rig, `wi_sample_summary_1_2_${attempt}`);
+        for (let attempt = 1; attempt <= 4; attempt += 1) seedSampleAttempt(rig, `wi_sample_summary_0_2_${attempt}`);
 
         expect(sampleAttempts(rig.store, summary.id, 2, 0)).toBe(4);
         expect(offers(rig)).toEqual([]);
@@ -410,7 +410,7 @@ describe('T12/P3 — the drain counts the sampling retry cap in the wave the eng
         // this sentence went silent over a sample the sweep was about to dispatch — the dashboard showed a
         // round waiting on nothing while the sampler ran. Scoped to the active wave it says what is true:
         // wave 1 has spent nothing, the round owes its sample, and the offer is the WAVE-1 claim key.
-        expect(offers(rig)).toEqual(['wi_sample_summary_1_2_w1_1']);
+        expect(offers(rig)).toEqual(['wi_sample_summary_0_2_w1_1']);
         expect(drainPreconditions(rig.store, storyOf(rig))).toEqual({
             met: false,
             unmet: ['1 task still queued', '0 of 1 sample exist for round 2 and retries remain (§6.4 step 3)']
@@ -420,9 +420,9 @@ describe('T12/P3 — the drain counts the sampling retry cap in the wave the eng
         // finally has its draft while the wave-0 rows stay where the audit can read them.
         await rig.step();
 
-        expect(runKeys(rig, 'wi_sample_summary_1_2_w1')).toEqual(['wi_sample_summary_1_2_w1_1']);
+        expect(runKeys(rig, 'wi_sample_summary_0_2_w1')).toEqual(['wi_sample_summary_0_2_w1_1']);
         expect(sampleAttempts(rig.store, summary.id, 2, 1)).toBe(1);
         expect(sampleAttempts(rig.store, summary.id, 2, 0)).toBe(5);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_2:r2:drafted']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_1:r2:drafted']);
     });
 });

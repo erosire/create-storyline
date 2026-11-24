@@ -420,6 +420,22 @@ export interface CreateStoryInput {
     summary_sampling?: number;
     /** Phase ①: how many Readers critique each sample (the Author's setting; standard 5). */
     summary_readers?: number;
+    /**
+     * SUMMARY PHRASE R1/R6 — how phase ① writes the Summary.
+     *
+     * `'groups'` (the default for NEW Stories) makes the five catalog groups the unit of work: one
+     * Writer pass per batch of groups, each install a per-group revision, no whole-Summary sampling
+     * and no draft selection (R5). `'sampling'` keeps the pre-redesign hill-climb (N competing
+     * samples, screening, one selected draft) — the value every book written before the redesign
+     * effectively has, because their rows carry no `summary_mode` at all and
+     * `phrase/catalog.ts:isGroupManagedStory` reads an absent value as `'sampling'`.
+     *
+     * WHY IT IS AN INPUT AND NOT A DERIVED FACT: "is this book group-managed?" must not depend on
+     * whether phrase rows happen to exist. A legacy book can be ENSURED (rows created, prose left
+     * alone) without opting into the new loop, and the only thing that opts it in is this setting —
+     * set here at creation, or by the Author's explicit `POST /stories/:id/phrases/import`.
+     */
+    summary_mode?: 'groups' | 'sampling';
 }
 
 /** What `changeChapterCount` returns, because D-3c's removal needs an explicit confirmation first. */
@@ -461,6 +477,18 @@ export interface EngineApi {
     start(): void;
     /** L-1/L-2: stops scheduling. In-flight runs are left alone; a later sweep re-adopts or abandons them. */
     stop(): void;
+
+    /**
+     * L-2: one sweep pass, on demand. A bare `LoopEngine` reports the ONE Story it was built over; the
+     * coordinator (`runtime/story-runtimes.ts`) sweeps every book under the one ceiling and folds the books
+     * into the same report — `stories` is per Story and each entry carries its own `story_id`, so the merge
+     * cannot fuse two Stories' local ids. Tests and the integration harness drive this instead of waiting for
+     * the timer.
+     */
+    sweep(): Promise<SweepReport>;
+
+    /** L-2/S-3: drains the runs this engine has in flight; a sweep pass is not one call. */
+    settle(): Promise<void>;
 
     /** §15 step 0: a Story starts at phase `summary`, `ready`, with the Seed and the declared count. */
     createStory(input?: CreateStoryInput): Promise<{ story_id: string }>;
@@ -582,6 +610,39 @@ export interface LoopEngineDeps {
     criteria: CriteriaEngine;
     digest: DigestBuilder;
     config?: LoopEngineConfig;
+    /**
+     * S-RUNTIME: the fan-out ceiling as a LIVE VIEW, for a server that runs one engine per Story book.
+     *
+     * WHY AN INPUT AND NOT A NUMBER: `dispatch` already counts `liveRuns(store)` against
+     * `config.globalMaxConcurrent`, and that was the whole rule while one Store held every Story. With
+     * one Store per Story (`store/story-stores.ts`) the count is this book's only, so four open books
+     * under a ceiling of 4 is sixteen threads — S-5's one number stops meaning anything. The view lets
+     * whoever owns the whole workspace answer both halves of the comparison (the limit, and the live
+     * count across every book) without the engine owning a registry it has no business holding.
+     *
+     * WHY A VIEW AND NOT A RESERVATION: the run ROWS are still the memory (P1) and `RunExecutor.execute`
+     * creates the row synchronously (`run/executor.ts` D-18), so a sweep of book B taken after book A
+     * launched already sees A's rows. A semaphore here would be a second source of truth that drifts the
+     * moment a run dies without the coordinator noticing (L-3).
+     *
+     * Optional: an engine without one behaves exactly as before — its own store's live count against its
+     * own config, which is every single-store server and every loop unit test.
+     */
+    ceiling?: LoopCeiling;
+}
+
+/**
+ * The cross-Story ceiling, as the coordinator that owns several engines implements it
+ * (`server/runtime/ceiling.ts:GlobalCeiling`). Read fresh on every dispatch, so moving the number needs
+ * no restart and cancels nothing (`engine.ts:setGlobalMaxConcurrent`'s reasoning is unchanged).
+ */
+export interface LoopCeiling {
+    /** The one limit, right now. */
+    limit(): number;
+    /** Live run rows across EVERY book this process owns — the number the limit is compared against. */
+    liveRuns(): number;
+    /** Moving the limit while the loop runs. Absent means the view is read-only. */
+    setLimit?(limit: number): void;
 }
 
 /** The resolved form of the config, so no method has to re-default it. */

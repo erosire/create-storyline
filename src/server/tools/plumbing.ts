@@ -138,7 +138,7 @@ const readSeed: ToolDefinition = {
 const readSummary: ToolDefinition = {
     name: 'readSummary',
     description:
-        'Read the Summary: premise, promise, theme, tone, ending, world_rules, and the declared chapter_count. Every plotline and chapter is measured against it (D-4); it is read-only once locked (P5).',
+        'Read the Summary: premise, promise, theme, tone, ending, world_rules, and the declared chapter_count. On a book whose Summary is written group by group these fields are the mirror of its five phrase groups (R6) — this read returns the Overview they compose, not the per-group revisions — and `world_rules` is a legacy field the engine leaves alone. Every plotline and chapter is measured against it (D-4); it is read-only once locked (P5).',
     inputSchema: { type: 'object', properties: {}, required: [] },
     writes: 'summaries',
     level: 'read',

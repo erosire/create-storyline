@@ -1,4 +1,12 @@
-// The left rail's second half: the Story's four phrases and its supporting folders.
+// The left rail's second half: the Summary phrase, its children, and the Story's supporting folders.
+//
+// R6 — WHAT THE PHRASE LIST HOLDS NOW. `STORY_PHRASES` carries the Summary alone, because the rail is the
+// content area's table of contents and a grouped book's content area opens the Summary Overview, one of the
+// five groups, or a folder. Characters/Plotlines/Chapters are phases the crew works through, not panes the
+// Author navigates to from here, and a rail row that opened nothing would be a dead end (the four-phrase
+// vocabulary stays in `story-nav.ALL_STORY_PHRASES` for the directive label and for a later phase's rail).
+// Under the Summary header the rows are the server's GROUP rows when the book is group-managed, and the
+// sampling round's `Revision 1 … N` drafts when it is not — see `groupChildren`/`summaryChildren`.
 //
 // WHY THE RAIL IS A PURE NAVIGATOR: the content area shows exactly one thing at a time, and the
 // rail is the only place that decision is made. It therefore renders the phrase/folder list and
@@ -21,13 +29,15 @@ import {
     attentionFor,
     castMembers,
     chaptersInOrder,
+    phraseLoaded,
     plotlinesInOrder,
+    summaryGroupEntries,
     summaryReadyForReview,
     summaryRevisionRef,
     summaryRevisions
 } from './story-nav';
 import type { StoryAttention, StoryPhraseKey, StorySelection, SummaryRevisionEntry } from './story-nav';
-import { isOpenFinding, type StoryViewData } from './story-contract';
+import { isGroupSummary, isOpenFinding, phraseReadError, type StoryViewData } from './story-contract';
 
 function CheckIcon() {
     return (
@@ -65,6 +75,15 @@ interface OutlineChildSpec {
      * screen-reader word), so no tooltip is needed to discover the state (R2/R6).
      */
     discardReason?: string;
+    /**
+     * R6 — one word for a Summary GROUP's state, rendered as a pill (`outline-state`). A group row has no
+     * engine `state` string of its own: what it can honestly say is whether the Writer holds its text and
+     * whether anything has been written at all. Never set on a revision row, so the sampling rail's rows —
+     * and every test that reads their exact accessible names — are untouched.
+     */
+    mark?: string;
+    /** The pill's tone: the Writer holding the job reads as activity (accent), unwritten as amber. */
+    markTone?: 'writer' | 'todo';
 }
 
 /** The engine's word for a draft a round parked as history (§4.17, P13/D-22). */
@@ -80,6 +99,35 @@ function summaryChildren(revisions: SummaryRevisionEntry[]): OutlineChildSpec[] 
         ).length,
         state: entry.revision.state,
         discardReason: entry.discardReason
+    }));
+}
+
+/**
+ * R6 / U2 — the rail's children of the Summary phrase when the book is GROUP-MANAGED: the server's five group
+ * rows, in composition order, named by their own titles.
+ *
+ * WHY NOT `Revision 1 … N` here. The sampling rail listed drafts because phase ① wrote whole-Summary drafts the
+ * Author could compare and pick. A grouped Story writes five NAMED parts, each with its own revision number
+ * (which belongs in the group's own pane, U3), so a `Revision N` row would name a draft the Author cannot open
+ * and hide the one thing that identifies the pane — which group it is. Archived history is not a row either: the
+ * projection sends metadata for superseded rows and no prose, so a row a reader cannot open is decoration.
+ *
+ * The badge keeps the sampling rail's rule (open Critical/Major only), and the counts come from
+ * `story-nav.summaryGroupEntries` — the same `groupBlockingFindings` read the Overview pane and the Accept gate
+ * use, so a badge can never disagree with the pane it points at. `state` stays unset: a group is never
+ * `discarded`, so it must not take the struck-out mark the stylesheet keys on.
+ */
+function groupChildren(view: StoryViewData): OutlineChildSpec[] {
+    return summaryGroupEntries(view).map((entry) => ({
+        ref: entry.ref,
+        // U6: the accessible name IS the group title — no id, no number, nothing else to read per row.
+        title: entry.group.title,
+        findings: entry.blockingFindings,
+        ...(entry.writerBusy
+            ? { mark: 'writer', markTone: 'writer' as const }
+            : entry.written
+              ? {}
+              : { mark: 'to write', markTone: 'todo' as const })
     }));
 }
 
@@ -195,6 +243,10 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
     const plotlines = plotlinesInOrder(view);
     const chapters = chaptersInOrder(view);
     const revisions = summaryRevisions(view);
+    // R6 — the one question that decides what the Summary phrase's children ARE: the server's five group rows,
+    // or the sampling round's Revision 1…N drafts. `isGroupSummary` reads `story.summary_mode` (echoed by the
+    // phrase read), so the answer cannot drift from what the wire says the book is.
+    const grouped = isGroupSummary(view);
 
     return (
         <nav className="outline" aria-label="Story phrases" data-testid="story-outline">
@@ -215,7 +267,9 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                     {STORY_PHRASES.map((phrase) => {
                         const children: OutlineChildSpec[] =
                             phrase.key === 'summary'
-                                ? summaryChildren(revisions)
+                                ? grouped
+                                  ? groupChildren(view)
+                                  : summaryChildren(revisions)
                                 : phrase.key === 'characters'
                                   ? cast.map((member) => ({ ref: member.id, title: member.name || member.id }))
                                   : phrase.key === 'plotlines'
@@ -304,6 +358,35 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                         onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
                                                     >
                                                         <span className="outline-name">{child.title}</span>
+                                                        {/* R6 — a GROUP row's one state word. A group has no engine
+                                                            state string (`data-state` above stays unset for group
+                                                            rows, so they never take the struck-out `discarded`
+                                                            mark), so the honest marks are the write's own: the
+                                                            Writer holds this group's job, or nothing has been
+                                                            written yet. Plain text in the row, so the word is in
+                                                            the accessible name and survives greyscale; the pill's
+                                                            border and colour (`app.css`) only add speed. */}
+                                                        {/* R6 — the row-level space the accessible name needs. An
+                                            accessible name is built from TEXT, and flex `gap` is not text: with no
+                                            separator the row reads "Premise1 open Critical or Major finding". This
+                                            is the same fix T5 pinned for the discarded row (its `' '` text node
+                                            sits between the two spans, out of reach of the name's final trim), and
+                                            the same reasoning applies to the state word, the badge and the
+                                            attention mark. A run of these spaces collapses to one, so a row that
+                                            also carries `DiscardedMark` is unaffected. */}
+                                                        {child.mark !== undefined ||
+                                                        (child.findings !== undefined && child.findings > 0) ||
+                                                        childAttention !== undefined ? (
+                                                            <> </>
+                                                        ) : null}
+                                                        {child.mark !== undefined ? (
+                                                            <span
+                                                                className={`outline-state outline-state--${child.markTone ?? 'todo'}`}
+                                                                data-testid="outline-group-state"
+                                                            >
+                                                                {child.mark}
+                                                            </span>
+                                                        ) : null}
                                                         {/* T4/R2 + R6: the visible mark is this row's struck name
                                                             (`data-state` drives the stylesheet); the word lives in
                                                             an `sr-only` span so a reader still says it, and the
@@ -311,6 +394,11 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                             — the only way to open that draft and read its reason
                                                             (T4/R1), parked history included. */}
                                                         {child.state === DISCARDED_STATE ? <DiscardedMark /> : null}
+                                                        {/* R6: a GROUP row needs the same word boundary BETWEEN its state
+                                                            word and its badge, or the name reads "Theme writer2 open…".
+                                                            `DiscardedMark` already emits its own leading space (line 159),
+                                                            so sampling rows keep their existing names untouched. */}
+                                                        {child.mark !== undefined ? ' ' : null}
                                                         {child.findings !== undefined && child.findings > 0 ? (
                                                             <span
                                                                 className="outline-badge"
@@ -320,14 +408,52 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                                 {child.findings}
                                                             </span>
                                                         ) : null}
+                                                        {/* R6: the same separator again before the attention mark —
+                                                            a row can carry a name, a state word, a badge AND a
+                                                            mark, and every one of those contributions needs a word
+                                                            boundary in front of it or the name runs them together
+                                                            ("…finding1 open finding…"). */}
                                                         {childAttention ? (
-                                                            <AttentionMark attention={childAttention} />
+                                                            <>
+                                                                {child.findings !== undefined && child.findings > 0
+                                                                    ? ' '
+                                                                    : null}
+                                                                <AttentionMark attention={childAttention} />
+                                                            </>
                                                         ) : null}
                                                     </button>
                                                 </li>
                                             );
                                         })}
                                     </ul>
+                                ) : null}
+                                {/* R6 / U6 — a group-managed book whose phrase read has NOT landed. The five groups
+                                    are part of the contract, so the rail says the rows are on their way instead of
+                                    showing a phrase with nothing under it, which reads as an empty book. One line,
+                                    not a spinner (U-11), and it is gone the moment `GET /stories/:id/phrases`
+                                    answers — including when it answers with five unwritten groups, which is a real
+                                    state and gets real rows. A folded phrase keeps showing nothing (R8 unmounts the
+                                    rows on purpose). */}
+                                {phrase.key === 'summary' && grouped && !phraseLoaded(view) && !isCollapsed ? (
+                                    phraseReadError(view) === undefined ? (
+                                        /* Pending: the read is in flight and the rows will arrive with it. */
+                                        <p className="outline-pending" data-testid="outline-phrase-pending">
+                                            reading the Summary groups…
+                                        </p>
+                                    ) : (
+                                        /* R-T2/F2 — the read FAILED. A rail that keeps promising "reading…"
+                                           over a 503 hides the only actionable fact the desk has: the server's
+                                           own sentence, plus the fact that the groups exist and are merely
+                                           unread. Kept to one line like the pending state (U-11), and the
+                                           Story's other rows stay exactly where they were. */
+                                        <p
+                                            className="outline-pending outline-pending--error"
+                                            data-testid="outline-phrase-error"
+                                            title={phraseReadError(view)}
+                                        >
+                                            {`Summary groups unread: ${phraseReadError(view)}`}
+                                        </p>
+                                    )
                                 ) : null}
                             </li>
                         );

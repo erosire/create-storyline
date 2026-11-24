@@ -16,7 +16,7 @@ import { MockChatClient, msg } from '../llm/mock';
 import { parseArgs, HELP_TEXT, bootBanner } from '../cli';
 import { bootStorylineServer, createStorylineApp, openStore } from '../main';
 import { resolveServerConfig } from '../config';
-import { Store } from '../store/store';
+import { Store, StoryStores, STORY_ID_PATTERN } from '../store';
 import { buildStorylineRuntime, startStorylineServer } from './server';
 import type { Run, Story } from '../../shared/types';
 
@@ -141,7 +141,7 @@ describe('the listener', () => {
         const story = (await created.json()) as { id: string; status: string };
 
         expect(story).toEqual({
-            id: 'story_1',
+            id: 'story_0',
             title: 'Booted',
             phase: 'summary',
             status: 'ready',
@@ -157,7 +157,7 @@ describe('the listener', () => {
             completion_proposed: false
         });
 
-        expect((await fetch(`${base}/stories/story_1`)).status).toBe(200);
+        expect((await fetch(`${base}/stories/story_0`)).status).toBe(200);
 
         await handle.close();
 
@@ -209,8 +209,16 @@ describe('the listener', () => {
 // ---------------------------------------------------------------------------
 
 describe('W9 — the store root at boot', () => {
-    /** One Story, created over the socket so the boot path under test is the shipped one. */
-    const createOverSocket = async (port: number, title: string): Promise<void> => {
+    /**
+     * One Story, created over the socket so the boot path under test is the shipped one.
+     *
+     * S-RUNTIME: the id the route answers with is the Story's identity AND its directory name, so it
+     * is the only way back to the book — these two tests read the row out of the registry by it. It is
+     * a UUID (`persist.ts:newStoryId`), never a `story_<n>` counter: an unbound flat book mints those,
+     * a workspace never does, and asserting the shape here is what stops a future change from quietly
+     * putting the counter back.
+     */
+    const createOverSocket = async (port: number, title: string): Promise<string> => {
         const created = await fetch(`http://127.0.0.1:${port}/v1/storyline/stories`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -219,9 +227,11 @@ describe('W9 — the store root at boot', () => {
 
         expect(created.status).toBe(200);
 
-        // The body is drained even though the row is not the point of these two tests: an unread body
-        // holds the socket, and a held socket can hold `close()` open.
-        await created.text();
+        const story = (await created.json()) as { id: string };
+
+        expect(STORY_ID_PATTERN.test(story.id)).toBe(true);
+
+        return story.id;
     };
 
     it('keeps an explicitly in-memory run in memory (W9: `--store-root ""`)', async () => {
@@ -238,11 +248,18 @@ describe('W9 — the store root at boot', () => {
         });
 
         try {
+            // S-RUNTIME: a workspace boot's `handle.store` is the APP-CONFIG book — in memory here, so
+            // it has no root — and it holds the crew catalogue and the host settings, never a Story row.
             expect(handle.store.rootDir).toBeNull();
+            expect(handle.store.stories.list()).toEqual([]);
 
-            await createOverSocket(handle.port, 'In Memory');
+            const storyId = await createOverSocket(handle.port, 'In Memory');
+            const book = handle.runtimes.requires(storyId).store;
 
-            expect(handle.store.stories.list().map((row) => [row.id, row.title])).toEqual([['story_1', 'In Memory']]);
+            // The Story is in its own in-memory book, keyed by the UUID the registry allocated
+            // (`store/story-stores.ts:create`), which is also the id the row carries.
+            expect(book.rootDir).toBeNull();
+            expect(book.stories.list().map((row) => [row.id, row.title])).toEqual([[storyId, 'In Memory']]);
         } finally {
             await handle.close();
         }
@@ -262,21 +279,38 @@ describe('W9 — the store root at boot', () => {
             env: {}
         });
 
-        try {
-            expect(handle.store.rootDir).toBe(root);
+        // `storyId` is read AGAIN below the `finally`, after the book has been closed and re-opened, so
+        // it is declared outside the try-block that mints it. It starts empty only to keep the later
+        // reads in scope: a create that throws propagates through `finally` and never reaches them.
+        let storyId = '';
 
-            await createOverSocket(handle.port, 'Durable');
+        try {
+            // S-RUNTIME: the workspace splits the root — `handle.store` is `<root>/server/` (the app
+            // book: catalogue + host settings), and the Story the POST below creates lives in
+            // `<root>/stories/<uuid>/`. Reading the app book's Story list would answer `[]` forever,
+            // which is the drift this assertion now pins instead.
+            expect(handle.store.rootDir).toBe(path.join(root, 'server'));
+
+            storyId = await createOverSocket(handle.port, 'Durable');
+
+            expect(handle.runtimes.requires(storyId).store.rootDir).toBe(path.join(root, 'stories', storyId));
         } finally {
             // `close()` is the flush (L-3): the snapshot and the journal are on disk when it resolves.
             await handle.close();
         }
 
-        // The proof is not a file format assertion but the Author's promise: re-open the book and the
-        // Story is still there.
-        const reopened = await openStore(root);
+        // The proof is not a file format assertion but the Author's promise: re-open the root and the
+        // Story is still there. `StoryStores.open` is the shipped opener for a WORKSPACE root — it
+        // refuses a pre-per-story flat `store.json` and loads one book per `<root>/stories/<uuid>/`
+        // folder, cross-checking each book's `story_id` binding (`store/store.ts:loadStory`).
+        const reopened = await StoryStores.open(root);
 
         try {
-            expect(reopened.stories.list().map((row) => [row.id, row.title])).toEqual([['story_1', 'Durable']]);
+            expect(reopened.ids()).toEqual([storyId]);
+            expect(reopened.rootOf(storyId)).toBe(path.join(root, 'stories', storyId));
+            expect(reopened.require(storyId).stories.list().map((row) => [row.id, row.title])).toEqual([
+                [storyId, 'Durable']
+            ]);
         } finally {
             await reopened.close();
         }
@@ -317,10 +351,10 @@ describe('§10 — the event stream', () => {
         const frames = await readUntil(reader, 'event: story');
 
         expect(frames).toContain('event: story');
-        expect(frames).toContain('data: story_1');
+        expect(frames).toContain('data: story_0');
 
         // A run row moves the CREW topic as well as the Story row's `active_runs` (U-1, U-7).
-        const assistant = await app.request('http://localhost/v1/storyline/stories/story_1/assistant', {
+        const assistant = await app.request('http://localhost/v1/storyline/stories/story_0/assistant', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ target: 'summary', text: 'tighten the promise line' })
@@ -384,13 +418,20 @@ describe('the mount entry', () => {
 
         const story = (await created.json()) as { id: string };
 
-        expect((runtime.store.stories.require(story.id) as Story).title).toBe('Mounted');
+        // S-RUNTIME: the mount entry on a store root opens a WORKSPACE, so `runtime.store` is the app
+        // book and the Story's rows are in the book the coordinator allocated for its UUID. `requires`
+        // is the coordinator's own verb and its error names the missing Story, which is what a host
+        // reading its own mount needs when it hands back an id from another book.
+        expect((runtime.runtimes.requires(story.id).store.stories.require(story.id) as Story).title).toBe('Mounted');
 
         // L-1: the mount entry does NOT start the loop — the host starts it when it is ready.
         runtime.engine.start();
         runtime.engine.stop();
 
-        await runtime.store.close();
+        // S-RUNTIME: `runtimes.close()` is the whole shutdown — every Story's projection and harness,
+        // then every book, then the app book. Closing only `runtime.store` would flush the
+        // configuration and leave each Story's journal unwritten.
+        await runtime.runtimes.close();
     });
 });
 
@@ -444,23 +485,35 @@ describe('the CLI flags', () => {
     });
 
     it('prints the resolved boot for the operator, not the flags it was given', () => {
-        const lines = bootBanner(
-            {
-                port: 5050,
-                host: '127.0.0.1',
-                app: {} as never,
-                store: { close: async () => undefined } as never,
-                engine: {} as never,
-                defaultModel: 'm',
-                close: async () => undefined
-            },
-            { storeRoot: null },
-            { STORYLINE_PROVIDER_MODEL: 'deepseek-r1' }
-        );
+        const handle = {
+            port: 5050,
+            host: '127.0.0.1',
+            app: {} as never,
+            store: { close: async () => undefined } as never,
+            engine: {} as never,
+            // S-RUNTIME: the banner's "durable — N Stories" line comes from the COORDINATOR
+            // (`cli.ts:bootBanner` reads `handle.runtimes.count()`), and the handle's shutdown is
+            // `runtimes.close()` — the flush of every Story book and the app book. A hand-built
+            // handle without it is not a handle the CLI could close.
+            runtimes: { count: () => 1, close: async () => undefined } as never,
+            defaultModel: 'm',
+            close: async () => undefined
+        } as never;
+
+        const lines = bootBanner(handle, { storeRoot: null }, { STORYLINE_PROVIDER_MODEL: 'deepseek-r1' });
 
         expect(lines[0]).toBe('Storyline is listening on http://127.0.0.1:5050/v1/storyline');
         expect(lines[2]).toBe('harness: http://localhost:8800/providers/private/v1 · model deepseek-r1');
         expect(lines[3]).toContain('in-memory');
+
+        // The durable half of the same sentence names the TWO directories a workspace boot opens, and
+        // the Story count the coordinator actually holds: an operator told "durable" is told what is
+        // behind the run, not just that a root was typed (`cli.ts:bootBanner`).
+        expect(
+            bootBanner(handle, { storeRoot: '/books' }, {})[3]
+        ).toBe(
+            'book: durable — 1 Story · store.json + journal.jsonl under /books/stories/<uuid> · configuration under /books/server'
+        );
         expect(HELP_TEXT).toContain('--store-root <dir>');
     });
 });

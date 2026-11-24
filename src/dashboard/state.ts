@@ -39,6 +39,9 @@ import {
     type AgentStatusRow,
     type AgentThreadRecord,
     type LoopSettings,
+    type PhraseGroupReviseInput,
+    type PhraseGroupReviseResult,
+    type PhraseView,
     type StoryKnowledgeTree
 } from './api';
 import type { Cost, Run, Template } from '../shared/types';
@@ -51,6 +54,20 @@ export interface DashboardSnapshot {
     activeStoryId: string | null;
     /** `story_id -> the last full read`, refetched on every event and every local mutation. */
     storyViews: Record<string, StoryView>;
+    /**
+     * `story_id -> the last SUMMARY PHRASE read` (R6): the five groups, the composed Overview, the
+     * findings' group scope and the review state. A SEPARATE cache from `storyViews` because the wire is
+     * a separate read (`GET /stories/:id/phrases`), and the group rail must not look like it loaded while
+     * only the Story payload landed. Absent means "not loaded" (or it failed — see `phraseErrors`), which
+     * is what the panes render as their loading/unavailable state rather than an empty Summary.
+     */
+    phrases: Record<string, PhraseView>;
+    /**
+     * `story_id -> the phrase read's last refusal`, the server's own sentence (L-13). A failed phrase read
+     * keeps its `storyViews` entry — the rest of the desk is still current — so the Summary pane needs its
+     * own honest error line instead of silently rendering the empty state.
+     */
+    phraseErrors: Record<string, string>;
     /** `story_id -> the durable knowledge directory`, one article per section. */
     knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
@@ -91,6 +108,8 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     stories: [],
     activeStoryId: null,
     storyViews: {},
+    phrases: {},
+    phraseErrors: {},
     knowledge: {},
     queue: [],
     runs: [],
@@ -210,6 +229,42 @@ export function createDashboardStore(client: ApiClient = api) {
                 : { storyViews, loading: false };
         });
 
+    /** Drops one key from a cached record without mutating the previous snapshot object. */
+    const withoutKey = <T,>(cache: Record<string, T>, key: string): Record<string, T> => {
+        const next = { ...cache };
+        delete next[key];
+        return next;
+    };
+
+    /**
+     * R6 — the SUMMARY PHRASE read, on the same coalesced path as every other resource, so the group rail
+     * moves with the stream and with every mutation rather than with a component's own `useEffect`.
+     *
+     * WHY THE FAILURE IS CAUGHT HERE RATHER THAN LEFT TO `refresh`: a phrase refusal must not blank the
+     * desk — the Story payload, the queue and the crew are still current — but it must not look like an
+     * unloaded Summary either. So the refusal is CACHED PER STORY (`phraseErrors`, the server's own
+     * sentence, L-13) AND raised into the shell-wide `error`, and the cache entry stays absent, which is
+     * what the Summary pane renders as "the Summary Phrase read failed" instead of "nothing is written".
+     * The next event or poll retries it, exactly as it retries every other failed read.
+     */
+    const refreshPhrase = (storyId: string): Promise<void> =>
+        refresh(`phrase:${storyId}`, async () => {
+            try {
+                const phrase = await client.getPhrase(storyId);
+
+                return {
+                    phrases: { ...snapshot.phrases, [storyId]: phrase },
+                    phraseErrors: withoutKey(snapshot.phraseErrors, storyId)
+                };
+            } catch (error) {
+                return {
+                    phrases: withoutKey(snapshot.phrases, storyId),
+                    phraseErrors: { ...snapshot.phraseErrors, [storyId]: failureText(error) },
+                    error: failureText(error)
+                };
+            }
+        });
+
     /**
      * Every mutation follows the same choreography: send, then re-read what the server may
      * have changed. The re-read is not caution, it is the design — a `lock` also empties the
@@ -222,7 +277,11 @@ export function createDashboardStore(client: ApiClient = api) {
             const result = await work();
             const refetch: Array<Promise<void>> = [refreshStories(), refreshQueue(), refreshRuns(), refreshAgents()];
             if (touchedStoryId) {
-                refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId));
+                // R6: the group rail is part of "what the server may have changed". An approval changes a
+                // finding's scope, a Writer install moves a group's number, a dispatched pass sets
+                // `writer_busy` — all of it rows the phrase read projects, so the Author sees the group
+                // rail answer in the same frame they clicked in.
+                refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId), refreshPhrase(touchedStoryId));
             }
             if (snapshot.selectedAgent) {
                 refetch.push(refreshAgentThreads(snapshot.selectedAgent));
@@ -255,6 +314,15 @@ export function createDashboardStore(client: ApiClient = api) {
         /** The selected Story's full read, or `null` on the home view (U-10). */
         selectedStory(): StoryView | null {
             return snapshot.activeStoryId ? (snapshot.storyViews[snapshot.activeStoryId] ?? null) : null;
+        },
+
+        /**
+         * The selected Story's SUMMARY PHRASE read (R6), or `null` on the home view. `null` while the read
+         * is in flight or has failed is the honest state the Summary panes render — they never fall back to
+         * the legacy `view.summary` fields for a group-managed book.
+         */
+        selectedPhrase(): PhraseView | null {
+            return snapshot.activeStoryId ? (snapshot.phrases[snapshot.activeStoryId] ?? null) : null;
         },
 
         /** Reads STORIES rows for the queue jump without re-reading the server. */
@@ -292,6 +360,10 @@ export function createDashboardStore(client: ApiClient = api) {
                     if (storyId === snapshot.activeStoryId) {
                         void refreshStory(storyId);
                         void refreshKnowledge(storyId);
+                        // The group rail is the Author's Summary surface: a Writer install, a finding
+                        // scope change or a dispatched group pass all land on this Story's phrase rows, so
+                        // the stream re-reads them on the same event rather than on a timer.
+                        void refreshPhrase(storyId);
                     }
                     void refreshStories();
                     void refreshQueue();
@@ -309,7 +381,16 @@ export function createDashboardStore(client: ApiClient = api) {
             // Opening a Story is the explicit way back from an employee's thread surface.
             commit({ activeStoryId: storyId, selectedAgent: null, loading: true });
             return mutate(async () => {
-                await Promise.all([refreshStory(storyId), refreshKnowledge(storyId), refreshRuns(), refreshStories()]);
+                await Promise.all([
+                    refreshStory(storyId),
+                    refreshKnowledge(storyId),
+                    // R6: the rail's group rows come from the phrase read, so the Story is not "open"
+                    // until it has answered. Its failure is cached per Story (see `refreshPhrase`), which
+                    // is why this stays one flight rather than a thrown error.
+                    refreshPhrase(storyId),
+                    refreshRuns(),
+                    refreshStories()
+                ]);
                 return snapshot.stories.find((row) => row.id === storyId) ?? null;
             });
         },
@@ -341,6 +422,9 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshAgentModels(),
                 refreshLoop(),
                 refreshRuns(),
+                // R6: the group rail reloads with everything else, so "reload the desk" is one verb
+                // rather than a rail that quietly keeps last poll's group rows.
+                ...(snapshot.activeStoryId ? [refreshPhrase(snapshot.activeStoryId)] : []),
                 ...(snapshot.selectedAgent ? [refreshAgentThreads(snapshot.selectedAgent)] : [])
             ]).then(() => undefined);
         },
@@ -352,7 +436,14 @@ export function createDashboardStore(client: ApiClient = api) {
                 // The new Story is immediately THE STORY: the Author just wrote a Seed and the
                 // next thing they do is work phase ① (U-12: usable with zero harnesses).
                 commit({ activeStoryId: row.id, selectedAgent: null });
-                await Promise.all([refreshStory(row.id), refreshKnowledge(row.id), refreshStories()]);
+                await Promise.all([
+                    refreshStory(row.id),
+                    refreshKnowledge(row.id),
+                    // R6: a new Story is group-managed from its first commit, so the rail has five groups
+                    // to show the moment the Author lands on the Summary.
+                    refreshPhrase(row.id),
+                    refreshStories()
+                ]);
                 return row;
             });
         },
@@ -369,7 +460,11 @@ export function createDashboardStore(client: ApiClient = api) {
                 commit({
                     ...(snapshot.activeStoryId === storyId ? { activeStoryId: null } : {}),
                     storyViews,
-                    knowledge
+                    knowledge,
+                    // R6: the deleted book's group rows are gone with it, including a cached refusal —
+                    // a Story id can be re-opened, and a stale error would outlive the delete.
+                    phrases: withoutKey(snapshot.phrases, storyId),
+                    phraseErrors: withoutKey(snapshot.phraseErrors, storyId)
                 });
 
                 return result;
@@ -378,9 +473,30 @@ export function createDashboardStore(client: ApiClient = api) {
         stop: stopStory,
         resume: (storyId: string) => mutate(() => client.resume(storyId), storyId),
         clearPending: (storyId: string) => mutate(() => client.clearPending(storyId), storyId),
-        // Phase ①'s "not final yet": queue another three-draft round without touching history.
+        // Phase ①'s "not final yet": queue another three-draft round without touching history. This is
+        // the WHOLE-Summary verb, so it belongs to a `summary_mode:'sampling'` book only — the route 409s
+        // it on a grouped Story, naming the group revise below (R5).
         requestSummaryRevision: (storyId: string, note?: string) =>
             mutate(() => client.requestSummaryRevision(storyId, note), storyId),
+        /**
+         * R2 — the Author rewrites ONE GROUP by hand (`POST /stories/:id/phrases/groups/:groupId/revise`).
+         * The group is addressed by the UUID the rail carries, so a catalog reorder cannot move the write
+         * onto a sibling, and a `writer_busy` group 409s — the control that would click it is disabled off
+         * the same projected flag, so the refusal is the guard rather than the routine path.
+         *
+         * The route answers the whole refreshed phrase view, and it is committed straight away: the pane
+         * shows the group's new number and its archived count from the server's own install report, and
+         * `mutate`'s choreography then re-reads the Story, the rail and the desk (P1: the durable store is
+         * the only memory, so nothing here is patched by hand beyond what the response carried).
+         */
+        revisePhraseGroup: (storyId: string, groupId: string, input: PhraseGroupReviseInput) =>
+            mutate(async () => {
+                const result = await client.revisePhraseGroup(storyId, groupId, input);
+
+                commit({ phrases: { ...snapshot.phrases, [storyId]: result.view } });
+
+                return result;
+            }, storyId),
         /**
          * U-3's biggest button. The pinned route table has no global endpoint, so a global
          * Stop is the client issuing P8's cord for every Story that could still be working:
@@ -464,9 +580,18 @@ export function createDashboardStore(client: ApiClient = api) {
                 await refreshLoop();
                 return settings;
             }),
+        /**
+         * U-7's cord. S-RUNTIME: a run id is LOCAL to one Story's book, so the click has to name the Story the
+         * run belongs to — the row's own `story_id` when the panel has the row (the cross-Story crew lists
+         * every book, and two of them can hold `run_0`), and otherwise the Story the Author is looking at.
+         * An unscoped kill is a 409 the moment more than one Story holds the id, so the server never has to
+         * guess which thread to abort and the panel never kills a sibling Story's run.
+         */
         killRun: (runId: string) =>
             mutate(async () => {
-                const run = await client.killRun(runId);
+                const storyId =
+                    snapshot.runs.find((row) => row.id === runId)?.story_id ?? snapshot.activeStoryId ?? undefined;
+                const run = await client.killRun(runId, storyId);
                 await Promise.all([refreshRuns(), refreshStories(), refreshAgents()]);
                 return run;
             }, snapshot.activeStoryId ?? undefined),

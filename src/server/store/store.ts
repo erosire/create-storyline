@@ -18,6 +18,19 @@
 // racing on one record is therefore not a corruption but a REV RACE, which is exactly the
 // case T-4 turns into a visible rejection instead of a lost update (D-37 explains why the
 // Author's UI writes go through a pause rather than through this same race).
+//
+// WHY ONE PRODUCTION STORE IS ONE STORY: the durable layout is `<root>/stories/<uuid>/`, and the
+// folder is the story's identity boundary (P3: a Story IS its records — so its records, its journal
+// and its harness live in one directory, and deleting that directory is the only way a story dies).
+// Two shapes of Store therefore exist, and only two:
+//   * UNBOUND — `Store.empty()`, or `Store.load(root)` with no `storyId`. The generic book: the
+//     unit tests, the in-memory run, and (later) the server-level templates/settings store.
+//   * STORY-BOUND — `Store.emptyStory(uuid)` / `Store.loadStory(uuid, dir)`, always built by the
+//     `StoryStores` registry. Such a store (a) mints the story's own UUID as the id of its single
+//     `stories` record instead of `story_<n>`, (b) refuses a second story record, (c) refuses any
+//     write whose `story_id` names a DIFFERENT story, and (d) records `story_id` in `store.json`,
+//     which `loadStory` cross-checks. Every child id (`finding_0`, `revision_0`, …) is local to the
+//     one store and starts at zero, so two stories may hold the same id and mean different things.
 import {
     COLLECTION_NAMES,
     COLLECTION_SINGULARS,
@@ -29,9 +42,12 @@ import {
     type Directive,
     type Finding,
     type Goal,
+    type GroupRevision,
     type Idea,
     type KnowledgeEntry,
     type LedgerEntry,
+    type Phrase,
+    type PhraseGroup,
     type Plotline,
     type Proposal,
     type Revision,
@@ -48,9 +64,13 @@ import {
 } from '../../shared/types';
 import {
     SNAPSHOT_VERSION,
+    STORIES_DIRECTORY,
     appendJournal,
+    assertStoryId,
+    isRecordUid,
     readJournal,
     readSnapshot,
+    storeFilePath,
     writeSnapshot,
     type StoreSnapshot
 } from './persist';
@@ -159,6 +179,25 @@ export class CasConflict extends Error {
     }
 }
 
+/**
+ * The id one collection must hand out, supplied by whoever owns the story's identity (the
+ * `StoryStores` registry, which names the folder before the folder names a store).
+ *
+ * It replaces the `${singular}_${n}` minting for that collection — a story-bound store's
+ * `stories.create` therefore produces the story UUID rather than `story_0`, which is what keeps
+ * the `story_id` fields, the folder name and the `store.json` binding the same string.
+ */
+export type StoryIdFactory = () => string;
+
+/** Options for opening a book. `storyId` is the only option today, and it is the whole difference. */
+export interface StoreOptions {
+    /**
+     * Bind the store to one Story (a UUID, validated before anything is read or written). Absent
+     * or null = an unbound generic book with no story rules.
+     */
+    storyId?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Small internal helpers (kept here so the store's rules are readable in one place)
 // ---------------------------------------------------------------------------
@@ -192,19 +231,29 @@ function requireAttribution(attribution: Attribution, collection: string, op: st
     }
 }
 
-/** The largest numeric suffix on `<singular>_<n>` ids, so a restart never mints a live id. */
-function highestIdSuffix(singular: string, ids: readonly string[]): number {
-    let highest = 0;
+/**
+ * The counter a collection must boot with: one past the largest `<singular>_<n>` suffix present.
+ *
+ * Ids are ZERO-BASED (`finding_0` is the first finding), so the persisted counter is the NEXT id to
+ * mint, and a store holding `finding_0…finding_2` must continue at 3. An empty collection returns
+ * 0 — NOT 1 — or a freshly created book would skip its first id. The "+1 over the highest live
+ * suffix" half is what stops a hand-edited or half-persisted book from minting a live id twice.
+ */
+function nextIdCounter(singular: string, ids: readonly string[]): number {
+    let highest = -1;
 
     for (const id of ids) {
         if (!id.startsWith(`${singular}_`)) continue;
 
         const suffix = Number(id.slice(singular.length + 1));
 
-        if (Number.isFinite(suffix) && suffix > highest) highest = suffix;
+        // `Number('')` is 0, which would silently resurrect `<singular>_0`; require real digits.
+        if (!/^\d+$/.test(id.slice(singular.length + 1))) continue;
+
+        if (suffix > highest) highest = suffix;
     }
 
-    return highest;
+    return highest + 1;
 }
 
 /** Snapshot journal + log journal, deduplicated by `seq` and ordered (either file may lead). */
@@ -222,6 +271,36 @@ function mergeEvents(snapshotJournal: readonly unknown[], logged: readonly unkno
     return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
 }
 
+/**
+ * The per-story binding, checked against the file rather than trusted.
+ *
+ * Two failures are refused, both because they would put one story's facts in another story's book
+ * and the build promises NO migration:
+ *   * the snapshot names a different story — `stories/<a>/store.json` opened as story `b`;
+ *   * the snapshot names no story at all — a book written by an unbound store (the pre-per-story
+ *     flat layout, or the server-level store) sitting where a story folder is expected.
+ * A missing snapshot is not a failure: that is a story folder's first boot.
+ */
+function assertSnapshotBinding(storyId: string, rootDir: string, snapshot: StoreSnapshot | null): void {
+    if (snapshot === null) return;
+
+    const bound = snapshot.story_id;
+
+    if (bound === undefined || bound === null) {
+        throw new StoreError(
+            `${storeFilePath(rootDir)} is not bound to a story (it has no story_id) — this build does not migrate ` +
+                `the old flat layout, so move it to stories/<uuid>/ or remove it`
+        );
+    }
+
+    if (bound === storyId) return;
+
+    throw new StoreError(
+        `${storeFilePath(rootDir)} belongs to story ${String(bound)}, not story ${storyId} — one story is one ` +
+            `folder, so it must be opened from stories/${String(bound)}/`
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Collection<T>
 // ---------------------------------------------------------------------------
@@ -230,6 +309,12 @@ function mergeEvents(snapshotJournal: readonly unknown[], logged: readonly unkno
 interface CollectionState<T> {
     records: Map<string, T>;
     counter: number;
+    /**
+     * Whether this collection's externally-assigned (story UUID) id has already been issued. It
+     * has to ride the rollback or a commit that created the Story and then threw would leave the
+     * store refusing a second Story it never actually wrote.
+     */
+    fixedIssued: boolean;
 }
 
 /**
@@ -238,7 +323,8 @@ interface CollectionState<T> {
  * so nothing outside the store constructs one.
  *
  * `T` is constrained to records carrying the §4 bookkeeping fields, which is what makes
- * `rev`-based CAS and the `updated_at` stamp type-safe for all 20 collections at once.
+ * `rev`-based CAS and the `updated_at` stamp type-safe for all collections at once (the 20 §4
+ * ones plus the three the Summary Phrase redesign appends).
  */
 export class Collection<T extends StoredRecord> {
     readonly name: CollectionName;
@@ -246,7 +332,16 @@ export class Collection<T extends StoredRecord> {
 
     private readonly owner: Store;
     private readonly records = new Map<string, T>();
+
+    /** The NEXT id to mint — ids are zero-based, so a fresh collection's first create is `_0`. */
     private counter = 0;
+
+    /**
+     * Set on the `stories` collection of a story-bound store (`Store` calls `_setIdFactory`): the
+     * id comes from the store's story identity instead of the counter, and it can be issued once.
+     */
+    private idFactory: StoryIdFactory | null = null;
+    private fixedIssued = false;
 
     constructor(owner: Store, name: CollectionName) {
         this.owner = owner;
@@ -287,20 +382,103 @@ export class Collection<T extends StoredRecord> {
 
     /**
      * Creates a record. The id is minted `${singular}_${n}` from the collection's monotonic
-     * counter (W1), `rev` starts at 1, and the timestamps are the store's — a caller cannot
-     * set any of the three, which is what keeps ids and revs trustworthy as CAS tokens.
+     * counter (W1) — ZERO-BASED, so the first finding in a story is `finding_0` and the ids are
+     * story-local (two stories may both hold `finding_0`, and they are different findings).
+     * A story-bound store's `stories` collection takes its id from the store's story UUID
+     * instead (`_setIdFactory`), and `rev` starts at 1 and the timestamps are the store's — a
+     * caller cannot set any of the three, which is what keeps ids and revs trustworthy as CAS
+     * tokens.
      */
     create(init: RecordInit<T>, attribution: Attribution): T {
         requireAttribution(attribution, this.name, 'create');
 
-        const id = `${this.singular}_${++this.counter}`;
+        const id = this.idFactory ? this.nextFixedId() : `${this.singular}_${this.counter++}`;
         const at = new Date().toISOString();
         const record = { ...copyIn(init), id, rev: 1, created_at: at, updated_at: at } as unknown as T;
+
+        // A story-bound store may hold no other story's records (see `Store._assertStoryScope`);
+        // this runs before the map is touched, so a refusal writes and journals nothing.
+        this.owner._assertStoryScope(this.name, record);
 
         this.records.set(id, record);
         this.owner._event(this.name, 'create', id, attribution, record);
 
         return copyIn(record);
+    }
+
+    /**
+     * Creates a record under an EXTERNALLY-ASSIGNED uid — the write behind a group id that is an
+     * ADDRESS rather than a label (R1: `phrases`, `phrase_groups`, `group_revisions`).
+     *
+     * The rules are the same as {@link create}'s and deliberately as strict: `rev` starts at 1, the
+     * timestamps are the store's, the caller may set none of them, the story scope is checked before
+     * the map is touched, and the write journals. What differs is only where the id comes from: the
+     * caller (usually `newRecordUid()` in `persist.ts`, injected so a test can pin ids) rather than
+     * the collection's counter.
+     *
+     * WHY THE ID IS VALIDATED AS A UUID: an id that will be quoted back by a route, a finding and a
+     * model's structured answer has to be unambiguous and unparsable-by-accident. A `${singular}_n`
+     * id handed here would be accepted by `Map.set` and then read as a DIFFERENT group by
+     * `nextIdCounter` on the next boot, which is exactly the class of drift this store refuses at the
+     * door rather than discovering in a projection.
+     *
+     * The counter does NOT advance: uid ids are not counter ids, and `nextIdCounter` skips
+     * non-`${singular}_` ids when a book hydrates, so the two schemes cannot collide in one collection.
+     */
+    createWithId(id: string, init: RecordInit<T>, attribution: Attribution): T {
+        requireAttribution(attribution, this.name, 'create');
+
+        if (this.idFactory !== null) {
+            throw new StoreError(
+                `the ${this.name} collection takes its id from the store's story identity, not from a caller — ` +
+                    `createWithId is for the collections whose ids are minted by their owner (phrase, group, revision)`
+            );
+        }
+
+        if (!isRecordUid(id)) {
+            throw new StoreError(
+                `the ${this.singular} id ${JSON.stringify(id)} is not a UUID (8-4-4-4-12 hexadecimal) — an ` +
+                    `externally-assigned id is quoted by routes, findings and structured answers, so it must be minted by newRecordUid()`
+            );
+        }
+
+        if (this.records.has(id)) {
+            throw new StoreError(
+                `the ${this.singular} id ${id} is already in the ${this.name} collection — an externally-assigned id ` +
+                    `is issued once, so minting it twice means the caller re-created a row it already has (P1: the store is the memory)`
+            );
+        }
+
+        const at = new Date().toISOString();
+        const record = { ...copyIn(init), id, rev: 1, created_at: at, updated_at: at } as unknown as T;
+
+        // Same story-scope guard as `create`, before the map is touched: a refusal writes and journals nothing.
+        this.owner._assertStoryScope(this.name, record);
+
+        this.records.set(id, record);
+        this.owner._event(this.name, 'create', id, attribution, record);
+
+        return copyIn(record);
+    }
+
+    /**
+     * The externally-assigned id (a story UUID): issued exactly once, because one story-bound
+     * Store IS one story. The refusal survives a delete of the record — a new story means a new
+     * folder and a new UUID from `StoryStores`, never a second story in this book.
+     */
+    private nextFixedId(): string {
+        if (this.fixedIssued || this.records.size > 0) {
+            throw new StoreError(
+                `this store already holds the story ${this.owner.storyId ?? ''} — one Store is one story, ` +
+                    `so a new story is a new story folder (StoryStores.create), not a second stories record`
+            );
+        }
+
+        const id = assertStoryId(this.idFactory!(), 'the id assigned to the stories collection');
+
+        this.fixedIssued = true;
+
+        return id;
     }
 
     /**
@@ -332,6 +510,10 @@ export class Collection<T extends StoredRecord> {
             rev: current.rev + 1,
             updated_at: new Date().toISOString()
         } as T;
+
+        // A patch cannot move a record into (or out of) this story: the story is the store's
+        // identity, so `story_id` is only writable when it agrees with it.
+        this.owner._assertStoryScope(this.name, next);
 
         this.records.set(id, next);
         this.owner._event(this.name, 'update', id, attribution, patch);
@@ -400,7 +582,7 @@ export class Collection<T extends StoredRecord> {
 
     /** @internal */
     _state(): CollectionState<T> {
-        return { records: new Map(this.records), counter: this.counter };
+        return { records: new Map(this.records), counter: this.counter, fixedIssued: this.fixedIssued };
     }
 
     /** @internal */
@@ -410,11 +592,21 @@ export class Collection<T extends StoredRecord> {
         for (const [id, record] of state.records) this.records.set(id, record);
 
         this.counter = state.counter;
+        this.fixedIssued = state.fixedIssued;
+    }
+
+    /**
+     * @internal Binds an externally-assigned id to this collection (only the `stories`
+     * collection of a story-bound Store). The factory is the story UUID the registry chose when it
+     * named the folder, so `stories.create` and the folder name can never disagree.
+     */
+    _setIdFactory(factory: StoryIdFactory): void {
+        this.idFactory = factory;
     }
 
     /**
      * @internal Boot hydration (L-3: restart with no lost state). The counter is the HIGHER
-     * of the persisted counter and the largest id suffix present, so a hand-edited or
+     * of the persisted "next id" and one past the largest id suffix present, so a hand-edited or
      * partially-persisted store cannot cause a duplicate id on the next create.
      */
     _hydrate(records: readonly unknown[], persistedCounter = 0): void {
@@ -433,11 +625,15 @@ export class Collection<T extends StoredRecord> {
 
         this.counter = Math.max(
             persistedCounter,
-            highestIdSuffix(
+            nextIdCounter(
                 this.singular,
                 materialised.map((record) => record.id)
             )
         );
+
+        // A book that already has its one Story record has spent its externally-assigned id; the
+        // UUID itself is not a `<singular>_<n>` suffix, so the counter cannot tell us this.
+        if (this.idFactory !== null) this.fixedIssued = materialised.length > 0;
     }
 }
 
@@ -455,7 +651,8 @@ export class Collection<T extends StoredRecord> {
  * inspects the files.
  */
 export class Store {
-    // The 20 §4 collections, named exactly as §4 names them (MUST NOT rename — W1).
+    // The 20 §4 collections, named exactly as §4 names them (MUST NOT rename — W1), plus the three
+    // the Summary Phrase redesign appends (`phrases`, `phrase_groups`, `group_revisions`).
     readonly stories: Collection<Story>;
     readonly summaries: Collection<Summary>;
     readonly plotlines: Collection<Plotline>;
@@ -482,6 +679,12 @@ export class Store {
     readonly seedBriefs: Collection<SeedBrief>;
     /** §3.4 — the screening Reader's one-turn issue list per sample; feeds the selector. */
     readonly sampleReviews: Collection<SampleReview>;
+    // The Summary Phrase collections (R1/R2). `phrases` and `phrase_groups` are created with
+    // `createWithId` (a uid ADDRESS, because a group id is named by routes, findings and run rows);
+    // `group_revisions` keeps counter ids, because a revision is addressed by (group id, number).
+    readonly phrases: Collection<Phrase>;
+    readonly phraseGroups: Collection<PhraseGroup>;
+    readonly groupRevisions: Collection<GroupRevision>;
 
     /** The single registry every generic path (snapshot, CAS resolution, rollback) walks. */
     private readonly collections: Record<CollectionName, Collection<AnyRecord>>;
@@ -514,12 +717,32 @@ export class Store {
     /** Where the two durable files live; `null` is the in-memory store (no persist target). */
     readonly rootDir: string | null;
 
-    private constructor(rootDir: string | null) {
+    /**
+     * The Story this book belongs to, or `null` for a generic book (`Store.empty()`, the
+     * server-level store). Story-bound stores mint the story UUID as their one `stories` id,
+     * refuse another story's records, and stamp `story_id` into `store.json`.
+     */
+    readonly storyId: string | null;
+
+    private constructor(rootDir: string | null, storyId?: string | null) {
         this.rootDir = rootDir;
+
+        // Validated in the constructor, not at the first write: an unbound id must not get as far
+        // as a path join or a record id, and `null`/undefined is the deliberate unbound case.
+        this.storyId = storyId === undefined || storyId === null ? null : assertStoryId(storyId, 'Store storyId');
+
         this.collections = {} as Record<CollectionName, Collection<AnyRecord>>;
 
         for (const name of COLLECTION_NAMES) {
             this.collections[name] = new Collection<AnyRecord>(this, name);
+        }
+
+        // The story's own identity is the id its `stories` record carries, so `stories.create`
+        // yields the folder UUID instead of `story_0` (see `Collection.nextFixedId`).
+        if (this.storyId !== null) {
+            const assigned = this.storyId;
+
+            this.collections.stories._setIdFactory(() => assigned);
         }
 
         // The typed aliases are the SAME objects as the registry entries (one state per
@@ -545,13 +768,31 @@ export class Store {
         this.knowledge = this.collections.knowledge as unknown as Collection<KnowledgeEntry>;
         this.seedBriefs = this.collections.seed_briefs as unknown as Collection<SeedBrief>;
         this.sampleReviews = this.collections.sample_reviews as unknown as Collection<SampleReview>;
+        this.phrases = this.collections.phrases as unknown as Collection<Phrase>;
+        this.phraseGroups = this.collections.phrase_groups as unknown as Collection<PhraseGroup>;
+        this.groupRevisions = this.collections.group_revisions as unknown as Collection<GroupRevision>;
     }
 
     // -- construction -------------------------------------------------------------------
 
-    /** A store with no files behind it — the test path and the "run it in memory" case. */
+    /**
+     * An UNBOUND store with no files behind it — the test path and the "run it in memory" case.
+     * It is generic on purpose: ids are `story_0`, `finding_0`, … and nothing is bound to a story,
+     * so a unit test never needs a UUID or a filesystem.
+     */
     static empty(): Store {
         return new Store(null);
+    }
+
+    /**
+     * An in-memory store bound to one story UUID — the multi-story test path (two of these hold
+     * `finding_0` each, independently, with no filesystem writes).
+     *
+     * The id is REQUIRED and validated: asking for a story store and quietly getting an unbound
+     * one is how two stories end up sharing a journal again. `Store.empty()` is the unbound call.
+     */
+    static emptyStory(storyId: string): Store {
+        return new Store(null, assertStoryId(storyId, 'Store.emptyStory storyId'));
     }
 
     /**
@@ -563,11 +804,17 @@ export class Store {
      * the snapshot's array is the cache; either may be one commit ahead of the other
      * depending on where a kill landed, and merging is what makes that harmless rather than a
      * lost event.
+     *
+     * `options.storyId` binds the book to one story and cross-checks it against the snapshot, so
+     * this directory cannot quietly be another story's book (see {@link Store.loadStory}).
      */
-    static async load(rootDir: string): Promise<Store> {
-        const store = new Store(rootDir);
+    static async load(rootDir: string, options: StoreOptions = {}): Promise<Store> {
+        const storyId = options.storyId ?? null;
+        const store = new Store(rootDir, storyId);
         const snapshot = await readSnapshot(rootDir);
         const logged = await readJournal(rootDir);
+
+        if (storyId !== null) assertSnapshotBinding(storyId, rootDir, snapshot);
 
         // A malformed section (a hand-edit, a half-written array) hydrates as empty for that
         // collection rather than throwing: `readSnapshot` already refused a corrupt FILE, and
@@ -611,6 +858,16 @@ export class Store {
         store.seq = merged.reduce((highest, event) => Math.max(highest, event.seq), 0);
 
         return store;
+    }
+
+    /**
+     * Opens ONE story's book: `<root>/stories/<uuid>/{store.json,journal.jsonl}`. This is what
+     * `StoryStores` calls; the story id is validated and cross-checked against the snapshot, so a
+     * folder is never opened as the wrong story and a story-bound store never silently adopts a
+     * book written before the per-story layout (there is no migration in this build).
+     */
+    static async loadStory(storyId: string, rootDir: string): Promise<Store> {
+        return Store.load(rootDir, { storyId: assertStoryId(storyId, 'Store.loadStory storyId') });
     }
 
     // -- the journal --------------------------------------------------------------------
@@ -797,8 +1054,31 @@ export class Store {
     }
 
     /**
+     * @internal The "one production Store is one story" rule, enforced at the write gate.
+     *
+     * Only records that CARRY a `story_id` are checked (the `Story` row itself has none — it is the
+     * story — and `Template`'s is optional). A story-bound store refuses a foreign one rather than
+     * storing it: a finding about another story sitting in this folder would be listed, judged and
+     * deleted as if it belonged here, and the Author would never see where it came from.
+     */
+    _assertStoryScope(collection: CollectionName, record: unknown): void {
+        if (this.storyId === null) return;
+
+        const value = (record as { story_id?: unknown } | undefined)?.story_id;
+
+        if (typeof value !== 'string' || value.length === 0) return;
+        if (value === this.storyId) return;
+
+        throw new StoreError(
+            `${collection} names story ${value}, but this store is story ${this.storyId} — one Store is one story, ` +
+                `so another story's records live in their own ${STORIES_DIRECTORY}/<uuid>/ folder`
+        );
+    }
+
+    /**
      * @internal Resolves an id to its collection and current record — id-prefix first (the
-     * ids are minted `${singular}_…`), then a full scan for anything hand-authored.
+     * ids are minted `${singular}_…`), then a full scan for anything hand-authored. The second
+     * loop is also how a story-bound store resolves its own UUID story id, which has no prefix.
      */
     _resolveId(id: string): { collection: CollectionName; record: AnyRecord | undefined } | undefined {
         let prefixHit: CollectionName | undefined;
@@ -917,6 +1197,10 @@ export class Store {
             settings: copyIn(Object.fromEntries(this.settings)),
             journal: copyIn(this.events)
         };
+
+        // Only a bound book writes `story_id`: an unbound book's snapshot stays exactly what it
+        // was, and a bound one carries the identity `Store.loadStory` cross-checks on the next boot.
+        if (this.storyId !== null) snapshot.story_id = this.storyId;
 
         for (const name of COLLECTION_NAMES) {
             const collection = this.collections[name];

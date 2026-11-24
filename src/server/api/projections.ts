@@ -16,8 +16,13 @@ import { CONFIRMED_FINDING_STATES, type LevelHistoryEntry, type LoopStory } from
 import { DISCARDABLE_FINDING_STATES, DISCARDABLE_IDEA_STATES } from '../loop/status';
 import {
     findingsAwaitingAuthor,
+    // SUMMARY PHRASE R6: the view says "has this text been reviewed?" from CLOSED run rows, so it needs
+    // the same liveness test the loop uses (`isLiveRun`) and the Author's seat count (`screeningSizeOf`),
+    // rather than a second opinion about what "running" and "how many Readers" mean.
+    isLiveRun,
     loopStory,
     samplingRoundOf,
+    screeningSizeOf,
     storyChapters,
     storyFindings,
     storyIdeas,
@@ -26,6 +31,25 @@ import {
     undecidedIdeas,
     verdictsFor
 } from '../loop/records';
+// SUMMARY PHRASE (R2/R3/R6) — the group domain's read side. Every rule the view states (a group's
+// history order, a finding's group scope, R3's resolution, the vector hash a review is keyed by, the
+// composition of the Overview, and the legacy field map the mirror is checked against) comes from the
+// module that OWNS it, so the projection cannot invent a second version of a loop rule.
+import {
+    composeGroupContentFrom,
+    findingGroupScope,
+    findingResolution,
+    groupRevisionHistory,
+    groupRevisionVector,
+    groupVectorHash,
+    isGroupManagedStory,
+    // F8 / R4 — the same held-group read the dispatch and the Author's 409 use, so the rail's disabled
+    // button and the server's refusal can never disagree about who is writing this group.
+    liveGroupRefs,
+    phraseGroupsOf,
+    storyPhrase
+} from '../phrase';
+import { SUMMARY_MIRROR_FIELDS } from '../../shared/phrase';
 // §6.4 gate 1's read: "the accepted brief" has exactly one definition in the build — the prompt
 // compiler's deterministic pick (`created_at` then id) — so the Story view reuses it rather than
 // opening a second interpretation of "accepted" that could disagree with what a Writer is told.
@@ -47,9 +71,21 @@ import type {
 import type { CriteriaEngine, LevelReport, LevelStatus } from '../criteria/engine';
 import type { DigestBuilder } from '../digest/digest';
 import type { CommitEvent, Store } from '../store';
-import type { Cost, Finding, Idea, Revision, Run, Story, StoryPhase, Task } from '../../shared/types';
+import type {
+    Cost,
+    Finding,
+    Idea,
+    Revision,
+    RoleKind,
+    Run,
+    Story,
+    StoryPhase,
+    Task
+} from '../../shared/types';
 import type { StreamKind } from '../../dashboard/api';
 import type { StoryThreadRecord } from '../run/thread-log';
+// The roster's tile shape, so the cross-book merge below produces the same rows a single book does.
+import type { StoryAgentStatus } from '../run/story-engine';
 
 /** Everything a projection needs: the book, and the two read-only engines that interpret it. */
 export interface ProjectionDeps {
@@ -172,8 +208,20 @@ export function costDistribution(store: Store, storyId: string): CostDistributio
     const raised = new Map<string, number>();
     const current = new Map<string, number>();
 
+    // S-RUNTIME: a journal event names a record by its LOCAL id, and one Story's `finding_0` is not
+    // another Story's `finding_0`. Under the per-Story layout (`store/story-stores.ts`) `store.journal`
+    // is one Story's journal and the fence below cannot exclude anything; in a book that holds several
+    // Stories it is what stops one Story's create from being paired with another Story's cost change —
+    // a downgrade the Author never made. A finding the book no longer holds (deleted, purged) has no
+    // owner to compare, so its events still count, which is what the audit line wants anyway.
+    const owners = new Map(store.findings.list().map((finding) => [finding.id, finding.story_id]));
+
     for (const event of store.journal) {
         if (event.collection !== 'findings') continue;
+
+        const owner = owners.get(event.id);
+
+        if (owner !== undefined && owner !== storyId) continue;
 
         const cost = costOfPatch(event.patch);
 
@@ -445,9 +493,34 @@ function samplingView(story: Story): SamplingView {
                 // their `sample_reviews` rows (P13/§6.6), so without this line the Author's pane shows
                 // counts and no reason. The `?? []` is the pre-H1 history line, normalised rather than
                 // optional: a consumer reads one shape and never has to ask which build wrote the row.
-                unresolved_fixes: sample.unresolved_fixes ?? []
+                unresolved_fixes: sample.unresolved_fixes ?? [],
+                // H2 — the hill's per-candidate outcome: `accepted` / `eligible` / `rejected`, the
+                // reason a refusal refused, and (refinement rounds only) the origin split and how much
+                // of the accepted text the draft touched. These travel WHEN RECORDED and not as zeros:
+                // a row from before the hill has no outcome to report, and inventing one — or reporting
+                // `0` introduced criticals, which reads as "this draft broke nothing" — would put a fact
+                // on the pane that the book never recorded.
+                ...(sample.outcome === undefined ? {} : { outcome: sample.outcome }),
+                ...(sample.reject_reason === undefined ? {} : { reject_reason: sample.reject_reason }),
+                ...(sample.introduced_critical === undefined ? {} : { introduced_critical: sample.introduced_critical }),
+                ...(sample.introduced_high === undefined ? {} : { introduced_high: sample.introduced_high }),
+                ...(sample.inherited_critical === undefined ? {} : { inherited_critical: sample.inherited_critical }),
+                ...(sample.inherited_high === undefined ? {} : { inherited_high: sample.inherited_high }),
+                ...(sample.changed_fields === undefined ? {} : { changed_fields: sample.changed_fields }),
+                ...(sample.changed_characters === undefined
+                    ? {}
+                    : { changed_characters: sample.changed_characters })
             })),
-            selected: row.selected
+            selected: row.selected,
+            // H2 — the wave's ledger, same rule as the sample fields: present when the row recorded it.
+            // `wave` is the one that changes what the pane MEANS: two rows for the same round, one at
+            // wave 0 and one at wave 1, are a stall and the restart after the Author's clear, and an
+            // Author who cannot see the wave cannot tell "the hill stalled again" from "the hill moved".
+            ...(row.wave === undefined ? {} : { wave: row.wave }),
+            ...(row.attempts === undefined ? {} : { attempts: row.attempts }),
+            ...(row.improvements === undefined ? {} : { improvements: row.improvements }),
+            ...(row.ceiling === undefined ? {} : { ceiling: row.ceiling }),
+            ...(row.unresolved_blocking === undefined ? {} : { unresolved_blocking: row.unresolved_blocking })
         }));
 
     const latest = history[0];
@@ -810,4 +883,389 @@ export function feedEvents(events: CommitEvent[]): FeedEvent[] {
     }
 
     return [...seen.values()];
+}
+
+// ---------------------------------------------------------------------------
+// S-RUNTIME — the aggregate reads, across SEVERAL books
+// ---------------------------------------------------------------------------
+//
+// Since the per-Story layout, one server serves several books and a Story's ids are LOCAL to its book
+// (`store/story-stores.ts`): two books both hold `finding_0`, both hold `run_7`, and both hold a thread
+// called `thread_3`. Every helper below therefore MERGES PER BOOK rather than re-deriving one view over a
+// combined row set, because the second reading is where two Stories' same-named records would collapse
+// into one row the Author cannot click. What stays identical is each book's own projection: the aggregate
+// is a union of correct per-Story answers, sorted by a key that includes the Story id, so the same
+// workspace state always produces the same listing.
+
+/** S-RUNTIME: the Stories panel (U-1) across several books, ranked as `storyRows` ranks one book's rows. */
+export const storyRowsAcross = (books: ProjectionDeps[]): StoryRow[] =>
+    books
+        .flatMap((deps) => storyRows(deps))
+        .sort((left, right) => storyRankOfRow(left) - storyRankOfRow(right) || left.id.localeCompare(right.id));
+
+/**
+ * The row-level reading of `storyRank`. U-1's row carries the two fields the rank is computed from, and
+ * re-deriving the rank from the ROW (rather than from a `Story` the row was built from) is what lets the
+ * aggregate sort rows from several books without holding every Story row in memory. Same rule, one
+ * function, no drift: `storyRank` is the source and this only reads through it.
+ */
+const storyRankOfRow = (row: StoryRow): number =>
+    storyRank({ status: row.status, pending_kind: row.pending_kind } as Story);
+
+/** S-RUNTIME: the Author's desk (U-10) across several books. `queueOrder` is Story-keyed, so the merge is stable. */
+export const queueItemsAcross = (books: Store[]): QueueItem[] =>
+    books.flatMap((store) => queueItems(store)).sort(queueOrder);
+
+/**
+ * S-RUNTIME: the crew panel (U-7) across several books, newest first.
+ *
+ * A run id is local to its book, so the rows are NOT de-duplicated by id — two Stories' `run_7` are two
+ * runs, and the panel needs to show both. Callers pass `story_id` when they want one Story's panel, which
+ * is the single-book read again.
+ */
+export const runsAcross = (books: Store[], storyId?: string): Run[] =>
+    books
+        .flatMap((store) => store.runs.list())
+        // The filter is on the ROW's Story, not on the book: a single-store workspace holds several Stories in
+        // one book, and `?story_id=` has always answered that Story's panel, not the book's whole ledger.
+        .filter((run) => storyId === undefined || run.story_id === storyId)
+        .sort((left, right) => left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id));
+
+/**
+ * S-RUNTIME: the employee roster (U-8) across several books, merged per KIND.
+ *
+ * The roster is five employees for the whole workspace, not five per book, so a per-kind merge is the
+ * honest aggregate: an employee is `running` if it has a live thread in ANY Story, `working` carries every
+ * live thread (each one already names its Story, and the dashboard opens a thread scoped to it), and
+ * `recent` keeps the newest closed runs across all of them. The model fields come from the FIRST book that
+ * answers for the kind, which is the book whose roster the runs read: the choice is one host setting, and
+ * `runtime/server-config.ts` mirrors it into every book, so a divergence would be a bug, not a choice.
+ */
+export const mergeAgentStatuses = (perBook: StoryAgentStatus[][]): StoryAgentStatus[] => {
+    const byKind = new Map<RoleKind, StoryAgentStatus>();
+
+    for (const statuses of perBook) {
+        for (const status of statuses) {
+            const merged = byKind.get(status.kind);
+
+            if (merged === undefined) {
+                // The first book answers the identity fields (rank, title, model) — see the note above.
+                byKind.set(status.kind, { ...status, working: [...status.working], recent: [...status.recent] });
+
+                continue;
+            }
+
+            merged.working.push(...status.working);
+            merged.recent.push(...status.recent);
+
+            if (status.status === 'running') merged.status = 'running';
+        }
+    }
+
+    for (const status of byKind.values()) {
+        status.working.sort((left, right) => left.started_at - right.started_at || left.thread_id.localeCompare(right.thread_id));
+
+        // The tile's "why did it end" list stays bounded (the same cap one book applies), newest first,
+        // so a workspace of twenty Stories cannot grow it past what the rail has room to show.
+        status.recent = status.recent
+            .sort((left, right) => right.started_at.localeCompare(left.started_at))
+            .slice(0, RECENT_RUNS_LIMIT);
+    }
+
+    return [...byKind.values()];
+};
+
+/** The tile's bounded "why did it end" list — mirrors `run/story-engine.ts:RECENT_RUNS`. */
+const RECENT_RUNS_LIMIT = 3;
+
+/**
+ * S-RUNTIME: the threads one employee ever ran (U-8's tile), across several books, oldest first.
+ *
+ * Each book's `agentThreads` answer is already correct for that book — including its own run-row folding,
+ * which keys on run ids that are LOCAL to it. Concatenating those answers and sorting by start time is
+ * therefore both the merge and the reason two Stories' `run_7` stay two bars.
+ */
+export const agentThreadsAcross = (perBook: AgentThreadRecord[][]): AgentThreadRecord[] =>
+    perBook
+        .flatMap((threads) => threads)
+        .sort(
+            (left, right) =>
+                left.started_at.localeCompare(right.started_at) ||
+                left.story_id.localeCompare(right.story_id) ||
+                left.thread_id.localeCompare(right.thread_id)
+        );
+
+// ---------------------------------------------------------------------------
+// SUMMARY PHRASE — the group view (R6)
+//
+// WHY A SEPARATE READ INSTEAD OF WIDENING `storyView`: the dashboard's `StoryView` is the PINNED wire
+// contract (`src/dashboard/api.ts`), and the redesign's rail is a new surface rather than a field of
+// the old one. A projection may only READ (the header rule), so everything below is a rendering of
+// rows the loop already owns: the group rows, their archived history, the findings' group scope and
+// resolution (`phrase/findings.ts`, the one place R3's rule is written), and the run rows that say
+// which Reader seats have already reported on the Overview as it stands.
+//
+// WHAT THE AUTHOR CAN SEE FROM IT, in one pass: which groups are written and to what number, what the
+// Overview says right now, which defect names which groups and which of those groups still owe it a
+// revision, whether the legacy Summary still agrees with the groups (R6's mirror), and whether the
+// current text has been reviewed at all.
+// ---------------------------------------------------------------------------
+
+/** One revision of one group, current or archived, as the history rail renders it (R2's retained history). */
+export interface PhraseRevisionRow {
+    id: string;
+    /** 1-based, per group (R2) — the number the rail labels a row with. */
+    number: number;
+    state: string;
+    at: string;
+    /** The run that wrote it, or null for a legacy import's seed row. */
+    run_ref: string | null;
+    /** R3: the findings this text was written to answer — the anchor a closure is judged on. */
+    finding_refs: string[];
+    /** The fix tasks it answered. */
+    task_refs: string[];
+    /** The text's length; the body itself is on the group row (latest) and costs a second read otherwise. */
+    chars: number;
+}
+
+/** One group: current text, its number, its retained history, and the findings it still owes. */
+export interface PhraseGroupRow {
+    id: string;
+    key: string;
+    title: string;
+    description: string;
+    order: number;
+    content: string;
+    revision: number;
+    updated_by: string | null;
+    /** Newest first, `latest` included — R2 keeps every superseded text, so the rail can show it. */
+    history: PhraseRevisionRow[];
+    /** Open findings that target this group and have no revision of IT resolving them (R3). */
+    owed_by_findings: string[];
+    /**
+     * F8 / R4 — a live Writer pass holds this group right now, so the text shown is about to move.
+     *
+     * Derived from the live `runs` rows (`phrase/exclusion.ts`), not from a flag anyone sets: the rail
+     * disables "revise this group" off exactly the read the route refuses with, so a button and a 409
+     * cannot disagree, and a restart of the server changes the answer with no bookkeeping of ours.
+     */
+    writer_busy: boolean;
+}
+
+/** A finding, its group attribution, and R3's resolution against the book as it stands. */
+export interface PhraseFindingRow {
+    id: string;
+    title: string;
+    cost: Cost;
+    state: Finding['state'];
+    seen_count: number;
+    /** The ids on the record; empty is the legacy "the whole Overview" reading. */
+    group_refs: string[];
+    /** True when the record named none, spelled out so a UI need not infer it from an empty array. */
+    unscoped: boolean;
+    targeted: string[];
+    resolved: string[];
+    missing: string[];
+    /** R3: every targeted group has a revision written to answer it, so the row may close. */
+    resolved_all: boolean;
+}
+
+/** A task in the group queue, with what it is waiting on. */
+export interface PhraseTaskRow {
+    id: string;
+    title: string;
+    state: Task['state'];
+    owner_role: string | null;
+    attempts: number;
+    finding_ref: string | null;
+}
+
+/** The state of the group pipeline: what is written, what is reviewed, and whether the mirror agrees. */
+export interface PhraseReviewState {
+    /** `story.summary_mode`, echoed — the switch is a Setting, not a derived fact (R6). */
+    mode: 'groups' | 'sampling';
+    /** Catalog keys with no revision yet; empty means the Overview is fully written. */
+    unwritten_groups: string[];
+    written_groups: number;
+    /** `{groupId: revisionNumber}` — the identity the reviews and the deferrals are keyed by. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** Reader seats the Author's dial asks for on this vector, and how many have produced a review. */
+    review_seats: number;
+    reviews_on_current_vector: number;
+    deep_reviews_on_current_vector: number;
+    open_findings: number;
+    /** The critical/major rows the sign-off treats as blocking (§6.8's bar, unchanged by the redesign). */
+    blocking_findings: number;
+    open_tasks: number;
+    /**
+     * R6's compatibility mirror: does the legacy `summaries` prose still say what the groups say?
+     * `in_sync: false` with `locked: true` is the Author's own doing (L-7a: signed prose is not
+     * rewritten under them), which is why the reason travels with the flag.
+     */
+    mirror: { summary_id: string | null; in_sync: boolean; locked: boolean; fields: string[] };
+}
+
+/** The whole group surface for one Story — one read for the Author's rail (R6). */
+export interface PhraseView {
+    story_id: string;
+    mode: 'groups' | 'sampling';
+    phrase_id: string | null;
+    /** The Overview's revision number (the phrase row), or 0 when the book has no phrase row. */
+    revision: number;
+    /** The composed Overview, from the group rows as they are (R2: the composition is a read). */
+    overview: string;
+    groups: PhraseGroupRow[];
+    findings: PhraseFindingRow[];
+    tasks: PhraseTaskRow[];
+    review: PhraseReviewState;
+}
+
+/** Closed runs of one claim family — the "has this seat reported yet?" read (L-3: the rows are the state). */
+function closedRunsFor(store: Store, storyId: string, prefix: string): number {
+    return store.runs.list().filter(
+        (run) => run.story_id === storyId && !isLiveRun(run) && (run.work_item_ref ?? '').startsWith(prefix)
+    ).length;
+}
+
+/**
+ * The group view of one Story (R6).
+ *
+ * It answers "what does the Summary say, who wrote each part, what is wrong with it, and what has been
+ * reviewed?" without ever writing — a pure read of `phrases`, `phrase_groups`, `group_revisions`,
+ * `findings`, `tasks` and the run ledger, so opening the rail cannot move a book (R6's "legacy stories
+ * stay readable with no destructive migration" holds in both directions).
+ *
+ * A LEGACY Story (no `summary_mode`, so no phrase rows) is not an error: the view comes back with
+ * `mode: 'sampling'` and empty groups, which is the truth about that book. The rail shows the legacy
+ * sampling panel for it, and `POST /stories/:id/phrases/import` is how the Author opts into groups.
+ */
+export function phraseView(store: Store, story: Story): PhraseView {
+    const phrase = storyPhrase(store, story.id);
+    const groups = phraseGroupsOf(store, story.id);
+    const findings = storyFindings(store, story.id);
+
+    // R3's per-group debt, computed once per finding and then transposed onto the group rows: the rail
+    // must be able to say "Premise still owes finding_3 a revision" without a second resolution pass.
+    const owedByGroup = new Map<string, string[]>();
+
+    const findingRows = findings.map((finding) => {
+        const scope = findingGroupScope(store, story, finding);
+        const resolution = findingResolution(store, story, finding);
+
+        if (resolution.missing.length > 0) {
+            for (const groupId of resolution.missing) {
+                owedByGroup.set(groupId, [...(owedByGroup.get(groupId) ?? []), finding.id]);
+            }
+        }
+
+        return {
+            id: finding.id,
+            title: finding.title,
+            cost: finding.cost,
+            state: finding.state,
+            seen_count: finding.seen_count,
+            group_refs: [...(finding.group_refs ?? [])],
+            unscoped: scope.unscoped,
+            targeted: resolution.targeted,
+            resolved: resolution.resolved,
+            missing: resolution.missing,
+            resolved_all: resolution.resolved_all
+        };
+    });
+
+    // F8 — read once for the whole view: the groups a live Writer pass holds (R4). A group with no
+    // `group_refs` on its live run counts as held for EVERY group, which is `liveGroupRefs`'s
+    // fail-closed reading — the rail then disables five buttons rather than let an edit race a writer.
+    const held = liveGroupRefs(store, story.id);
+
+    const groupRows: PhraseGroupRow[] = groups.map((group) => ({
+        id: group.id,
+        key: group.key,
+        title: group.title,
+        description: group.description,
+        order: group.order,
+        content: group.content,
+        revision: group.revision,
+        updated_by: group.updated_by ?? null,
+        history: groupRevisionHistory(store, group.id).map((revision) => ({
+            id: revision.id,
+            number: revision.number,
+            state: revision.state,
+            at: revision.created_at,
+            run_ref: revision.run_ref ?? null,
+            finding_refs: [...(revision.finding_refs ?? [])],
+            task_refs: [...(revision.task_refs ?? [])],
+            chars: revision.content.length
+        })),
+        owed_by_findings: owedByGroup.get(group.id) ?? [],
+        writer_busy: held.has(group.id)
+    }));
+
+    const openFindings = findings.filter(
+        (finding) => finding.state !== 'fixed' && finding.state !== 'discarded' && finding.state !== 'disputed'
+    );
+    const openTasks = store.tasks.list().filter((task) => task.story_id === story.id && task.state !== 'done');
+
+    const vector = groupRevisionVector(store, story.id);
+    const vectorHash = groupVectorHash(vector);
+    const seats = screeningSizeOf(story);
+
+    // R6's mirror, READ rather than trusted: the legacy fields are compared against the group texts
+    // they are supposed to mirror. A drift means either a locked Summary (the Author's choice) or a
+    // book whose groups were written by something that skipped the mirror — and the rail says so
+    // instead of silently showing two different answers to "what is the premise?".
+    const summary = storySummary(store, story.id);
+    const inSync =
+        summary === undefined
+            ? groups.length === 0
+            : groups.every((group) => {
+                  const field = SUMMARY_MIRROR_FIELDS[group.key as keyof typeof SUMMARY_MIRROR_FIELDS];
+                  const value = field === undefined ? undefined : (summary as unknown as Record<string, unknown>)[field];
+
+                  return typeof value === 'string' ? value.trim() === group.content.trim() : group.content.trim() === '';
+              });
+
+    return {
+        story_id: story.id,
+        mode: isGroupManagedStory(story) ? 'groups' : 'sampling',
+        phrase_id: phrase?.id ?? null,
+        revision: phrase?.revision ?? 0,
+        overview: groups.length === 0 ? '' : composeGroupContentFrom(groups),
+        groups: groupRows,
+        findings: findingRows,
+        tasks: openTasks.map((task) => ({
+            id: task.id,
+            title: task.title,
+            state: task.state,
+            owner_role: task.owner_role ?? null,
+            attempts: task.attempts ?? 0,
+            finding_ref: task.finding_ref ?? null
+        })),
+        review: {
+            mode: isGroupManagedStory(story) ? 'groups' : 'sampling',
+            unwritten_groups: groups.filter((group) => group.revision === 0).map((group) => group.key),
+            written_groups: groups.filter((group) => group.revision > 0).length,
+            vector,
+            vector_hash: vectorHash,
+            review_seats: seats,
+            // Keyed by the vector hash the generator uses (`loop/work.ts:phase1GroupCandidates`), so the
+            // count answers "has this TEXT been read?" and a new install re-arms the seats by itself.
+            reviews_on_current_vector: closedRunsFor(store, story.id, `wi_review_groups_${vectorHash}_`),
+            deep_reviews_on_current_vector: closedRunsFor(store, story.id, `wi_group_check_${vectorHash}_`),
+            open_findings: openFindings.length,
+            // The blocking bar is §6.8's, unchanged by the redesign: `critical` and `major` (the two
+            // words `FINDING_COSTS` gates on), never a cost the sign-off tolerates.
+            blocking_findings: openFindings.filter(
+                (finding) => finding.cost === 'critical' || finding.cost === 'major'
+            ).length,
+            open_tasks: openTasks.length,
+            mirror: {
+                summary_id: summary?.id ?? null,
+                in_sync: inSync,
+                locked: summary?.locked ?? false,
+                fields: Object.keys(SUMMARY_MIRROR_FIELDS)
+            }
+        }
+    };
 }

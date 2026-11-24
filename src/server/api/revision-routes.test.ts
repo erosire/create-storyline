@@ -69,15 +69,20 @@ const errorOf = (reply: Reply): string => (reply.body as { error: string }).erro
  * its Summary and Goal are real rows); the drafts are written straight to the store because §8's
  * `fileRevision` is the crew's path and this file is about the Author's.
  *
- * The ids are the store's own minted sequence — `story_1`, `chapter_1`, `revision_1`, `revision_2` —
+ * The ids are the store's own minted sequence — `story_0`, `chapter_0`, `revision_0`, `revision_1` —
  * and every assertion names them exactly rather than reading them back.
  */
-async function seedWorld(): Promise<TestApp & { story: Story }> {
+async function seedWorld(summaryMode: 'groups' | 'sampling' = 'sampling'): Promise<TestApp & { story: Story }> {
     const world = makeApp();
     const reply = await call(world.app, 'POST', '/stories', {
         title: 'The Return',
         idea: 'A cartographer finds the valley she mapped is under water.',
-        chapter_count: 2
+        chapter_count: 2,
+        // SUMMARY PHRASE (R5/R6): every case in this file is the legacy draft-set route — the Author
+        // picking one competing draft and deleting or discarding the rest. A group-managed Story has no
+        // Summary draft set at all (an accepted Writer result installs), so the rig asks for the legacy
+        // pipeline by name. `summaryMode: 'groups'` is how a case opts into the new answer instead.
+        summary_mode: summaryMode
     });
 
     const story = world.store.stories.require((reply.body as StoryRow).id);
@@ -129,7 +134,7 @@ async function seedWorld(): Promise<TestApp & { story: Story }> {
                     ]
                 },
                 unit_kind: 'chapter',
-                unit_ref: 'chapter_1',
+                unit_ref: 'chapter_0',
                 run_ref: `run_${index + 1}`,
                 template_ref: 'writer',
                 state: 'competing',
@@ -147,24 +152,24 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         const world = await seedWorld();
         const journalBefore = world.store.journal.length;
 
-        const reply = await call(world.app, 'POST', '/stories/story_1/revisions/revision_2/select', {
+        const reply = await call(world.app, 'POST', '/stories/story_0/revisions/revision_1/select', {
             note: 'The underwater version keeps the map promise (D-24).'
         });
 
         expect(reply.status).toBe(200);
         // The response is the refreshed stories-row, the same shape every Story verb answers with.
-        expect((reply.body as StoryRow).id).toBe('story_1');
+        expect((reply.body as StoryRow).id).toBe('story_0');
 
         // D-22: exactly one draft survives, and it is the one the Author named.
         const survivors: Revision[] = world.store.revisions.list();
 
-        expect(survivors.map((row) => row.id)).toEqual(['revision_2']);
+        expect(survivors.map((row) => row.id)).toEqual(['revision_1']);
         expect(survivors[0].state).toBe('selected');
         expect(survivors[0].selection_note).toBe('The underwater version keeps the map promise (D-24).');
 
         // The winning draft's prose is the chapter's prose, and `current_revision` records the choice
         // so the restore path stays expressible (D-24).
-        expect(world.store.chapters.require('chapter_1').sections).toEqual<ChapterSection[]>([
+        expect(world.store.chapters.require('chapter_0').sections).toEqual<ChapterSection[]>([
             {
                 id: 'section_1',
                 text: 'Second draft: the ridge is underwater.',
@@ -172,7 +177,7 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
                 last_run_ref: null
             }
         ]);
-        expect(world.store.chapters.require('chapter_1').current_revision).toBe('revision_2');
+        expect(world.store.chapters.require('chapter_0').current_revision).toBe('revision_1');
 
         // P11/D-20a: an Author write, so `author: true` with no run behind it — the audit has to tell
         // this apart from the Checker's `selectRevision`, which carries a `run_ref`.
@@ -181,98 +186,98 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
 
         expect(labels).toEqual(['author_revision_select']);
         expect(group.map((event) => `${event.op} ${event.collection} ${event.id}`)).toEqual([
-            'update chapters chapter_1',
-            'update revisions revision_2',
-            'delete revisions revision_1'
+            'update chapters chapter_0',
+            'update revisions revision_1',
+            'delete revisions revision_0'
         ]);
         expect(group.every((event) => event.attribution.author === true && event.attribution.run_ref === null)).toBe(
             true
         );
-        expect(group[0].attribution.why).toBe('the Author selected revision_2 for chapter_1 (D-24, U-13)');
+        expect(group[0].attribution.why).toBe('the Author selected revision_1 for chapter_0 (D-24, U-13)');
     });
 
     it('a bare click still attributes: the default note is the Author naming themselves (U-13, L-13)', async () => {
         const world = await seedWorld();
 
-        const reply = await call(world.app, 'POST', '/stories/story_1/revisions/revision_1/select', {});
+        const reply = await call(world.app, 'POST', '/stories/story_0/revisions/revision_0/select', {});
 
         expect(reply.status).toBe(200);
-        expect(world.store.revisions.require('revision_1').selection_note).toBe('selected by the Author (D-24)');
-        expect(world.store.revisions.list().map((row) => row.id)).toEqual(['revision_1']);
+        expect(world.store.revisions.require('revision_0').selection_note).toBe('selected by the Author (D-24)');
+        expect(world.store.revisions.list().map((row) => row.id)).toEqual(['revision_0']);
     });
 
     it('a draft that is not in the book misses, and no draft is touched (U-13, T-3, L-13)', async () => {
         const world = await seedWorld();
 
-        const reply = await call(world.app, 'POST', '/stories/story_1/revisions/revision_9/select', {});
+        const reply = await call(world.app, 'POST', '/stories/story_0/revisions/revision_8/select', {});
 
         expect(reply.status).toBe(404);
-        expect(errorOf(reply)).toBe('no revision named revision_9 is in the book (P1: the store is the memory)');
+        expect(errorOf(reply)).toBe('no revision named revision_8 is in the book (P1: the store is the memory)');
         expect(world.store.revisions.list().map((row) => row.state)).toEqual(['competing', 'competing']);
 
         // T-3: a draft from another Story is the same miss, and the Story check comes first.
-        const foreign = await call(world.app, 'POST', '/stories/story_7/revisions/revision_1/select', {});
+        const foreign = await call(world.app, 'POST', '/stories/story_6/revisions/revision_0/select', {});
 
         expect(foreign.status).toBe(404);
-        expect(errorOf(foreign)).toBe('no story named story_7 is in the book (P1: the store is the memory)');
+        expect(errorOf(foreign)).toBe('no story named story_6 is in the book (P1: the store is the memory)');
     });
 
     it('the merge request opens the task a Writer picks up, and the drafts keep competing (U-13a, D-23)', async () => {
         const world = await seedWorld();
 
-        const reply = await call(world.app, 'POST', '/stories/story_1/revisions/merge', {
-            unit_ref: 'chapter_1',
-            revision_ids: ['revision_1', 'revision_2'],
-            parts: 'The opening of revision_1, the last paragraph of revision_2.',
+        const reply = await call(world.app, 'POST', '/stories/story_0/revisions/merge', {
+            unit_ref: 'chapter_0',
+            revision_ids: ['revision_0', 'revision_1'],
+            parts: 'The opening of revision_0, the last paragraph of revision_1.',
             why: 'Neither draft is right, and the pair of them is.'
         });
 
         expect(reply.status).toBe(200);
-        expect((reply.body as StoryRow).id).toBe('story_1');
+        expect((reply.body as StoryRow).id).toBe('story_0');
 
         // D-23: the merge is queued work, not a decision — the drafts are untouched.
         expect(world.store.revisions.list().map((row) => row.state)).toEqual(['competing', 'competing']);
-        expect(world.store.chapters.require('chapter_1').sections[0].text).toBe('The standing text before any draft.');
-        expect(world.store.chapters.require('chapter_1').current_revision).toBeUndefined();
+        expect(world.store.chapters.require('chapter_0').sections[0].text).toBe('The standing text before any draft.');
+        expect(world.store.chapters.require('chapter_0').current_revision).toBeUndefined();
 
         // The task is the one §8.2's `requestMerge` would open: same kind, same dedupe title, same
         // owner, so the Author's desk and the Checker's request land as ONE entry (T-24, L-11a).
         expect(world.store.tasks.list().length).toBe(1);
-        expect(world.store.tasks.require('task_1')).toMatchObject({
-            story_id: 'story_1',
+        expect(world.store.tasks.require('task_0')).toMatchObject({
+            story_id: 'story_0',
             kind: 'merge',
-            title: 'Merge 2 drafts for chapter_1',
+            title: 'Merge 2 drafts for chapter_0',
             owner_role: 'writer',
             state: 'open',
             attempts: 0
         });
-        expect(world.store.tasks.require('task_1').detail).toBe(
-            'The opening of revision_1, the last paragraph of revision_2.\nDrafts: revision_1, revision_2\nWhy: Neither draft is right, and the pair of them is.'
+        expect(world.store.tasks.require('task_0').detail).toBe(
+            'The opening of revision_0, the last paragraph of revision_1.\nDrafts: revision_0, revision_1\nWhy: Neither draft is right, and the pair of them is.'
         );
         // P11: the Author asked, so the row is attributed to the Author and not to a run.
-        expect(world.store.tasks.require('task_1').created_at.length).toBeGreaterThan(0);
+        expect(world.store.tasks.require('task_0').created_at.length).toBeGreaterThan(0);
     });
 
     it('a second merge request for the same drafts dedupes into the one task (U-13a, T-24, L-11a)', async () => {
         const world = await seedWorld();
         const body = {
-            unit_ref: 'chapter_1',
-            revision_ids: ['revision_1', 'revision_2'],
-            parts: 'Opening from revision_1, ending from revision_2.'
+            unit_ref: 'chapter_0',
+            revision_ids: ['revision_0', 'revision_1'],
+            parts: 'Opening from revision_0, ending from revision_1.'
         };
 
-        expect((await call(world.app, 'POST', '/stories/story_1/revisions/merge', body)).status).toBe(200);
-        expect((await call(world.app, 'POST', '/stories/story_1/revisions/merge', body)).status).toBe(200);
-        expect(world.store.tasks.list().map((task) => task.id)).toEqual(['task_1']);
+        expect((await call(world.app, 'POST', '/stories/story_0/revisions/merge', body)).status).toBe(200);
+        expect((await call(world.app, 'POST', '/stories/story_0/revisions/merge', body)).status).toBe(200);
+        expect(world.store.tasks.list().map((task) => task.id)).toEqual(['task_0']);
     });
 
     it('the merge request refuses what is not a merge, in the copy the Author reads (U-13a, D-23, L-13)', async () => {
         const world = await seedWorld();
 
         // One draft is already a decision.
-        const lonely = await call(world.app, 'POST', '/stories/story_1/revisions/merge', {
-            unit_ref: 'chapter_1',
-            revision_ids: ['revision_1'],
+        const lonely = await call(world.app, 'POST', '/stories/story_0/revisions/merge', {
+            unit_ref: 'chapter_0',
+            revision_ids: ['revision_0'],
             parts: 'All of it.'
         });
 
@@ -282,9 +287,9 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         );
 
         // The brief is the whole request; a merge with no stated parts is a coin flip.
-        const silent = await call(world.app, 'POST', '/stories/story_1/revisions/merge', {
-            unit_ref: 'chapter_1',
-            revision_ids: ['revision_1', 'revision_2'],
+        const silent = await call(world.app, 'POST', '/stories/story_0/revisions/merge', {
+            unit_ref: 'chapter_0',
+            revision_ids: ['revision_0', 'revision_1'],
             parts: '   '
         });
 
@@ -292,26 +297,26 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         expect(errorOf(silent)).toBe('`parts` is the merge brief: which half of which draft to take (§8.2).');
 
         // A draft from another unit cannot be merged with this one (T-3's one-unit rule).
-        const otherUnit = await call(world.app, 'POST', '/stories/story_1/revisions/merge', {
-            unit_ref: 'plotline_1',
-            revision_ids: ['revision_1', 'revision_2'],
+        const otherUnit = await call(world.app, 'POST', '/stories/story_0/revisions/merge', {
+            unit_ref: 'plotline_0',
+            revision_ids: ['revision_0', 'revision_1'],
             parts: 'Both halves.'
         });
 
         expect(otherUnit.status).toBe(400);
         expect(errorOf(otherUnit)).toBe(
-            'revision revision_1 belongs to chapter_1, not to plotline_1, so it cannot be merged with it (T-3).'
+            'revision revision_0 belongs to chapter_0, not to plotline_0, so it cannot be merged with it (T-3).'
         );
 
         // An unknown unit misses rather than queueing a task against nothing.
-        const nowhere = await call(world.app, 'POST', '/stories/story_1/revisions/merge', {
-            unit_ref: 'chapter_9',
-            revision_ids: ['revision_1', 'revision_2'],
+        const nowhere = await call(world.app, 'POST', '/stories/story_0/revisions/merge', {
+            unit_ref: 'chapter_8',
+            revision_ids: ['revision_0', 'revision_1'],
             parts: 'Both halves.'
         });
 
         expect(nowhere.status).toBe(404);
-        expect(errorOf(nowhere)).toBe('no unit named chapter_9 is in the book (P1: the store is the memory)');
+        expect(errorOf(nowhere)).toBe('no unit named chapter_8 is in the book (P1: the store is the memory)');
         expect(world.store.tasks.list().length).toBe(0);
     });
 
@@ -322,7 +327,7 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         for (const ending of ['She floods the valley on purpose.', 'She leaves the valley standing.']) {
             world.store.revisions.create(
                 {
-                    story_id: 'story_1',
+                    story_id: 'story_0',
                     body: { fields: { ending } },
                     unit_kind: 'summary',
                     unit_ref: summary.id,
@@ -334,7 +339,7 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
             );
         }
 
-        const reply = await call(world.app, 'POST', '/stories/story_1/revisions/revision_3/select', {
+        const reply = await call(world.app, 'POST', '/stories/story_0/revisions/revision_2/select', {
             note: 'The deliberate ending is the one the Seed promises (D-24).'
         });
 
@@ -343,12 +348,12 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         // A Summary selection keeps the losing sample as `discarded` so the Revision 1…N history
         // survives; the chapter's drafts are untouched. The winner is the only `selected` row.
         expect(world.store.revisions.list().map((row) => row.id)).toEqual([
+            'revision_0',
             'revision_1',
             'revision_2',
-            'revision_3',
-            'revision_4'
+            'revision_3'
         ]);
-        expect(world.store.revisions.require('revision_3').state).toBe('selected');
-        expect(world.store.revisions.require('revision_4').state).toBe('discarded');
+        expect(world.store.revisions.require('revision_2').state).toBe('selected');
+        expect(world.store.revisions.require('revision_3').state).toBe('discarded');
     });
 });

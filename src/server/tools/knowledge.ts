@@ -243,7 +243,15 @@ const structureSeed: ToolDefinition = {
             want: str('What the protagonist pursues.'),
             need: str('What the protagonist actually needs, when the Seed implies a gap between the two.'),
             obstacle: str('What stands in the way.'),
-            stakes: str('What is lost if the protagonist fails.'),
+            // T3 — the Seed leaves a required scalar open by PASSING IT EMPTY, not by inventing a value.
+            // `stakes` is a required arg (the row shape §4 has), so "the Seed never said" has to be a
+            // legal value rather than a fabricated stake; an empty string already is one (the tool trims
+            // and stores it), and the prompts render an empty field as the Seed leaving the choice open.
+            // Saying so here is what stops an Editor inventing a stake to fill the box — and a Reader
+            // later filing that invented absence as a C-14 defect.
+            stakes: str(
+                'What is lost if the protagonist fails. When the Seed does not say, pass an empty string and put the gap in open_questions: the Writer chooses it compatibly, and a stake the Seed never stated is not a promise the Summary owes.'
+            ),
             setting: str('Where and when the story happens.'),
             world_rules: arr(
                 'The rules this world holds to, restated from the Seed. A rule the Seed never states belongs in open_questions, not here.',

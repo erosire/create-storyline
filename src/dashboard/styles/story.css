@@ -491,6 +491,273 @@
     margin-top: 0.5rem;
 }
 
+/* ------------------------------------------------- the Summary's five groups (R6) */
+
+/* The Overview pane and the five group panes are the Summary now: the compiled text, then one row per
+   group saying where it stands. The flat skin holds — separation is a 1px border, emphasis is a solid
+   fill — and no sampling vocabulary (rounds, candidates, selection) survives here. */
+.sv-group-overview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* The per-group state list: five rows, always all five, because the five groups are a contract. */
+.sv-group-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-group-row {
+    list-style: none;
+}
+
+/* The whole row is the control that opens the group's pane: one button per row, so the rail and this list
+   agree that a group is a pane and not a row of inline verbs. */
+.sv-group-row-open {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: baseline;
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.sv-group-row-open:hover {
+    background: var(--surface-3);
+}
+
+/* A group with an open blocking finding is the row to look at; one never written is the row to
+   notice; one the Writer is holding is moving. All three marks are the LEFT EDGE plus the state word, so the
+   reading survives greyscale and the flat skin (a 1px border, a solid fill) holds. */
+.sv-group-row--blocking .sv-group-row-open {
+    border-left-color: var(--urgent);
+}
+
+.sv-group-row--todo .sv-group-row-open {
+    border-left-color: var(--amber);
+}
+
+.sv-group-row--writer .sv-group-row-open {
+    border-left-color: var(--accent);
+}
+
+.sv-group-row[data-selected='true'] .sv-group-row-open {
+    border-color: var(--line-strong);
+    border-left-color: var(--accent);
+    background: var(--surface-3);
+    color: var(--text-strong);
+}
+
+.sv-group-row-name {
+    color: var(--text-strong);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+/* One word for the group's state, then the counts. The word is the engine's own situation
+   (`blocking`/`open`) or the write's (`writer`, `to write`, `clean`) — never a sentence. */
+.sv-group-row-state {
+    padding: 0 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    color: var(--dim);
+    font-size: 0.63rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-group-row-state[data-tone='blocking'] {
+    border-color: var(--urgent);
+    background: var(--urgent-bg);
+    color: var(--urgent);
+}
+
+.sv-group-row-state[data-tone='open'] {
+    border-color: var(--calm);
+    background: var(--calm-bg);
+    color: var(--calm);
+}
+
+.sv-group-row-state[data-tone='todo'] {
+    border-color: var(--amber);
+    color: var(--amber);
+}
+
+.sv-group-row-state[data-tone='writer'] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.sv-group-row-state[data-tone='done'] {
+    border-color: var(--finished);
+    background: var(--finished-bg);
+    color: var(--finished);
+}
+
+.sv-group-row-findings,
+.sv-group-row-quiet {
+    color: var(--muted);
+    font-size: 0.68rem;
+}
+
+.sv-group-review {
+    color: var(--muted);
+    font-size: 0.68rem;
+}
+
+/* ---------------------------------------------------------------- one group (R6) */
+
+/* The group's own pane: what it is for, what the Writer has written, what the Reviewer left open. */
+.sv-group-purpose {
+    margin: 0.3rem 0 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.sv-group-notice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    margin-top: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.7rem;
+}
+
+/* R-T2/F2 — the same notice in its warning tone: the phrase read FAILED (the route answered 503 or the
+   Story's groups could not be listed). It is not the Writer-busy notice's "wait a moment", so it takes the
+   amber accent rather than the accent, and both panes use it for that one state. */
+.sv-group-notice--warn {
+    border-color: var(--amber);
+    color: var(--amber);
+}
+
+.sv-group-note {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    margin-top: 0.4rem;
+}
+
+.sv-group-note textarea {
+    flex: 1 1 16rem;
+    min-height: 2.2rem;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.7rem;
+}
+
+.sv-group-note input {
+    flex: 1 1 10rem;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.7rem;
+}
+
+.sv-group-note input:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+.sv-group-note textarea:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+/* The group's prose, which is also its ONE reading copy for assistive tech (R-T2/F6): the revise field
+   below starts empty rather than mirroring it, so a screen reader hears the text once. `.sv-summary-text`
+   carries `flex: 1 1 18rem`, which in a COLUMN pane is a height basis with shrink allowed, so a height-
+   constrained pane squeezes the paragraph and a two- or three-line group text loses its last line. `flex:
+   none` plus three lines of min-height keeps the whole paragraph visible, and `overflow-wrap` keeps a long
+   unbreakable token from forcing the pane wider than it is. */
+.sv-group-content,
+/* The Overview's compiled prose sits in the same column-flex pane and carries the same base rule, so it is
+   held open the same way — its content is normally LONGER than three lines, which is exactly what a shrinkable
+   height basis clips. */
+.sv-group-overview .sv-summary-text {
+    flex: none;
+    min-height: calc(3 * 1.55em);
+    overflow-wrap: anywhere;
+}
+
+/* The Reviewer's open findings, scoped to this group. Cross-group findings are the interesting ones,
+    so the groups a finding spans are chips beside its title — the server's own titles, never an id. */
+.sv-group-findings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-group-finding {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    font-size: 0.7rem;
+}
+
+.sv-group-finding-title {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.sv-group-finding-count,
+.sv-group-finding-groups {
+    color: var(--dim);
+    font-size: 0.65rem;
+}
+
+.sv-group-finding-chip {
+    padding: 0 0.3rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    color: var(--muted);
+    font-size: 0.62rem;
+}
+
+.sv-group-quiet {
+    margin-top: 0.4rem;
+    color: var(--dim);
+    font-size: 0.7rem;
+}
+
 /* --------------------------------------------------- plotlines beside prose (U-4) */
 
 .sv-chapters-none {

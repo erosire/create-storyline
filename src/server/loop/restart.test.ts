@@ -160,14 +160,14 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
             if (store.revisions.list().filter((revision) => revision.story_id === first.storyId).length >= 1) break;
         }
 
-        expect(store.revisions.list().map((revision) => revision.id)).toEqual(['revision_1']);
+        expect(store.revisions.list().map((revision) => revision.id)).toEqual(['revision_0']);
 
         // SIGKILL's fingerprint: the SECOND sample's run row exists and is live, but its owner died
         // with the old process. Nothing abandons it but the restarted engine's `recover()`.
         const orphan = store.runs.create(
             {
                 story_id: first.storyId,
-                work_item_ref: 'wi_sample_summary_1_1_2',
+                work_item_ref: 'wi_sample_summary_0_1_2',
                 role: 'writer',
                 state: 'working',
                 started_at: new Date().toISOString(),
@@ -195,15 +195,15 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
         // twice (L-2's claim is the run row, so the abandoned row keeps its own key).
         const keys = store.runs
             .list()
-            .filter((run) => (run.work_item_ref ?? '').startsWith('wi_sample_summary_1_1_'))
+            .filter((run) => (run.work_item_ref ?? '').startsWith('wi_sample_summary_0_1_'))
             .sort((left, right) => left.id.localeCompare(right.id))
             .map((run) => `${run.work_item_ref}:${run.state}`);
 
         expect(keys).toEqual([
-            'wi_sample_summary_1_1_1:torn_down',
-            'wi_sample_summary_1_1_2:abandoned',
-            'wi_sample_summary_1_1_3:torn_down',
-            'wi_sample_summary_1_1_4:torn_down'
+            'wi_sample_summary_0_1_1:torn_down',
+            'wi_sample_summary_0_1_2:abandoned',
+            'wi_sample_summary_0_1_3:torn_down',
+            'wi_sample_summary_0_1_4:torn_down'
         ]);
         expect(new Set(keys.map((key) => key.split(':')[0])).size).toBe(keys.length);
 
@@ -212,11 +212,11 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
         const story = second.story();
 
         expect(store.revisions.list().map((revision) => `${revision.id}:${revision.state}`)).toEqual([
-            'revision_1:selected'
+            'revision_0:selected'
         ]);
         expect(story.sampling_round).toBe(1);
         expect((story.sampling_history ?? []).map((entry) => entry.samples.map((sample) => sample.revision_id))).toEqual([
-            ['revision_1', 'revision_2', 'revision_3']
+            ['revision_0', 'revision_1', 'revision_2']
         ]);
     });
 
@@ -234,7 +234,7 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
             store.runs.create(
                 {
                     story_id: rig.storyId,
-                    work_item_ref: 'wi_write_summary_1_2_a2',
+                    work_item_ref: 'wi_write_summary_0_2_a2',
                     role: 'writer',
                     state: 'working',
                     started_at: new Date().toISOString(),
@@ -255,12 +255,12 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
         const next = await rig.step();
         const row = rig.store.runs
             .list()
-            .filter((run) => run.work_item_ref === 'wi_write_summary_1_2_a2')
+            .filter((run) => run.work_item_ref === 'wi_write_summary_0_2_a2')
             .sort((left, right) => left.id.localeCompare(right.id))[0];
 
         // The report names the Work Item key, not the run row: what the caller cares about is which job
         // came back from the dead, and the key is what they would re-dispatch by.
-        expect(next.leases_lapsed).toEqual(['wi_write_summary_1_2_a2']);
+        expect(next.leases_lapsed).toEqual(['wi_write_summary_0_2_a2']);
         expect({ state: row.state, end_reason: row.end_reason }).toEqual({
             state: 'abandoned',
             end_reason: 'the lease lapsed after 1ms of silence (S-4a, D-36)'

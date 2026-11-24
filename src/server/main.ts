@@ -9,16 +9,17 @@
 //     because the host owns the process lifecycle (L-1: the loop is started, not auto-started).
 //   * `bootStorylineServer` — the standalone entry the CLI calls: the same app plus its own listener.
 //
-// WHY THE STORE IS OPENED HERE AND NOT IN `api/server.ts`: `Store.load` is async and `storeRoot` is a
-// config decision (W1's two files are the Author's book). Keeping the await on this side means
-// `buildStorylineRuntime` stays synchronous and testable, and the failure mode of a corrupt snapshot
-// surfaces as a startup error rather than a 500 on the first request (L-3's restart guarantee is about
-// the rows, not about guessing where they are).
+// WHY THE WORKSPACE IS OPENED HERE AND NOT IN `api/server.ts`: opening it is async (a durable knowledge
+// projection has to be loaded per Story) and `storeRoot` is a config decision (W1's two files are the
+// Author's book). Keeping the awaits on this side means `buildStorylineRuntime` stays synchronous and
+// testable, and the failure mode of a corrupt snapshot — or of a root still in the pre-Story flat layout —
+// surfaces as a startup error rather than a 500 on the first request (L-3's restart guarantee is about the
+// rows, not about guessing where they are).
 import { resolveServerConfig } from './config';
 import { Store } from './store/store';
 import { StoryKnowledge } from './knowledge';
 import { StoryThreadLog } from './run/thread-log';
-import { buildStorylineRuntime, startStorylineServer } from './api/server';
+import { buildStorylineRuntime, openStorylineRuntime, startStorylineServer } from './api/server';
 import type { StorylineServerConfig } from './config';
 import type { StorylineRuntime, StorylineRuntimeOptions, StorylineServerHandle } from './api/server';
 import type { LoopEngineConfig } from './loop/types';
@@ -42,25 +43,51 @@ export async function openStore(storeRoot: string | null): Promise<Store> {
 // ---------------------------------------------------------------------------
 
 export interface CreateStorylineAppOptions extends StorylineRuntimeOptions {
-    /** Where `store.json` + `journal.jsonl` live; `undefined` uses the config chain, `null` forces memory. */
+    /**
+     * The workspace root: `<root>/server/` for app configuration and `<root>/stories/<uuid>/` for one book
+     * per Story. `undefined` uses the config chain; `null` forces the in-memory workspace.
+     */
     storeRoot?: string | null;
     /** Passed through to the loop; an embedding host usually keeps `autoSweep` off until it is ready. */
     engineConfig?: LoopEngineConfig;
 }
 
 /**
- * Builds the app WITHOUT listening: open the book, seed §8.6's assistant harness, wire the engines, mount
- * the route table at `/v1/storyline`. The handle carries `engine`, so a host can start and stop the loop
- * on its own terms (L-1) and close the book on shutdown.
+ * Builds the app WITHOUT listening: open the workspace, seed §8.6's assistant harness, wire the engines,
+ * mount the route table at `/v1/storyline`. The handle carries `engine` (the coordinator's router) and
+ * `runtimes`, so a host can start and stop the loop on its own terms (L-1) and close every book on shutdown.
+ *
+ * THREE SHAPES, decided by what the caller hands in — and only one of them is the shipped default:
+ *
+ *   * `runtimes` — an open coordinator, used as is (a host that owns the books, or a test that built one);
+ *   * `store` — one book the caller owns, which stays the whole workspace, with the durable projection and
+ *     the retained thread log opened beside `storeRoot` exactly as before;
+ *   * neither — the workspace: `<root>/server/` plus `<root>/stories/<uuid>/`, one runtime per Story.
+ *
+ * The last shape is where a legacy root goes loud: a `<root>/store.json` from before the per-Story layout is
+ * refused by the registry's own layout error, because a server that ignored that file would answer requests
+ * about Stories it no longer holds. There is no migration, and nothing here guesses.
  */
 export async function createStorylineApp(options: CreateStorylineAppOptions = {}): Promise<StorylineRuntime> {
+    if (options.runtimes !== undefined)
+        return buildStorylineRuntime({
+            ...options,
+            store: options.store ?? options.runtimes.appConfig.book
+        });
+
+    if (options.store !== undefined) {
+        const storeRoot =
+            options.storeRoot === undefined ? resolveServerConfig({ env: options.env }).storeRoot : options.storeRoot;
+        const knowledge = options.knowledge ?? (await StoryKnowledge.open(options.store, storeRoot));
+        const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
+
+        return buildStorylineRuntime({ ...options, store: options.store, knowledge, threadLog });
+    }
+
     const storeRoot =
         options.storeRoot === undefined ? resolveServerConfig({ env: options.env }).storeRoot : options.storeRoot;
-    const store = options.store ?? (await openStore(storeRoot));
-    const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
-    const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
 
-    return buildStorylineRuntime({ ...options, store, knowledge, threadLog });
+    return openStorylineRuntime({ ...options, storeRoot, harnessRoot: storeRoot });
 }
 
 // ---------------------------------------------------------------------------
@@ -74,9 +101,14 @@ export interface BootStorylineOptions extends CreateStorylineAppOptions {
 }
 
 /**
- * The full boot: config → book → runtime → listener. `port`/`host`/`staticRoot` default through
+ * The full boot: config → workspace → runtimes → listener. `port`/`host`/`staticRoot` default through
  * `resolveServerConfig`, so the CLI can pass its parsed flags straight through and the precedence chain
  * (flag → `STORYLINE_*` env → default) is resolved in exactly one place.
+ *
+ * The CLI's default boot is a WORKSPACE (`storeRoot`), so each Story gets its own book, loop, executor,
+ * knowledge projection and thread log, and an old flat root is refused at startup rather than half-read. A
+ * caller that hands in its own `store` keeps the single-book shape — that is what an embed with one book, and
+ * every test that wants one durable file, asks for.
  */
 export async function bootStorylineServer(options: BootStorylineOptions = {}): Promise<StorylineServerHandle> {
     const resolved: StorylineServerConfig = resolveServerConfig({ env: options.env });
@@ -86,20 +118,21 @@ export async function bootStorylineServer(options: BootStorylineOptions = {}): P
     // would silently open the DURABLE book anyway — the banner would promise "no book behind this run"
     // while the last run's Stories were still on the wall. Only `undefined` means "the caller did not say".
     const storeRoot = options.storeRoot === undefined ? resolved.storeRoot : options.storeRoot;
-    const store = options.store ?? (await openStore(storeRoot));
-    const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
-    const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
-
-    return startStorylineServer({
-        ...options,
-        store,
-        knowledge,
-        threadLog,
+    const listener = {
         port: options.port ?? resolved.port,
         host: options.host ?? resolved.host,
         // An explicit `null` means "API only" and must not fall through to the `dist/` probe.
         staticRoot: options.staticRoot === undefined ? resolved.staticRoot : options.staticRoot
-    });
+    };
+
+    if (options.store === undefined && options.runtimes === undefined)
+        return startStorylineServer({ ...options, ...listener, storeRoot, harnessRoot: storeRoot });
+
+    const store = options.store ?? (await openStore(storeRoot));
+    const knowledge = options.knowledge ?? (await StoryKnowledge.open(store, storeRoot));
+    const threadLog = options.threadLog ?? StoryThreadLog.open(storeRoot);
+
+    return startStorylineServer({ ...options, ...listener, store, knowledge, threadLog });
 }
 
 /**

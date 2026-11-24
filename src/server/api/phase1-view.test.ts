@@ -377,4 +377,167 @@ describe('§10 / §6.5-§6.6 — the Story view carries the sampling state', () 
             ]
         });
     });
+
+    it('carries the hill’s wave ledger on the row and each candidate’s outcome, and sends neither for a round that never had one', async () => {
+        // H2 — the hill-climb audit would be dropped at the projection boundary: `projections.ts` sends an
+        // ALLOWLIST, so a field the server persists and the pane never asks for simply disappears. Two
+        // facts the Author cannot recover from `critical`/`high` alone:
+        //   * WHICH WAVE a row belongs to (wave 0 stalled; wave 1 is the restart after their clear), and
+        //     what that wave spent to stop — attempts against the ceiling, and the unresolved-blocking bar
+        //     the install left behind;
+        //   * WHY each candidate is on the line — `accepted`, `eligible` or `rejected`, with the reason,
+        //     and for a refinement round the origin split (inherited vs introduced) and how much of the
+        //     accepted text the draft touched. The selection commit deletes the loser's draft AND its
+        //     screening rows, so this is the whole record (P13/§6.6).
+        // The refinement fields are absent on a FIRST-round row on purpose: round 1 has no accepted draft
+        // to inherit from and nothing to be minimal against, so `introduced: 0` would be an invented zero.
+        const world = makeApp();
+        const storyId = await createStory(world.app);
+        const row = world.store.stories.require(storyId);
+
+        world.store.stories.update(
+            storyId,
+            {
+                sampling_round: 2,
+                sampling_history: [
+                    {
+                        round: 1,
+                        at: '2026-12-01T09:00:00.000Z',
+                        wave: 0,
+                        attempts: 1,
+                        improvements: 0,
+                        ceiling: 4,
+                        unresolved_blocking: 0,
+                        samples: [
+                            {
+                                revision_id: 'revision_0',
+                                critical: 0,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: [],
+                                outcome: 'accepted'
+                            }
+                        ],
+                        selected: 'revision_0'
+                    },
+                    {
+                        round: 2,
+                        at: '2026-12-02T09:00:00.000Z',
+                        wave: 1,
+                        attempts: 4,
+                        improvements: 1,
+                        ceiling: 5,
+                        unresolved_blocking: 1,
+                        samples: [
+                            {
+                                revision_id: 'revision_1',
+                                critical: 1,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: ['task_0'],
+                                outcome: 'rejected',
+                                reject_reason: 'fix task_0 not certified with evidence',
+                                introduced_critical: 0,
+                                introduced_high: 0,
+                                inherited_critical: 1,
+                                inherited_high: 0,
+                                changed_fields: 2,
+                                changed_characters: 1
+                            },
+                            {
+                                revision_id: 'revision_2',
+                                critical: 0,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: [],
+                                outcome: 'accepted',
+                                introduced_critical: 0,
+                                introduced_high: 0,
+                                inherited_critical: 0,
+                                inherited_high: 0,
+                                changed_fields: 1,
+                                changed_characters: 0
+                            }
+                        ],
+                        selected: 'revision_2'
+                    }
+                ]
+            },
+            { run_ref: null, why: 'seed: a first round and a refined round that stalled then climbed (§3.6)' },
+            [{ id: storyId, rev: row.rev }]
+        );
+
+        const view = (await call(world.app, 'GET', `/stories/${storyId}`)).body as { sampling: unknown };
+
+        expect(view.sampling).toEqual({
+            round: 2,
+            active_round: 3,
+            selected: { revision_id: 'revision_2', critical: 0, high: 0 },
+            history: [
+                {
+                    round: 2,
+                    at: '2026-12-02T09:00:00.000Z',
+                    wave: 1,
+                    attempts: 4,
+                    improvements: 1,
+                    ceiling: 5,
+                    unresolved_blocking: 1,
+                    samples: [
+                        {
+                            revision_id: 'revision_1',
+                            critical: 1,
+                            high: 0,
+                            valid: true,
+                            unresolved_fixes: ['task_0'],
+                            outcome: 'rejected',
+                            reject_reason: 'fix task_0 not certified with evidence',
+                            introduced_critical: 0,
+                            introduced_high: 0,
+                            inherited_critical: 1,
+                            inherited_high: 0,
+                            changed_fields: 2,
+                            changed_characters: 1
+                        },
+                        {
+                            revision_id: 'revision_2',
+                            critical: 0,
+                            high: 0,
+                            valid: true,
+                            unresolved_fixes: [],
+                            outcome: 'accepted',
+                            introduced_critical: 0,
+                            introduced_high: 0,
+                            inherited_critical: 0,
+                            inherited_high: 0,
+                            changed_fields: 1,
+                            changed_characters: 0
+                        }
+                    ],
+                    selected: 'revision_2'
+                },
+                // The first round: the wave ledger travels (it was recorded), the refinement split does not
+                // (there was no accepted draft to compare against).
+                {
+                    round: 1,
+                    at: '2026-12-01T09:00:00.000Z',
+                    wave: 0,
+                    attempts: 1,
+                    improvements: 0,
+                    ceiling: 4,
+                    unresolved_blocking: 0,
+                    samples: [
+                        {
+                            revision_id: 'revision_0',
+                            critical: 0,
+                            high: 0,
+                            valid: true,
+                            unresolved_fixes: [],
+                            outcome: 'accepted'
+                        }
+                    ],
+                    selected: 'revision_0'
+                }
+            ]
+        });
+    });
 });

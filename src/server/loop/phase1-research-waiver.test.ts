@@ -92,7 +92,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         expect(researchKeyOf(brief)).toBe('wi_research_1');
 
         // Gate 2 generates NOTHING, so the very next job is the first sample (R1b).
-        expect(keys(rig)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(keys(rig)).toEqual(['wi_sample_summary_0_1_1']);
         // …and nothing research-shaped was ever written: no run row, for any revision.
         expect(runs(rig, 'wi_research')).toEqual([]);
 
@@ -103,7 +103,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         expect(unmet).not.toContain(RESEARCH_UNMET);
 
         // The sample really does run on the waived brief: the gate was never going to block it.
-        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_1_1_1']);
+        expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_1']);
     });
 
     it('starts a waived Story straight at sampling when the rig seeds the closed state (R1b, seeded)', async () => {
@@ -113,7 +113,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
 
         expect(briefOf(rig).research_questions).toEqual([]);
         expect(runs(rig, 'wi_research')).toEqual([]);
-        expect(keys(rig)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(keys(rig)).toEqual(['wi_sample_summary_0_1_1']);
     });
 
     it('still gates sampling on a listed question, and hands the Researcher the Editor\u2019s questions (R1c)', async () => {
@@ -156,7 +156,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         // The default scripted Researcher writes Knowledge, the pass closes, and the sample is next.
         expect((await rig.step()).stories[0].started).toEqual(['wi_research_1']);
         expect(researchGate(rig.store, rig.store.stories.require(rig.storyId), briefOf(rig))).toBe('closed');
-        expect(keys(rig)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(keys(rig)).toEqual(['wi_sample_summary_0_1_1']);
         expect(runs(rig, 'wi_research')).toEqual(['wi_research_1:torn_down']);
     });
 
@@ -184,7 +184,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
 
         expect((await rig.step()).stories[0].started).toEqual(['wi_research_1']);
         expect(researchGate(rig.store, rig.store.stories.require(rig.storyId), briefOf(rig))).toBe('closed');
-        expect(keys(rig)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(keys(rig)).toEqual(['wi_sample_summary_0_1_1']);
     });
 
     it('closes the gate on a report of "nothing needs research", with no Knowledge and no re-dispatch (R1d)', async () => {
@@ -228,7 +228,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         expect(drainPreconditions(rig.store, story).unmet).not.toContain(RESEARCH_UNMET);
 
         // The next job is the sample — NOT a second Researcher, and NOT the same pass again.
-        expect(keys(rig)).toEqual(['wi_sample_summary_1_1_1']);
+        expect(keys(rig)).toEqual(['wi_sample_summary_0_1_1']);
         expect(runs(rig, 'wi_research')).toEqual(['wi_research_1:torn_down']);
     });
 });

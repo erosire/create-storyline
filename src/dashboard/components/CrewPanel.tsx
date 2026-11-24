@@ -51,7 +51,10 @@ export function CrewPanel({ runs, templates, now, onKillRun }: CrewPanelProps) {
         const dissent = panelDissent(run);
 
         return (
-            <li className={`sv-run${run.role === 'writer' ? ' sv-run-writer' : ''}`} key={run.id}>
+            // S-RUNTIME: the panel lists every Story's runs when no Story is selected, and a run id is local
+            // to one Story's book — two Stories both have a `run_0`. The Story id is what tells them apart
+            // (the row carries it, and the crew panel's own rows are tagged), so the key is the pair.
+            <li className={`sv-run${run.role === 'writer' ? ' sv-run-writer' : ''}`} key={`${run.story_id}:${run.id}`}>
                 <div className="sv-run-head">
                     {/* U-7: role and kind, with the kind as a badge so the writer reads different at a glance. */}
                     <span className={roleClass(run.role)}>{run.role}</span>

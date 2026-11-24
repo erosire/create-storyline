@@ -11,17 +11,29 @@
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
 import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
+import type { PhraseGroupRow } from './story-contract';
 import {
     buildRevisionUnits,
     findingAppliesToRevision,
+    findingGroups,
     findingRevisionScope,
+    groupBlockingFindings,
+    groupOpenFindings,
+    groupOpenTasks,
     isDecidedIdea,
+    isGroupSummary,
+    isGroupWriterBusy,
+    isGroupWritten,
     isPendingRevision,
     isReviewableRevision,
     isSupersededSummaryDraft,
+    phraseGroupById,
+    phraseGroups,
+    phraseReadLanded,
     selectedSummaryRevision,
     summaryBlockingFindings,
-    summaryScopeContext
+    summaryScopeContext,
+    unwrittenGroups
 } from './story-contract';
 import type { FindingRevisionScope, RevisionUnit, StoryViewData } from './story-contract';
 
@@ -51,8 +63,23 @@ export interface StoryPhraseSpec {
     title: string;
 }
 
-/** Phrase order is the reading order; the number is what the rail paints. */
+/**
+ * The rail's PHRASES. U1 is the product's decision, not a rendering detail: for now the Author's Story
+ * workspace has ONE phrase — Summary — and the folders that support it. Characters, Plotlines and
+ * Chapters are later phases: their panes, their rail helpers and their tests stay in the build, and the
+ * rail offers no row, card or dropdown that navigates to them, so an Author on the Summary workspace
+ * cannot click through to a phase the product has not turned on yet.
+ *
+ * This is the ACTIVE list. `ALL_STORY_PHRASES` below keeps the full four-phrase vocabulary for the panes
+ * that still address a phrase directly (`StoryView` routes a `panel` prop, and a later phase hands the
+ * same selection object in), so narrowing the rail never means a pane's title reads "The story".
+ */
 export const STORY_PHRASES: readonly StoryPhraseSpec[] = [
+    { key: 'summary', number: 1, title: 'Summary' }
+];
+
+/** The full phrase vocabulary, in reading order: the rail shows {@link STORY_PHRASES}, the panes route on all four. */
+export const ALL_STORY_PHRASES: readonly StoryPhraseSpec[] = [
     { key: 'summary', number: 1, title: 'Summary' },
     { key: 'characters', number: 2, title: 'Characters' },
     { key: 'plotlines', number: 3, title: 'Plotlines' },
@@ -91,6 +118,27 @@ export function phraseLabel(spec: StoryPhraseSpec): string {
  * and the Accept button can never disagree about which revision a finding sits on (T5).
  */
 export function summaryReadyForReview(view: StoryViewData): boolean {
+    if (storyInSummaryPhase(view) && isGroupSummary(view)) {
+        // R6 — THE GROUP DERIVATION. A grouped Summary is ready when the Overview is fully written and
+        // nothing on it is outstanding: no unwritten group (R1), no open finding at the Summary's blocking
+        // costs scoped to any group (R3), no open group task, and no live Writer pass holding a group (R4 —
+        // a Summary that is about to move is not ready to sign). None of this reads `sampling.active_round`,
+        // which is a sampler-pipeline number a grouped Story never runs.
+        // R-T2/F1 — THE READ IS A PRECONDITION, NOT ONE OF THE CHECKS. Every clause below counts rows, and
+        // `phraseGroups` answers `[]` for a phrase read that has not landed, so an in-flight (or failed) read
+        // would fall through all four checks and the rail would tick a five-group Summary it has never seen —
+        // while the Accept button, which reads `groupSignOffBlockers`, refuses on exactly that fact. An
+        // already-locked book is no exception: with no rows the desk cannot show what was signed.
+        if (!phraseReadLanded(view)) return false;
+        if (view.story.summary_locked) return true;
+        if (view.goal.failing.length > 0) return false;
+        if (unwrittenGroups(view).length > 0) return false;
+        if (phraseGroups(view).some(isGroupWriterBusy)) return false;
+        if (groupOpenTasks(view).length > 0) return false;
+
+        return phraseGroups(view).every((group) => groupBlockingFindings(view, group.id).length === 0);
+    }
+
     if (view.story.summary_locked) {
         return true;
     }
@@ -343,6 +391,87 @@ export function summaryRevisions(view: StoryViewData): SummaryRevisionEntry[] {
     });
 }
 
+// ---------------------------------------------------------------------------
+// SUMMARY PHRASE — the group rail's refs and focus (R6 / U2)
+//
+// A GROUP REF IS A UUID WITH A PREFIX. The rail addresses a group by `summary-group:<uuid>`, so:
+//   - the selection survives a phrase refetch, a server restart, and a catalog reorder — the id is the
+//     row's identity, and `order`/index is only what the rail displays in that order;
+//   - a group that stops existing (a Story switched back to `sampling`, a deleted book) fails
+//     `selectionExists` and falls back to the Summary overview instead of opening an empty pane;
+//   - the prefix keeps a group ref distinguishable from the legacy `revision:<id>` ref the same panel
+//     used before the redesign, so a payload from an older build cannot be read as a group.
+// ---------------------------------------------------------------------------
+
+const SUMMARY_GROUP_PREFIX = 'summary-group:';
+
+/** The rail ref for one Summary group. */
+export const summaryGroupRef = (groupId: string): string => `${SUMMARY_GROUP_PREFIX}${groupId}`;
+
+/** Reads a rail ref back into the group id; `undefined` for anything that is not a group ref. */
+export function parseSummaryGroupRef(ref: string | undefined): string | undefined {
+    if (ref === undefined || !ref.startsWith(SUMMARY_GROUP_PREFIX)) return undefined;
+
+    const id = ref.slice(SUMMARY_GROUP_PREFIX.length);
+
+    return id.length > 0 ? id : undefined;
+}
+
+/**
+ * True once the phrase read has landed for this Story — what separates "loading" from "stale" (U6).
+ *
+ * R-T2/F1 moved the ANSWER into `story-contract` (as `phraseReadLanded`): the sign-off gate needs the same
+ * predicate, and a contract module may not import from the rail's navigation model. The rail keeps reading
+ * it as `phraseLoaded`, which is the name its loading line is written against.
+ */
+export const phraseLoaded = phraseReadLanded;
+
+/** The rail's group selection, resolved against the live rows; `undefined` names no live group. */
+export function summaryGroupFocus(
+    view: StoryViewData,
+    selection: StorySelection
+): PhraseGroupRow | undefined {
+    if (selection.panel !== 'summary') return undefined;
+
+    const id = parseSummaryGroupRef(selection.ref);
+
+    return id === undefined ? undefined : phraseGroupById(view, id);
+}
+
+/**
+ * The rail's children of the Summary phrase: the server's group rows, in composition order, each with
+ * the badge the rail paints and the ref it navigates by.
+ *
+ * NO REVISION ROWS HERE (U2). The old rail listed `Revision 1 … Revision N` because phase ① wrote whole
+ * Summary drafts; the group model writes five named parts, so the rail's children are the GROUPS and the
+ * revision number belongs in the group's own detail (U3). Archived history is not a rail row either: the
+ * projection keeps it as metadata (R2), and a row a reader cannot open would be decoration.
+ */
+export interface SummaryGroupEntry {
+    group: PhraseGroupRow;
+    /** The selection ref — `summary-group:<uuid>`. */
+    ref: string;
+    /** Open findings at the Summary's blocking costs that name this group; 0 draws no badge. */
+    blockingFindings: number;
+    /** Every open finding that names this group, including the costs the dial tolerates. */
+    openFindings: number;
+    /** The Writer holds this group's text right now (F8/R4). */
+    writerBusy: boolean;
+    /** Written at least once: `revision > 0` is the loop's "never written" line (R1). */
+    written: boolean;
+}
+
+export function summaryGroupEntries(view: StoryViewData): SummaryGroupEntry[] {
+    return phraseGroups(view).map((group) => ({
+        group,
+        ref: summaryGroupRef(group.id),
+        blockingFindings: groupBlockingFindings(view, group.id).length,
+        openFindings: groupOpenFindings(view, group.id).length,
+        writerBusy: isGroupWriterBusy(group),
+        written: isGroupWritten(group)
+    }));
+}
+
 /**
  * The revision the Summary row carries, for the "final Summary" decision (§6.6).
  *
@@ -419,7 +548,9 @@ export function selectionTitle(view: StoryViewData, selection: StorySelection): 
         return 'Seed';
     }
 
-    const phrase = STORY_PHRASES.find((candidate) => candidate.key === selection.panel);
+    // `ALL_STORY_PHRASES`, not the rail's one-phrase list: a later phase can hand this selection in
+    // directly, and a title that fell through to "The story" would be a lie about what is on screen.
+    const phrase = ALL_STORY_PHRASES.find((candidate) => candidate.key === selection.panel);
 
     if (phrase) {
         const entry = selection.ref ? phraseEntryTitle(view, phrase.key, selection.ref) : undefined;
@@ -432,6 +563,14 @@ export function selectionTitle(view: StoryViewData, selection: StorySelection): 
 
 function phraseEntryTitle(view: StoryViewData, phrase: StoryPhraseKey, ref: string): string | undefined {
     if (phrase === 'summary') {
+        // R6 — the rail's Summary children are GROUPS, so the opened entry is named by its own title
+        // ("Premise"), never by a revision number and never by a label this file invented (U2/U7).
+        const groupId = parseSummaryGroupRef(ref);
+        const group = groupId === undefined ? undefined : phraseGroupById(view, groupId);
+
+        if (group !== undefined) return group.title;
+
+        // The legacy ref shape, for a selection a sampling-mode book is still holding.
         const id = parseSummaryRevisionRef(ref);
         const entry = id === undefined ? undefined : summaryRevisions(view).find((row) => row.revision.id === id);
 
@@ -455,6 +594,19 @@ export function selectionExists(view: StoryViewData, selection: StorySelection):
     }
 
     if (selection.panel === 'summary') {
+        const groupId = parseSummaryGroupRef(selection.ref);
+
+        if (groupId !== undefined) {
+            // U6's stale-ref rule, stated honestly in both directions: until the phrase read has landed the
+            // dashboard cannot tell a deleted group from one it has not seen yet, so the selection is kept
+            // and the pane shows its loading state. Once the read HAS landed and the UUID is not among the
+            // rows, the group is gone (a Story switched back to `sampling`, a re-import) and the selection
+            // falls back to the Summary overview rather than opening an empty pane.
+            if (!phraseLoaded(view)) return true;
+
+            return phraseGroupById(view, groupId) !== undefined;
+        }
+
         const id = parseSummaryRevisionRef(selection.ref);
 
         return id !== undefined && summaryRevisions(view).some((entry) => entry.revision.id === id);
@@ -564,14 +716,20 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
     }
 
     const context = summaryScopeContext(view);
-    const summaryDrafts = view.revisions.filter(
-        (revision) =>
-            revision.unit_kind === 'summary' &&
-            isReviewableRevision(revision) &&
-            // T11/F2: a draft from a round the loop has already settled is not a round in flight, so it
-            // earns no chip — the rail would point at a selection that has already happened.
-            !isSupersededSummaryDraft(view, revision, context)
-    );
+    // R6 — in the GROUP model a Summary draft row is a legacy artifact, not a round in flight: the loop
+    // writes group revisions, and no engine selection is pending on a whole-Summary draft. So the chip that
+    // told the Author to wait for the winner is turned off for a grouped book, and the group rows below
+    // carry the real work instead. (A `sampling`-mode Story keeps the chip exactly as it was.)
+    const summaryDrafts = isGroupSummary(view)
+        ? []
+        : view.revisions.filter(
+              (revision) =>
+                  revision.unit_kind === 'summary' &&
+                  isReviewableRevision(revision) &&
+                  // T11/F2: a draft from a round the loop has already settled is not a round in flight, so
+                  // it earns no chip — the rail would point at a selection that has already happened.
+                  !isSupersededSummaryDraft(view, revision, context)
+          );
     if (summaryDrafts.length > 0) {
         // PHASE ① COPY ONLY (T5 / R3, §16.6 + D-47). An open Summary draft is a round that has not
         // settled, and in phase ① NOTHING asks the Author or an Editor to settle it: the engine picks the
@@ -586,6 +744,33 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
             label: story.phase === 'summary' ? 'engine selects a draft' : 'choose a draft',
             tone: 'awaiting'
         });
+    }
+
+    // R6 / U5 — WORK MARKS ON THE GROUP ROWS. A finding that names a group is that group's business, and the
+    // rail says which group without the Author opening the Findings folder: the badge is the count, this mark
+    // is the "come here". A live Writer is NOT attention — it is the crew working, and the row shows it in its
+    // own words — and a `fixed` finding never reaches here, because the phrase rows it returns are scoped and
+    // resolved, and R3 closes the row once every targeted group has answered it.
+    //
+    // WHY THE LABEL CARRIES NO NUMBER: a group row is the first rail row that can carry BOTH a findings badge
+    // and an attention mark, and an accessible name is built by concatenating them. "1 open Critical or Major
+    // finding" plus "1 open finding on Premise" makes a reader hear the same count twice, and the group title
+    // again, on a row whose visible label already says which group it is. The count is the badge's job — it
+    // carries the number AND what the number means — so this mark says only the direction the count is pointing
+    // at, which is the part the badge cannot spell.
+    if (isGroupSummary(view)) {
+        for (const group of phraseGroups(view)) {
+            const blocking = groupBlockingFindings(view, group.id);
+
+            if (blocking.length === 0) continue;
+
+            add({
+                panel: 'summary',
+                ref: summaryGroupRef(group.id),
+                label: 'open findings to answer',
+                tone: 'awaiting'
+            });
+        }
     }
 
     if (view.completion_preview && story.status !== 'completed') {
@@ -622,8 +807,11 @@ export interface DirectiveFocus {
     refs: string[];
 }
 
-/** The slices the directive bar reads; the raw `getStory` payload satisfies it too. */
-export type DirectiveFocusView = Pick<StoryViewData, 'story' | 'summary' | 'cast' | 'plotlines' | 'chapters'>;
+/** The slices the directive bar reads; the raw `getStory` payload satisfies it too (plus the phrase read, R6). */
+export type DirectiveFocusView = Pick<
+    StoryViewData,
+    'story' | 'summary' | 'cast' | 'plotlines' | 'chapters' | 'phrase'
+>;
 
 /** The focus the directive bar should show for the rail's current selection. */
 export function directiveFocus(view: DirectiveFocusView, selection: StorySelection): DirectiveFocus {
@@ -637,11 +825,27 @@ export function directiveFocus(view: DirectiveFocusView, selection: StorySelecti
     }
 
     if (selection.panel === 'summary') {
+        // R6 / U5 — A GROUP DIRECTIVE ADDRESSES THE GROUP. With a Summary group open, the sentence is about
+        // that part of the Overview and the ref is the group's UUID, which is the address the loop's group
+        // work and the revise route both take. The label names the path the Author is standing on
+        // (`Summary → Premise`) rather than collapsing five different panes into one "the Summary".
+        const groupId = parseSummaryGroupRef(selection.ref);
+        const group = groupId === undefined ? undefined : phraseGroupById(view, groupId);
+
+        if (group !== undefined) {
+            return {
+                label: `Summary → ${group.title} → Editor`,
+                target: `the ${group.title} group of the Summary`,
+                placeholder: `e.g. rewrite the ${group.title.toLowerCase()} · keep the rest of the Overview`,
+                refs: [group.id]
+            };
+        }
+
         return {
             label: 'Summary → Editor',
             target: 'the Summary',
             placeholder: 'e.g. tighten the premise · keep the ending',
-            refs: view.summary ? [view.summary.id] : []
+            refs: view.summary ? [view.summary.id] : view.phrase?.phrase_id ? [view.phrase.phrase_id] : []
         };
     }
 

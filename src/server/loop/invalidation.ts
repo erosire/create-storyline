@@ -23,6 +23,10 @@ import {
     loopChapter
 } from './records';
 import { TASK_KINDS, UNDO_STACK_LIMIT, type LoopChapter, type UndoEntry } from './types';
+// HARDENING (D-25/D-25a group reset): `scrapPhasesAfter` has to scrap the group pipeline's history
+// alongside the legacy `revisions` rows — see the block in the function — and the switch is the book
+// itself (`phrase/catalog.ts:isGroupManagedStory`).
+import { isGroupManagedStory } from '../phrase';
 import type { Chapter, ChapterSection, Story, StoryPhase, Task } from '../../shared/types';
 import type { Store } from '../store';
 
@@ -302,9 +306,17 @@ export function scrapPhasesAfter(
     story: Story,
     phase: StoryPhase,
     why: string
-): { chapters: number; plotlines: number; revisions: number; ideas: number; digests: number; verdicts: number } {
+): {
+    chapters: number;
+    plotlines: number;
+    revisions: number;
+    groupRevisions: number;
+    ideas: number;
+    digests: number;
+    verdicts: number;
+} {
     const rank = phaseRank(phase);
-    const counts = { chapters: 0, plotlines: 0, revisions: 0, ideas: 0, digests: 0, verdicts: 0 };
+    const counts = { chapters: 0, plotlines: 0, revisions: 0, groupRevisions: 0, ideas: 0, digests: 0, verdicts: 0 };
 
     for (const chapter of store.chapters.list()) {
         if (chapter.story_id !== story.id) continue;
@@ -327,6 +339,25 @@ export function scrapPhasesAfter(
         store.revisions.delete(revision.id, loopAttr(why));
         scrappedRevisions.add(revision.id);
         counts.revisions += 1;
+    }
+
+    // SUMMARY PHRASE (hardening, D-25/D-25a): `group_revisions` is the group pipeline's history —
+    // the same kind of row the loop deletes one block above, produced by the same reopened phase.
+    // Left behind, the scrapped pass kept steering the book three ways at once: the write allowance
+    // counts "runs after THIS text" from the `latest` row (`phrase/exclusion.ts:writeBaselineOf`),
+    // the review seats are keyed by the vector those numbers hash to, and R3's closure joins on
+    // claims stamped onto exactly these rows — so an open finding could read "already answered" by
+    // a revision of prose the Author just scrapped, and a fresh draft would land at number N+1 of a
+    // round nobody remembers. The GROUP ROWS survive, ids stable (R1's addresses outlive the text):
+    // they are the reopened phase's own artifact, the same L-31 reason the `summaries` row and the
+    // plotlines survive a backtrack. Whether the current text itself is re-grown is the CALLER's
+    // decision, exactly as the legacy prose is cleared by `engine.ts:editSeed` and kept by
+    // `backtrack('summary')` — those flows reset the group rows with the mirror, never this scrap.
+    if (rank < phaseRank('chapters') && isGroupManagedStory(story)) {
+        counts.groupRevisions = store.groupRevisions.deleteWhere(
+            (revision) => revision.story_id === story.id,
+            loopAttr(`${why}; the group revisions of the scrapped phase go with their drafts (D-25, R2)`)
+        );
     }
 
     // T12/B: a `sample_reviews` row is a review OF one revision (`revision_ref`), so it is scoped to

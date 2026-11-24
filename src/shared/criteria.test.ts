@@ -64,7 +64,13 @@ const SPEC_5_2: { id: string; label: string; checker: 'code' | 'judge'; hard: bo
     },
     {
         id: 'C-14',
-        label: 'the Summary delivers the Seed: nothing central to `stories.idea` is missing from it, and nothing in it contradicts the Seed',
+        // §5.2's C-14 row, re-cut by T3: the Seed is GENERAL, so this criterion is a contradiction
+        // test, not a checklist. The old label ("nothing central to `stories.idea` is missing from
+        // it") is what let Readers file the Author's two screenshot findings — a refuge with no
+        // earlier planting, and a stake the Seed never stated — as C-14 defects. `checker` and `hard`
+        // are unchanged; only the criterion's own wording moved, and the spec table row
+        // (documents/specifications.md §5.2) carries this same text.
+        label: 'the Summary delivers the Seed: nothing in it contradicts what the Seed states, and no commitment the Seed states explicitly goes unpaid',
         checker: 'judge',
         hard: true
     },
@@ -107,6 +113,36 @@ describe('§5.2 — the built-in criteria', () => {
                 (criterion) => criterion.id
             )
         ).toEqual([]);
+    });
+
+    it('T3: C-14 is a contradiction test, and its own wording says Seed silence is not a defect', () => {
+        // The failure this pins is the one the Author reported: a Reader spent a round on "the final
+        // refuge has no earlier setup in the Summary" and another on "the Summary never says what the
+        // bird loses" — both details a general Seed leaves open. The old label/question framed C-14 as
+        // "nothing central … is missing from it", which made every silence an unmet promise, and the
+        // fix_hint told the Writer to "carry everything central to the Seed". None of that survives.
+        const c14 = criterionById('C-14');
+
+        // The three fields are what a Reviewer and a fix task actually read: the brief renders label +
+        // question + fix_hint together (`run/brief.ts`), and a fix task renders the hint as its
+        // definition of done (`run/phase1-prompt.ts:renderFixTask`). `?.` keeps this strict-mode clean;
+        // an absent C-14 makes every assertion below throw rather than pass quietly.
+        const fields = [c14?.label, c14?.question, c14?.fix_hint];
+
+        expect(fields.filter((text) => /nothing central|is missing from it|everything central/i.test(`${text}`))).toEqual(
+            []
+        );
+
+        expect(c14?.label).toContain('nothing in it contradicts what the Seed states');
+        expect(c14?.label).toContain('no commitment the Seed states explicitly goes unpaid');
+        expect(c14?.question).toContain('the Writer may supply any detail the Seed does not rule out');
+        expect(c14?.question).toContain('stakes it left open, setup the Summary did not promise');
+        expect(c14?.fix_hint).toContain('Remove what contradicts the Seed');
+        expect(c14?.fix_hint).toContain('so its absence is not a defect to fix');
+        // The controls are NOT relaxed: an explicit commitment still fails the line, and the Seed stays
+        // un-editable (P5) — the fix is always in the Summary.
+        expect(c14?.question).toContain('a quote of what the Summary contradicts');
+        expect(c14?.fix_hint).toContain('P5: the Seed is never edited to pass');
     });
 
     it("§5.2's levels: one per phase boundary plus the whole-Story pass", () => {

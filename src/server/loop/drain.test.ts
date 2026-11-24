@@ -78,7 +78,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
         // L-29 stops the crew at a sign-off; D-27 does not. The sweep dispatches, and the pending
         // screen the Author would otherwise be reading is gone (status_reason names the D-27 clause).
-        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_1_idea_1']);
+        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_1_idea_0']);
         expect(report.stories[0]?.deferred).toEqual({});
         expect({ status: story.status, pending: story.pending_kind }).toEqual({ status: 'ready', pending: 'none' });
         expect(story.status_reason).toBe(
@@ -87,7 +87,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
         await rig.run();
 
-        const verified = rig.store.ideas.require('idea_1');
+        const verified = rig.store.ideas.require('idea_0');
 
         // §4.17's `verification` block: the verdict, the evidence, the guidelines answer (D-31), and
         // the RUN that made it (C-15 refuses a verdict with no `checked_by_run`).
@@ -104,7 +104,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
             meets_guidelines: true,
             run: true
         });
-        expect(verifyRuns(rig)).toEqual(['wi_verify_ideas_1_1_idea_1:torn_down']);
+        expect(verifyRuns(rig)).toEqual(['wi_verify_ideas_1_1_idea_0:torn_down']);
 
         // The verdict does NOT hand the sign-off back: `verified` is the Editor's answer to "is the claim
         // true?", not the Author's pick (T-3b), so the row is still in the tray and L-7a keeps the lock
@@ -114,7 +114,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         expect({ status: after.status, pending: after.pending_kind, ideas: ideaRows(rig) }).toEqual({
             status: 'pending',
             pending: 'idea_selection',
-            ideas: ['idea_1:verified:verified']
+            ideas: ['idea_0:verified:verified']
         });
         expect(after.status_reason).toBe(
             "phase summary's Goal passes (2/2) · 1 undecided Idea must be selected, discarded, or deferred before the lock (L-7a, D-29)"
@@ -134,7 +134,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         await rig.step();
         await rig.run();
 
-        expect(ideaRows(rig)).toEqual(['idea_1:verified:verified']);
+        expect(ideaRows(rig)).toEqual(['idea_0:verified:verified']);
 
         // 1. The lock is refused, and the sentence names the tray.
         await expect(rig.engine.lockPhase(rig.storyId, 'summary')).rejects.toThrow(
@@ -144,7 +144,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
         // 2. The Author's discard is the decision L-7a was waiting for (U-15's other button).
         await rig.store.commit('author_discards_the_verified_idea', () => {
-            const row = rig.store.ideas.require('idea_1');
+            const row = rig.store.ideas.require('idea_0');
 
             rig.store.ideas.update(
                 row.id,
@@ -194,7 +194,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         expect(story.status_reason).toBe(
             "phase summary's Goal passes (2/2) · 1 undecided Idea must be selected, discarded, or deferred before the lock (L-7a, D-29)"
         );
-        expect(ideaRows(rig)).toEqual(['idea_1:proposed:unverified']);
+        expect(ideaRows(rig)).toEqual(['idea_0:proposed:unverified']);
         expect(verifyRuns(rig)).toEqual([]);
     });
 
@@ -208,15 +208,15 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
         const report = await rig.step();
 
-        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_1_idea_1']);
+        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_1_idea_0']);
         expect(report.stories[0]?.deferred).toEqual({});
 
         await rig.run();
 
-        expect(ideaRows(rig)).toEqual(['idea_1:verified:verified']);
+        expect(ideaRows(rig)).toEqual(['idea_0:verified:verified']);
         // One Editor pass only: the claim key is store-derived and the row now carries `verification`, so
         // `ideasToVerify` (records.ts:305) stops offering it — no Editor-pass treadmill at the dial.
-        expect(verifyRuns(rig)).toEqual(['wi_verify_ideas_1_1_idea_1:torn_down']);
+        expect(verifyRuns(rig)).toEqual(['wi_verify_ideas_1_1_idea_0:torn_down']);
         // And the drained screen comes back on its own once the fact-check is in.
         expect({ status: rig.story().status, pending: rig.story().pending_kind }).toEqual({
             status: 'pending',
@@ -275,7 +275,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         await rig.run();
 
         expect(verifyRuns(rig)).toEqual([]);
-        expect(ideaRows(rig)).toEqual(['idea_1:selected:unverified']);
+        expect(ideaRows(rig)).toEqual(['idea_0:selected:unverified']);
         // The dial phrase is `dialPhrase` over D-35's shipped default (critical + major + minor), so the
         // drained reason lists three costs — `status.ts:276-284` joins all but the last with `, `.
         expect(rig.story().status_reason).toBe(
@@ -287,7 +287,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
             criterion: 'C-15',
             passed: false,
             evidence:
-                '1 selected Idea reached an artifact without a checked Editor verdict — idea_1 (1 source): no Editor verification at all',
+                '1 selected Idea reached an artifact without a checked Editor verdict — idea_0 (1 source): no Editor verification at all',
             source: 'code'
         });
     });
@@ -310,13 +310,13 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
         const rows = rig.store.verdicts.list().filter((verdict) => verdict.story_id === rig.storyId);
 
         expect(draftVerdictRows(rows)).toEqual([
-            'revision_1:verdict_1:revision:1:true:advance',
-            'revision_4:verdict_8:revision:1:true:advance',
-            'revision_5:verdict_11:revision:1:true:advance',
-            'revision_6:verdict_14:revision:1:true:advance',
-            'revision_7:verdict_17:revision:1:true:advance',
-            'revision_8:verdict_20:revision:1:true:advance',
-            'revision_9:verdict_23:revision:1:true:advance'
+            'revision_0:verdict_0:revision:1:true:advance',
+            'revision_3:verdict_7:revision:1:true:advance',
+            'revision_4:verdict_10:revision:1:true:advance',
+            'revision_5:verdict_13:revision:1:true:advance',
+            'revision_6:verdict_16:revision:1:true:advance',
+            'revision_7:verdict_19:revision:1:true:advance',
+            'revision_8:verdict_22:revision:1:true:advance'
         ]);
 
         // D-22: the selection deletes the losing drafts hard; the verdicts that judged them stay, because
@@ -327,7 +327,7 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
                 .list()
                 .filter((revision) => revision.unit_kind === 'chapter')
                 .map((revision) => `${revision.id}:${revision.state}`)
-        ).toEqual(['revision_4:selected', 'revision_7:selected']);
+        ).toEqual(['revision_3:selected', 'revision_6:selected']);
 
         // U-13: `GET /stories/:id` is the pinned wire (W9) and the dashboard is forbidden from
         // recomputing anything, so the §4.9 rows themselves have to ride with it — in the store's
@@ -352,7 +352,7 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
                         .map((v) => v.id)
                         .join('+')}`
             )
-        ).toEqual(['revision_1:verdict_1', 'revision_4:verdict_8', 'revision_7:verdict_17']);
+        ).toEqual(['revision_0:verdict_0', 'revision_3:verdict_7', 'revision_6:verdict_16']);
     });
 });
 
@@ -383,7 +383,7 @@ describe('H2/R2 — an open Author question reads as the Author wait, and only w
         return seedTask(rig.store, rig.storyId, {
             kind: 'escalation',
             title: 'Phase ① sampling failed after 4 attempts — no draft answered the fixes this round was armed with',
-            detail: 'wave: 2 · task_9 (unresolved on revision_2)',
+            detail: 'wave: 2 · task_8 (unresolved on revision_1)',
             owner_role: 'author',
             state: 'open'
         });
@@ -442,7 +442,7 @@ describe('H2/R2 — an open Author question reads as the Author wait, and only w
 
         const report = await rig.step();
 
-        expect(report.stories[0]?.started).toEqual(['wi_directive_directive_1']);
+        expect(report.stories[0]?.started).toEqual(['wi_directive_directive_0']);
         expect(String(report.stories[0]?.status_reason)).not.toContain('the crew asked you');
         expect(rig.story().blocked_on).not.toBe('the Author: an open question');
     });

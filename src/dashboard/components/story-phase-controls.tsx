@@ -9,7 +9,7 @@
 // "revert to an earlier draft", so the confirm line is generated from the live record counts
 // (`backtrackStatement` in `story-contract`), never from a static string.
 import { useState } from 'react';
-import { PHASE_LABELS, PHASE_ORDER, backtrackStatement, lockCheck, phasesAfter } from './story-contract';
+import { PHASE_LABELS, PHASE_ORDER, backtrackStatement, isGroupSummary, lockCheck, phasesAfter } from './story-contract';
 import type { BacktrackTarget, LockCheck, StoryActions, StoryViewData } from './story-contract';
 import type { Story, StoryPhase } from '../../shared/types';
 
@@ -144,7 +144,10 @@ export function PhaseControls({ view, actions, lock, showLock = true }: PhaseCon
                             ))}
                         </ul>
                     ) : null}
-                    {gate.phase === 'summary' && !story.summary_locked ? (
+                    {/* Phase ①'s round verb. R6: a group-managed Story has no round to request — its Summary is
+                        five groups the loop refines on its own, and the Author's verb is a direction to the
+                        Editor (the directive bar) or one group's own revise. The gate above it stays. */}
+                    {gate.phase === 'summary' && !story.summary_locked && !isGroupSummary(view) ? (
                         <button
                             type="button"
                             className="sv-summary-revise-button"

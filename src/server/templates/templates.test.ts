@@ -203,10 +203,12 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // compiled prompt says it again next to the draft; this is the half that survives a template
         // swap, because an Author's custom sampler replaces the compiled system turn entirely.
         expect(sampler.roles[0].prompt).toContain('BASE REVISION and FIX TASKS');
-        expect(sampler.roles[0].prompt).toContain('this is a refinement round');
+        expect(sampler.roles[0].prompt).toContain('this is hill-climbing repair, not another attempt at the brief');
         expect(sampler.roles[0].prompt).toContain('A rewrite from scratch throws away');
-        expect(sampler.roles[0].prompt).toContain('restating the same commitment in different words');
-        expect(sampler.done_definition).toBe('A schema-valid SummarySample delivered in one turn with no tool calls.');
+        expect(sampler.roles[0].prompt).toContain('Restating the same commitment in different words answers none of the tasks');
+        expect(sampler.done_definition).toBe(
+            "A schema-valid answer delivered in one turn with no tool calls: on a group-managed book, one entry for every group the job named, none for a group it did not name, and none twice (R2); on a legacy sampled book, one SummarySample."
+        );
         // A tool-less run holds nothing that could escalate, so no escalation rule is claimed.
         expect(sampler.escalation_rule).toBeUndefined();
 
@@ -236,7 +238,9 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // is what stops a round being spent on a comma (and resampling forever over a taste).
         expect(screening.roles[0].prompt).toContain('Word choice, sentence structure, grammar');
         expect(screening.roles[0].prompt).toContain('are NOT issues at this phase');
-        expect(screening.done_definition).toBe('A schema-valid IssueList delivered in one turn with no tool calls.');
+        expect(screening.done_definition).toBe(
+            "A schema-valid review delivered in one turn with no tool calls: critical and high issues only, every issue carrying the `group_refs` it is about on a group-managed book (R3), one `fix_verifications` entry for every FIX TASKS id the prompt named, and an empty issues list when the text holds."
+        );
         expect(screening.escalation_rule).toBeUndefined();
     });
 
@@ -256,6 +260,137 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // Phase ③'s prose checker is the other half: wording is somebody's job, and it is not the
         // screening pass's (C-13).
         expect(byName('checker-prose').roles[0].prompt).not.toContain('are NOT issues at this phase');
+    });
+
+    it('T3 — the Writer is licensed to invent compatible specifics, not merely implications', () => {
+        // The Author's rule: "Writer has liberty to fill in details not in the Seed. That is fine, and it
+        // is not an issue." The sampler's prompt used to say the opposite — "an implication is legitimate,
+        // a new setting rule or technology is not" — which is narrower than the licence and reads as a
+        // warning against exactly the invention the Readers then complained about.
+        const sampler = byName('writer-summary-sampler').roles[0];
+
+        expect(sampler.prompt).not.toContain('an implication is legitimate');
+        expect(sampler.prompt).toContain('an invented specific that does not contradict the brief is legitimate');
+        expect(sampler.prompt).toContain('you are not confined to what strictly follows from it');
+        // The constraints that stay (R2): the Knowledge still bounds facts, the brief still rules out what
+        // it rules out, and a world_rule may not quietly replace the brief's own — the world_rules are the
+        // contract every later chapter is graded against.
+        expect(sampler.prompt).toContain('Do not invent a fact the Knowledge does not support');
+        expect(sampler.prompt).toContain('any rule you write that contradicts or quietly replaces the brief’s own world rules');
+        expect(sampler.prompt).toContain('Carry every commitment the brief states explicitly (C-14)');
+        // And the Seed is still law: invention never licenses editing it (P5).
+        expect(sampler.prompt).toContain('The Seed itself is Author truth and is never edited (P5)');
+    });
+
+    it('T3 — the screening Reader may not report Seed silence, and keeps every contradiction gate', () => {
+        const screening = byName('reader-screening').roles[0];
+
+        // The two absence classes from the Author's screenshots, named in the words the role would use.
+        expect(screening.prompt).toContain('stakes or consequences the Seed never stated');
+        expect(screening.prompt).toContain('setup the Summary did not promise are NOT issues and never a C-14 issue');
+        expect(screening.prompt).toContain('the Writer may invent any specific that does not contradict it');
+        // A C-14 citation must be earned, and the quote is the test that earns it.
+        expect(screening.prompt).toContain('Never cite C-14 for something the Seed simply does not say');
+        expect(screening.prompt).toContain('quote only an absence');
+        // R2 — what is NOT relaxed: the two severities are still defined, a high is still an unpaid
+        // EXPLICIT commitment, and the phrasing rule (H1/R6) still holds.
+        expect(screening.prompt).toContain('A high leaves unpaid a commitment the Seed Brief states EXPLICITLY');
+        expect(screening.prompt).toContain('A critical is a contradiction the text under review cannot live with');
+        expect(screening.prompt).toContain('are NOT issues at this phase');
+    });
+
+    it('T3 — the four deep-review angles scope the Summary restriction and keep the later-phase checks', () => {
+        // THE PHASE-ISOLATION PIN. These four templates serve phases ② and ③ as well as ①, so the rule
+        // that stands down "unplanted setup" is written as `When the artifact under review is a SUMMARY`
+        // and says in the same breath that the chapter/plotline setup-and-payoff review continues. This
+        // is why the clause is asserted per role rather than once: a role whose scoping sentence is
+        // deleted would stop reporting real phase-②/③ defects (C-4, C-5, C-6, C-10) or would keep filing
+        // the Author's screenshot complaint against every Summary.
+        //
+        // BOTH HALVES ARE PINNED AS EXACT STRINGS, each role in its own phrasing, because a regex that
+        // accepts "any reasonable wording" is what let the clause be clipped out of the shipped brief
+        // while its test still passed. If one of these sentences moves, the edit below has to move with
+        // it deliberately — that is the point of the pin.
+        const scoping: Record<string, { silence: string; laterPhases: string }> = {
+            'reader-genre': {
+                silence:
+                    'When the artifact under review is a SUMMARY (phase \u2460): the Seed is general, not an outline, and the Writer may invent any detail it does not contradict \u2014 so an added detail, a Seed question left open, stakes the Seed never stated, and a payoff that arrives without earlier planting are not genre defects at this phase.',
+                laterPhases:
+                    'The same setup-and-payoff checks stay in force in phases \u2461 and \u2462, where the plotlines and chapters do make those commitments.'
+            },
+            'reader-plausibility': {
+                silence:
+                    'This is a plotline and chapter check: when the artifact under review is a SUMMARY (phase \u2460) there is no ledger and no earlier chapter yet, so "nothing established it" is not a factual doubt there, and the Writer is free to establish a fact the Seed never named as long as it contradicts nothing.',
+                laterPhases:
+                    'Phases \u2461 and \u2462 keep every check above unchanged: there the ledger and the earlier chapters DO make those promises, and a setup that never arrives is a defect again.'
+            },
+            'reader-audience': {
+                silence:
+                    'When the artifact under review is a SUMMARY (phase \u2460), none of those complaints has a page to stand on unless the Summary itself promises the setup and then breaks it: the Seed is general, the Writer may invent any detail the Seed does not rule out, and an unpaid setup, an unstated stake or a consequence the Seed left open is not a reader complaint at this phase.',
+                laterPhases: 'Phases \u2461 and \u2462 keep the full list \u2014 there the book has made the promise and owes the payoff.'
+            },
+            'reader-mystery': {
+                silence:
+                    'When the artifact under review is a SUMMARY (phase \u2460): there is no ledger and no chapter order yet, so do not file "it was never planted" or "the answer arrives without its setup" against one \u2014 the Writer is allowed to bring in what the Seed never stated, and the Summary\u2019s own ending is not owed an earlier hint.',
+                laterPhases: 'Phases \u2461 and \u2462 keep every setup-and-payoff check in this prompt unchanged.'
+            }
+        };
+
+        for (const [name, clauses] of Object.entries(scoping)) {
+            const prompt = byName(name).roles[0].prompt;
+
+            // The scoping marker itself: the rule is phase-①-only, written as a condition, not a
+            // blanket "absences are free" that would travel into the chapter phases. `reader-plausibility`
+            // spells it mid-sentence after a colon, so the marker is matched case-insensitively — the
+            // role's FULL sentence is pinned exactly below, which is where the wording is actually held.
+            expect(prompt).toMatch(/when the artifact under review is a summary/i);
+            expect(prompt).toContain(clauses.silence);
+            // The later-phase half of the same breath — the reason deleting the clause is a regression
+            // in phases ② and ③ and not just a relief in ①.
+            expect(prompt).toContain(clauses.laterPhases);
+        }
+
+        // The ledger machinery this angle is built on is still there for the phases that have a ledger.
+        expect(byName('reader-mystery').roles[0].prompt).toContain('Read the ledger');
+        expect(byName('reader-plausibility').roles[0].prompt).toContain('C-5, C-6');
+        expect(byName('reader-audience').roles[0].prompt).toContain('payoff that arrived without the setup');
+    });
+
+    it('T3 — the Editor disputes an omission-only finding instead of confirming the absence', () => {
+        const editor = byName('editor-general').roles[0];
+
+        // The Editor is the gate the screenshots show working AGAINST the Author: one absence-only finding
+        // came back `APPROVED`, so the role prompt has to say what makes a finding admissible before it
+        // asks whether the claim is factually true (an absence is always factually true).
+        expect(editor.prompt).toContain('ADMISSIBILITY comes before accuracy');
+        expect(editor.prompt).toContain('quotes a commitment and shows the artifact breaking it');
+        expect(editor.prompt).toContain('is an invalid finding however true the absence is');
+        expect(editor.prompt).toContain('rather than confirming that something is missing');
+        // The controls that stay: evidence quoting, the real-contradiction grounds, and the speed rule that
+        // keeps D-33's verification cheap.
+        expect(editor.prompt).toContain('a contradiction of the Seed, of critical Knowledge, or of the artifact');
+        expect(editor.prompt).toContain('verifyFinding is a QUICK validity check');
+        expect(editor.prompt).toContain('The phase waits on these verdicts, so be fast');
+    });
+
+    it('T3 — the Seed-structuring Editor records a silent field as open, not as an invented blank', () => {
+        // A required scalar the Seed says nothing about has to be recorded as open (empty string +
+        // `open_questions`), because the prompts now render an empty field as an open choice. Left unsaid,
+        // the Editor invents a stake to fill the box — and a Reader later reports the invented absence.
+        const structure = byName('editor-seed-structure').roles[0];
+
+        expect(structure.prompt).toContain('a field the Seed leaves silent goes to open_questions');
+        expect(structure.prompt).toContain('leave a silent one an empty string');
+        // WHY the empty string is the right recording: the prompts render a blank required field as the
+        // Seed leaving the choice OPEN, and this sentence is what tells the Editor that downstream
+        // reading is intended rather than a promise the Summary is expected to pay.
+        expect(structure.prompt).toContain(
+            'the prompts render an empty field as the Seed leaving it OPEN, which is what tells the Writer and the Readers that filling it compatibly is allowed and not a broken promise'
+        );
+
+        expect(byName('editor-seed-structure').selection_rules).toContain(
+            'an empty string is how a silent required field is recorded'
+        );
     });
 
     it('D-17d / E-4 / §14 item 9: divergence is the sampler count, and the later Writers keep theirs', () => {
@@ -571,5 +706,120 @@ describe('W8 — validateTemplate refuses the harnesses that cannot run', () => 
 
         expect(byName('checker-prose').roles[0].prompt).not.toBe('third voice');
         expect(first.roles[0].prompt).not.toBe('third voice');
+    });
+});
+
+describe('SUMMARY PHRASE — the built-in crews are taught the five-group contract (R1/R2/R3/R5)', () => {
+    const promptOf = (name: string): string => byName(name).roles[0].prompt;
+
+    it('the Summary Writer is taught the five group purposes, the exact batch set, and no World rules group', () => {
+        const prompt = promptOf('writer-summary-sampler');
+
+        // The purposes are the catalog's own words (`shared/phrase.ts:PHRASE_GROUP_DEFINITIONS`). A
+        // Writer that is not told what a group is FOR writes the whole Overview inside the one it was asked for.
+        for (const purpose of [
+            'PREMISE — what the story is',
+            'PROMISE — what the story commits the reader to',
+            'THEME — what the story is about underneath',
+            'TONE — voice, point of view, tense and register',
+            'ENDING — where the story lands and what resolves'
+        ])
+            expect(prompt).toContain(purpose);
+
+        // R1: `summaries.world_rules` is a deprecated field of the legacy schema, so no sixth group is taught.
+        expect(prompt).toContain('There is NO World rules group');
+        expect(prompt).toContain('nothing you write mints a new one');
+
+        // R2: the batch set is exact — one group, several, or all five — and the install is atomic.
+        expect(prompt).toContain('The GROUPS section names the ONLY groups this job may write');
+        expect(prompt).toContain('A batch naming ONE group is a one-group answer');
+        expect(prompt).toContain('the engine installs an answer for all the named groups or for none');
+
+        // R5 + the hill climb: an accepted answer IS the installed text, and the N-samples/selector are
+        // kept only as the LEGACY clause, so a group Writer is never taught a winner-takes-it round.
+        expect(prompt).toContain('A group-managed book has no such competition');
+        expect(prompt).toContain('On a book still sampled whole you are one of N independent samples');
+        expect(prompt).toContain('a selector — never you — chooses between committed alternatives');
+
+        // H1/R2: the Writer does not certify its own cure, and a multi-group defect is answered in full.
+        expect(prompt).toContain('a finding that names several groups closes only when every one of them carries it');
+    });
+
+    it('the screening Reviewer is taught both modes, the scope it owes, and the closure join', () => {
+        const prompt = promptOf('reader-screening');
+
+        // One row serves both phase-① Reader modes (`compileGroupReviewPrompt` / `compileScreenPrompt`).
+        expect(prompt).toContain('`GroupReview` on a group-managed book');
+        expect(prompt).toContain('`IssueList` on a book still sampled whole');
+        expect(prompt).toContain('the OVERVIEW: the five Summary groups as the book now holds them');
+        expect(prompt).toContain('A group-managed book has no competing samples and nothing to rank (R5)');
+
+        // R3 attribution: one group, several, or all five; one defect is one issue; the quote names its
+        // group, because a five-group scope on a one-group complaint rewrites four groups for a sentence.
+        expect(prompt).toContain('Name the ONE group the defect is in; name several, or all five');
+        expect(prompt).toContain('ONE issue naming three groups');
+        expect(prompt).toContain('Name in `location` the group the quote came from');
+        expect(prompt).toContain('do not name a group you have not quoted from');
+
+        // H1/R2 with R3: the certificate is per-group, and a review never spends the rewrite allowance.
+        expect(prompt).toContain('`resolved` only when EVERY one of those groups now carries the repair');
+        expect(prompt).toContain('costs the Story no Writer attempt');
+
+        // The earlier T3 gates (Seed silence, the style ladder) are still in force beside the group text.
+        expect(prompt).toContain('A critical is a contradiction the text under review cannot live with');
+        expect(prompt).toContain('are NOT issues at this phase');
+    });
+
+    it('every tool-carrying review angle scopes a Summary defect to its groups (R3)', () => {
+        // The refusal is the reason: `tools/checker.ts:raiseFinding` refuses an unscoped Summary finding
+        // on a group-managed book, so a role that is not told this burns the pass on a refusal.
+        for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
+            const prompt = promptOf(name);
+
+            expect(prompt).toContain('raiseFinding');
+            expect(prompt).toContain('group_refs');
+            expect(prompt).toContain('the group ids the brief prints');
+        }
+
+        // Each angle states the one-finding rule in its own terms (and the mystery angle in BOTH groups').
+        expect(promptOf('reader-genre')).toContain('ONE finding naming three groups');
+        expect(promptOf('reader-genre')).toContain('judge the groups AGAINST EACH OTHER');
+        expect(promptOf('reader-plausibility')).toContain('ONE finding naming three groups, never three findings');
+        expect(promptOf('reader-audience')).toContain('keep it ONE finding however many groups it names');
+        expect(promptOf('reader-mystery')).toContain('never name one you have not quoted from');
+
+        // The Consistency checker scopes a Summary defect by group and every later defect by its artifact.
+        expect(promptOf('checker-consistency')).toContain('group_refs');
+        expect(promptOf('checker-consistency')).toContain('needs no group ids');
+    });
+
+    it('the Researcher feeds whichever phase-① prompt exists, so it is not taught "the sampler"', () => {
+        const prompt = promptOf('researcher-story');
+
+        expect(prompt).toContain('the phase-① drafters can build on');
+        expect(prompt).toContain('Only critical and high reach the phase-① prompt, group batch or legacy sample alike');
+        expect(prompt).toContain('the loop goes straight to the phase-① draft');
+        // D-51's two pinned sentences (the no-research report and the question-scoped pass) survive.
+        expect(prompt).toContain('reportNoResearch');
+        expect(prompt).toContain('Work the questions this job names');
+    });
+
+    it('the Editor is told what there is to select on a group book — and what its verdicts trigger', () => {
+        const prompt = promptOf('editor-general');
+
+        // R2/R5: no competing Summary round; five contradicting groups are arbitrated, not selected.
+        expect(prompt).toContain('GROUP BOOKS.');
+        expect(prompt).toContain('there is no Summary selection to make');
+        expect(prompt).toContain('arbitrated, not selected');
+        // R3: the scope it confirms is the scope the repair is routed and closed by.
+        expect(prompt).toContain('closes only once EVERY group it names has been revised to answer it');
+        // D-34/D-35: approval is what creates the work, and the cost dial decides who is asked.
+        expect(prompt).toContain('Approving it is what turns it into a Writer task (D-34)');
+        expect(prompt).toContain('`auto` follows this Story’s `auto_approve` dial for that cost (D-35)');
+
+        // The pinned admissibility gates, the speed rule and the editable rules are untouched.
+        expect(prompt).toContain('ADMISSIBILITY comes before accuracy');
+        expect(prompt).toContain('The phase waits on these verdicts, so be fast');
+        expect(byName('editor-general').selection_rules).toContain('Edit me');
     });
 });

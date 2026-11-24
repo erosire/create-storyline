@@ -53,8 +53,19 @@ export function StorylineApp(props: { store?: DashboardStore }) {
 /** The regions themselves, split out so the store injection above stays one line. */
 function Shell() {
     const store = useDashboardStore();
-    const { activeStoryId, stories, storyViews, templates, agents, selectedAgent, agentThreads, agentModels, loop } =
-        useDashboard();
+    const {
+        activeStoryId,
+        stories,
+        storyViews,
+        phrases,
+        phraseErrors,
+        templates,
+        agents,
+        selectedAgent,
+        agentThreads,
+        agentModels,
+        loop,
+    } = useDashboard();
 
     // The stream is the Dashboard's pulse: one subscription for the whole shell, torn down on
     // unmount (React StrictMode's double-mount is why the teardown has to be real).
@@ -72,7 +83,19 @@ function Shell() {
 
     const story = activeStoryId ? stories.find((row) => row.id === activeStoryId) : undefined;
     const view = activeStoryId ? storyViews[activeStoryId] : undefined;
-    const storyData = view ? (storyViewData(view, templates) as unknown as StoryViewData) : undefined;
+    // R6: the Summary phrase is the rail's other half, so the desk's one model carries it too — the
+    // rail needs the group rows for its child entries and the Overview pane needs the composed text.
+    // A missing entry is a read that has not landed (or failed), which the panes render as their own
+    // state rather than as an empty Summary.
+    const phrase = activeStoryId ? phrases[activeStoryId] : undefined;
+    // R-T2/F2 — the phrase read's CACHED FAILURE travels with the frame, so a grouped book whose read got a
+    // 503 says which it is (in flight, or failed) instead of drawing a loading line forever. `phrases` alone
+    // cannot answer that: an absent entry means both. The failure is the phrase read's own, so the Story
+    // payload, the folders and the rest of the desk keep rendering exactly as they did.
+    const phraseError = activeStoryId ? phraseErrors[activeStoryId] : undefined;
+    const storyData = view
+        ? (storyViewData(view, templates, phrase, phraseError) as unknown as StoryViewData)
+        : undefined;
     const now = new Date().toISOString();
     const selectedAgentRow = selectedAgent ? agents.find((row) => row.kind === selectedAgent) : undefined;
     const selectedAgentTitle = selectedAgentRow?.title ?? selectedAgent;
@@ -97,8 +120,8 @@ function Shell() {
 
             <div className="station__regions">
                 {/* Region 1 — STORIES: phase-first, then status, awaiting on top (U-1). Below the
-                    list sits the selected Story's own phrase rail — the four phrases and the
-                    folders the content area can open, and nothing else. */}
+                    list sits the selected Story's own phrase rail — R6: the Summary phrase, its five
+                    groups, and the folders the content area can open, and nothing else. */}
                 <aside className="region region--stories" data-region="stories" aria-label="Stories">
                     <div className="region__body region__body--stack">
                         <StoriesPanel />
@@ -170,6 +193,10 @@ function Shell() {
                                         view={storyData as StoryViewData}
                                         selection={selection}
                                         actions={shellActions(store, activeStoryId)}
+                                        // R6: the group rows in the Summary panes navigate, so the content column
+                                        // gets the same verb the rail has. One handler means a row click clears the
+                                        // selected employee exactly the way a rail click does.
+                                        onSelect={selectPanel}
                                     />
                                 ) : (
                                     /* U-11: no spinner while the first read is in flight. */

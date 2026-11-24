@@ -20,6 +20,7 @@ import type {
     LedgerKind,
     LedgerStatus,
     Plotline,
+    Revision,
     Story,
     StoryPhase,
     Verdict,
@@ -31,8 +32,8 @@ import { CriteriaEngine, type CriterionResult } from './engine';
 // The three attributions a real server produces (P11). Nothing here needs a run that talks to a
 // model: the fixtures are writes, and the engine under test only reads them.
 const AUTHOR: Attribution = { run_ref: null, author: true, why: 'author seeds the story' };
-const WRITER: Attribution = { run_ref: 'run_1', why: 'writer produces the artifact' };
-const CHECKER: Attribution = { run_ref: 'run_2', why: 'checker submits the verdict' };
+const WRITER: Attribution = { run_ref: 'run_0', why: 'writer produces the artifact' };
+const CHECKER: Attribution = { run_ref: 'run_1', why: 'checker submits the verdict' };
 
 // ---------------------------------------------------------------------------
 // Fixtures — only the fields §4 marks required, so a test cannot invent a field and pass on it
@@ -156,6 +157,35 @@ function seedGoal(store: Store, storyId: string, thresholdSoft: number, criteria
             regress_tolerance: base.regress_tolerance
         },
         AUTHOR
+    );
+}
+
+/**
+ * §4.15's divergence row. `unitKind`/`unitRef` decide which artifact the draft is an alternative TO,
+ * and `state` is what the criteria engine's Summary fallback reads (engine.ts:selectedSummaryDraftId):
+ * only `selected` can stand in for the Summary row, and among several selected rows (one per round)
+ * the newest is the current one — the same answer `loop/records.ts:selectedSummaryRevision` gives.
+ */
+function createRevision(
+    store: Store,
+    storyId: string,
+    unitKind: 'summary' | 'plotline' | 'chapter',
+    unitRef: string,
+    state: 'drafted' | 'competing' | 'selected' | 'discarded',
+    round = 1
+): Revision {
+    return store.revisions.create(
+        {
+            story_id: storyId,
+            unit_kind: unitKind,
+            unit_ref: unitRef,
+            body: `draft of ${unitRef}`,
+            run_ref: WRITER.run_ref ?? undefined,
+            state,
+            verdict_refs: [],
+            round
+        },
+        WRITER
     );
 }
 
@@ -346,13 +376,13 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
         createSummary(store, story.id, 2);
         const bound = createPlotline(store, story.id, 1);
         createChapter(store, story.id, 1);
-        createChapter(store, story.id, 2, 'plotline_9');
+        createChapter(store, story.id, 2, 'plotline_8');
 
         expect(only(engine.evaluateCode(store, story.id), 'C-1')).toEqual(
             code(
                 'C-1',
                 false,
-                '2 of 2 chapters have no resolvable plotline: chapter_1 (order 1, no plotline_ref); chapter_2 (order 2, plotline_ref plotline_9 is missing)'
+                '2 of 2 chapters have no resolvable plotline: chapter_0 (order 1, no plotline_ref); chapter_1 (order 2, plotline_ref plotline_8 is missing)'
             )
         );
         expect(bound.order).toBe(1);
@@ -446,7 +476,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
             code(
                 'C-6',
                 false,
-                'timeline goes backwards: ledger_entry_2 ("the rescue", chapter chapter_1 order 1) is recorded after ledger_entry_1 (chapter order 2)'
+                'timeline goes backwards: ledger_entry_1 ("the rescue", chapter chapter_0 order 1) is recorded after ledger_entry_0 (chapter order 2)'
             )
         );
     });
@@ -461,7 +491,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
             code(
                 'C-6',
                 false,
-                'fact contradiction on "vera age": ledger_entry_1 says "vera is 37" vs ledger_entry_2 says "vera is 42"'
+                'fact contradiction on "vera age": ledger_entry_0 says "vera is 37" vs ledger_entry_1 says "vera is 42"'
             )
         );
     });
@@ -522,7 +552,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
             code(
                 'C-15',
                 false,
-                '1 selected Idea reached an artifact without a checked Editor verdict — idea_1 (1 source): no Editor verification at all'
+                '1 selected Idea reached an artifact without a checked Editor verdict — idea_0 (1 source): no Editor verification at all'
             )
         );
     });
@@ -563,7 +593,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
                     verdict: 'verified',
                     evidence: '   ',
                     meets_guidelines: true,
-                    checked_by_run: 'run_3',
+                    checked_by_run: 'run_2',
                     checked_at: '2026-01-04T00:00:00.000Z'
                 }
             }),
@@ -574,7 +604,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
             code(
                 'C-15',
                 false,
-                '1 selected Idea reached an artifact without a checked Editor verdict — idea_1 (1 source): the verdict carries no evidence line (D-15)'
+                '1 selected Idea reached an artifact without a checked Editor verdict — idea_0 (1 source): the verdict carries no evidence line (D-15)'
             )
         );
     });
@@ -589,7 +619,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
                     verdict: 'refuted',
                     evidence: 'the page does not say that',
                     meets_guidelines: true,
-                    checked_by_run: 'run_3',
+                    checked_by_run: 'run_2',
                     checked_at: '2026-01-04T00:00:00.000Z'
                 }
             }),
@@ -600,7 +630,7 @@ describe('CriteriaEngine — the code half runs with no model (G-3, D-10)', () =
             code(
                 'C-15',
                 false,
-                '1 selected Idea reached an artifact without a checked Editor verdict — idea_1 (1 source): the Editor verdict is `refuted`'
+                '1 selected Idea reached an artifact without a checked Editor verdict — idea_0 (1 source): the Editor verdict is `refuted`'
             )
         );
     });
@@ -710,7 +740,7 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
         createVerdict(store, story.id, second.id, 'plotline', [line('C-2', true, 'this one traces to the Summary')]);
 
         expect(engine.aggregateJudge(store, story.id, ['C-2'])).toEqual([
-            { criterion: 'C-2', passed: false, evidence: 'plotline_1: no verdict yet', source: 'verdict' }
+            { criterion: 'C-2', passed: false, evidence: 'plotline_0: no verdict yet', source: 'verdict' }
         ]);
     });
 
@@ -808,7 +838,7 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
     });
 
     it('judges C-14 against the Summary record and C-10/C-13 against the Story', () => {
-        createVerdict(store, story.id, 'summary_1', 'summary', [
+        createVerdict(store, story.id, 'summary_0', 'summary', [
             line('C-14', true, 'the Summary carries every central beat of the Seed')
         ]);
         createVerdict(store, story.id, story.id, 'story', [
@@ -819,6 +849,170 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
         expect(engine.aggregateJudge(store, story.id, ['C-14', 'C-10', 'C-13']).map((result) => result.passed)).toEqual(
             [true, true, true]
         );
+    });
+
+    it('reads the SELECTED Summary draft’s verdict as the Summary’s own — the phase-① book that never named the Summary (C-14, §6.4 step 6, CS-VERDICT-1b)', () => {
+        // The state a real phase-① run leaves behind: the Reader rated the draft the brief showed it
+        // (every `revision_N` row the round produced), and nothing was ever filed at the Summary row.
+        // C-14's scope is still the Summary record (`engine.ts:scopeTargets`); what changed is that a
+        // verdict on the draft that Summary row CURRENTLY carries is read as that row's evidence
+        // (`engine.ts:summaryDraftEvidenceRefs`), because in phase ① that draft IS the Summary's text.
+        createRevision(store, story.id, 'summary', 'summary_0', 'selected', 1);
+        createRevision(store, story.id, 'summary', 'summary_0', 'discarded', 1);
+        createRevision(store, story.id, 'summary', 'summary_0', 'discarded', 1);
+
+        // The two losers first: a discarded sibling's verdict is per-draft display (U-13), never the
+        // Goal's answer — D-22 deletes it, and the next round re-reads the kept draft fresh.
+        createVerdict(store, story.id, 'revision_1', 'revision', [
+            line('C-14', true, 'discarded draft 2 carries every central beat of the Seed')
+        ]);
+        createVerdict(store, story.id, 'revision_2', 'revision', [
+            line('C-14', true, 'discarded draft 3 carries every central beat of the Seed')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            { criterion: 'C-14', passed: false, evidence: 'summary_0: no verdict yet', source: 'verdict' }
+        ]);
+
+        // The carried draft's verdict: the same judgement, filed where the review actually read it.
+        createVerdict(store, story.id, 'revision_0', 'revision', [
+            line('C-14', true, 'the selected draft carries every central beat of the Seed')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: true,
+                evidence: 'the latest verdict for each of 1 target(s) passes C-14',
+                source: 'verdict'
+            }
+        ]);
+
+        // And the Summary row's own line still works, unchanged, with the draft line beside it — the
+        // fallback is EXTRA evidence, never a replacement (requirement: unit-targeted verdicts keep
+        // working exactly as they did).
+        createVerdict(store, story.id, 'summary_0', 'summary', [
+            line('C-14', true, 'the Summary carries every central beat of the Seed')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: true,
+                evidence: 'the latest verdict for each of 1 target(s) passes C-14',
+                source: 'verdict'
+            }
+        ]);
+    });
+
+    it('fails C-14 on a failing line against the SELECTED draft, and cites the draft the line is filed on (C-14, D-15, D-16)', () => {
+        createRevision(store, story.id, 'summary', 'summary_0', 'selected', 1);
+
+        createVerdict(store, story.id, 'revision_0', 'revision', [
+            line('C-14', false, 'the selected draft leaves the Seed’s third beat unpaid', 'finding_0')
+        ]);
+
+        // The evidence names `revision_0` rather than `summary_0`: that is the record the winning
+        // verdict sits on, and P6/D-15 want the citation to point at what exists.
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: false,
+                evidence: 'revision_0: the selected draft leaves the Seed’s third beat unpaid',
+                finding_ref: 'finding_0',
+                source: 'verdict'
+            }
+        ]);
+    });
+
+    it('sorts the Summary row and its selected draft in ONE recency list — an older pass cannot mask a newer failure either way (W3, P2, CS-VERDICT-1b)', () => {
+        createRevision(store, story.id, 'summary', 'summary_0', 'selected', 1);
+
+        // The Summary row was judged passing, and then a fresh review of the SAME text failed it at the
+        // draft. The newer line wins: an older Summary-row pass must not outvote it, or a regression
+        // the crew actually saw would stay hidden behind a stale green.
+        createVerdict(store, story.id, 'summary_0', 'summary', [
+            line('C-14', true, 'older pass: the Summary carries every beat')
+        ]);
+        createVerdict(store, story.id, 'revision_0', 'revision', [
+            line('C-14', false, 'newer pass: the draft drops the Seed’s ending')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: false,
+                evidence: 'revision_0: newer pass: the draft drops the Seed’s ending',
+                source: 'verdict'
+            }
+        ]);
+
+        // The reverse order, symmetrically: the newest Summary-row pass clears the older draft failure.
+        createVerdict(store, story.id, 'summary_0', 'summary', [
+            line('C-14', true, 'newest pass: the Summary carries every beat')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: true,
+                evidence: 'the latest verdict for each of 1 target(s) passes C-14',
+                source: 'verdict'
+            }
+        ]);
+    });
+
+    it('ignores a verdict on a draft the Summary no longer carries, and takes the newest selected row when a book carries two (D-22, T10/F7)', () => {
+        // Two rounds: round 1's winner is superseded by round 2's. The Goal grades the text the Summary
+        // holds NOW, so only round 2's carried draft can speak for it.
+        createRevision(store, story.id, 'summary', 'summary_0', 'selected', 1);
+        createRevision(store, story.id, 'summary', 'summary_0', 'discarded', 1);
+        createRevision(store, story.id, 'summary', 'summary_0', 'selected', 2);
+
+        // A newer verdict on the OLDER round's row is not evidence either: the resolver's answer is
+        // the newest selected row (`revision_2`), matching `loop/records.ts:selectedSummaryRevision`.
+        createVerdict(store, story.id, 'revision_0', 'revision', [
+            line('C-14', true, 'round 1’s draft carried every central beat')
+        ]);
+        createVerdict(store, story.id, 'revision_1', 'revision', [
+            line('C-14', true, 'round 1’s loser carried every central beat')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            { criterion: 'C-14', passed: false, evidence: 'summary_0: no verdict yet', source: 'verdict' }
+        ]);
+
+        createVerdict(store, story.id, 'revision_2', 'revision', [
+            line('C-14', true, 'round 2’s carried draft carries every central beat')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-14'])).toEqual([
+            {
+                criterion: 'C-14',
+                passed: true,
+                evidence: 'the latest verdict for each of 1 target(s) passes C-14',
+                source: 'verdict'
+            }
+        ]);
+    });
+
+    it('confines the draft fallback to the Summary level: a selected CHAPTER draft’s verdict answers neither C-7 nor C-14 (D-21, §6.2a)', () => {
+        // Phases ②/③'s competition still aggregates per draft and never borrows a draft's line for the
+        // stored artifact: the resolver reads `unit_kind: 'summary'` rows only, and only for a
+        // `summary`-level criterion.
+        const chapter = createChapter(store, story.id, 1, createPlotline(store, story.id, 1).id);
+
+        createRevision(store, story.id, 'chapter', chapter.id, 'selected', 1);
+
+        createVerdict(store, story.id, 'revision_0', 'revision', [
+            line('C-7', true, 'this chapter draft delivers its contract'),
+            line('C-14', true, 'this chapter draft says the Summary is fine')
+        ]);
+
+        expect(engine.aggregateJudge(store, story.id, ['C-7', 'C-14'])).toEqual([
+            { criterion: 'C-7', passed: false, evidence: `${chapter.id}: no verdict yet`, source: 'verdict' },
+            { criterion: 'C-14', passed: false, evidence: 'summary_0: no verdict yet', source: 'verdict' }
+        ]);
     });
 
     it('falls back to the linked finding when the verdict line carries no evidence (D-15)', () => {
@@ -838,14 +1032,14 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
             },
             CHECKER
         );
-        createVerdict(store, story.id, plotline.id, 'plotline', [line('C-3', false, '', 'finding_1')]);
+        createVerdict(store, story.id, plotline.id, 'plotline', [line('C-3', false, '', 'finding_0')]);
 
         expect(engine.aggregateJudge(store, story.id, ['C-3'])).toEqual([
             {
                 criterion: 'C-3',
                 passed: false,
-                evidence: 'plotline_1: finding_1: both fields name the burned map',
-                finding_ref: 'finding_1',
+                evidence: 'plotline_0: finding_0: both fields name the burned map',
+                finding_ref: 'finding_0',
                 source: 'verdict'
             }
         ]);
@@ -927,9 +1121,14 @@ describe('CriteriaEngine — levels and per-phase progress (L-14, G-2)', () => {
         expect(status.failing).toEqual([
             {
                 criterion: 'C-14',
+                // T3: this is C-14's `fix_hint`, and it is the definition of done a C-14 fix task carries
+                // into the Writer's prompt (`run/phase1-prompt.ts:renderFixTask`). It used to say "Expand
+                // the Summary to carry everything central to the Seed", which is the instruction that
+                // turned Seed silence into a defect; the hint now says which additions are owed and which
+                // are not.
                 fix_hint:
-                    'Expand the Summary to carry everything central to the Seed, and remove what contradicts it (P5: the Seed is never edited to pass).',
-                evidence: 'summary_1: no verdict yet'
+                    'Remove what contradicts the Seed, repair what contradicts the Summary\u2019s own promise, and add only a commitment the Seed states explicitly that the Summary does not carry; what the Seed leaves open is the Writer\u2019s to fill with any compatible detail, so its absence is not a defect to fix (P5: the Seed is never edited to pass).',
+                evidence: 'summary_0: no verdict yet'
             }
         ]);
         expect(status.progress).not.toContain('C-0');
@@ -939,12 +1138,12 @@ describe('CriteriaEngine — levels and per-phase progress (L-14, G-2)', () => {
         const story = awaitChapterThree(store);
 
         // C-7/C-8 per chapter, C-10/C-11/C-13 against the Story: the whole phase-3 set is 6 criteria.
-        createVerdict(store, story.id, 'chapter_1', 'chapter', [
+        createVerdict(store, story.id, 'chapter_0', 'chapter', [
             line('C-7', true, 'every named event is on the page'),
             line('C-8', true, 'the change lands in the last section'),
             line('C-9', true, 'no behaviour against the arc')
         ]);
-        createVerdict(store, story.id, 'chapter_2', 'chapter', [
+        createVerdict(store, story.id, 'chapter_1', 'chapter', [
             line('C-7', true, 'every named event is on the page'),
             line('C-8', true, 'the change lands in the last section'),
             line('C-9', true, 'no behaviour against the arc')
@@ -967,15 +1166,15 @@ describe('CriteriaEngine — levels and per-phase progress (L-14, G-2)', () => {
     it('blocks the Goal on a soft shortfall while every HARD criterion passes (§5.1, L-28)', () => {
         const story = awaitChapterThree(store);
 
+        createVerdict(store, story.id, 'chapter_0', 'chapter', [
+            line('C-7', true, 'events delivered'),
+            line('C-8', true, 'change delivered'),
+            line('C-9', false, 'Vera acts against her arc with no scene owning it', 'finding_1')
+        ]);
         createVerdict(store, story.id, 'chapter_1', 'chapter', [
             line('C-7', true, 'events delivered'),
             line('C-8', true, 'change delivered'),
-            line('C-9', false, 'Vera acts against her arc with no scene owning it', 'finding_2')
-        ]);
-        createVerdict(store, story.id, 'chapter_2', 'chapter', [
-            line('C-7', true, 'events delivered'),
-            line('C-8', true, 'change delivered'),
-            line('C-9', false, 'Vera acts against her arc with no scene owning it', 'finding_2')
+            line('C-9', false, 'Vera acts against her arc with no scene owning it', 'finding_1')
         ]);
         createVerdict(store, story.id, story.id, 'story', [
             line('C-10', true, 'the ending pays the promise'),
@@ -995,7 +1194,7 @@ describe('CriteriaEngine — levels and per-phase progress (L-14, G-2)', () => {
             {
                 criterion: 'C-9',
                 fix_hint: 'Add the scene that owns the change, or bring the behaviour back to the cast record (D-9).',
-                evidence: `chapter_1: Vera acts against her arc with no scene owning it · chapter_2: Vera acts against her arc with no scene owning it`
+                evidence: `chapter_0: Vera acts against her arc with no scene owning it · chapter_1: Vera acts against her arc with no scene owning it`
             }
         ]);
     });
@@ -1164,10 +1363,10 @@ describe('CriteriaEngine — the per-chapter Goal and `bar_override` (G-1)', () 
         const other = createStory(store, 'chapters');
 
         expect(() => engine.chapterGoalStatus(store, other, chapter.id)).toThrow(
-            'chapter chapter_1 belongs to story_1, not story_2 — T-3 scopes every read to one Story'
+            'chapter chapter_0 belongs to story_0, not story_1 — T-3 scopes every read to one Story'
         );
-        expect(() => engine.chapterGoalStatus(store, story, 'chapter_99')).toThrow(
-            'no chapter named chapter_99 in the chapters collection — the per-chapter Goal has nothing to measure'
+        expect(() => engine.chapterGoalStatus(store, story, 'chapter_98')).toThrow(
+            'no chapter named chapter_98 in the chapters collection — the per-chapter Goal has nothing to measure'
         );
     });
 });

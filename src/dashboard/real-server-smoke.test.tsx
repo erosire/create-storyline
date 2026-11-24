@@ -14,11 +14,13 @@ import {
     createSliceStory,
     openDial,
     queue,
+    SLICE_SEED,
     storyRow,
     storyView,
     type StorylineFixture
 } from '../server/integration/harness';
 import type { QueueItem, StoryRow, StoryView } from './api';
+import { seedHashOf } from '../shared/seed-hash';
 
 /** Mounts the whole shell over one Story's real payloads, with the Story region already open. */
 async function mountRealServer(
@@ -64,7 +66,10 @@ describe('the dashboard over the real server', () => {
     it('a Story nobody has worked on renders from the server without inventing a level (L-14)', async () => {
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
 
-        expect(await storyRow(fixture, storyId)).toMatchObject({ id: 'story_1', phase: 'summary', status: 'ready' });
+        // S-RUNTIME: the workspace's Story id is the UUID its book is named after
+        // (`store/persist.ts:STORY_ID_PATTERN`), not a `story_<n>` counter — the row the panel renders
+        // is therefore keyed by the id the fixture got back from `POST /stories`.
+        expect(await storyRow(fixture, storyId)).toMatchObject({ id: storyId, phase: 'summary', status: 'ready' });
 
         await mountRealServer(
             rows,
@@ -119,13 +124,46 @@ describe('the dashboard over the real server', () => {
 
         // The crew is the server's run rows: the templates that actually ran, not a fixture list —
         // phase ①'s opener in dispatch order (templates.ts:DEFAULT_ASSIGNMENT). `writer-summary` no
-        // longer exists; the Sampler replaced it, and it buys one sample per sweep (§6.4 step 3's
-        // claim key), so the FIRST sampler row is exactly where this walk stopped.
-        expect(runs.map((run) => run.template_ref)).toEqual([
-            'editor-seed-structure',
-            'researcher-story',
-            'writer-summary-sampler'
+        // longer exists; the Sampler replaced it (§6.4 step 3).
+        //
+        // The two GATE rows are pinned exactly, in dispatch order, with the role each one ran under:
+        // that is the proof the walk reached a sampler through both gates rather than past them. What
+        // follows them is the SAMPLING LEG — one `wi_sample_…` claim per sample
+        // (`loop/records.ts:sampleKeyOf`) and one `wi_screen_revision_<n>_<pass>` claim per screening
+        // pass over that sample (`loop/records.ts:screenPrefixOf`, and the key names the SAMPLE's own
+        // revision id, so sample 1's first pass is `wi_screen_revision_0_1`).
+        //
+        // WHY THE LEG IS SPLIT FROM THE GATES BY CLAIM PREFIX RATHER THAN PINNED ROW-FOR-ROW: the walk
+        // stops the moment ONE sampler row exists (`settle` above), and `harness.ts:tick` drains every
+        // run a sweep opens — so on a loaded machine the first sample's screening pass has already torn
+        // down inside the same tick that produced the sampler. Screening is therefore legitimate work of
+        // the leg, not a gate this walk walked past: it is filtered with the samples and pinned by WHO
+        // ran, exactly like them. The exact per-round ledger is pinned row-for-row in
+        // `summary-sampling.test.ts` and `slice-phases.test.ts`. Anything that is neither gate nor
+        // sampler nor screening pass (a deep review, an escalation, a sign-off) lands in `gates` below
+        // and fails it, which is what keeps the shape honest.
+        const keyOf = (run: Record<string, unknown>): string => String(run.work_item_ref);
+        const samplerOf = (run: Record<string, unknown>): string => `${String(run.template_ref)}/${String(run.role)}`;
+
+        const sampling = runs.filter((run) => keyOf(run).startsWith('wi_sample_'));
+        const screening = runs.filter((run) => keyOf(run).startsWith('wi_screen_'));
+        const gates = runs.filter(
+            (run) => !keyOf(run).startsWith('wi_sample_') && !keyOf(run).startsWith('wi_screen_')
+        );
+
+        expect(gates.map((run) => [keyOf(run), String(run.template_ref), String(run.role)])).toEqual([
+            [`wi_structure_seed_${seedHashOf(SLICE_SEED)}`, 'editor-seed-structure', 'editor'],
+            ['wi_research_1', 'researcher-story', 'researcher']
         ]);
-        expect(runs.map((run) => run.role)).toEqual(['editor', 'researcher', 'writer']);
+
+        // The Sampler is the only crew writing prose here, under the Writer's kind, and at least one
+        // sample row exists — which is the row the stop predicate walked to.
+        expect(sampling.length).toBeGreaterThan(0);
+        expect([...new Set(sampling.map(samplerOf))]).toEqual(['writer-summary-sampler/writer']);
+
+        // A screening pass that has landed is the Screening crew reading a sample: none is legitimate
+        // (the sweep may have stopped after the first sample), and any row under a `wi_screen_…` claim
+        // that is NOT `reader-screening/reader` is the drift this pins.
+        expect(screening.filter((run) => samplerOf(run) !== 'reader-screening/reader')).toEqual([]);
     });
 });

@@ -6,8 +6,11 @@
 //
 // WHY `severity` IS AN ENUM IN THE SCHEMA: the request caps screening at `critical | high`, and
 // the design's whole point (§4.3) is that the cap is enforced by the TRANSPORT, not by a prompt
-// the model can forget. `critical`/`high` are the two words shared with `FINDING_COSTS` so the
-// selector can rank the two counts without a mapping table (§6.5).
+// the model can forget. The two words map ONE-ON-ONE onto the finding ladder — screening
+// `critical` is a finding at cost `critical` and screening `high` is a finding at cost `major`
+// (`shared/types.ts:SampledIssue`) — so "no blocking issue" means the same thing in the screening
+// answer, in the selector, and in the Author's escalation, and the selector can rank the two
+// counts without a mapping table (§6.5).
 import type { SampledFixVerification, SampledIssue } from '../types';
 
 /** The `response_format.json_schema.name` every IssueList answer is labelled with. */
@@ -38,6 +41,13 @@ export type IssueList = {
  * an issue with no verbatim excerpt is not a judgement the selector may act on. `fix_hint` is
  * optional (G-2 asks for one, but a screening pass must not fail schema validation when the
  * model declines to name a fix it is not yet sure of).
+ *
+ * HILL CLIMB: `origin` is the candidate's own statement of whether a blocking issue is NEW in this
+ * draft or was ALREADY in the accepted text it replaces. It is OPTIONAL for the same transport
+ * reason `fix_hint` is — a row written before the field exists, and a first-round screen with no
+ * base to compare against, must both keep parsing — and an absent value FAILS CLOSED as
+ * `introduced` in a round that has an accepted base (`sample-select.ts:issueIsIntroduced`), so the
+ * optionality can never be read as a clean bill of health.
  */
 export const IssueListSchema = {
     type: 'object',
@@ -47,7 +57,14 @@ export const IssueListSchema = {
             items: {
                 type: 'object',
                 properties: {
+                    // `critical`/`high` are the two words shared with `FINDING_COSTS`, and they map
+                    // one-to-one onto the finding ladder: screening `critical` = finding `critical`,
+                    // screening `high` = finding `major`.
                     severity: { type: 'string', enum: ['critical', 'high'] },
+                    // Where the issue came from, relative to the accepted draft the candidate
+                    // replaces. `unknown` is the Reader admitting it cannot tell, and the selector
+                    // treats it exactly as `introduced`.
+                    origin: { type: 'string', enum: ['introduced', 'inherited', 'unknown'] },
                     criterion: { type: 'string' },
                     location: { type: 'string' },
                     quote: { type: 'string', minLength: 1 },

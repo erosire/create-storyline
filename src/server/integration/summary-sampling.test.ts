@@ -35,6 +35,34 @@ import type { IssueList, SummarySample } from '../../shared/schemas';
 /** The claim key of the Editor's structuring pass for the slice's Seed. */
 const STRUCTURE_KEY = `wi_structure_seed_${seedHashOf(SLICE_SEED)}`;
 
+/**
+ * Phase ①'s two priority-0 gates, in DISPATCH ORDER, torn down — the rows every §6.4 steps 1-2
+ * assertion in this file pins.
+ */
+const GATE_LINES = [
+    `${STRUCTURE_KEY}[editor-seed-structure/editor]=torn_down`,
+    'wi_research_1[researcher-story/researcher]=torn_down'
+];
+
+/**
+ * The two GATE claim prefixes. Anything outside them is the sampling leg, and how far the leg has
+ * got at a given sweep is the loop's dispatch decision: `harness.ts:tick` is one `sweep()` plus
+ * however many `settle()` passes the runs take, so a run that closes can hand the next claim to the
+ * same tick. A loaded run therefore tears down `wi_research_1` beside the structure pass, and the
+ * first Sampler claim beside the Researcher — verified by replaying these two sweeps under CPU
+ * contention, where the list is one claim longer than an idle run's.
+ *
+ * That is why the gate rows are pinned EXACTLY (they are the subject of the step) while the leg
+ * behind them is pinned by CLAIM AND CREW: admitting a Sampler claim and nothing else keeps the
+ * step honest — a Screening, Review or sign-off claim this early means the loop judged a draft
+ * before both gates were shut — without asserting a row count the loop never promised.
+ */
+const isGateLine = (line: string): boolean => line.startsWith('wi_structure_seed_') || line.startsWith('wi_research_');
+
+/** A Sampler claim, torn down, under the Sampler's own template and role — the only crew past the gates. */
+const isSamplerLine = (line: string): boolean =>
+    /^wi_sample_[^[]*\[writer-summary-sampler\/writer\]=torn_down$/.test(line);
+
 /** Every run row as `claim key[template/role]=state`, in dispatch order. */
 const runLines = async (fixture: StorylineFixture, storyId: string): Promise<string[]> =>
     (await crewRows(fixture, storyId)).map(
@@ -71,7 +99,18 @@ describe('§6.4 steps 1-2: the Seed is structured and researched before anything
             // the DERIVED brief. Nothing may be sampled while the brief is missing.
             await fixture.tick();
 
-            expect(await runLines(fixture, storyId)).toEqual([`${STRUCTURE_KEY}[editor-seed-structure/editor]=torn_down`]);
+            const sweep1 = await runLines(fixture, storyId);
+
+            // THE STRUCTURE PASS RAN, AND RAN FIRST — and it is the ONLY thing that ran. The Researcher's
+            // claim depends on the SEED rather than on the brief the Editor is writing, so the coordinator
+            // dispatches it in the same sweep and a loaded run has it torn down here too (`isGateLine`'s
+            // note); that prefix is admitted. NO Sampler claim is: a sample needs the brief AND the
+            // Knowledge rows, and neither existed when this sweep computed its work items — which is the
+            // "samples nothing before both close" the step is named for, and what the empty revisions list
+            // below proves from the other side.
+            expect(sweep1[0]).toBe(GATE_LINES[0]);
+            expect(sweep1.filter(isGateLine)).toEqual(GATE_LINES.slice(0, sweep1.filter(isGateLine).length));
+            expect(sweep1.filter((line) => !isGateLine(line))).toEqual([]);
 
             const brief = fixture.store.seedBriefs.list()[0];
 
@@ -92,23 +131,33 @@ describe('§6.4 steps 1-2: the Seed is structured and researched before anything
             // one `high` claim — the two importances the sampling prompt is allowed to carry (§5).
             await fixture.tick();
 
-            expect(await runLines(fixture, storyId)).toEqual([
-                `${STRUCTURE_KEY}[editor-seed-structure/editor]=torn_down`,
-                'wi_research_1[researcher-story/researcher]=torn_down'
-            ]);
+            const sweep2 = await runLines(fixture, storyId);
+
+            // BOTH GATES ARE SHUT, pinned exactly and in dispatch order, and the only thing that may
+            // follow them is a Sampler claim — the leg the loop is entitled to start now. A Screening,
+            // Review or sign-off row here would be the drift this pins.
+            expect(sweep2.filter(isGateLine)).toEqual(GATE_LINES);
+            expect(sweep2.filter((line) => !isGateLine(line) && !isSamplerLine(line))).toEqual([]);
             expect(
                 fixture.store.knowledge
                     .list()
                     .map((entry) => `${entry.topic}:${entry.kind}:${entry.importance}:${entry.sources.length}`)
             ).toEqual(['period and place:place:critical:1', 'governing rule:world_rule:high:1']);
-            expect(fixture.store.knowledge.require('knowledge_entry_1').sources).toEqual([
+            expect(fixture.store.knowledge.require('knowledge_entry_0').sources).toEqual([
                 {
                     url_or_title: 'the Author\u2019s Seed',
                     claim: 'it names the story\u2019s setting',
                     accessed_at: '2000-01-01T00:00:00.000Z'
                 }
             ]);
-            expect(fixture.store.revisions.list()).toEqual([]);
+            // NOTHING HAS BEEN CHOSEN. A Sampler claim may already be torn down at this sweep — the gates
+            // closed at the end of the last one, so sampling is legitimate work now, and a loaded sweep
+            // does exactly that — but §6.5 installs a draft only once the round's screening sets exist,
+            // and a `selected` row is the install (`records.ts` truncates the losers with it). Asserting
+            // the absence of a SELECTION rather than of a revision is the timing-proof form of the claim,
+            // and it still fails the drift: a loop that skipped a gate and installed prose anyway lands
+            // here.
+            expect(fixture.store.revisions.list().filter((revision) => revision.state === 'selected')).toEqual([]);
             expect(fixture.refusals).toEqual([]);
         } finally {
             await fixture.close();
@@ -133,14 +182,17 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
                 'wi_research_1[researcher-story/researcher]=torn_down'
             ]);
             expect(lines.filter((line) => line.startsWith('wi_sample_')).sort()).toEqual([
-                'wi_sample_summary_1_1_1[writer-summary-sampler/writer]=torn_down',
-                'wi_sample_summary_1_1_2[writer-summary-sampler/writer]=torn_down',
-                'wi_sample_summary_1_1_3[writer-summary-sampler/writer]=torn_down'
+                'wi_sample_summary_0_1_1[writer-summary-sampler/writer]=torn_down',
+                'wi_sample_summary_0_1_2[writer-summary-sampler/writer]=torn_down',
+                'wi_sample_summary_0_1_3[writer-summary-sampler/writer]=torn_down'
             ]);
             expect(lines.filter((line) => line.startsWith('wi_screen_')).sort()).toEqual([
+                // The screen key carries the SAMPLE's own revision id (`records.ts:screenPrefixOf`), and
+                // revision ids are story-local counters from 0 — so sample N (1-based, in `wi_sample_*`) is
+                // `revision_${N - 1}` here. Sample 1's five screens are `revision_0_1..5`.
                 ...[1, 2, 3].flatMap((sample) =>
                     [1, 2, 3, 4, 5].map(
-                        (pass) => `wi_screen_revision_${sample}_${pass}[reader-screening/reader]=torn_down`
+                        (pass) => `wi_screen_revision_${sample - 1}_${pass}[reader-screening/reader]=torn_down`
                     )
                 )
             ]);
@@ -152,23 +204,23 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
                 fixture.store.revisions
                     .list()
                     .map((revision) => `${revision.id}:${revision.unit_ref}/${revision.state}:r${revision.round}:${revision.origin}`)
-            ).toEqual(['revision_1:summary_1/selected:r1:sampled']);
-            expect(fixture.store.revisions.require('revision_1').issue_counts).toEqual({ critical: 0, high: 0 });
+            ).toEqual(['revision_0:summary_0/selected:r1:sampled']);
+            expect(fixture.store.revisions.require('revision_0').issue_counts).toEqual({ critical: 0, high: 0 });
             expect(
                 fixture.store.sampleReviews
                     .list()
                     .map((review) => `${review.revision_ref}:${review.valid}:${review.issues.length}`)
             ).toEqual([
-                'revision_1:true:0',
-                'revision_1:true:0',
-                'revision_1:true:0',
-                'revision_1:true:0',
-                'revision_1:true:0'
+                'revision_0:true:0',
+                'revision_0:true:0',
+                'revision_0:true:0',
+                'revision_0:true:0',
+                'revision_0:true:0'
             ]);
 
             // The engine installed the winner's six prose blocks (§6.6). `chapter_count` is Author
             // truth and was never in the sample, so it is untouched (D-3b).
-            const summary = fixture.store.summaries.require('summary_1');
+            const summary = fixture.store.summaries.require('summary_0');
             const expected = defaultSampleAnswer(1, SLICE_SEED, knowledgeRefs(fixture));
 
             // The Summary carries the six prose blocks only: `knowledge_used` is the sample's audit
@@ -192,7 +244,7 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
             });
             // Every Knowledge fingerprint the prompt carried is in the sample's audit list.
             expect(expected.knowledge_used).toEqual(knowledgeRefs(fixture));
-            expect((fixture.store.revisions.require('revision_1').body as { fields: unknown }).fields).toEqual(expected);
+            expect((fixture.store.revisions.require('revision_0').body as { fields: unknown }).fields).toEqual(expected);
 
             const story = fixture.store.stories.require(storyId);
 
@@ -200,33 +252,37 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
             expect((story.sampling_history ?? []).map(({ round, samples, selected }) => ({ round, samples, selected }))).toEqual([
                 {
                     round: 1,
+                    // H2 — every candidate carries its OUTCOME now: the winner is `accepted`, the two it
+                    // beat were `eligible` (they owed nothing and broke nothing; they simply changed less
+                    // … or rather, in round 1, lost §6.5's tie-break). A round-1 line has NO origin split
+                    // and no minimality numbers, because there is no accepted draft to regress against.
                     samples: [
-                        { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                        { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                        { revision_id: 'revision_3', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
+                        { revision_id: 'revision_0', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'accepted' },
+                        { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'eligible' },
+                        { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'eligible' }
                     ],
-                    selected: 'revision_1'
+                    selected: 'revision_0'
                 }
             ]);
 
             // The deep review is the tool-using Reader pass on the winner, one per angle (§6.4 step 6).
             expect(lines.filter((line) => line.startsWith('wi_review_'))).toEqual([
-                'wi_review_revision_1_a1[reader-genre/reader]=torn_down',
-                'wi_review_revision_1_a2[reader-plausibility/reader]=torn_down',
-                'wi_review_revision_1_a3[reader-audience/reader]=torn_down',
-                'wi_review_revision_1_a4[reader-mystery/reader]=torn_down',
-                'wi_review_revision_1_a5[reader-genre/reader]=torn_down'
+                'wi_review_revision_0_a1[reader-genre/reader]=torn_down',
+                'wi_review_revision_0_a2[reader-plausibility/reader]=torn_down',
+                'wi_review_revision_0_a3[reader-audience/reader]=torn_down',
+                'wi_review_revision_0_a4[reader-mystery/reader]=torn_down',
+                'wi_review_revision_0_a5[reader-genre/reader]=torn_down'
             ]);
             expect(
                 fixture.store.verdicts
                     .list()
                     .map((verdict) => `${verdict.target_ref}:${verdict.recommendation}`)
             ).toEqual([
-                'summary_1:advance',
-                'summary_1:advance',
-                'summary_1:advance',
-                'summary_1:advance',
-                'summary_1:advance'
+                'summary_0:advance',
+                'summary_0:advance',
+                'summary_0:advance',
+                'summary_0:advance',
+                'summary_0:advance'
             ]);
             expect(fixture.refusals).toEqual([]);
         } finally {
@@ -262,7 +318,7 @@ describe('§6.5/§6.6: the deterministic selection', () => {
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 80);
 
             // Sample 1's fields are installed — the clean sample, not merely the first one written.
-            const summary = fixture.store.summaries.require('summary_1');
+            const summary = fixture.store.summaries.require('summary_0');
             const expected = defaultSampleAnswer(1, SLICE_SEED, knowledgeRefs(fixture));
 
             expect({
@@ -286,8 +342,8 @@ describe('§6.5/§6.6: the deterministic selection', () => {
                 fixture.store.revisions
                     .list()
                     .map((revision) => `${revision.id}:${revision.unit_ref}/${revision.state}`)
-            ).toEqual(['revision_1:summary_1/selected']);
-            expect(fixture.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual(['revision_1']);
+            ).toEqual(['revision_0:summary_0/selected']);
+            expect(fixture.store.sampleReviews.list().map((review) => review.revision_ref)).toEqual(['revision_0']);
 
             // ...but the P11 audit line keeps every sample and its issue counts, and the selected id.
             const story = fixture.store.stories.require(storyId);
@@ -297,12 +353,32 @@ describe('§6.5/§6.6: the deterministic selection', () => {
                 history: [
                     {
                         round: 1,
+                        // H2 — the two samples that carried a critical are `rejected`, and each says WHY
+                        // in the words the selector used. In a first round the reason is the §6.5 counts
+                        // themselves (there is no incumbent to regress against), and the winner carries
+                        // no reason at all.
                         samples: [
-                            { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                            { revision_id: 'revision_2', critical: 1, high: 0, valid: true, unresolved_fixes: [] },
-                            { revision_id: 'revision_3', critical: 1, high: 0, valid: true, unresolved_fixes: [] }
+                            { revision_id: 'revision_0', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'accepted' },
+                            {
+                                revision_id: 'revision_1',
+                                critical: 1,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: [],
+                                outcome: 'rejected',
+                                reject_reason: '1 critical / 0 major screening issues'
+                            },
+                            {
+                                revision_id: 'revision_2',
+                                critical: 1,
+                                high: 0,
+                                valid: true,
+                                unresolved_fixes: [],
+                                outcome: 'rejected',
+                                reject_reason: '1 critical / 0 major screening issues'
+                            }
                         ],
-                        selected: 'revision_1'
+                        selected: 'revision_0'
                     }
                 ]
             });
@@ -312,12 +388,12 @@ describe('§6.5/§6.6: the deterministic selection', () => {
             const lines = await runLines(fixture, storyId);
 
             expect(lines.filter((line) => line.startsWith('wi_sample_')).sort()).toEqual([
-                'wi_sample_summary_1_1_1[writer-summary-sampler/writer]=torn_down',
-                'wi_sample_summary_1_1_2[writer-summary-sampler/writer]=torn_down',
-                'wi_sample_summary_1_1_3[writer-summary-sampler/writer]=torn_down'
+                'wi_sample_summary_0_1_1[writer-summary-sampler/writer]=torn_down',
+                'wi_sample_summary_0_1_2[writer-summary-sampler/writer]=torn_down',
+                'wi_sample_summary_0_1_3[writer-summary-sampler/writer]=torn_down'
             ]);
             expect(lines.filter((line) => line.startsWith('wi_review_'))).toEqual([
-                'wi_review_revision_1_a1[reader-genre/reader]=torn_down'
+                'wi_review_revision_0_a1[reader-genre/reader]=torn_down'
             ]);
         } finally {
             await fixture.close();
@@ -338,7 +414,7 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
             // sibling passes and all of round 2's passes file nothing. A crew that re-filed the
             // repaired flaw would spin a third round forever.
             readerFinds: (ctx) => {
-                if (ctx.draftIds[0] !== 'revision_1') return undefined;
+                if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
 
@@ -363,13 +439,13 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
             const findings = fixture.store.findings.list();
 
             expect(findings.map((finding) => `${finding.id}:${finding.state}/${finding.cost}`)).toEqual([
-                'finding_1:fixed/major'
+                'finding_0:fixed/major'
             ]);
             expect(findings[0]).toMatchObject({
-                target_ref: 'summary_1',
+                target_ref: 'summary_0',
                 criterion_ref: 'C-14',
                 approved_by: 'auto',
-                related_refs: ['revision_1']
+                related_refs: ['revision_0']
             });
 
             const tasks = fixture.store.tasks.list();
@@ -378,7 +454,7 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
             expect(tasks[0]).toMatchObject({
                 kind: 'fix',
                 state: 'done',
-                finding_ref: 'finding_1',
+                finding_ref: 'finding_0',
                 criterion_ref: 'C-14'
             });
             // `approveFinding` queues the task in the Editor's own thread (D-34), so it keeps the
@@ -390,8 +466,8 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
                 fixture.store.revisions
                     .list()
                     .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
-            ).toEqual(['revision_1:r1:sampled:selected', 'revision_2:r2:refined:selected']);
-            expect(fixture.store.summaries.require('summary_1').premise).toBe('refined: sample 1');
+            ).toEqual(['revision_0:r1:sampled:selected', 'revision_1:r2:refined:selected']);
+            expect(fixture.store.summaries.require('summary_0').premise).toBe('refined: sample 1');
 
             const story = fixture.store.stories.require(storyId);
 
@@ -403,8 +479,8 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
                     selected
                 }))
             ).toEqual([
-                { round: 1, samples: ['revision_1:0:true'], selected: 'revision_1' },
-                { round: 2, samples: ['revision_2:0:true'], selected: 'revision_2' }
+                { round: 1, samples: ['revision_0:0:true'], selected: 'revision_0' },
+                { round: 2, samples: ['revision_1:0:true'], selected: 'revision_1' }
             ]);
 
             // §6.8's compiled input, seen from the sampler: the base draft and the open fix task.
@@ -419,20 +495,20 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
             const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
 
             expect(refs.filter((ref) => ref.startsWith('wi_sample_'))).toEqual([
-                'wi_sample_summary_1_1_1',
-                'wi_sample_summary_1_2_1'
+                'wi_sample_summary_0_1_1',
+                'wi_sample_summary_0_2_1'
             ]);
             expect(refs.filter((ref) => ref.startsWith('wi_review_')).sort()).toEqual([
+                'wi_review_revision_0_a1',
+                'wi_review_revision_0_a2',
+                'wi_review_revision_0_a3',
+                'wi_review_revision_0_a4',
+                'wi_review_revision_0_a5',
                 'wi_review_revision_1_a1',
                 'wi_review_revision_1_a2',
                 'wi_review_revision_1_a3',
                 'wi_review_revision_1_a4',
-                'wi_review_revision_1_a5',
-                'wi_review_revision_2_a1',
-                'wi_review_revision_2_a2',
-                'wi_review_revision_2_a3',
-                'wi_review_revision_2_a4',
-                'wi_review_revision_2_a5'
+                'wi_review_revision_1_a5'
             ]);
 
             // The Goal passes with nothing owed: the phase signs off, and the Author's lock moves it.
@@ -449,7 +525,7 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
                 phase: 'plotlines',
                 summary_locked: true
             });
-            expect(fixture.store.summaries.require('summary_1').locked).toBe(true);
+            expect(fixture.store.summaries.require('summary_0').locked).toBe(true);
         } finally {
             await fixture.close();
         }
@@ -470,7 +546,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
         const fixture = await bootStoryline({
             readerIdeas: 0,
             readerFinds: (ctx) => {
-                if (ctx.draftIds[0] !== 'revision_1') return undefined;
+                if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
 
@@ -497,22 +573,22 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
             await openDial(fixture, storyId);
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 100);
 
-            // Sample 1 was drafted first, so it is `revision_3` — and it is gone. An uncertified draft
+            // Sample 1 was drafted first, so it is `revision_2` — and it is gone. An uncertified draft
             // is not the round's answer, even though it tied on every §6.5 count, and §6.6's
             // truncation deleted it with its screening reviews.
             expect(
                 fixture.store.revisions
                     .list()
                     .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
-            ).toEqual(['revision_1:r1:sampled:selected', 'revision_4:r2:refined:selected']);
+            ).toEqual(['revision_0:r1:sampled:selected', 'revision_3:r2:refined:selected']);
             // The Summary now reads the CERTIFIED draft, not merely the earliest one.
-            expect(fixture.store.summaries.require('summary_1').premise).toBe(`sample 2: ${SLICE_SEED}`);
+            expect(fixture.store.summaries.require('summary_0').premise).toBe(`sample 2: ${SLICE_SEED}`);
 
             // R4: the task and its finding close on the winner's certificate. Neither moved when the
             // failed draft was screened, and neither would have moved had the round selected it.
-            expect(fixture.store.tasks.list().map((task) => `${task.id}:${task.state}`)).toEqual(['task_1:done']);
+            expect(fixture.store.tasks.list().map((task) => `${task.id}:${task.state}`)).toEqual(['task_0:done']);
             expect(fixture.store.findings.list().map((finding) => `${finding.id}:${finding.state}`)).toEqual([
-                'finding_1:fixed'
+                'finding_0:fixed'
             ]);
 
             // R4's audit: the loser's `sample_reviews` rows are deleted by the selection commit, so the
@@ -524,24 +600,43 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
                 (story.sampling_history ?? []).map(({ round, samples, selected }) => ({
                     round,
                     samples: samples.map(
-                        (sample) => `${sample.revision_id}:${sample.critical}:${((sample.unresolved_fixes ?? []).join('+')) || 'clear'}`
+                        (sample) =>
+                            `${sample.revision_id}:${sample.critical}:${((sample.unresolved_fixes ?? []).join('+')) || 'clear'}:${sample.outcome ?? 'unrecorded'}`
                     ),
                     selected
                 }))
             ).toEqual([
-                { round: 1, samples: ['revision_1:0:clear', 'revision_2:0:clear'], selected: 'revision_1' },
-                { round: 2, samples: ['revision_3:0:task_1', 'revision_4:0:clear'], selected: 'revision_4' }
+                {
+                    round: 1,
+                    samples: ['revision_0:0:clear:accepted', 'revision_1:0:clear:eligible'],
+                    selected: 'revision_0'
+                },
+                {
+                    // H2 — the OUTCOME rides with the outstanding fix: `revision_2` is `rejected` for the
+                    // fix task, `revision_3` is the draft the round installed, and `revision_1` was
+                    // eligible and simply lost round 1's tie-break. `unrecorded` never appears on a line
+                    // this build wrote — it is the shape a history line from before the hill has.
+                    round: 2,
+                    samples: ['revision_2:0:task_0:rejected', 'revision_3:0:clear:accepted'],
+                    selected: 'revision_3'
+                }
             ]);
+
+            // …and the refusal is recorded in the selector's own words, not a score: this is the sentence
+            // that survives §6.6's truncation of the draft and its screening rows (H1-C1/F3, H2).
+            expect(story.sampling_history?.[1]?.samples[0]?.reject_reason).toBe(
+                'fix task_0 not certified with evidence'
+            );
 
             // No retry was bought: the round held a certifiable draft, so the hill-climb never had to
             // reach for its allowance (R3: the retry is for a stalled round, not a decided one).
             const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
 
             expect(refs.filter((ref) => ref.startsWith('wi_sample_'))).toEqual([
-                'wi_sample_summary_1_1_1',
-                'wi_sample_summary_1_1_2',
-                'wi_sample_summary_1_2_1',
-                'wi_sample_summary_1_2_2'
+                'wi_sample_summary_0_1_1',
+                'wi_sample_summary_0_1_2',
+                'wi_sample_summary_0_2_1',
+                'wi_sample_summary_0_2_2'
             ]);
             expect(refs.filter((ref) => ref.startsWith('wi_escalation'))).toEqual([]);
 
@@ -566,7 +661,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
         const fixture = await bootStoryline({
             readerIdeas: 0,
             readerFinds: (ctx) => {
-                if (ctx.draftIds[0] !== 'revision_1') return undefined;
+                if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
 
@@ -602,11 +697,11 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
             const refs = (await crewRows(fixture, storyId)).map((row) => String(row.work_item_ref));
 
             expect(refs.filter((ref) => ref.startsWith('wi_sample_'))).toEqual([
-                'wi_sample_summary_1_1_1',
-                'wi_sample_summary_1_2_1',
-                'wi_sample_summary_1_2_2',
-                'wi_sample_summary_1_2_3',
-                'wi_sample_summary_1_2_4'
+                'wi_sample_summary_0_1_1',
+                'wi_sample_summary_0_2_1',
+                'wi_sample_summary_0_2_2',
+                'wi_sample_summary_0_2_3',
+                'wi_sample_summary_0_2_4'
             ]);
 
             const story = fixture.store.stories.require(storyId);
@@ -616,23 +711,23 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
             // left them (R4 — the old behaviour closed them on a selection that had not earned it).
             expect(story.sampling_round).toBe(1);
             expect(story.sampling_history?.map((line) => line.round)).toEqual([1]);
-            expect(fixture.store.summaries.require('summary_1').premise).toBe(`sample 1: ${SLICE_SEED}`);
+            expect(fixture.store.summaries.require('summary_0').premise).toBe(`sample 1: ${SLICE_SEED}`);
             expect(
                 fixture.store.revisions
                     .list()
                     .map((revision) => `${revision.id}:r${revision.round}:${revision.origin}:${revision.state}`)
             ).toEqual([
-                'revision_1:r1:sampled:selected',
+                'revision_0:r1:sampled:selected',
+                'revision_1:r2:refined:drafted',
                 'revision_2:r2:refined:drafted',
                 'revision_3:r2:refined:drafted',
-                'revision_4:r2:refined:drafted',
-                'revision_5:r2:refined:drafted'
+                'revision_4:r2:refined:drafted'
             ]);
             expect(
                 fixture.store.tasks.list().map((task) => `${task.id}:${task.kind}:${task.state}`)
-            ).toEqual(['task_1:fix:open', 'task_2:escalation:open']);
+            ).toEqual(['task_0:fix:open', 'task_1:escalation:open']);
             expect(fixture.store.findings.list().map((finding) => `${finding.id}:${finding.state}`)).toEqual([
-                'finding_1:approved'
+                'finding_0:approved'
             ]);
 
             // The escalation is the OTHER sampling failure — not the provider one — and it names the
@@ -642,7 +737,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
             expect(escalation?.title).toBe(
                 'Phase ① sampling failed after 4 attempts — no draft answered the fixes this round was armed with'
             );
-            expect(escalation?.detail).toContain('task_1 (unresolved on revision_2)');
+            expect(escalation?.detail).toContain('task_0 (unresolved on revision_1)');
             expect(escalation?.detail).toContain('wave: 0');
             expect(escalation?.detail).toContain('every fix task is still open');
         } finally {
@@ -691,10 +786,10 @@ describe('§6.4 step 3: a sampler that never validates costs attempts, then esca
                 .sort((left, right) => String(left.work_item_ref).localeCompare(String(right.work_item_ref)));
 
             expect(samples.map((row) => `${row.work_item_ref}=${row.state}`)).toEqual([
-                'wi_sample_summary_1_1_1=failed',
-                'wi_sample_summary_1_1_2=failed',
-                'wi_sample_summary_1_1_3=failed',
-                'wi_sample_summary_1_1_4=failed'
+                'wi_sample_summary_0_1_1=failed',
+                'wi_sample_summary_0_1_2=failed',
+                'wi_sample_summary_0_1_3=failed',
+                'wi_sample_summary_0_1_4=failed'
             ]);
             expect(samples.map((row) => row.end_reason)).toEqual([
                 'failed: Error: structured answer failed schema validation after 2 attempts: premise: expected a string with minLength 1, received ""',

@@ -29,8 +29,9 @@ Usage: create-storyline [options]
 
   --port <n>          port to listen on (0 = the OS picks one)   [${'STORYLINE_PORT'}]
   --host <addr>       interface to bind                          [${'STORYLINE_HOST'}]
-  --store-root <dir>  where store.json + journal.jsonl live;
-                      an empty value runs in memory              [${'STORYLINE_STORE_ROOT'}]
+  --store-root <dir>  where each Story's book lives (<dir>/stories/<uuid>/,
+                      configuration in <dir>/server/); an empty value runs in
+                      memory                                      [${'STORYLINE_STORE_ROOT'}]
   --database-root     alias for --store-root
   --no-static         API only: do not serve the built dashboard [${'STORYLINE_STATIC_ROOT'}]
   -h, --help          this text
@@ -101,17 +102,26 @@ export function parseArgs(argv: string[]): StorylineFlags {
 // The banner
 // ---------------------------------------------------------------------------
 
-/** The two-line startup read: where the book is, where to look, and what the crew talks to. */
+/** The two-line startup read: where the books are, where to look, and what the crew talks to. */
 export function bootBanner(
     handle: StorylineServerHandle,
     book: { storeRoot: string | null },
     env: Record<string, string | undefined>
 ): string[] {
+    // The Story count comes from the coordinator (the books that are open right now), because "durable" is
+    // only honest if it says what is actually behind this run. `?.` keeps a hand-built handle — a test's
+    // stub, or a host that wraps the listener — from turning a banner into a crash at startup.
+    const open = handle.runtimes?.count?.() ?? 0;
+
     return [
         `Storyline is listening on http://${handle.host}:${handle.port}/v1/storyline`,
         `dashboard: ${env.STORYLINE_DASHBOARD_HINT ?? 'http://localhost:4510 (vite dev) or the same origin once the UI is built'}`,
         `harness: ${env[PROVIDER_BASE_URL_ENVIRONMENT] ?? DEFAULT_PROVIDER_BASE_URL} · model ${env[PROVIDER_MODEL_ENVIRONMENT] ?? DEFAULT_PROVIDER_MODEL}`,
-        `book: ${book.storeRoot === null ? 'in-memory — this run leaves no book behind' : `durable — store.json + journal.jsonl under ${book.storeRoot}`}`
+        `book: ${
+            book.storeRoot === null
+                ? 'in-memory — this run leaves no book behind'
+                : `durable — ${open === 0 ? 'no Story yet' : `${open} Stor${open === 1 ? 'y' : 'ies'}`} · store.json + journal.jsonl under ${book.storeRoot}/stories/<uuid> · configuration under ${book.storeRoot}/server`
+        }`
     ];
 }
 

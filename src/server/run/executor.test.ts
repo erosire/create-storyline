@@ -189,9 +189,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             {
                                 name: 'editChapter',
                                 args: {
-                                    chapter_id: 'chapter_1',
+                                    chapter_id: 'chapter_0',
                                     summary: 'Maren reads the map against the water',
-                                    expects: [{ id: 'chapter_1', rev: 1 }],
+                                    expects: [{ id: 'chapter_0', rev: 1 }],
                                     why: 'the chapter must pay off the 1911 map'
                                 }
                             }
@@ -223,7 +223,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         // The RunResult the loop engine reads (T6's pinned shape).
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false, // it wrote AND reported, so S-4's no-op turn did not happen
             tokens: 425, // 165 + 120 + 140 — the sum of the scripted usage across all three turns (S-6)
@@ -232,14 +232,14 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         // §4.13's row, exactly. S-1: one row for one Work Item, and `session_ref` names the session
         // that no other run will ever reuse.
-        expect(rowOf(store, 'run_1')).toEqual({
-            id: 'run_1',
-            story_id: 'story_1',
+        expect(rowOf(store, 'run_0')).toEqual({
+            id: 'run_0',
+            story_id: 'story_0',
             work_item_ref: 'work_1',
             template_ref: 'writer-prose',
             role: 'writer',
             kind: 'work',
-            session_ref: 'sess_run_1',
+            session_ref: 'sess_run_0',
             state: 'torn_down', // S-3: teardown is unconditional
             tokens: 425,
             no_op: false,
@@ -249,7 +249,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         });
 
         // D-18: the row existed from before the first token, so both timestamps are filled in.
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
         expect(typeof row.started_at).toBe('string');
         expect(typeof row.ended_at).toBe('string');
         // create, working, a lease beat before each of the three model turns (S-4a), a beat after
@@ -290,7 +290,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // create/update/delete), so the row's LAST write is the evidence it closed, and it names the
         // close the way P11 wants a reason attached.
         expect(lastRunEvent(store).attribution).toEqual({
-            run_ref: 'run_1',
+            run_ref: 'run_0',
             why: `teardown — ${END_COMPLETED} (S-3)`
         });
 
@@ -300,17 +300,17 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             store.journal
                 .filter((event) => event.collection === 'chapters' && event.op === 'update')
                 .map((event) => event.attribution)
-        ).toEqual([{ run_ref: 'run_1', why: 'the chapter must pay off the 1911 map' }]);
+        ).toEqual([{ run_ref: 'run_0', why: 'the chapter must pay off the 1911 map' }]);
 
         // And the store proves the write landed, with the rev the next `expects` needs (T-8).
-        expect(store.chapters.get('chapter_1')).toMatchObject({
+        expect(store.chapters.get('chapter_0')).toMatchObject({
             rev: 2,
             summary: 'Maren reads the map against the water'
         });
         expect(
             store.tasks.list().map((task) => ({ id: task.id, kind: task.kind, title: task.title, state: task.state }))
         ).toEqual([
-            { id: 'task_1', kind: 'author_question', title: 'does the valley flood on purpose?', state: 'blocked' }
+            { id: 'task_0', kind: 'author_question', title: 'does the valley flood on purpose?', state: 'blocked' }
         ]);
     });
 
@@ -325,8 +325,8 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
 
-        expect(result).toEqual({ runId: 'run_1', ended: 'completed', no_op: true, tokens: 60, toolsCalled: [] });
-        expect(rowOf(store, 'run_1')).toMatchObject({
+        expect(result).toEqual({ runId: 'run_0', ended: 'completed', no_op: true, tokens: 60, toolsCalled: [] });
+        expect(rowOf(store, 'run_0')).toMatchObject({
             state: 'torn_down',
             no_op: true,
             tokens: 60,
@@ -348,7 +348,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // The observation seam is a tool of our own: the mock runtime takes an override bag, and this
         // one reads the row back mid-run, which is exactly what the crew panel does (U-7).
         const seen: string[] = [];
-        const runtime = new MockToolRuntime(store, 'story_1', {
+        const runtime = new MockToolRuntime(store, 'story_0', {
             peekRow: (ctx) => {
                 seen.push(store.runs.get(ctx.runRef)!.state);
 
@@ -373,7 +373,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // The report landed BEFORE the peek, so the row the run sees is `reporting`, and the final
         // state is still `torn_down` — the transient state is observable, not terminal.
         expect(seen).toEqual(['reporting']);
-        expect(rowOf(store, 'run_1')).toMatchObject({ state: 'torn_down', no_op: false });
+        expect(rowOf(store, 'run_0')).toMatchObject({ state: 'torn_down', no_op: false });
         expect(stateSteps(store)).toEqual([
             'create:spawning',
             'update:working',
@@ -411,9 +411,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                         {
                             name: 'editChapter',
                             args: {
-                                chapter_id: 'chapter_1',
+                                chapter_id: 'chapter_0',
                                 summary: 'half-written',
-                                expects: [{ id: 'chapter_1', rev: 1 }]
+                                expects: [{ id: 'chapter_0', rev: 1 }]
                             }
                         }
                     ])
@@ -429,9 +429,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // before the first token — D-18's whole point. The engine's first stream request is queued
         // on its own thread, so the call lands one turn of the event loop later.
         await vi.waitFor(() => expect(client.callCount).toBe(1));
-        expect(store.runs.get('run_1')!.state).toBe('working');
+        expect(store.runs.get('run_0')!.state).toBe('working');
 
-        executor.kill('run_1');
+        executor.kill('run_0');
         executor.kill('run_does_not_exist'); // a kill for a run this instance does not own is a no-op
         openGate();
 
@@ -440,24 +440,24 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // The engine checks cancellation before every tool call, so a turn the Author interrupted
         // does NOT land its write after the abort (P8's stop is preemptive).
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'killed',
             no_op: true,
             tokens: 75,
             toolsCalled: []
         });
 
-        const row = store.runs.get('run_1')!;
-        expect(rowOf(store, 'run_1')).toEqual({
-            id: 'run_1',
-            story_id: 'story_1',
+        const row = store.runs.get('run_0')!;
+        expect(rowOf(store, 'run_0')).toEqual({
+            id: 'run_0',
+            story_id: 'story_0',
             work_item_ref: 'work_1',
             template_ref: 'writer-prose',
             role: 'writer',
             kind: 'work',
             // S-3's "no orphan sessions": a killed run keeps the session it wrote, because the Author
             // reads what the run got through. Nothing here deletes it.
-            session_ref: 'sess_run_1',
+            session_ref: 'sess_run_0',
             state: 'abandoned', // S-4a/L-3's terminal state; the row still closed (S-3)
             tokens: 75,
             no_op: true, // it never reached a report tool (S-4)
@@ -473,10 +473,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         expect(stateSteps(store)).toEqual(['create:spawning', 'update:working', 'update:', 'update:abandoned']);
         // S-3 has no exception for a stop: the row closed through the same teardown write, named on it.
         expect(lastRunEvent(store).attribution).toEqual({
-            run_ref: 'run_1',
+            run_ref: 'run_0',
             why: 'teardown — killed — the Author pulled the cord (P8, U-7) (S-3)'
         });
-        expect(store.chapters.get('chapter_1')).toMatchObject({ rev: 1 });
+        expect(store.chapters.get('chapter_0')).toMatchObject({ rev: 1 });
     });
 
     it('keeps the sweep’s lease sentence when it closes the row before the aborted run settles (S-4a, S-3)', async () => {
@@ -498,21 +498,21 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         await vi.waitFor(() => expect(client.callCount).toBe(1));
 
         // The sweep kills the lapsed run and closes its row with S-4a's reason (loop/engine.ts).
-        executor.kill('run_1', 'lease');
+        executor.kill('run_0', 'lease');
         store.runs.update(
-            'run_1',
+            'run_0',
             {
                 state: 'abandoned',
                 ended_at: new Date().toISOString(),
                 end_reason: 'the lease lapsed after 120000ms of silence (S-4a, D-36)'
             },
-            { run_ref: 'run_1', why: 'lease expiry returned the Work Item to the queue (S-4a)' }
+            { run_ref: 'run_0', why: 'lease expiry returned the Work Item to the queue (S-4a)' }
         );
         openGate();
 
         await running;
 
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
         // The executor's teardown must not relabel a sweep kill as "the Author pulled the cord".
         expect(row.state).toBe('abandoned');
         expect(row.end_reason).toBe('the lease lapsed after 120000ms of silence (S-4a, D-36)');
@@ -525,10 +525,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // The Author edits the same chapter first (D-20a: a direct write, no proposal), so the rev the
         // run's brief carried is already stale when its write arrives.
         store.chapters.update(
-            'chapter_1',
+            'chapter_0',
             { summary: 'the Author rewrote the ridge line' },
             { run_ref: null, author: true, why: 'the Author edited while the run was reading (D-20a)' },
-            [{ id: 'chapter_1', rev: 1 }]
+            [{ id: 'chapter_0', rev: 1 }]
         );
 
         const { client, requests } = record((request: ChatRequest): ChatResponse => {
@@ -541,9 +541,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             {
                                 name: 'editChapter',
                                 args: {
-                                    chapter_id: 'chapter_1',
+                                    chapter_id: 'chapter_0',
                                     summary: "the run's line",
-                                    expects: [{ id: 'chapter_1', rev: 1 }],
+                                    expects: [{ id: 'chapter_0', rev: 1 }],
                                     why: 'pay off the map'
                                 }
                             }
@@ -559,9 +559,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             {
                                 name: 'editChapter',
                                 args: {
-                                    chapter_id: 'chapter_1',
+                                    chapter_id: 'chapter_0',
                                     summary: 'the run reconciled with the Author line',
-                                    expects: [{ id: 'chapter_1', rev: 2 }],
+                                    expects: [{ id: 'chapter_0', rev: 2 }],
                                     why: 'reconciled with the Author edit'
                                 }
                             }
@@ -581,7 +581,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
 
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 0, // no `usage` was scripted, and S-6 records what the provider sent — nothing invented
@@ -605,18 +605,18 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         expect(payload.cas_conflict).toBe(true);
         expect(payload.currents).toEqual([
             {
-                id: 'chapter_1',
+                id: 'chapter_0',
                 record: expect.objectContaining({ rev: 2, summary: 'the Author rewrote the ridge line' })
             }
         ]);
-        expect(payload.message).toContain('chapter_1 is at rev 2, the caller expected rev 1');
+        expect(payload.message).toContain('chapter_0 is at rev 2, the caller expected rev 1');
 
         // And the run finished with the write applied over the Author's, at the rev T-8 reports.
-        expect(store.chapters.get('chapter_1')).toMatchObject({
+        expect(store.chapters.get('chapter_0')).toMatchObject({
             rev: 3,
             summary: 'the run reconciled with the Author line'
         });
-        expect(rowOf(store, 'run_1')).toMatchObject({ state: 'torn_down', no_op: false, end_reason: END_COMPLETED });
+        expect(rowOf(store, 'run_0')).toMatchObject({ state: 'torn_down', no_op: false, end_reason: END_COMPLETED });
     });
 
     it('closes the row when the provider faults, and names the fault on it (S-3)', async () => {
@@ -628,14 +628,14 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
 
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'failed',
             no_op: true,
             tokens: 0,
             toolsCalled: [],
             error: 'LlmError: the provider returned 503'
         });
-        expect(rowOf(store, 'run_1')).toMatchObject({
+        expect(rowOf(store, 'run_0')).toMatchObject({
             // The terminal STATE names the outcome (S-4a/L-3 read `failed` and `abandoned` as the two
             // ways a run stops being its own); S-3's teardown is the write that closes it either way.
             state: 'failed',
@@ -645,7 +645,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             no_op: true
         });
         expect(lastRunEvent(store).attribution).toEqual({
-            run_ref: 'run_1',
+            run_ref: 'run_0',
             why: 'teardown — failed — LLM provider fault: LlmError: the provider returned 503 (S-3)'
         });
         // The row closed even though the loop threw before its first tool call; the empty patch
@@ -686,10 +686,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                                 name: 'raiseFinding',
                                 args: {
                                     criterion_ref: 'C-4',
-                                    target_ref: 'chapter_1',
+                                    target_ref: 'chapter_0',
                                     title: 'the 1911 map is set up and never paid off',
                                     detail: 'sec_1 puts the map in her hand; nothing answers it',
-                                    evidence: 'chapter_1 sec_1',
+                                    evidence: 'chapter_0 sec_1',
                                     cost: 'major',
                                     why: 'D-15: the failure needs an evidence line'
                                 }
@@ -700,7 +700,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                 };
             if (isSubContext)
                 return {
-                    message: msg({ content: 'the map is set up and never paid off in chapter_1' }),
+                    message: msg({ content: 'the map is set up and never paid off in chapter_0' }),
                     usage: { input: 40, output: 50, cached_input: 0 }
                 };
 
@@ -714,7 +714,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         // S-6: the run's total is its internals' total — parent 175 + sub-context 190.
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 365,
@@ -723,18 +723,18 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
 
         // S-7: the sub-context is NOT a Work Item and gets no row of its own — the Author's unit of
         // attention is the dispatched run, and the sub-context shows nested under it.
-        expect(store.runs.list().map((row) => row.id)).toEqual(['run_1']);
+        expect(store.runs.list().map((row) => row.id)).toEqual(['run_0']);
 
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
         expect(row.delegated).toEqual([
             {
                 role: 'researcher',
                 task: 'what would break the 1911 map payoff?',
-                summary: 'the map is set up and never paid off in chapter_1',
+                summary: 'the map is set up and never paid off in chapter_0',
                 tokens: 190
             }
         ]);
-        expect(rowOf(store, 'run_1')).toMatchObject({
+        expect(rowOf(store, 'run_0')).toMatchObject({
             state: 'torn_down',
             tokens: 365,
             no_op: false,
@@ -747,7 +747,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         ) as { ok: boolean; data?: { summary: string } };
         expect(delegateResult).toEqual({
             ok: true,
-            data: { summary: 'the map is set up and never paid off in chapter_1' }
+            data: { summary: 'the map is set up and never paid off in chapter_0' }
         });
 
         // T-2b: it wrote for real, under the PARENT's run identity — a phantom run id would break the
@@ -756,10 +756,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             store.findings
                 .list()
                 .map((finding) => ({ id: finding.id, criterion_ref: finding.criterion_ref, cost: finding.cost }))
-        ).toEqual([{ id: 'finding_1', criterion_ref: 'C-4', cost: 'major' }]);
+        ).toEqual([{ id: 'finding_0', criterion_ref: 'C-4', cost: 'major' }]);
         expect(
             store.journal.filter((event) => event.collection === 'findings').map((event) => event.attribution.run_ref)
-        ).toEqual(['run_1']);
+        ).toEqual(['run_0']);
     });
 
     it('refuses a delegation the template forbids, and teaches the model why (D-17e, T-1a)', async () => {
@@ -813,14 +813,14 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
 
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: true,
             tokens: 85,
             toolsCalled: ['delegate']
         });
         expect(store.runs.list().length).toBe(1);
-        expect(store.runs.get('run_1')!.delegated).toEqual([]);
+        expect(store.runs.get('run_0')!.delegated).toEqual([]);
 
         // The refusal is a teaching message inside the run (T-1a): the rule id, the reason, and the
         // list the model may actually use.
@@ -842,7 +842,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             // Each agent picks a draft (agents 1 and 2 agree, agent 3 does not) and then answers.
             if (agent !== null && toolResults === 0) {
                 const index = Number(agent[1]);
-                const revisionId = index === 3 ? 'revision_2' : 'revision_1';
+                const revisionId = index === 3 ? 'revision_1' : 'revision_0';
 
                 return {
                     message: msg({
@@ -851,9 +851,9 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                             {
                                 name: 'selectRevision',
                                 args: {
-                                    unit_ref: 'chapter_1',
+                                    unit_ref: 'chapter_0',
                                     revision_id: revisionId,
-                                    selection_note: `agent ${index} picks ${revisionId === 'revision_1' ? 'the map paid off on the page' : 'the bell under the water'}`,
+                                    selection_note: `agent ${index} picks ${revisionId === 'revision_0' ? 'the map paid off on the page' : 'the bell under the water'}`,
                                     expects: [{ id: revisionId, rev: 1 }],
                                     why: 'the must_happen rule (T-2a)'
                                 }
@@ -875,7 +875,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // D-38: the loop receives exactly ONE permission-bearing answer, so S-4 sees a report and the
         // run's `toolsCalled` lists one write.
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 840,
@@ -889,7 +889,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         // never under a per-agent id (D-38, T-2b, P11).
         expect(
             runtime.calls.map((call) => ({ name: call.name, runRef: call.runRef, revision_id: call.args.revision_id }))
-        ).toEqual([{ name: 'selectRevision', runRef: 'run_1', revision_id: 'revision_1' }]);
+        ).toEqual([{ name: 'selectRevision', runRef: 'run_0', revision_id: 'revision_0' }]);
 
         // D-38's MUST: the dissent is named IN the note, alongside the agent's own reasoning. D-22
         // deleted the other two drafts in the same commit.
@@ -901,41 +901,41 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             }))
         ).toEqual([
             {
-                id: 'revision_1',
+                id: 'revision_0',
                 state: 'selected',
                 selection_note:
-                    'agent 1 picks the map paid off on the page | 2 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_1 on majority 2 of 3'
+                    'agent 1 picks the map paid off on the page | 2 of 3 preferred revision_0; 1 of 3 preferred revision_1; selected revision_0 on majority 2 of 3'
             }
         ]);
-        expect(store.chapters.get('chapter_1')!.current_revision).toBe('revision_1');
+        expect(store.chapters.get('chapter_0')!.current_revision).toBe('revision_0');
 
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
         // S-7 / U-8d: the three agents nest on the row (no extra rows), and the row marks that this
         // run's internals disagreed, because a hidden disagreement is the one thing untunable (D-38).
         expect(row.delegated.slice().sort((left, right) => left.role.localeCompare(right.role))).toEqual([
             {
                 role: 'editor#agent_1',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 1 chose its draft and reported',
                 tokens: 280
             },
             {
                 role: 'editor#agent_2',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 2 chose its draft and reported',
                 tokens: 280
             },
             {
                 role: 'editor#agent_3',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 3 chose its draft and reported',
                 tokens: 280
             }
         ]);
-        expect(store.runs.list().map((entry) => entry.id)).toEqual(['run_1']);
+        expect(store.runs.list().map((entry) => entry.id)).toEqual(['run_0']);
         expect(row.tokens).toBe(840);
         expect(row.end_reason).toBe(
-            `${END_COMPLETED}; panel disagreed — 2 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_1 on majority 2 of 3 (3 of 3 agents answered)`
+            `${END_COMPLETED}; panel disagreed — 2 of 3 preferred revision_0; 1 of 3 preferred revision_1; selected revision_0 on majority 2 of 3 (3 of 3 agents answered)`
         );
 
         // The state trail, ignoring the heartbeats and the nested-entry writes (neither carries a
@@ -961,8 +961,8 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const first = await executor.execute(item);
         const second = await executor.execute(item);
 
-        expect(first.runId).toBe('run_1');
-        expect(second.runId).toBe('run_2');
+        expect(first.runId).toBe('run_0');
+        expect(second.runId).toBe('run_1');
         expect(second.tokens).toBe(15);
 
         // S-1: a run is never handed a second job, so the second dispatch is a second row with a
@@ -972,8 +972,8 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
                 .list()
                 .map((row) => ({ id: row.id, session_ref: row.session_ref, state: row.state, tokens: row.tokens }))
         ).toEqual([
-            { id: 'run_1', session_ref: 'sess_run_1', state: 'torn_down', tokens: 15 },
-            { id: 'run_2', session_ref: 'sess_run_2', state: 'torn_down', tokens: 15 }
+            { id: 'run_0', session_ref: 'sess_run_0', state: 'torn_down', tokens: 15 },
+            { id: 'run_1', session_ref: 'sess_run_1', state: 'torn_down', tokens: 15 }
         ]);
 
         // S-2 / D-12a: the brief is a pure function of stored state, so two dispatches over the same
@@ -1079,7 +1079,7 @@ function samplingRig() {
         {
             story_id: story.id,
             unit_kind: 'summary',
-            unit_ref: 'summary_1',
+            unit_ref: 'summary_0',
             body: {
                 fields: {
                     premise: 'Maren returns.',
@@ -1090,7 +1090,7 @@ function samplingRig() {
                     world_rules: 'Engineering.'
                 }
             },
-            run_ref: 'run_2',
+            run_ref: 'run_1',
             state: 'drafted',
             verdict_refs: [],
             round: 1
@@ -1100,7 +1100,7 @@ function samplingRig() {
 
     const runtime = new MockToolRuntime(store, story.id);
     const sampleItem: WorkItem = {
-        id: 'wi_sample_summary_1_1',
+        id: 'wi_sample_summary_0_1',
         storyId: story.id,
         kind: 'sample_unit',
         templateRef: 'writer-summary-sampler',
@@ -1151,7 +1151,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
 
         // §2 decision 2: the engine persists the validated answer, so it never becomes a no-op.
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 50,
@@ -1163,7 +1163,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
 
         // D-18/S-2: the row exists through spawn → work → teardown, and its `brief_hash` is the
         // COMPILED PROMPT's hash — that is the memory the model was actually given.
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
 
         expect({
             id: row.id,
@@ -1175,7 +1175,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
             tokens: row.tokens,
             end_reason: row.end_reason
         }).toEqual({
-            id: 'run_1',
+            id: 'run_0',
             state: 'torn_down',
             kind: 'work',
             role: 'writer',
@@ -1209,7 +1209,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
 
         // S-6: both provider calls count — the failed one cost a request too.
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 43,
@@ -1234,7 +1234,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
         // TWO attempts exactly — the repair budget is one, never a second (§4.2).
         expect(requests.length).toBe(2);
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'failed',
             no_op: true,
             tokens: 30,
@@ -1243,7 +1243,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
                 'Error: structured answer failed schema validation after 2 attempts: assistant content is not valid JSON: "still not json"'
         });
 
-        const row = store.runs.get('run_1')!;
+        const row = store.runs.get('run_0')!;
 
         expect(row.state).toBe('failed');
         // S-3: the row says exactly why the run ended, and the validation error is the reason.
@@ -1272,7 +1272,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
         }));
 
         const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute({
-            id: 'wi_screen_summary_1_1_2',
+            id: 'wi_screen_summary_0_1_2',
             storyId: story.id,
             kind: 'screen_samples',
             templateRef: 'reader-screening',
@@ -1291,7 +1291,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
         expect(requests[0].messages[1].content).toContain('## TARGET DRAFT\npremise: Maren returns.');
 
         expect(result).toEqual({
-            runId: 'run_1',
+            runId: 'run_0',
             ended: 'completed',
             no_op: false,
             tokens: 42,
@@ -1333,7 +1333,7 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
             answer: records[0].answer,
             retained: records[0].retained
         }).toEqual({
-            thread_id: 'single_run_1',
+            thread_id: 'single_run_0',
             run_id: result.runId,
             role: 'writer',
             role_name: 'writer',
@@ -1437,7 +1437,7 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             // the REQUEST, not at the `working` write. The fake clock is frozen until advanced, which
             // makes "the beat just happened" an exact string comparison.
             expect(requests.length).toBe(1);
-            expect(store.runs.require('run_1').updated_at).toBe(new Date(Date.now()).toISOString());
+            expect(store.runs.require('run_0').updated_at).toBe(new Date(Date.now()).toISOString());
             // One interval armed for the request, and nothing else.
             expect(vi.getTimerCount()).toBe(timers + 1);
 
@@ -1449,19 +1449,19 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
 
             for (let minute = 0; minute < 3; minute += 1) {
                 await vi.advanceTimersByTimeAsync(30_000);
-                silences.push(Date.now() - Date.parse(store.runs.require('run_1').updated_at));
+                silences.push(Date.now() - Date.parse(store.runs.require('run_0').updated_at));
                 expect(lapsedRuns(store, Date.now(), DEFAULT_LEASE_IDLE_MS)).toEqual([]);
             }
 
             await vi.advanceTimersByTimeAsync(40_000);
-            silences.push(Date.now() - Date.parse(store.runs.require('run_1').updated_at));
+            silences.push(Date.now() - Date.parse(store.runs.require('run_0').updated_at));
 
             // The row is never silent for more than one beat cadence (30s). Before the fix every
             // entry reads [30000, 60000, 90000, 130000] — the last one over the lease, which is
             // exactly the abandonment the Author watched.
             expect(silences).toEqual([0, 0, 0, 10_000]);
-            expect(store.runs.require('run_1').updated_at).toBe(new Date(Date.now() - 10_000).toISOString());
-            expect(store.runs.require('run_1').state).toBe('working');
+            expect(store.runs.require('run_0').updated_at).toBe(new Date(Date.now() - 10_000).toISOString());
+            expect(store.runs.require('run_0').state).toBe('working');
 
             // R2: the request that crossed the threshold is still eligible to finish, and it finishes
             // with the same exact result a fast turn produces.
@@ -1473,7 +1473,7 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             const result = await running;
 
             expect(result).toEqual({
-                runId: 'run_1',
+                runId: 'run_0',
                 ended: 'completed',
                 no_op: false,
                 tokens: 50,
@@ -1516,9 +1516,9 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             // inside the lease right up to the ceiling, which is the point of the beat.
             await vi.advanceTimersByTimeAsync(599_000);
 
-            expect(Date.now() - Date.parse(store.runs.require('run_1').updated_at)).toBe(29_000);
+            expect(Date.now() - Date.parse(store.runs.require('run_0').updated_at)).toBe(29_000);
             expect(lapsedRuns(store, Date.now(), DEFAULT_LEASE_IDLE_MS)).toEqual([]);
-            expect(store.runs.require('run_1').state).toBe('working');
+            expect(store.runs.require('run_0').state).toBe('working');
 
             // The 600s tick: the ceiling, not the sweep, stops the run.
             await vi.advanceTimersByTimeAsync(1_000);
@@ -1527,9 +1527,9 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
 
             // The RunResult the sweep reads: a stopped run, not a provider fault — the request never
             // answered, so nothing was spent and nothing was produced.
-            expect(result).toEqual({ runId: 'run_1', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
+            expect(result).toEqual({ runId: 'run_0', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
 
-            const row = store.runs.require('run_1');
+            const row = store.runs.require('run_0');
 
             expect({
                 state: row.state,
@@ -1590,17 +1590,17 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
 
             // Two beats in: t=0 and t=30s.
             await vi.advanceTimersByTimeAsync(45_000);
-            expect(store.runs.require('run_1').state).toBe('working');
+            expect(store.runs.require('run_0').state).toBe('working');
 
-            executor.kill('run_1');
+            executor.kill('run_0');
 
             // The abort settles the run on the spot — the provider promise never answers at all, and
             // the executor does not wait for the ceiling to notice the stop.
             const result = await running;
 
-            expect(result).toEqual({ runId: 'run_1', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
+            expect(result).toEqual({ runId: 'run_0', ended: 'killed', no_op: true, tokens: 0, toolsCalled: [] });
 
-            const row = store.runs.require('run_1');
+            const row = store.runs.require('run_0');
 
             expect({ state: row.state, end_reason: row.end_reason }).toEqual({
                 state: 'abandoned',
@@ -1622,7 +1622,7 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             await vi.advanceTimersByTimeAsync(REQUEST_MAX_MS);
 
             // The ceiling cannot re-open a closed row or overwrite its cause.
-            expect(store.runs.require('run_1').end_reason).toBe('killed — the Author pulled the cord (P8, U-7)');
+            expect(store.runs.require('run_0').end_reason).toBe('killed — the Author pulled the cord (P8, U-7)');
             expect(vi.getTimerCount()).toBe(timers);
         } finally {
             vi.useRealTimers();
@@ -1651,7 +1651,7 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             const fast = await fastRunning;
 
             expect(fast).toEqual({
-                runId: 'run_1',
+                runId: 'run_0',
                 ended: 'completed',
                 no_op: false,
                 tokens: 50,
@@ -1690,7 +1690,7 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
             // The same sentences the tool-run fault case asserts, and the same one request: the wrapper
             // changed WHEN the lease is beaten, never what an error means.
             expect(result).toEqual({
-                runId: 'run_1',
+                runId: 'run_0',
                 ended: 'failed',
                 no_op: true,
                 tokens: 0,
@@ -1698,8 +1698,8 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
                 error: 'LlmError: the provider returned 503'
             });
             expect({
-                state: store.runs.require('run_1').state,
-                end_reason: store.runs.require('run_1').end_reason
+                state: store.runs.require('run_0').state,
+                end_reason: store.runs.require('run_0').end_reason
             }).toEqual({
                 state: 'failed',
                 end_reason: 'failed — LLM provider fault: LlmError: the provider returned 503'

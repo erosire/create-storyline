@@ -75,7 +75,7 @@ describe('L-21 / L-22 — the stall that pages the Author, and the reason it has
         // L-22's three sentences, in the order the Author reads them: what stopped moving, the oldest
         // thing still open, and what the crews already spent trying to move it.
         expect(story.status_reason).toBe(
-            'every level unchanged for 2 of the 2 rounds that trip loop detection — no level will move · oldest confirmed finding C-10|story_1 (seen 1×, on story_1) · the crews tried 0 task attempts across 24 runs'
+            'every level unchanged for 2 of the 2 rounds that trip loop detection — no level will move · oldest confirmed finding C-10|story_0 (seen 1×, on story_0) · the crews tried 0 task attempts across 24 runs'
         );
     });
 
@@ -95,10 +95,10 @@ describe('L-21 / L-22 — the stall that pages the Author, and the reason it has
         // The stall sentence is generated from the records rather than from anything the engine
         // remembered, so a restarted engine would page the Author with the same finding.
         expect({ criterion: `${oldest?.criterion_ref}|${oldest?.target_ref}`, seen: oldest?.seen_count }).toEqual({
-            criterion: 'C-10|story_1',
+            criterion: 'C-10|story_0',
             seen: 1
         });
-        expect(rig.story().status_reason).toContain(`oldest confirmed finding C-10|story_1 (seen 1×, on story_1)`);
+        expect(rig.story().status_reason).toContain(`oldest confirmed finding C-10|story_0 (seen 1×, on story_0)`);
     });
 
     it('the exits are not sticky: changing the Goal re-arms the loop (L-23)', async () => {

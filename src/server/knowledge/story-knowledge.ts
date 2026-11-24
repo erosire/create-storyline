@@ -210,6 +210,16 @@ const placeholder = (section: (typeof STORY_SECTIONS)[number]): DesiredEntry => 
 
 const byOrder = <T extends { order: number }>(left: T, right: T): number => left.order - right.order;
 
+/**
+ * The deterministic string comparator: UTF-16 code-unit order, the same total order on every machine.
+ *
+ * WHY NOT `localeCompare`: it is ICU collation, so its answer for the same two ids depends on the locale
+ * data the host ships. These entries are written straight into the Story's durable knowledge articles, and
+ * the sync diffs the previous text against the new one — an order that changes between machines rewrites
+ * bytes the rows did not change, which is exactly the instability the per-story book exists to remove.
+ */
+const byCodeUnit = (left: string, right: string): number => (left === right ? 0 : left < right ? -1 : 1);
+
 // ---------------------------------------------------------------------------
 // The projection: store records -> the directory's entries
 // ---------------------------------------------------------------------------
@@ -347,7 +357,10 @@ function goalEntries(criteria: Criterion[], thresholdSoft: number | undefined): 
  *
  * SORTING: `KNOWLEDGE_IMPORTANCE` IS the triage scale (critical → high → normal → low), so its index
  * is the sort key; `id` breaks ties so the same store always renders the same article — the sync's
- * diff compares text, and an unstable order would rewrite the durable bytes on every commit.
+ * diff compares text, and an unstable order would rewrite the durable bytes on every commit. The
+ * tie-break is CODE-UNIT order (`byCodeUnit`), not `localeCompare`: ICU collation depends on the
+ * machine's locale data, and the whole point of a per-story book is that the same rows produce the same
+ * article bytes on every machine and on every restart.
  *
  * ONE SOURCE, NOT ALL: the requested format names a single `url_or_title`, and T-10's rule is that a
  * source backs ONE named claim. The first citation is that source; the full `sources` array stays on
@@ -358,7 +371,7 @@ function researchEntries(entries: KnowledgeEntry[]): DesiredEntry[] {
         .sort(
             (left, right) =>
                 KNOWLEDGE_IMPORTANCE.indexOf(left.importance) - KNOWLEDGE_IMPORTANCE.indexOf(right.importance) ||
-                left.id.localeCompare(right.id)
+                byCodeUnit(left.id, right.id)
         )
         .map((entry) => {
             const detail = entry.detail === undefined || entry.detail.trim().length === 0 ? '' : ` — ${entry.detail}`;

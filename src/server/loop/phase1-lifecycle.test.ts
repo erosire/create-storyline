@@ -164,11 +164,11 @@ describe('R2a — a clean, fully reviewed Summary stops and awaits the Author', 
         // the deep review of the winner. Nothing else — no verification thread, no sampling retry.
         expect(runKeys(rig)).toEqual([
             'wi_research_1',
-            'wi_sample_summary_1_1_1',
-            'wi_screen_revision_1_1',
-            'wi_review_revision_1_a1'
+            'wi_sample_summary_0_1_1',
+            'wi_screen_revision_0_1',
+            'wi_review_revision_0_a1'
         ]);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected']);
         expect(taskRows(rig)).toEqual([]);
 
         // L-2's idempotence, measured rather than assumed: a Story waiting on its Author never spends
@@ -198,7 +198,7 @@ describe('R2b — a sampling round whose leg closed mid-flight still reaches sel
         await rig.step();
 
         expect(storyOf(rig).sampling_round).toBe(1);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_4:r2:drafted']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_3:r2:drafted']);
 
         // The round is disarmed UNDER ITSELF: a review files a blocking suspicion nobody decides, so
         // the arming rule refuses the next sample. The draft that exists is screened and reviewable,
@@ -208,33 +208,33 @@ describe('R2b — a sampling round whose leg closed mid-flight still reaches sel
             fingerprint: 'C-14|mid-round',
             cost: 'critical',
             state: 'unconfirmed',
-            refs: ['revision_1']
+            refs: ['revision_0']
         });
 
         for (let sweep = 0; sweep < 10; sweep += 1) await rig.step();
 
         const story = storyOf(rig);
 
-        // The round closed: `revision_4`, the only draft it produced, was screened and selected, and
+        // The round closed: `revision_3`, the only draft it produced, was screened and selected, and
         // `sampling_round` advanced. Round 1's winner stays as the audit line the history names.
         expect(story.sampling_round).toBe(2);
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_4:r2:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_3:r2:selected']);
 
         // The stranded draft really was screened — ONE pass, because the Story asks for one Reader, and
         // the family stopped there. An unscreenable draft would have been bought to the screening
         // attempt cap, one job per sweep, which is the treadmill this rule replaces with an answer.
         expect(runKeys(rig, 'wi_screen_')).toEqual([
+            'wi_screen_revision_0_1',
             'wi_screen_revision_1_1',
             'wi_screen_revision_2_1',
-            'wi_screen_revision_3_1',
-            'wi_screen_revision_4_1'
+            'wi_screen_revision_3_1'
         ]);
         // …and the round stopped SAMPLING rather than restarting it: exactly one round-2 attempt.
         expect(runKeys(rig, 'wi_sample_')).toEqual([
-            'wi_sample_summary_1_1_1',
-            'wi_sample_summary_1_1_2',
-            'wi_sample_summary_1_1_3',
-            'wi_sample_summary_1_2_1'
+            'wi_sample_summary_0_1_1',
+            'wi_sample_summary_0_1_2',
+            'wi_sample_summary_0_1_3',
+            'wi_sample_summary_0_2_1'
         ]);
 
         // D-47 step 5: the resample answers the fix task its prompt carried, and the sign-off is offered —
@@ -259,9 +259,9 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         const summary = summaryOf(rig);
         const carried = carriedOf(rig, 'attribution scopes');
 
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected']);
         expect(storyOf(rig).sampling_history?.map((entry) => `${entry.round}:${entry.samples.map((s) => s.revision_id).join('+')}:${entry.selected}`)).toEqual([
-            '1:revision_1+revision_2:revision_1'
+            '1:revision_0+revision_1:revision_0'
         ]);
         expect(isSupersededSummaryDraft(rig.store, storyOf(rig), carried)).toBe(false);
 
@@ -282,13 +282,13 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         expect(scopeOf([carried.id])).toBe('selected');
         // `superseded` names a draft this Story has already had and the Summary no longer holds — the
         // row is gone, the audit line is not, and re-reading the kept draft can never decide it.
-        expect(scopeOf(['revision_2'])).toBe('superseded');
+        expect(scopeOf(['revision_1'])).toBe('superseded');
         // `artifact` is a statement about the Summary as a whole: no refs at all (L-11a's legacy
         // shape), the Summary row itself, or an id this Story never had. All three keep their weight.
         expect(scopeOf([])).toBe('artifact');
         expect(scopeOf()).toBe('artifact');
         expect(scopeOf([summary.id])).toBe('artifact');
-        expect(scopeOf(['revision_9'])).toBe('artifact');
+        expect(scopeOf(['revision_8'])).toBe('artifact');
     });
 
     it('neither blocks the round nor buys a verification pass for a finding about a set-aside draft', async () => {
@@ -304,7 +304,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         armRefinementRound(rig);
         await rig.run();
 
-        expect(carriedOf(rig, 'round 2 selection').id).toBe('revision_2');
+        expect(carriedOf(rig, 'round 2 selection').id).toBe('revision_1');
 
         // The late report of a review that ran while round 1's winner was the carried draft.
         const stale = seedSummaryFinding(rig, {
@@ -359,7 +359,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         // D-33 hold (the sign-off's `findingsUnconfirmed`), while `summaryBlockingFindings` counts the
         // ones somebody has already decided — the same attribution answers both, as the flip below shows.
         expect(gateRows(rig)).toEqual({ blocking: [], unconfirmed: [live.id] });
-        expect(runKeys(rig, 'wi_verify_')).toEqual(['wi_verify_finding_finding_1_1']);
+        expect(runKeys(rig, 'wi_verify_')).toEqual(['wi_verify_finding_finding_0_1']);
 
         const story = storyOf(rig);
 
@@ -383,7 +383,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
 
         await rig.run();
 
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected']);
 
         armRefinementRound(rig);
 
@@ -391,15 +391,15 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         // screening that closes the round. The selection cannot have run yet: nobody has screened it.
         let sweep = 0;
 
-        while (sweep < 12 && !rig.store.revisions.list().some((revision) => revision.id === 'revision_4')) {
+        while (sweep < 12 && !rig.store.revisions.list().some((revision) => revision.id === 'revision_3')) {
             await rig.step();
             sweep += 1;
         }
 
         expect(revisionRows(rig)).toEqual([
-            'revision_1:r1:selected',
-            'revision_3:r2:drafted',
-            'revision_4:r2:drafted'
+            'revision_0:r1:selected',
+            'revision_2:r2:drafted',
+            'revision_3:r2:drafted'
         ]);
 
         // A confirmed defect on the draft that will lose, and the fix task its confirmation queued.
@@ -407,7 +407,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
             fingerprint: 'C-14|doomed',
             cost: 'major',
             state: 'confirmed',
-            refs: ['revision_4']
+            refs: ['revision_3']
         });
         const fix = seedTask(rig.store, rig.storyId, {
             kind: 'fix',
@@ -421,7 +421,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
 
         // The selection kept round 2's first sample and truncated the second — and with the draft went
         // the finding about it and the work that finding had queued.
-        expect(revisionRows(rig)).toEqual(['revision_1:r1:selected', 'revision_3:r2:selected']);
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_2:r2:selected']);
         expect(rig.store.findings.require(doomed.id).state).toBe('discarded');
         expect(rig.store.tasks.require(fix.id).state).toBe('wontfix');
 
@@ -462,17 +462,17 @@ describe('R2d — an Editor verification pass that never decides the finding is 
         // Exactly the cap, each generation of ONE anchored family: no fifth pass on the sixth sweep,
         // and no second family for the same finding.
         expect(runKeys(rig, 'wi_verify_')).toEqual([
-            'wi_verify_finding_finding_1_1',
-            'wi_verify_finding_finding_1_2',
-            'wi_verify_finding_finding_1_3',
-            'wi_verify_finding_finding_1_4'
+            'wi_verify_finding_finding_0_1',
+            'wi_verify_finding_finding_0_2',
+            'wi_verify_finding_finding_0_3',
+            'wi_verify_finding_finding_0_4'
         ]);
         expect(FINDING_VERIFY_CAP).toBe(4);
 
         // The crew's question, in the shape the decision tree reads as the Author's turn: ONE row,
         // `blocked` (an `open` escalation is dispatchable work the crew cannot do), and pointed at the
         // finding so the sweep can close it when the finding is decided.
-        expect(taskRows(rig)).toEqual(['task_1:escalation:blocked']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:blocked']);
 
         const question = rig.store.tasks.list()[0];
 
@@ -483,7 +483,7 @@ describe('R2d — an Editor verification pass that never decides the finding is 
         }).toEqual({
             prefix: FINDING_VERIFY_STALL_PREFIX,
             owner: 'author',
-            findingRef: 'finding_1'
+            findingRef: 'finding_0'
         });
 
         const story = storyOf(rig);
@@ -502,11 +502,11 @@ describe('R2d — an Editor verification pass that never decides the finding is 
         // The answer arrives: the Author discards the defect. The next sweep closes the question and the
         // phase is offered its lock again — a question outliving its answer would hold the Story in
         // "the crew asked you" forever.
-        rig.store.findings.update('finding_1', { state: 'discarded' }, { why: 'test: the Author dismissed it' });
+        rig.store.findings.update('finding_0', { state: 'discarded' }, { why: 'test: the Author dismissed it' });
 
         for (let sweep = 0; sweep < 2; sweep += 1) await rig.step();
 
-        expect(taskRows(rig)).toEqual(['task_1:escalation:done']);
+        expect(taskRows(rig)).toEqual(['task_0:escalation:done']);
         expect(storyOf(rig).pending_kind).toBe('phase_signoff');
         // The budget is not re-spent after the answer either: no further pass was bought.
         expect(runKeys(rig, 'wi_verify_').length).toBe(FINDING_VERIFY_CAP);
@@ -522,7 +522,7 @@ describe('the round and its sampling leg, read from the ledger', () => {
         // Round 1 completed, so the round IN FLIGHT is 2 — and round 2 has no sampling run yet, which is
         // the state D-49's arming rule must keep refusing. `samplingRoundOf` is the round the loop works.
         expect(samplingRoundOf(storyOf(rig))).toBe(2);
-        expect(runKeys(rig, 'wi_sample_summary_1_2_')).toEqual([]);
-        expect(runKeys(rig, 'wi_sample_summary_1_1_')).toEqual(['wi_sample_summary_1_1_1']);
+        expect(runKeys(rig, 'wi_sample_summary_0_2_')).toEqual([]);
+        expect(runKeys(rig, 'wi_sample_summary_0_1_')).toEqual(['wi_sample_summary_0_1_1']);
     });
 });

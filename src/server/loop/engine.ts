@@ -28,6 +28,7 @@ import {
     findingsVerifyStalled,
     // F3 — the shared-finding gate: a finding is only retired when its LAST open fix row settles.
     findingFixWorkSettled,
+    isBlockingCost,
     isFullyScreened,
     isLiveRun,
     isResearchPrerequisiteFix,
@@ -49,12 +50,24 @@ import {
     researchPrerequisiteAnswered,
     requireStory,
     roleNameOf,
+    // T6/round-3 fix #3 — the hill's ledger reads: the round's measured candidates, the one it may
+    // INSTALL, the wave's derived budget, and the wave-scoped leg gate. `records.ts:roundSampleScores`
+    // scores every drafted candidate against `acceptedSummaryRevision` internally, so the selection pass
+    // never re-derives the base (and cannot disagree with the queue about what the base was).
+    roundInstallableCandidate,
     roundRevisions,
+    roundSampleScores,
+    // T10/F7's live-read: a probe round is judged only once neither probe job has a live run. The
+    // hill-climb rewrite of the selection pass must not drop it — `judgeProbeRound` reads it.
     runsForItem,
-    sampleAttempts,
-    sampleFixDemand,
-    samplingCapOf,
+    // G1: the accepted-revision audit. The sweep writes the entry, the plateau gates the round (through
+    // `samplingArmed`), and this is the reader that decides whether a cleared plateau row may bump the wave.
+    deepReviewRoundOf,
+    pendingRevisionReviewEntry,
+    revisionReviewPlateau,
+    revisionReviewProgressOf,
     samplingLegClosed,
+    samplingProgressOf,
     samplingRoundOf,
     samplingSizeOf,
     samplingWaveOf,
@@ -96,20 +109,34 @@ import {
     // work.ts, like every other escalation title here, so the reuse key and the row share one source).
     FIX_PREREQUISITE_STALL_PREFIX,
     FIX_TASK_OWNER_PREFIX,
+    // SUMMARY PHRASE: the G1 plateau's Author row (`openRevisionPlateauTask` / `SAMPLING_PLATEAU_PREFIX`)
+    // is GONE — the whole-Summary hill-climb it policed no longer runs for group-managed books (R5),
+    // and `phase1RevisionPlateau`'s "ask the Author when samples stop improving" is replaced by the
+    // per-group hill-climb, where a group that stops improving is the SAME group the next Writer batch
+    // is pointed at. Only the sampling-failure family remains, for legacy `summary_mode:'sampling'`
+    // books (`phrase/catalog.ts:isGroupManagedStory`).
     SAMPLING_FAILURE_PREFIX,
     samplingExhausted
 } from './work';
-// H1: selection is not a plain least-bad ranking any more — `scoreSample` also grades the fix
-// certificate, and `eligibleSamples` is the pool the hill-climb may pick from.
-import {
-    eligibleSamples,
-    requiresFixCertification,
-    scoreSample,
-    selectSample,
-    type ScoredSample,
-} from './sample-select';
 import { carriedDelta, levelPairs, measureRound, recordRound, renderPairs } from './trend';
 import { completeDirective, createDirectiveFallbackTasks, pendingDirectives, recordDirective } from './directives';
+// SUMMARY PHRASE (R1-R6) — the group domain rules the sweep enforces. Every one of these is the ONE
+// place its rule lives (`../phrase/**` is the owner; the engine only sequences the calls): the catalog
+// ensure + the group-managed predicate (`catalog.ts`), the batch install with its per-group revisions
+// and legacy mirror (`revisions.ts`), the answer validators that refuse a batch whole
+// (`parseGroupDraftAnswer` / `parseGroupReviewAnswer`), and R3's closure (`closeFindingWhenGroupsResolved`).
+import {
+    closeFindingAnsweredByInstalls,
+    closeFindingWhenGroupsResolved,
+    ensurePhraseCatalog,
+    installGroupRevisions,
+    isGroupManagedStory,
+    parseGroupDraftAnswer,
+    parseGroupReviewAnswer,
+    // HARDENING (D-25a group reset): the Seed edit resets these rows too — see `editSeed`.
+    phraseGroupsOf,
+    storyPhrase
+} from '../phrase';
 import {
     applySectionEdit,
     createFixTask,
@@ -139,6 +166,7 @@ import {
     type DirectiveReport,
     type EngineApi,
     type GoalPatch,
+    type LoopCeiling,
     type LoopEngineDeps,
     type LoopStory,
     type ProbeState,
@@ -155,7 +183,6 @@ import type {
     Chapter,
     Cost,
     Finding,
-    SampleReview,
     Story,
     StoryPhase,
     Summary,
@@ -179,6 +206,12 @@ export class LoopEngine implements EngineApi {
     private readonly executor: LoopEngineDeps['executor'];
     private readonly criteria: LoopEngineDeps['criteria'];
     private readonly digest: LoopEngineDeps['digest'];
+    /**
+     * S-RUNTIME: the cross-Story fan-out ceiling, when this engine is one of several under a
+     * coordinator. Undefined is the pre-registry shape — one Store holding every Story, where
+     * `liveRuns(store)` IS the whole workspace and `config.globalMaxConcurrent` is the whole rule.
+     */
+    private readonly ceiling?: LoopCeiling;
     readonly config: ResolvedEngineConfig;
 
     /** L-1's switch. The engine is built stopped so a restart can recover before it moves (L-3). */
@@ -205,6 +238,7 @@ export class LoopEngine implements EngineApi {
         this.executor = deps.executor;
         this.criteria = deps.criteria;
         this.digest = deps.digest;
+        this.ceiling = deps.ceiling;
         this.config = {
             globalMaxConcurrent: deps.config?.globalMaxConcurrent ?? DEFAULT_GLOBAL_MAX_CONCURRENT,
             sweepIntervalMs: deps.config?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
@@ -281,6 +315,13 @@ export class LoopEngine implements EngineApi {
      */
     setGlobalMaxConcurrent(limit: number): void {
         this.config.globalMaxConcurrent = limit;
+
+        // S-RUNTIME: under a coordinator, the config number this engine reads is the VIEW's number, so
+        // the write has to move the shared one — otherwise a rail write would change one book's limit and
+        // leave every other book on the old one, which is the bug the shared ceiling exists to close.
+        // Both are written: the config stays correct for an engine whose view is detached, and the view
+        // stays correct for every engine attached to it.
+        this.ceiling?.setLimit?.(limit);
     }
 
     // -----------------------------------------------------------------------
@@ -461,10 +502,14 @@ export class LoopEngine implements EngineApi {
                 if (finding.state !== 'confirmed') continue;
                 // Phase ①'s bar is the deep review: the Editor's verification of a tool-using
                 // Reader's finding IS the acceptance that arms the next sampling round, and only the
-                // blocking costs travel back — a minor/taste note is recorded, never a Writer round
-                // (D-30, D-34). Later phases keep the Author's dial unchanged.
+                // blocking costs travel back — a taste note is recorded, never a Writer round (D-30,
+                // D-34). Which costs block is ONE predicate (`records.ts:isBlockingCost`), read the same
+                // way by the Editor's `approveFinding`, the arming rule, the sign-off and the drain:
+                // critical and major always, and `minor` exactly when the Author's dial covers it. A dial
+                // that includes minor turns a confirmed Summary minor into fix work; a dial that leaves
+                // it out records the note and lets the round stop. Later phases are unchanged.
                 const summaryRevision = story.phase === 'summary';
-                if (summaryRevision && finding.cost !== 'critical' && finding.cost !== 'major') continue;
+                if (!isBlockingCost(story, finding.cost)) continue;
                 // The Author's dial still wins, even in phase ①: a narrowed dial parks a major
                 // finding for the Author's approval instead of silently authorising it.
                 if (!story.auto_approve.includes(finding.cost)) continue;
@@ -488,6 +533,66 @@ export class LoopEngine implements EngineApi {
 
             autoApproved = ids;
         });
+
+        // SUMMARY PHRASE R3 — the close the STATE GATE deferred, re-checked once per sweep.
+        //
+        // `settleJob` closes a group finding at the moment its install lands, and
+        // `phrase/findings.ts:closeFindingWhenGroupsResolved` refuses anything but an `approved` row
+        // (D-34's gate: the loop may not mark a defect `fixed` while the Author is looking at an
+        // approval row). The problem is ordering: the group planner cuts a Writer batch off an OPEN
+        // finding — `loop/work.ts:groupWorkTargets` accepts D-33's `unconfirmed`/`confirmed` rows on
+        // purpose — so a pass can install the answer BEFORE the Editor's `approveFinding`, the dial's
+        // auto-approve, or the Author's tap makes the row `approved`. The install-time close then
+        // correctly declines, and with no other caller the finding sits `approved` with every targeted
+        // group already rewritten to resolve it, plus a fix task the planner will never dispatch again
+        // (`findingGroupsStillOwed` is empty for it). That is R3's promise broken by sequencing, so the
+        // sweep re-runs the read every round: the same records, the same rule, one sweep later.
+        //
+        // WHY A SWEEP STEP AND NOT A WRITE AT EACH APPROVAL: there are three approval funnels —
+        // `tools/editor.ts:approveFinding`, `approveFinding` here, and the auto-approve commit above —
+        // and a crash between any of them and the close has to self-heal anyway. One idempotent sweep
+        // step covers all three and survives a restart with no new bookkeeping, which is L-3's rule for
+        // anything the loop is allowed to finish late.
+        //
+        // GROUP BOOKS ONLY: the rule reads `group_revisions.finding_refs`, and only a group install ever
+        // writes one, so a single-Summary book has nothing to reconcile — and `findingResolution` answers
+        // `resolved_all: true` vacuously for a Story with no phrase rows, which must not close anything.
+        if (isGroupManagedStory(story)) {
+            await store.commit('loop_reconcile_findings', () => {
+                for (const finding of storyFindings(store, story.id)) {
+                    if (finding.state !== 'approved') continue;
+
+                    const closed = closeFindingAnsweredByInstalls(
+                        store,
+                        story,
+                        finding,
+                        loopAttr(
+                            `the sweep re-checked ${finding.id} after its approval landed, and every group it names already has an installed revision answering it`
+                        )
+                    );
+
+                    if (closed === undefined) continue;
+
+                    // R3 — THE TASKS FOLLOW THE FINDINGS, the same evidence rule `settleJob` applies
+                    // beside an install: a row that named a now-`fixed` finding is consumed rather than
+                    // dispatched. Leaving it open would hold L-37's drain hostage over a defect the book
+                    // can already show as answered, and the task can never run: no group still owes it.
+                    for (const task of openTasks(store, story.id)) {
+                        if (task.finding_ref !== closed.id) continue;
+
+                        store.tasks.update(
+                            task.id,
+                            { state: 'done' },
+                            {
+                                run_ref: null,
+                                why: `${closed.id} closed on the evidence that every group it targets has a revision written to resolve it, so the fix task that named it is consumed (R3, D-11, D-34)`
+                            },
+                            [{ id: task.id, rev: task.rev }]
+                        );
+                    }
+                }
+            });
+        }
 
         // D-12/D-12a/D-14: the Digest is derived by the engine, and a stale Digest blocks a REVIEW but
         // not a fix — so the refresh happens here, before any candidate is generated, which is what
@@ -610,6 +715,18 @@ export class LoopEngine implements EngineApi {
                 openSamplingFailureTask(store, requireStory(store, story.id));
             });
         }
+
+        // G1 — the accepted-revision audit, and the plateau the audit proves. This is the loop's OTHER
+        // no-progress stop: `samplingProgressOf` bounds the CANDIDATE ATTEMPTS of one round, while this
+        // bounds the ROUNDS themselves, by counting what each accepted revision's own deep review raised
+        // (F1's adversarial path — every candidate certifies the old fix and introduces nothing, so the
+        // hill never reports a stall, while each accepted revision files a fresh blocking finding with new
+        // wording). The write happens HERE, before the candidate list is built below, so the sweep that
+        // proves the plateau is the sweep that stops buying samples — the guard is not a status line the
+        // queue may ignore, and it lands before any sampler the settled verification would otherwise arm.
+        await this.trackRevisionProgress(story.id, at);
+
+        story = requireStory(store, story.id);
 
         // T6/R2d: the other phase-① failure the loop cannot work around by itself — an Editor
         // verification pass that closes without ever confirming or disputing the finding. The queue
@@ -950,11 +1067,25 @@ export class LoopEngine implements EngineApi {
         );
         const launched: WorkCandidate[] = [];
 
-        let used = liveRuns(store).length;
+        // S-RUNTIME: the ceiling comparison, in the two shapes it now has.
+        //
+        // No view attached (a single-store server, every loop unit test): the book IS the workspace, so
+        // this is exactly S-5's rule as written — this store's live rows against its own config.
+        //
+        // With a view (one engine per Story book): the limit comes from the one number the coordinator
+        // owns, and the live count is the LARGER of this book's rows and the cross-book total the view
+        // answers. The `max` is not decoration — the view counts what the books hold, and a row this
+        // sweep has not seen yet (a commit two statements ago) is still a row, so undercounting here is
+        // the direction that oversubscribes. The rows are created synchronously by the executor
+        // (D-18), so a sweep of another book that launched after this one is already visible.
+        const limit = this.ceiling?.limit() ?? this.config.globalMaxConcurrent;
+
+        let used = Math.max(liveRuns(store).length, this.ceiling?.liveRuns() ?? 0);
 
         for (const entry of sorted) {
-            if (used >= this.config.globalMaxConcurrent) break;
-            if (isClaimedHere(store, entry.candidate.key) || this.inflight.has(entry.candidate.key)) continue;
+            if (used >= limit) break;
+            if (isClaimedHere(store, entry.candidate.key, entry.story.id) || this.inflight.has(entry.candidate.key))
+                continue;
 
             const perTemplate = liveRunsForTemplate(store, entry.story.id, entry.candidate.item.templateRef);
 
@@ -970,8 +1101,16 @@ export class LoopEngine implements EngineApi {
             // capacity would serialize the whole sampling round behind its first sample.
             const unitRef = entry.candidate.item.unit?.ref;
             const readerPass = entry.candidate.item.kind === 'check_unit' && entry.candidate.item.roleName === 'reader';
+            // SUMMARY PHRASE: `draft_groups` and `review_groups` join the non-editing exception (R4 —
+            // disjoint group batches run CONCURRENTLY, and N reviewers read one Overview at once). A
+            // group pass never races a group pass on the same GROUP: that is excluded from persisted Run
+            // rows (`phrase/exclusion.ts:liveGroupRefs`), and the Summary unit it names is written through
+            // the install, which re-reads its rows inside the commit rather than editing a cached copy.
             const structuredPass =
-                entry.candidate.item.kind === 'sample_unit' || entry.candidate.item.kind === 'screen_samples';
+                entry.candidate.item.kind === 'sample_unit' ||
+                entry.candidate.item.kind === 'screen_samples' ||
+                entry.candidate.item.kind === 'draft_groups' ||
+                entry.candidate.item.kind === 'review_groups';
 
             if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !readerPass && !structuredPass) {
                 const busy = liveRuns(store, entry.story.id).some((run) => (run.work_item_ref ?? '').includes(unitRef));
@@ -1098,6 +1237,38 @@ export class LoopEngine implements EngineApi {
             item.kind === 'screen_samples' && closed && result.structured !== undefined
                 ? (result.structured as IssueList)
                 : undefined;
+        // ---------------------------------------------------------------------
+        // SUMMARY PHRASE (R2/R3/R5) — the group passes, parsed BEFORE the commit.
+        //
+        // WHY BEFORE: a `GroupDraft` answer is validated against the JOB (the exact group set the batch
+        // named), and the validator is a pure read. Deciding the outcome first means a refusal writes
+        // only the task attempts below — never a half-installed batch — which is R2's atomicity rule
+        // expressed as sequencing rather than as rollback.
+        //
+        // WHY `item.groupRefs` IS THE SOURCE OF THE EXPECTED SET: the same list the executor copied onto
+        // the Run row (`run/executor.ts`) and the same list R4's exclusion reads from the live rows. A
+        // restart settles the answer against the job that asked for it, not against whatever the book
+        // looks like now (L-3).
+        const isGroupPass = item.kind === 'draft_groups' || item.kind === 'review_groups';
+        const groupDraft =
+            item.kind === 'draft_groups' && closed && result.structured !== undefined
+                ? parseGroupDraftAnswer(store, item.storyId, item.groupRefs ?? [], result.structured)
+                : undefined;
+        const groupReview =
+            item.kind === 'review_groups' && closed && result.structured !== undefined
+                ? parseGroupReviewAnswer(store, item.storyId, result.structured)
+                : undefined;
+        // The sentence a HELD task reports, so the row says what it is waiting for instead of going
+        // quietly. Computed once: an invalid answer and a refused batch are different refusals, and the
+        // Author reads this string in the task's history.
+        const groupHold =
+            groupDraft !== undefined && !groupDraft.ok
+                ? `its Writer answer was refused whole (${groupDraft.refusal})`
+                : groupReview !== undefined && !groupReview.ok
+                  ? `its Reader answer was refused whole (${groupReview.refusal})`
+                  : closed
+                    ? 'a revision was written, but the evidence that closes the row is the FINDING being resolved group by group (R3)'
+                    : `run ${result.runId} ended ${result.ended}`;
 
         await store.commit('loop_job_result', () => {
             for (const ref of item.taskRefs ?? []) {
@@ -1109,6 +1280,26 @@ export class LoopEngine implements EngineApi {
                 // prerequisite settles on the Knowledge its pass recorded — `settleFixPrerequisites`
                 // below, gated by `researchPrerequisiteAnswered` — never because a run completed. The
                 // row's own `attempts` is only the mirror of the journal-derived pass counter.
+                // SUMMARY PHRASE (R3): a group pass holds EVERY task it was handed. The generic write
+                // below closes a row because a run finished, and for this family "a run finished" is not
+                // the done condition — the done condition is the FINDING the row names being resolved in
+                // every group it targets, which only becomes true after the install and the closure pass
+                // further down. So the attempt is spent here, and the row itself is consumed (or left
+                // open with the reason) after the install, where the post-write state is visible.
+                if (isGroupPass) {
+                    store.tasks.update(
+                        task.id,
+                        { attempts: (task.attempts ?? 0) + 1 },
+                        {
+                            run_ref: item.id,
+                            why: `run ${item.id} spent a group pass on ${task.id}; the row stays open until ${groupHold} (R2, R3)`
+                        },
+                        [{ id: task.id, rev: task.rev }]
+                    );
+
+                    continue;
+                }
+
                 const settledByEvidence = isGroundingPass && isResearchPrerequisiteFix(task);
 
                 store.tasks.update(
@@ -1238,6 +1429,131 @@ export class LoopEngine implements EngineApi {
                     )
                 );
             }
+
+            // -----------------------------------------------------------------
+            // SUMMARY PHRASE R2 + R5 + R6 — the group install, in the SAME commit that closes the run.
+            //
+            // One accepted Writer answer becomes: one new `latest` row PER GROUP it wrote (numbered from
+            // that group's own line), the rows it replaces flipped to `archived` and retained, the
+            // Overview recomposed from the rows as they now are, and the legacy `summaries` prose fields
+            // rewritten from the same texts (R6's mirror). A group the batch did not name keeps its text
+            // and its number untouched — that is R2's "one group's work never revises another's", and it
+            // is why the batch, not the Story, is the unit of the commit.
+            //
+            // There is no selection step: R5 removed whole-Summary sampling from this path, so an accepted
+            // result installs immediately and the previous text becomes history in the same write.
+            if (groupDraft !== undefined && groupDraft.ok) {
+                const fresh = requireStory(store, item.storyId);
+                const install = installGroupRevisions(
+                    store,
+                    fresh,
+                    groupDraft.contents,
+                    loopAttr(
+                        `run ${result.runId} answered the group draft job for ${groupDraft.contents.length} group(s); the engine installed each text as that group's next revision and archived the text it replaces (R2, R5)`
+                    ),
+                    {
+                        runRef: result.runId,
+                        workItemRef: item.id,
+                        taskRefs: [...(item.taskRefs ?? [])],
+                        findingRefs: [...(item.findingRefs ?? [])],
+                        knowledgeUsed: groupDraft.knowledgeUsed,
+                        ...(result.promptHash === undefined ? {} : { promptHash: result.promptHash })
+                    }
+                );
+
+                // R3 — CLOSURE ON EVIDENCE. A finding closes only when EVERY group it targets has a
+                // revision written to answer it (`phrase/findings.ts:findingResolution`), and only an
+                // `approved` row can close at all, so a finding still sitting behind D-34's sign-off is
+                // left where the Author put it. A multi-group finding whose batch covered three of five
+                // targeted groups therefore stays `approved` with three groups resolved, and the next
+                // batch is pointed at the two it still owes.
+                const closedFindings = new Set<string>();
+
+                for (const ref of item.findingRefs ?? []) {
+                    const finding = store.findings.get(ref);
+
+                    if (finding === undefined) continue;
+
+                    const outcome = closeFindingWhenGroupsResolved(
+                        store,
+                        finding,
+                        loopAttr(
+                            `the group install of run ${result.runId} left every group this finding targets with a revision written to resolve it (R3, D-34)`
+                        )
+                    );
+
+                    if (outcome.closed) closedFindings.add(finding.id);
+                }
+
+                // R3 — THE TASKS FOLLOW THE FINDINGS, in the same settlement. The rows were held above;
+                // each one closes here only on evidence the book can now show: either the finding it
+                // names is `fixed`, or it names no finding at all (a hand-armed row) and a revision row
+                // exists that was written in answer to it. A row whose finding is still open stays open
+                // with its attempt spent, which is what makes "the Writer tried and the defect survived"
+                // a visible streak rather than a silent loop.
+                const answeredTasks = new Set(install.installed.flatMap((revision) => revision.task_refs ?? []));
+
+                for (const ref of item.taskRefs ?? []) {
+                    const task = store.tasks.get(ref);
+
+                    if (task === undefined || task.state === 'done') continue;
+
+                    const finding = task.finding_ref === undefined ? undefined : store.findings.get(task.finding_ref);
+                    const evidence =
+                        finding !== undefined
+                            ? finding.state === 'fixed'
+                            : answeredTasks.has(task.id) && closedFindings.size === 0;
+
+                    if (!evidence) continue;
+
+                    store.tasks.update(
+                        task.id,
+                        { state: 'done' },
+                        {
+                            run_ref: item.id,
+                            why:
+                                finding === undefined
+                                    ? `the group revision installed by run ${item.id} names ${task.id}, and no finding is left unresolved by the batch — the queue consumed it (R2, R3, D-11)`
+                                    : `the group install of run ${item.id} resolved ${finding.id} in every group it targets, so the task that named it is consumed (R3, D-11, D-34)`
+                        },
+                        [{ id: task.id, rev: task.rev }]
+                    );
+                }
+
+                // R6's mirror can be SKIPPED, and both reasons are the Author's, not the loop's: the
+                // Summary is `locked` (L-7a/P5 — prose the Author signed is not rewritten under them) or
+                // the Story has no `summaries` row at all. Neither is a fault, so nothing is written here;
+                // the projection reports `mirror.written: false` with the reason, and the group rows stay
+                // the truth either way.
+            }
+
+            // -----------------------------------------------------------------
+            // SUMMARY PHRASE R3/R5 — the group review's answer. A structured Reader pass has no tools, so
+            // its product is the review ROW, exactly as a legacy screen's was; the difference is that the
+            // artifact in front of the Reader is the INSTALLED Overview (there is no draft set to rank),
+            // so `revision_ref` names the Phrase row rather than a Summary revision. Each issue carries
+            // the `group_refs` the Reader was shown, which is what makes a later finding attributable to
+            // the groups it is actually about.
+            if (groupReview !== undefined && groupReview.ok) {
+                const phrase = storyPhrase(store, item.storyId);
+
+                store.sampleReviews.create(
+                    {
+                        story_id: item.storyId,
+                        revision_ref: phrase?.id ?? (item.groupRefs ?? [])[0] ?? item.storyId,
+                        reader: item.roleName,
+                        issues: groupReview.review.issues ?? [],
+                        valid: true,
+                        fix_refs: [...(item.fixRefs ?? [])],
+                        ...(groupReview.review.fix_verifications === undefined
+                            ? {}
+                            : { fix_verifications: groupReview.review.fix_verifications })
+                    },
+                    loopAttr(
+                        `run ${result.runId} answered with a schema-valid GroupReview over ${item.groupRefs?.length ?? 0} group(s); the engine persisted it as a review of the installed Overview (§2 decision 2, R3, R5)`
+                    )
+                );
+            }
         });
 
         if (item.kind === 'directive_work') await this.settleDirectiveReview(item, result);
@@ -1283,6 +1599,12 @@ export class LoopEngine implements EngineApi {
 
         if (story.phase !== 'summary') return;
 
+        // SUMMARY PHRASE R5: a group-managed book has no draft SET to select from. Its Writer result is
+        // installed the moment it is accepted (`phrase/revisions.ts:installGroupRevisions`) and the
+        // previous text is archived in the same commit, so "pick the best of N" has nothing to rank and a
+        // selection here would install a `revisions` row that does not exist.
+        if (isGroupManagedStory(story)) return;
+
         const summary = storySummary(store, story.id);
 
         if (summary === undefined) return;
@@ -1298,26 +1620,25 @@ export class LoopEngine implements EngineApi {
         if (drafted.length === 0) return;
 
         // T12/D: the round may not select while it still OWES samples. `samplingSizeOf` is what the
-        // Author asked for; the attempt cap is the only honest way to give up on the rest. The
-        // attempt count is the CURRENT WAVE's, exactly as generation counts it (T12/E).
+        // Author asked for; the wave's budget is the only honest way to give up on the rest, and
+        // T6/R2b's third way a round stops owing samples (`records.ts:samplingLegClosed`) now reads that
+        // SAME budget, so the selection gate, the work queue and the drain probe cannot disagree.
         //
-        // T6/R2b adds the third way a round stops owing samples: its sampling LEG has closed
-        // (`records.ts:samplingLegClosed` — the cap is spent, or the wave was disarmed after the round
-        // had started). Refusing there strands the round: the drafts that exist are screened and
-        // reviewed, the sign-off gates on a selection (§15 step 10), and the samples that would have
-        // completed the round will never be written — so the loop waited on work it had stopped
-        // buying. Selection is not the sign-off: D-33 still holds the phase while a suspicion is
-        // undecided, and the NEXT round is still gated on the arming rule (`records.ts:samplingArmed`).
+        // T6/round-3 fix #3, and requirement 9 — the attempt count is no longer read off a `pending`
+        // sampling job (that row is deleted the moment the sample's run closes, so an exhausted wave
+        // re-bought samples forever), and it is no longer guessed. `records.ts:samplingProgressOf`
+        // derives the whole hill state from the ledger on EVERY read — the wave's attempts through the
+        // sample runs' wave-scoped claim keys (`Revision.run_ref` → `work_item_ref`), the lowest
+        // unresolved-blocking count any regression-free candidate proved as the BASELINE, one extra
+        // attempt per measured improvement, and `SAMPLING_NO_PROGRESS_STREAK` consecutive attempts that
+        // failed to lower it (requirements 5 and 6). The engine keeps no memory, so a restart recomputes
+        // exactly these numbers and a wave that spent its budget stays spent.
         const size = samplingSizeOf(story);
-        const attempts = sampleAttempts(store, summary.id, round, samplingWaveOf(story));
+        const progress = samplingProgressOf(store, story, round);
 
-        if (revisions.length < size && attempts < samplingCapOf(story) && !samplingLegClosed(store, story, round))
-            return;
+        if (revisions.length < size && !progress.spent && !samplingLegClosed(store, story, round)) return;
 
         const readers = screeningSizeOf(story);
-        const reviewsOf = new Map<string, SampleReview[]>();
-
-        for (const revision of drafted) reviewsOf.set(revision.id, screensFor(store, revision.id));
 
         // T12/C: a draft is screened when it carries its full review set OR its screening attempts are
         // exhausted (`records.ts:isFullyScreened`). The second clause is the degrade path: the round
@@ -1332,47 +1653,60 @@ export class LoopEngine implements EngineApi {
         // the escalation the commit opens, so the Author can see WHICH samples went in partially
         // screened (the ids still exist at that point; the truncation below deletes the losers).
         const partiallyScreened = drafted
-            .filter((revision) => (reviewsOf.get(revision.id) ?? []).length < readers)
+            .filter((revision) => screensFor(store, revision.id).length < readers)
             .map((revision) => revision.id);
 
-        // §6.5's counts plus H1's certificate: every issue of every review of this revision split by
-        // severity, and the fix tasks its screening passes were asked to certify. `scoreSample` is the
-        // one implementation (`records.ts:roundSampleScores` scores the same way for the queue and for
-        // the exhaustion check), so a candidate cannot be "eligible" to the queue and rejected here.
-        const scored: ScoredSample[] = drafted.map((revision) =>
-            scoreSample({
-                revision,
-                reviews: reviewsOf.get(revision.id) ?? [],
-                fixRefs: sampleFixDemand(store, story.id, revision)
-            })
-        );
-
-        // H1/R3/R5 — the hill. A round that was handed fixes selects ONLY from candidates that cleared
-        // them with no blocking screening issue; a round that was handed nothing (round 1, or a
-        // refinement whose fix tasks the Author has since settled — H1-C1/F1) keeps §6.5's least-bad path.
+        // ----------------------------------------------------------------------------------------------
+        // The hill, stated once in `records.ts` so the queue and the selection cannot disagree (R3).
         //
-        // H1-C1/F2 — and an ungradeable screening set is NOT "handed nothing". When the round owes open
-        // fixes and its screening leg answered nothing (every attempt failed the schema, or the rows
-        // predate fix verification), `scoreSample` reports `legacyScreening` and leaves the candidate
-        // INELIGIBLE: the incumbent keeps the Summary and the round retries or escalates below. Before
-        // this, that shape installed a refined draft on zero verification — the strict contract the
-        // Author asked for is "if it isn't verified, discard the draft and try again".
+        // Requirements 2, 3, 5, 6, 7. An accepted Summary Revision is a STATE, never an issue list to
+        // out-score: every candidate of a refinement round is scored against THE TEXT THE AUTHOR SIGNED
+        // (`roundSampleScores` → `acceptedSummaryRevision`), and the only questions about it are whether
+        // it fixed what was demanded of it and whether it introduced a new critical/major OF ITS OWN.
+        // Issues the accepted draft already carried are `inherited` and cost the candidate nothing; an
+        // item that claims `inherited` with no base to inherit from — or states no origin at all — counts
+        // as introduced, so an unclassified defect fails CLOSED (`sample-select.ts:scoreSample`).
         //
-        // NOTHING IS SELECTED when the round holds no eligible candidate. That is not a stall: the
-        // screening rows stay, the fix tasks stay open, `work.ts` offers another sample inside the
-        // attempt cap, and a spent cap opens the Author escalation (`samplingExhausted`, shape (b)).
-        // Selecting the least-bad candidate here would install a draft the round's own Readers rejected
-        // and, until this change, close the very tasks it failed — the ratchet the Author reported.
-        const winner = selectSample(requiresFixCertification(scored) ? eligibleSamples(scored) : scored);
+        // `roundInstallableCandidate` is the whole install rule, and it is the ratchet this change
+        // removes:
+        //   * WITH an accepted base, the round selects from the ELIGIBLE set or from NOTHING. §6.5's
+        //     least-bad path used to install the least-bad draft of a failed round over the Author's
+        //     signed text AND close the fix tasks that draft failed — the loop running backwards. Now the
+        //     incumbent keeps the Summary, every demanded fix task keeps its demand, and nothing closes.
+        //   * WITHOUT a base (round 1) the least-bad path stays, with the T12/C degrade it leans on (R5):
+        //     nothing exists yet to be worse than, so the First Revision is the best of what the seed
+        //     produced. A refinement round whose fix tasks the Author has since settled (H1-C1/F1) does
+        //     NOT need least-bad either — its candidates are eligible once nothing is demanded of them.
+        //
+        // So `installable === undefined` is a normal answer, not a stall to work around here: the
+        // screening rows stay, `work.ts` offers another Sampling unit while the wave keeps proving a
+        // LOWER unresolved count (requirement 6), and a spent wave — ceiling or streak — is reported by
+        // the sweep's exhaustion path above (`samplingExhausted` → `openSamplingFailureTask`), which
+        // counts the attempts the wave ACTUALLY spent. There is no automatic re-arm: only the Author
+        // clearing that escalation bumps `sampling_wave`, and because every number above is wave-scoped,
+        // a fresh wave IS a fresh baseline (requirement 8).
+        // ----------------------------------------------------------------------------------------------
+        const scored = roundSampleScores(store, story.id, round);
+        const installable = roundInstallableCandidate(store, story.id, round);
 
-        if (winner === undefined) return;
+        if (installable === undefined) return;
+
+        // The install attribution says which rule installed it: a certified step of the climb, or §6.5's
+        // least-bad choice in the one round that had no state to protect.
+        const winner = installable.eligible ? installable : undefined;
 
         await store.commit('loop_sample_selection', () => {
             // Re-read everything the commit rewrites: the settle commit that led here may have moved
             // rows, and T-4's compare-and-set is what makes the writes an honest transaction.
             const fresh = requireStory(store, story.id);
             const freshSummary = storySummary(store, fresh.id);
-            const current = store.revisions.get(winner.revision.id);
+            // The STATE this round installs. When `winner` is set it is a candidate that certified every
+            // fix demanded of it and introduced no new critical/major of its own — a step up the hill.
+            // When it is not, this is §6.5's least-bad pick, which requirement 7 allows ONLY in a round
+            // with no accepted state to protect. Nothing here is cached: the budget that led to this
+            // commit is re-derived from the ledger every pass (`records.ts:samplingProgressOf`), so a
+            // restart cannot buy an attempt the wave already spent.
+            const current = store.revisions.get(installable.revision.id);
 
             if (freshSummary === undefined) return;
             if (current === undefined || current.state !== 'drafted') return;
@@ -1400,7 +1734,11 @@ export class LoopEngine implements EngineApi {
                     freshSummary.id,
                     patch,
                     loopAttr(
-                        `sampling round ${round} installed ${current.id}'s fields on ${freshSummary.id} (the deterministically least-issue sample, §6.5)`
+                        `sampling round ${round} installed ${current.id}'s fields on ${freshSummary.id} (${
+                            winner
+                                ? 'the state that certified every fix demanded of it and introduced no new critical/major over the accepted Summary — the hill climbed one step (D-34, §6.5)'
+                                : "round 1: no accepted state existed, so §6.5's least-bad ranking chose the First Revision (requirement 7 keeps this path only there)"
+                        })`
                     ),
                     [{ id: freshSummary.id, rev: freshSummary.rev }]
                 );
@@ -1408,35 +1746,66 @@ export class LoopEngine implements EngineApi {
 
             store.revisions.update(
                 current.id,
-                { state: 'selected', issue_counts: { critical: winner.critical, high: winner.high } },
+                { state: 'selected', issue_counts: { critical: installable.critical, high: installable.high } },
                 loopAttr(
-                    `sampling round ${round}'s winner: ${winner.critical} critical, ${winner.high} high, ${winner.total} total (§6.5: fewest critical → fewest high → fewest total → earliest)`
+                    installable.refinement
+                        ? `sampling round ${round}'s winner: ${installable.fixesCleared.length} of ${installable.fixRefs.length} demanded fix task(s) certified by every pass handed them, ${installable.blockingIntroduced} new critical/major on the accepted draft (it inherited ${installable.inheritedCritical + installable.inheritedHigh}), ${installable.minimality.changedFields} field(s) and ${installable.minimality.changedCharacters} character(s) changed (the hill: fewest unresolved fixes → no new critical/major → smallest change → earliest candidate; §6.5, §6.6)`
+                        : `sampling round ${round}'s winner: ${installable.critical} critical, ${installable.high} high, ${installable.total} total (§6.5: fewest critical → fewest high → fewest total → earliest)`
                 ),
                 [{ id: current.id, rev: current.rev }]
             );
 
             // §6.6's audit line, built BEFORE the losers are deleted so it can name them.
             //
-            // H1/R4 adds `unresolved_fixes` to every sample line: the losers' `sample_reviews` rows are
-            // deleted by this very commit, so without this the ONLY trace of why a candidate was thrown
-            // out — which fix it failed, and on which draft — would be gone. The line is the audit of a
-            // hill that was not climbed, and it is what the Author reads when the round escalates.
+            // H1/R4 adds `unresolved_fixes` to every sample line, and the hill adds the REST of the
+            // candidate's outcome: whether it was accepted, eligible-but-not-chosen, or rejected, the
+            // reason, the blocking issues it introduced vs inherited, and how much of the accepted text
+            // it changed. The selection truncates every losing draft AND its screening reviews, so
+            // without these fields the reason a candidate was refused — the evidence, not a score — is
+            // deleted with it, and a REJECTED attempt, which closed no task and advanced no round, would
+            // leave no trace that the attempt happened at all.
+            // Requirement 4: the audit names EVERY attempt the wave made — the drafts that came with the
+            // round AND the ones the retry allowance bought — because `roundSampleScores` scores every
+            // `drafted` Revision of the round, gradeable or not. A rejected or ungradeable attempt closed
+            // no task and advanced no round, so after the truncation below deletes its draft and its
+            // screening rows, this line is the only trace that the attempt happened at all. The hill's
+            // numbers ride with it: the wave, the attempts it spent, the improvements it proved, the
+            // ceiling that bounded it, and the unresolved-blocking bar this install leaves behind
+            // (requirement 2 — only a strictly lower count buys another attempt).
             const history = [
                 ...(fresh.sampling_history ?? []),
                 {
                     round,
                     at,
-                    samples: scored.map((sample) => {
-                        const reviews = reviewsOf.get(sample.revision.id) ?? [];
-
-                        return {
-                            revision_id: sample.revision.id,
-                            critical: sample.critical,
-                            high: sample.high,
-                            valid: reviews.length > 0 && reviews.every((review) => review.valid),
-                            unresolved_fixes: sample.fixesUnresolved
-                        };
-                    }),
+                    wave: progress.wave,
+                    attempts: progress.attempts,
+                    improvements: progress.improvements,
+                    ceiling: progress.ceiling,
+                    unresolved_blocking: installable.fixesUnresolved.length,
+                    samples: scored.map((sample) => ({
+                        revision_id: sample.revision.id,
+                        critical: sample.critical,
+                        high: sample.high,
+                        valid: sample.screenedValid,
+                        unresolved_fixes: sample.fixesUnresolved,
+                        outcome:
+                            sample.revision.id === current.id
+                                ? ('accepted' as const)
+                                : sample.eligible
+                                  ? ('eligible' as const)
+                                  : ('rejected' as const),
+                        ...(sample.rejectReason === undefined ? {} : { reject_reason: sample.rejectReason }),
+                        ...(sample.refinement
+                            ? {
+                                  introduced_critical: sample.introducedCritical,
+                                  introduced_high: sample.introducedHigh,
+                                  inherited_critical: sample.inheritedCritical,
+                                  inherited_high: sample.inheritedHigh,
+                                  changed_fields: sample.minimality.changedFields,
+                                  changed_characters: sample.minimality.changedCharacters
+                              }
+                            : {})
+                    })),
                     selected: current.id
                 }
             ];
@@ -1540,7 +1909,7 @@ export class LoopEngine implements EngineApi {
             // this commit does not touch: the screening rows are only ever deleted for the LOSERS, and
             // the compare-and-set below is what makes the writes an honest transaction if a run moved a
             // task while this commit was being built.
-            const verified = new Set(winner.fixesCleared);
+            const verified = new Set(installable.fixesCleared);
 
             // H2/R1: WRITER-owned rows only. A Researcher prerequisite is closed by the Knowledge its
             // own pass recorded (`settleFixPrerequisites`), never as a side effect of a draft winning;
@@ -1584,7 +1953,7 @@ export class LoopEngine implements EngineApi {
                 fresh.id,
                 { sampling_round: round, sampling_history: history },
                 loopAttr(
-                    `sampling round ${round} selected ${current.id} (${winner.critical} critical, ${winner.high} high) and advanced sampling_round (§6.5, §6.6)`
+                    `sampling round ${round} selected ${current.id} (${installable.critical} critical, ${installable.high} high) and advanced sampling_round (§6.5, §6.6)`
                 ),
                 [{ id: fresh.id, rev: fresh.rev }]
             );
@@ -1599,15 +1968,20 @@ export class LoopEngine implements EngineApi {
      * of run rows under a claim prefix (`records.ts:sampleAttempts`), and nothing can un-run them, so
      * the only way to reset it honestly is a NEW GENERATION in the key — `stories.sampling_wave`.
      *
+     * SUMMARY PHRASE: G1's plateau row used to be re-armed here too. It is gone (R5): the audit write
+     * in `trackRevisionProgress` stays for legacy books, but the plateau's Author question and its
+     * wave bump go with the whole-Summary hill-climb they policed.
+     *
      * The guards, and why each one is load-bearing:
      *   * the escalation row must exist and must no longer be `open` — the Author cleared it
      *     (`clearPending` → `wontfix`, L-36/U-1b) or answered it (`done`);
      *   * the wave recorded in its `detail` must equal the Story's current wave — that is the
      *     once-per-cleared-escalation guard: after the bump the recorded wave is stale, so a later
      *     sweep cannot climb the wave again on the same row;
-     *   * sampling must still be EXHAUSTED — if the Author widened `summary_sampling` instead, the
-     *     cap moved and generation already re-arms under the same wave; bumping then would silently
-     *     discard a round of retries.
+     *   * the loop must still be stuck THE WAY THAT ROW SAID IT WAS. A sampling-failure row is answered
+     *     by a cap that is still spent (`samplingExhausted`): if the Author widened `summary_sampling`
+     *     instead, the cap moved and generation already re-arms under the same wave, and bumping then
+     *     would silently discard a round of retries.
      */
     private async rearmSamplingWave(storyId: string): Promise<void> {
         const store = this.store;
@@ -1615,8 +1989,12 @@ export class LoopEngine implements EngineApi {
 
         if (story.phase !== 'summary') return;
 
-        // The NEWEST sampling-failure row, closed or not: one escalation per exhausted round, and a
-        // later wave raises its own row (its detail names the new wave).
+        // SUMMARY PHRASE: a group-managed book has no sampling wave to re-arm — its retries are the
+        // per-group claim keys, and R4's exclusion (not a cap) is what defers its work.
+        if (isGroupManagedStory(story)) return;
+
+        // The NEWEST sampling row, closed or not: one escalation per stuck state, and a later wave
+        // raises its own row (its detail names the new wave).
         const escalation = last(
             store.tasks
                 .list()
@@ -1638,6 +2016,7 @@ export class LoopEngine implements EngineApi {
 
         if (recorded === null) return;
         if (Number(recorded[1]) !== samplingWaveOf(story)) return;
+
         if (!samplingExhausted(store, story)) return;
 
         await store.commit('loop_sampling_wave', () => {
@@ -1648,10 +2027,88 @@ export class LoopEngine implements EngineApi {
                 fresh.id,
                 { sampling_wave: wave },
                 loopAttr(
-                    `the Author cleared ${escalation.id}; sampling round ${samplingRoundOf(fresh)} re-arms as wave ${wave} (§6.4 step 3, T12/E)`
+                    `the Author cleared ${escalation.id}; sampling round ${samplingRoundOf(fresh)} re-arms as wave ${wave} — the accepted-revision audit is partitioned by wave, so this is a fresh baseline (§6.4 step 3, §6.8, T12/E, G1)`
                 ),
                 [{ id: fresh.id, rev: fresh.rev }]
             );
+        });
+    }
+
+    /**
+     * G1 — the accepted-revision audit: record what one accepted revision's deep review raised, then ask
+     * the Author when the wave's revisions stop getting better.
+     *
+     * THE WRITE (requirement 1) is the audit row on `stories.summary_review_history`: `{round, wave,
+     * revision_id, at, blocking_found, finding_refs}`, appended once per revision and keyed by the
+     * revision id, so a restart or a re-run of the same sweep cannot count a revision twice (the audit
+     * IS the persistent state the plateau policy needs — see `records.ts:revisionReviewProgressOf` for
+     * why it is stored rather than re-derived from live finding rows). `blocking_found` counts FINDING
+     * ROWS by the dial-aware Summary bar, never a fingerprint or a title, so re-wording the same defect
+     * is not progress and one defect described twice is not two regressions.
+     *
+     * THE TIMING (requirement 5) is the sweep position above: the entry is only owed once the review has
+     * fully closed AND every blocking suspicion the Readers filed has been decided by the Editor, so a
+     * suspicion the Editor later disputes or re-costs below the bar never becomes a permanent number —
+     * and the wait costs the loop nothing, because those same unconfirmed rows already refuse the
+     * sampler. This step sits BEFORE the sweep builds its candidate list, which is what makes the guard
+     * land ahead of the next sampler in the adversarial scenario instead of racing it.
+     *
+     * THE QUESTION (requirement 2/3) used to be opened in the same commit as the entry that proves the
+     * streak. SUMMARY PHRASE removed it (R5): a group-managed book's "this stopped getting better"
+     * question is the per-group hill-climb — the next Writer batch is pointed at the SAME group whose
+     * revision the review criticised (`phrase/findings.ts:findingGroupsStillOwed` routes those groups),
+     * so no Author row is needed and none is raised. The audit row itself stays, because a legacy
+     * `summary_mode:'sampling'` book still runs the whole-Summary loop and its history keeps being
+     * written.
+     */
+    private async trackRevisionProgress(storyId: string, at: string): Promise<void> {
+        const store = this.store;
+        const story = requireStory(store, storyId);
+
+        if (story.phase !== 'summary') return;
+
+        // SUMMARY PHRASE: a group-managed book's accepted state is the GROUP VECTOR, not one selected
+        // Summary revision, so `pendingRevisionReviewEntry` (a whole-Summary read) has nothing to
+        // report here — skipping keeps the audit free of rows about a revision that never existed.
+        if (isGroupManagedStory(story)) return;
+
+        const owed = pendingRevisionReviewEntry(store, story);
+
+        // The common case: nothing reviewed since the last sweep. Two reads, no commit — a sweep must
+        // not touch the journal to say nothing happened.
+        if (owed === undefined) return;
+
+        await store.commit('loop_revision_review', () => {
+            const fresh = requireStory(store, storyId);
+            // Re-derived INSIDE the commit (T-4's discipline): the row the selection installed and the
+            // verification the Editor settled may both have moved between the pre-read and this write.
+            const entry = pendingRevisionReviewEntry(store, fresh);
+
+            if (entry !== undefined) {
+                store.stories.update(
+                    fresh.id,
+                    {
+                        summary_review_history: [
+                            ...(fresh.summary_review_history ?? []),
+                            {
+                                round: deepReviewRoundOf(fresh),
+                                wave: samplingWaveOf(fresh),
+                                revision_id: entry.revision.id,
+                                at,
+                                blocking_found: entry.blocking.length,
+                                finding_refs: entry.blocking.map((finding) => finding.id)
+                            }
+                        ]
+                    },
+                    loopAttr(
+                        `the deep review of ${entry.revision.id} closed and its suspicions were decided: ${entry.blocking.length} blocking finding(s) on the accepted revision — the accepted-revision audit (§3.6, §6.8, G1)`
+                    ),
+                    [{ id: fresh.id, rev: fresh.rev }]
+                );
+            }
+            // SUMMARY PHRASE: the plateau escalation (`openRevisionPlateauTask`) that used to follow
+            // this write is gone (R5) — the per-group hill-climb is the retry policy now, so a streak
+            // of revisions that do not improve the review's numbers routes work instead of asking.
         });
     }
 
@@ -2052,7 +2509,13 @@ export class LoopEngine implements EngineApi {
                     chapter_deps: {},
                     // The Author's phase-① pipeline dials (D-17d/D-38a: counts are settings).
                     ...(input.summary_sampling === undefined ? {} : { summary_sampling: input.summary_sampling }),
-                    ...(input.summary_readers === undefined ? {} : { summary_readers: input.summary_readers })
+                    ...(input.summary_readers === undefined ? {} : { summary_readers: input.summary_readers }),
+                    // SUMMARY PHRASE R1/R6: a NEW book is group-managed unless the caller asks for the
+                    // legacy sampler. This is the ONLY place `'groups'` is chosen automatically — an
+                    // existing Story opts in by the Author's explicit import (`POST /stories/:id/phrases/import`),
+                    // and a row with no `summary_mode` reads as `'sampling'` (R6: old books are readable,
+                    // not migrated).
+                    summary_mode: input.summary_mode ?? 'groups'
                 },
                 authorAttr(`the Author opened a Story from a Seed (D-2a: it starts ready)`)
             );
@@ -2066,6 +2529,19 @@ export class LoopEngine implements EngineApi {
                 },
                 authorAttr(`the Author declared chapter_count for ${created.id} (D-3b)`)
             );
+
+            // SUMMARY PHRASE R1: the catalog exists IN THE BOOK from the first moment the Story does —
+            // one Phrase row and one row per ENABLED group (today: premise, promise, theme, tone,
+            // ending), each at `revision: 0` with empty content, which is the state generation reads as
+            // "never written". It rides THIS commit, so a crash cannot leave a group-managed Story
+            // without groups (P1); `ensurePhraseCatalog` is idempotent, so an api layer that creates a
+            // Story twice over a restored store adds nothing.
+            //
+            // The legacy import is NOT part of this: new books have no prose to import, and a legacy
+            // book's prose moves into group history only when the Author asks (R6).
+            if (isGroupManagedStory(created)) {
+                ensurePhraseCatalog(store, created, authorAttr(`the Summary Phrase catalog (R1) was created with the Story — its Summary is written group by group`));
+            }
 
             // G-4: every crew is briefed against the SAME target. A Story with no Goal row is a Story
             // whose brief says "(no Goal row for this Story)" and whose phase Goal is answered from the
@@ -2140,8 +2616,9 @@ export class LoopEngine implements EngineApi {
     /**
      * §10 / P1 — delete a Story and everything it owns. The Author's cord first (a phrase must not
      * outlive the book it was writing), then ONE commit removes every story-scoped §4 row, the three
-     * phase-① research collections (`seed_briefs`, `knowledge`, `sample_reviews` — T12/A) and the
-     * Story itself; finally the Story's harness is disposed, which tears down its sessions and
+     * phase-① research collections (`seed_briefs`, `knowledge`, `sample_reviews` — T12/A), the three
+     * Summary Phrase collections (`phrases`, `phrase_groups`, `group_revisions` — P1 hardening) and
+     * the Story itself; finally the Story's harness is disposed, which tears down its sessions and
      * threads. The knowledge FILES are a projection outside §4, so the route deletes that directory
      * alongside this call; the `knowledge` COLLECTION is a store row and goes in this commit.
      */
@@ -2184,6 +2661,19 @@ export class LoopEngine implements EngineApi {
             this.store.revisions.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.ideas.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.proposals.deleteWhere((row) => row.story_id === story.id, attribution);
+
+            // SUMMARY PHRASE (P1 hardening) — the three Summary Phrase collections are story-scoped
+            // exactly like the §4 rows, and T4's probe measured `phrases=1 phrase_groups=5`
+            // surviving the delete: the Phrase row, its five groups (Author-imported or loop-
+            // ensured, locked or not) and every archived/active group revision outlived the book,
+            // each still naming a `story_id` the store no longer held. Phrase findings and fix
+            // tasks ride the `findings`/`tasks` deletes above and group-review verdicts the
+            // `verdicts` delete — but these three collections needed their own lines. P1 gives
+            // the Author's delete no lock exemption: the whole book goes.
+            this.store.phrases.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.phraseGroups.deleteWhere((row) => row.story_id === story.id, attribution);
+            this.store.groupRevisions.deleteWhere((row) => row.story_id === story.id, attribution);
+
             this.store.stories.delete(story.id, attribution);
         });
 
@@ -2393,6 +2883,10 @@ export class LoopEngine implements EngineApi {
                 patch.sampling_round = 0;
                 patch.sampling_history = [];
                 patch.sampling_wave = 0;
+                // G1: the accepted-revision audit describes revisions `scrapPhasesAfter` just deleted, and
+                // a plateau computed from revisions that no longer exist would stop a fresh phase ① before
+                // it sampled once. Wave 0 restarts the audit's partition too (§3.6, G1).
+                patch.summary_review_history = [];
 
                 const summary = storySummary(this.store, storyId);
 
@@ -2580,7 +3074,10 @@ export class LoopEngine implements EngineApi {
                     // The retry WAVE goes with them (T12/E): a new Seed starts at wave 0.
                     sampling_round: 0,
                     sampling_history: [],
-                    sampling_wave: 0
+                    sampling_wave: 0,
+                    // G1: a new Seed has no accepted revisions to audit, so the plateau's ledger goes with
+                    // the sampling counters — the new Seed gets its own baseline, not the old wave's streak.
+                    summary_review_history: []
                 },
                 authorAttr('the Author rewrote the Seed; the Story starts again from scratch (D-25a, P5)'),
                 [{ id: fresh.id, rev: fresh.rev }]
@@ -2595,6 +3092,46 @@ export class LoopEngine implements EngineApi {
                     authorAttr('the Summary is the artifact the new Seed has to re-grow (D-25a, D-5)'),
                     [{ id: summary.id, rev: summary.rev }]
                 );
+            }
+
+            // SUMMARY PHRASE (hardening, D-25a/D-5/R2): on a group-managed book the CURRENT text is
+            // not the mirror above — it is the `phrase_groups` rows and the Overview the `phrases`
+            // row composes from them. Clearing only the mirror would leave the OLD Seed's group
+            // prose driving everything: `groupWorkTargets` would see five written groups and offer
+            // no first draft, the review seats would stay keyed to the stale vector, and the rail
+            // would show an Overview the new Seed never wrote. The rows are RESET in place — same
+            // ids (R1's addresses outlive the text; the catalog is not deleted and re-minted),
+            // content empty, number back to 0 — which is EXACTLY the fresh-catalog state
+            // `phrase/catalog.ts` creates, so the next install lands at revision 1 and a
+            // re-pressed `ensurePhraseCatalog` is a no-op. The `group_revisions` history is already
+            // gone with the legacy revisions (`scrapPhasesAfter`, same commit): no stale `latest`
+            // row keeps its claim on the attempt baseline (`writeBaselineOf`) or the vector hash,
+            // and R3's closure cannot fire off a scrapped Seed's install. The mirror stays cleared:
+            // it re-derives from the new texts inside the next install (R6).
+            if (isGroupManagedStory(fresh)) {
+                for (const group of phraseGroupsOf(store, storyId)) {
+                    store.phraseGroups.update(
+                        group.id,
+                        // The fresh-row triple `catalog.ts` mints: unwritten is `''` + `0` + null
+                        // authorship (the projection reads exactly that as "never written").
+                        { content: '', revision: 0, updated_by: null },
+                        authorAttr('the Author rewrote the Seed; the groups re-grow from the new one (D-25a, R2)'),
+                        [{ id: group.id, rev: group.rev }]
+                    );
+                }
+
+                const phrase = storyPhrase(store, storyId);
+
+                if (phrase !== undefined) {
+                    store.phrases.update(
+                        phrase.id,
+                        // Nothing composed yet — the same `''` a fresh catalog row carries; a
+                        // placeholder sentence would be quoted back by a review as Author prose.
+                        { content: '', revision: 0 },
+                        authorAttr('the Overview recomposes when the first new group lands (D-25a, R2)'),
+                        [{ id: phrase.id, rev: phrase.rev }]
+                    );
+                }
             }
         });
     }
@@ -3329,9 +3866,19 @@ function normaliseProposalPatch(field: string, patch: unknown): Record<string, u
     return {};
 }
 
-/** Is this claim key already claimed, in this process or in the store? (L-2's two halves.) */
-function isClaimedHere(store: Store, key: string): boolean {
-    return store.runs.list().some((run) => isLiveRun(run) && run.work_item_ref === key);
+/**
+ * Is this claim key already claimed, in this process or in the store? (L-2's two halves.)
+ *
+ * S-RUNTIME: scoped to the candidate's Story. The claim is a STRING comparison, and the id-less families
+ * (`wi_verify_ideas`, `wi_whole_check`, a probe round's `wi_probe_reader_chapters_1`) are the same
+ * string for every Story, so in a book holding more than one Story an unscoped read lets Story A's live
+ * run answer "claimed" for Story B's job and Story B goes unswept. One Store per Story
+ * (`store/story-stores.ts`) is what makes the scope a no-op; the scope is what makes a shared book honest.
+ */
+function isClaimedHere(store: Store, key: string, storyId?: string): boolean {
+    return store.runs.list().some(
+        (run) => isLiveRun(run) && run.work_item_ref === key && (storyId === undefined || run.story_id === storyId)
+    );
 }
 
 /**

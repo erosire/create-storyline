@@ -149,14 +149,15 @@ describe("D-3c — the chapter count is the Author's, and changing it after the 
         // a plotline set that no longer matches the count: the confirm names them (L-32).
         expect(await rig.engine.changeChapterCount(rig.storyId, 4)).toEqual({
             pending_confirm: true,
-            removed: ['chapter_1', 'chapter_2']
+            // ZERO-BASED ids: the two chapters the walk built are `chapter_0`/`chapter_1`.
+            removed: ['chapter_0', 'chapter_1']
         });
 
         const result = await rig.engine.changeChapterCount(rig.storyId, 4, { confirm: true });
 
         // The confirmed call rebuilds the set from scratch — the old rows are gone, and the new ids
         // continue the collection rather than reusing them (P11's ids are never reissued).
-        expect(result).toEqual({ created: ['chapter_3', 'chapter_4', 'chapter_5', 'chapter_6'], needs_recheck: [] });
+        expect(result).toEqual({ created: ['chapter_2', 'chapter_3', 'chapter_4', 'chapter_5'], needs_recheck: [] });
         expect(
             rig.store.chapters
                 .list()
@@ -181,10 +182,10 @@ describe("D-3c — the chapter count is the Author's, and changing it after the 
 
         expect(await rig.engine.changeChapterCount(rig.storyId, 3)).toEqual({
             pending_confirm: true,
-            removed: ['chapter_6']
+            removed: ['chapter_5']
         });
         expect(await rig.engine.changeChapterCount(rig.storyId, 3, { confirm: true })).toEqual({
-            removed: ['chapter_6'],
+            removed: ['chapter_5'],
             // Nothing else in the sequence moved, so nothing else has to be re-read (D-3c, L-11).
             needs_recheck: []
         });
@@ -216,7 +217,7 @@ describe('D-37 / D-37a / L-17a — Pause & edit, then hand the book back', () =>
 
         expect(
             chapter.sections.map((section) => `${section.id}:${section.origin}:${section.text.slice(0, 24)}`)
-        ).toEqual(['sec_1:author:', 'sec_2:writer:draft wi_write_chapter_1']);
+        ).toEqual(['sec_1:author:', 'sec_2:writer:draft wi_write_chapter_0']);
 
         await rig.engine.pauseStory(rig.storyId);
 
@@ -235,7 +236,7 @@ describe('D-37 / D-37a / L-17a — Pause & edit, then hand the book back', () =>
             rig.store.chapters
                 .get(chapter.id)
                 ?.sections.map((section) => `${section.id}:${section.origin}:${section.text.slice(0, 24)}`)
-        ).toEqual(['sec_1:author:The water came back over', 'sec_2:writer:draft wi_write_chapter_1']);
+        ).toEqual(['sec_1:author:The water came back over', 'sec_2:writer:draft wi_write_chapter_0']);
 
         await rig.engine.resumeStory(rig.storyId);
 
@@ -257,7 +258,7 @@ describe('D-37 / D-37a / L-17a — Pause & edit, then hand the book back', () =>
             rig.store.chapters
                 .get(chapter.id)
                 ?.sections.map((section) => `${section.id}:${section.origin}:${section.text.slice(0, 24)}`)
-        ).toEqual(['sec_1:author:', 'sec_2:writer:draft wi_write_chapter_1']);
+        ).toEqual(['sec_1:author:', 'sec_2:writer:draft wi_write_chapter_0']);
     });
 
     it('an Author edit dirties the chapters that depend on it before anyone runs (D-37a, L-11a)', async () => {
@@ -316,7 +317,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
         // the stop, the report). The TASKS are the Editor's: the row says so by staying propagating
         // with a zero count, not by pretending a review already happened (D-19, V-1).
         expect(result).toEqual({
-            directive_id: 'directive_1',
+            directive_id: 'directive_0',
             impact: {
                 runs_stopped: 0,
                 tasks_created: 0,
@@ -328,7 +329,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
             }
         });
 
-        let directive = rig.store.directives.get('directive_1');
+        let directive = rig.store.directives.get('directive_0');
 
         expect({ state: directive?.state, impact: directive?.impact }).toEqual({
             state: 'propagating',
@@ -340,7 +341,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
         // the server resolved, and its createTask calls are what the queue gets.
         await rig.step();
 
-        directive = rig.store.directives.get('directive_1');
+        directive = rig.store.directives.get('directive_0');
 
         expect({ state: directive?.state, tasks: directive?.report?.tasks_created }).toEqual({
             state: 'done',
@@ -387,7 +388,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
             priority: 1,
             finding_ref: '',
             criterion_ref: '',
-            detail: `directive_1 · ${chapter.id}`
+            detail: `directive_0 · ${chapter.id}`
         });
 
         // The journal says what created the work — a run, not an Author write. The run is the
@@ -399,7 +400,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
             `the Editor queued the Author's directive onto ${chapter.id} (D-19, D-11)`
         );
         expect(rig.store.runs.get(String(created?.attribution.run_ref))?.work_item_ref).toBe(
-            'wi_directive_directive_1'
+            'wi_directive_directive_0'
         );
     });
 });
@@ -431,10 +432,12 @@ describe("D-29 — the selection note IS the record of the Author's decision", (
             body: 'the steeple bell rings under the water'
         });
 
-        await rig.engine.decideIdea('idea_1', ['idea_1'], NOTE);
+        // ZERO-BASED, story-local ids: the rig's sweep files no Idea of its own, so the two seeded
+        // rows are `idea_0` and `idea_1`, and the Story row is `story_0`.
+        await rig.engine.decideIdea('idea_0', ['idea_0'], NOTE);
 
-        const picked = rig.store.ideas.require('idea_1');
-        const loser = rig.store.ideas.require('idea_2');
+        const picked = rig.store.ideas.require('idea_0');
+        const loser = rig.store.ideas.require('idea_1');
 
         expect({ state: picked.state, selection_note: picked.selection_note }).toEqual({
             state: 'selected',
@@ -450,9 +453,9 @@ describe("D-29 — the selection note IS the record of the Author's decision", (
         // P11: the journal carries the same words as the row, so the audit trail shows the reason too.
         expect(
             rig.store.journal
-                .filter((event) => event.op === 'update' && event.id === 'idea_1')
+                .filter((event) => event.op === 'update' && event.id === 'idea_0')
                 .map((event) => event.attribution.why)
-        ).toEqual([`the Author selected idea_1: ${NOTE} (D-29)`]);
+        ).toEqual([`the Author selected idea_0: ${NOTE} (D-29)`]);
 
         // D-29's other half still fires off the same commit: the pick becomes the next Writer's job.
         expect(
@@ -460,7 +463,7 @@ describe("D-29 — the selection note IS the record of the Author's decision", (
                 .list()
                 .filter((task) => task.kind === 'absorb')
                 .map((task) => `${task.state}:${task.detail ?? ''}`)
-        ).toEqual(['open:idea_1 · story_1']);
+        ).toEqual(['open:idea_0 · story_0']);
 
         // The fallback is for a note-less call only — a blank note is not a reason, so it falls back too.
         seedIdea(rig.store, rig.storyId, {
@@ -471,11 +474,11 @@ describe("D-29 — the selection note IS the record of the Author's decision", (
             body: 'the keeper never names the light'
         });
 
-        await rig.engine.decideIdea('idea_3', ['idea_3'], '   ');
+        await rig.engine.decideIdea('idea_2', ['idea_2'], '   ');
 
         expect({
-            state: rig.store.ideas.require('idea_3').state,
-            selection_note: rig.store.ideas.require('idea_3').selection_note
+            state: rig.store.ideas.require('idea_2').state,
+            selection_note: rig.store.ideas.require('idea_2').selection_note
         }).toEqual({
             state: 'selected',
             selection_note: 'the Author selected this Idea (D-29)'

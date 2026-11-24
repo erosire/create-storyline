@@ -1,16 +1,22 @@
 // §15 step 4 and the Author's other verbs: stop/resume, backtrack, the section edit, undo, the
 // assistant run, kill, the cross-Story queue, and a restart from the journal — over real HTTP.
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
     advanceUntil,
     bootStoryline,
+    chapterStates,
     createSliceStory,
+    ideaStates,
     liveRunRows,
     openDial,
     queue,
     revisionStates,
     storyRow,
+    storyRowFrom,
     storyView,
     type StorylineFixture
 } from './harness';
@@ -102,13 +108,13 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         // desk is the Story, and the sentence is read back from the ledger. A pending sign-off is
         // re-armed by the Author's decision (L-27).
         expect({ id: directive.body.id, phase: directive.body.phase, status: directive.body.status }).toEqual({
-            id: 'story_1',
+            id: storyId,
             phase: 'summary',
             status: 'ready'
         });
 
-        expect(fixture.store.directives.require('directive_1')).toMatchObject({
-            story_id: 'story_1',
+        expect(fixture.store.directives.require('directive_0')).toMatchObject({
+            story_id: storyId,
             text: 'The keeper never learns her own name. Keep it that way.',
             // The server records the direction; the Editor's review is the next sweep's thread, so
             // the row is still propagating when the POST answers (V-1: Author → Editor → tasks).
@@ -119,7 +125,7 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         // task plan is empty and the directive closes `done` with a zero task count (L-11).
         await fixture.tick();
 
-        const propagated = fixture.store.directives.require('directive_1');
+        const propagated = fixture.store.directives.require('directive_0');
 
         expect(propagated.impact).toEqual([]);
         expect({ state: propagated.state, tasks: propagated.report?.tasks_created }).toEqual({
@@ -129,7 +135,7 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
 
         // The review is a real Editor thread, not a server shortcut: one run, the editor role, and
         // the directive as its job (V-1: the Author's only channel is the Editor).
-        const review = fixture.store.runs.list().filter((run) => run.work_item_ref === 'wi_directive_directive_1');
+        const review = fixture.store.runs.list().filter((run) => run.work_item_ref === 'wi_directive_directive_0');
 
         expect(review).toHaveLength(1);
         // The job binds the first editor template the Story is assigned (`records.ts:templatesFor`
@@ -157,7 +163,8 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         expect({ kind: first.body.kind, role: first.body.role }).toEqual({ kind: 'assistant', role: 'writer' });
         // The claim key is scoped to this Story; its counter is the book's run count, so it moves
         // whenever the loop has opened a thread before it (the directive review does exactly that).
-        expect(String(first.body.work_item_ref)).toMatch(/^assistant_story_1_\d+$/);
+        // The Story half of the key is the Story's UUID (`routes.ts` builds `assistant_${storyId}_${n}`).
+        expect(String(first.body.work_item_ref)).toMatch(new RegExp(`^assistant_${storyId}_\\d+$`));
         expect((await fixture.api<Array<Record<string, unknown>>>('GET', '/runs')).body.length).toBe(before + 1);
 
         // The run answers by reading, and it writes nothing: the assistant's tools are all reads (§8.5).
@@ -188,7 +195,7 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         // Backtracking to the phase the drafts belong to retires those drafts: the phase is open again
         // and the crew will produce again. What survives is the Story, its ledger and its Goal.
         expect(revisionStates(fixture.store, storyId)).toEqual([]);
-        expect(fixture.store.summaries.require('summary_1').locked).toBe(false);
+        expect(fixture.store.summaries.require('summary_0').locked).toBe(false);
 
         const bad = await fixture.api<{ error?: string }>('POST', `/stories/${storyId}/backtrack`, {
             phase: 'nowhere'
@@ -198,18 +205,97 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
     });
 
     it('a restart reads the same journal and reports the same Story (L-26)', async () => {
+        // ONE COHERENT BOUNDARY, and a barrier to prove it. `quiesce()` returns only when the engine's
+        // in-flight map is drained AND no book carries a live run row, so nothing can move the Story
+        // between the snapshot below and the journal flush after it. This step used to take its two row
+        // reads back to back with nothing between them, and a sweep that landed in the gap moved the row
+        // from the backtrack's `ready` to the sign-off the re-decided phase produces (`pending` +
+        // `phase_signoff` + `blocked_on: 'the Summary'`), which is the flake — and the panel it compared
+        // was never the one the reloaded Store held.
+        await fixture.quiesce();
+
         const live = await storyRow(fixture, storyId);
 
         // The Store debounces its snapshot; `persist()` is the flush the shipped server does on close,
         // and only after it is the journal on disk current.
         await fixture.store.persist();
 
-        const reloaded = await Store.load(fixture.root);
-        const panel = await storyRow({ ...fixture, store: reloaded } as StorylineFixture, storyId);
+        // A workspace root is not a book: `<root>/server/` is the app-config book and each Story lives in
+        // `<root>/stories/<uuid>/` (D-34), so the restart re-opens THIS Story's book, not the root.
+        const dir = fixture.storyDir(storyId);
+
+        if (!dir) throw new Error(`The durable fixture gave ${storyId} no book directory.`);
+
+        // The flush is what made the book re-openable: `persist()` writes `<dir>/store.json`, and that
+        // snapshot is the section `Store.load` hydrates rows from (`store.ts:742-770`) — the journal
+        // beside it is the audit log, not a second source of the rows.
+        expect(existsSync(path.join(dir, 'store.json'))).toBe(true);
+
+        // THE RESTART: a second Store over the same book directory.
+        const reloaded = await Store.loadStory(storyId, dir);
+
+        // L-26's claim is about the PANEL a restarted server paints, so the comparison reads the
+        // journal-loaded book through the shipped projection (`harness.ts:storyRowFrom` — the very
+        // function `GET /stories` renders rows with). The old call, `storyRow({...fixture, store:
+        // reloaded})`, went through `fixture.api` and therefore answered from the LIVE server: the
+        // reloaded Store it was handed was ignored, and the assertion compared two live HTTP reads taken
+        // at two different times rather than live-vs-journal.
+        const panel = storyRowFrom(reloaded, storyId);
 
         expect(panel).toEqual(live);
-        expect(reloaded.stories.require(storyId).phase).toBe(live.phase);
-        expect(reloaded.ideas.list()).toEqual([]);
+
+        // It is a RESTART, not the live rows under a new name. The event log the reload merged off disk is
+        // the live book's flushed sequence, commit for commit — still ending on the Author's backtrack,
+        // the state this panel had to reproduce — and a write to the LIVE book afterwards moves the live
+        // row and leaves the journal-loaded copy exactly where the flush left it. (`require` hands out a
+        // clone, so object identity proves nothing; the direction the data moved is the proof.)
+        const liveJournal = fixture.store.journal;
+
+        expect(reloaded).not.toBe(fixture.store);
+        expect(reloaded.journal.map((event) => event.seq)).toEqual(liveJournal.map((event) => event.seq));
+        expect(liveJournal.length).toBeGreaterThan(0);
+        expect(reloaded.journal[reloaded.journal.length - 1]).toEqual(liveJournal[liveJournal.length - 1]);
+        expect(liveJournal[liveJournal.length - 1].commit_label).toBe('backtrack_to_phase');
+
+        fixture.store.stories.update(
+            storyId,
+            { title: 'the live book, after the reload' },
+            { author: true, run_ref: null, why: 'L-26: shows the panel above came off the journal, not these rows' },
+            [{ id: storyId, rev: fixture.store.stories.require(storyId).rev }]
+        );
+
+        expect(fixture.store.stories.require(storyId).title).toBe('the live book, after the reload');
+        expect(reloaded.stories.require(storyId).title).toBe(live.title);
+        expect(storyRowFrom(reloaded, storyId).title).toBe(live.title);
+
+        // The persisted fields behind that panel, pinned off the journal's rows so a panel that merely
+        // looks right cannot pass: phase ① reopened by the backtrack, both locks open, the scrapped
+        // chapters stayed scrapped, the Ideas tray is empty because phase ①'s Goal passed and L-29 stopped
+        // the crew before any probe round filed an Idea (the sign-off's own reason line says the same),
+        // and the row's own chapter tally line, which counts the scrap.
+        const story = reloaded.stories.require(storyId);
+
+        expect({
+            phase: story.phase,
+            status: story.status,
+            pending_kind: story.pending_kind,
+            summary_locked: story.summary_locked,
+            plotlines_locked: story.plotlines_locked,
+            levels: panel.levels,
+            chapters: chapterStates(reloaded, storyId),
+            ideas: ideaStates(reloaded, storyId),
+            progress: panel.progress
+        }).toEqual({
+            phase: 'summary',
+            status: 'ready',
+            pending_kind: 'none',
+            summary_locked: false,
+            plotlines_locked: false,
+            levels: { summary: '2/2', plotlines: 'n/a', chapters: 'n/a', whole: 'n/a' },
+            chapters: [],
+            ideas: [],
+            progress: '0 chapters · 0 done'
+        });
     });
 });
 
@@ -293,7 +379,7 @@ describe('§15 step 3d/4: the Author writing into a chapter, and undo', () => {
 
     it("undo takes the section back to the crew's draft, and the Story keeps working (U-5, P11)", async () => {
         const chapter = (await storyView(fixture, storyId)).chapters.find(
-            (entry: Record<string, unknown>) => entry.id === 'chapter_1'
+            (entry: Record<string, unknown>) => entry.id === 'chapter_0'
         );
         const section = chapter.sections[0];
 
@@ -308,7 +394,7 @@ describe('§15 step 3d/4: the Author writing into a chapter, and undo', () => {
         expect(undo).toEqual({ status: 200, body: expect.anything() });
 
         const restored = (await storyView(fixture, storyId)).chapters.find(
-            (entry: Record<string, unknown>) => entry.id === 'chapter_1'
+            (entry: Record<string, unknown>) => entry.id === 'chapter_0'
         ).sections[0];
 
         // U-5 / P11: the undo restores the crew's draft and the origin stamp goes back with it.
@@ -340,9 +426,9 @@ describe('§15 step 3d/4: the Author writing into a chapter, and undo', () => {
         // Losing a run does not stop a Story: the sweep keeps the Story's own work moving (S-6).
         expect((await storyRow(fixture, storyId)).status).not.toBe('stopped');
 
-        const missing = await fixture.api<{ error?: string }>('POST', '/runs/run_999/kill');
+        const missing = await fixture.api<{ error?: string }>('POST', '/runs/run_998/kill');
 
         expect(missing.status).toBe(404);
-        expect(missing.body.error).toBe('no run named run_999 is in the book (P1: the store is the memory)');
+        expect(missing.body.error).toBe('no run named run_998 is in the book (P1: the store is the memory)');
     });
 });

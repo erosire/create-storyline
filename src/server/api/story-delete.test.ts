@@ -4,7 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import { MockChatClient, msg } from '../llm/mock';
 import { buildStorylineRuntime } from './server';
-import { MockToolRuntime, seedChapter, seedFinding, seedIdea, seedPlotline, seedRevision, seedTask } from '../run/mock';
+import { MockToolRuntime, AUTHOR_ATTR, seedChapter, seedFinding, seedIdea, seedPlotline, seedRevision, seedTask } from '../run/mock';
+import { installGroupRevisions } from '../phrase/revisions';
 import { Store } from '../store/store';
 import type { Hono } from 'hono';
 import type { StoryRow } from '../../dashboard/api';
@@ -152,6 +153,144 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
         expect(world.executor.harness.has(storyId)).toBe(false);
         expect((await call(world.app, 'GET', `/stories/${storyId}`)).status).toBe(404);
         expect((await call(world.app, 'GET', `/stories/${storyId}/knowledge`)).status).toBe(404);
+    });
+
+    it('purges the Summary Phrase catalog, its Overview and its whole revision history (P1, R1)', async () => {
+        const world = makeApp();
+
+        const created = await call(world.app, 'POST', '/stories', {
+            title: 'The Salt Cartographer',
+            idea: 'A mapmaker finds her own coastline redrawn on a chart she surveyed herself.',
+            chapter_count: 1,
+            summary_mode: 'groups'
+        });
+        const storyId = (created.body as StoryRow).id;
+        const groupsOf = (id: string) => world.store.phraseGroups.list().filter((group) => group.story_id === id);
+
+        // The create mints the catalog on this pipeline (R1): the five groups, unwritten, plus the one
+        // Overview row that composes them.
+        expect(groupsOf(storyId).map((group) => group.key)).toEqual(['premise', 'promise', 'theme', 'tone', 'ending']);
+        expect(world.store.phrases.list().filter((row) => row.story_id === storyId)).toHaveLength(1);
+
+        // Two accepted passes: five `latest` group revisions at number 2 and five `archived` at number 1.
+        // These are the rows T4's probe measured SURVIVING the delete (`phrases=1 phrase_groups=5`).
+        for (const pass of ['first', 'second']) {
+            installGroupRevisions(
+                world.store,
+                world.store.stories.require(storyId),
+                groupsOf(storyId).map((group) => ({ group, content: `${group.key}: the ${pass} text.` })),
+                AUTHOR_ATTR,
+                { runRef: `run_${pass}`, workItemRef: `wi_draft_groups_${pass}_1` }
+            );
+        }
+
+        expect(
+            world.store.groupRevisions
+                .list()
+                .filter((row) => row.story_id === storyId)
+                .map((row) => `${row.number}:${row.state}`)
+                .sort()
+        ).toEqual([
+            '1:archived',
+            '1:archived',
+            '1:archived',
+            '1:archived',
+            '1:archived',
+            '2:latest',
+            '2:latest',
+            '2:latest',
+            '2:latest',
+            '2:latest'
+        ]);
+
+        // An open defect scoped to two groups (R3) and the fix task it opened — phrase-scoped rows the
+        // Author's rail shows, riding on ids the delete is about to remove.
+        const seededFinding = seedFinding(world.store, storyId, {
+            target_ref: 'summary_0',
+            criterion_ref: 'C-14',
+            cost: 'major',
+            state: 'confirmed',
+            title: 'the Overview keeps a coastline the Seed drowned',
+            detail: 'summary_0 promise says the valley is dry; the Seed says it is a reservoir',
+            fingerprint: 'C-14|summary_0|coastline'
+        });
+        const finding = world.store.findings.update(
+            seededFinding.id,
+            { group_refs: [groupsOf(storyId)[0]!.id, groupsOf(storyId)[1]!.id] },
+            { run_ref: null, author: true, why: 'seed: the defect is scoped to two groups (R3)' },
+            [{ id: seededFinding.id, rev: seededFinding.rev }]
+        );
+
+        seedTask(world.store, storyId, {
+            kind: 'fix',
+            title: 'fix finding_0: drown the coastline',
+            detail: `C-14 on summary_0 · ${finding.id}`,
+            owner_role: 'writer',
+            finding_ref: finding.id
+        });
+
+        // The Author has ALREADY locked the phase (L-7). P1 gives the delete no lock exemption: a locked
+        // Summary is part of the book, and the whole book goes.
+        const summary = world.store.summaries.require('summary_0');
+        const lockedStory = world.store.stories.require(storyId);
+
+        world.store.summaries.update(
+            summary.id,
+            { locked: true },
+            { run_ref: null, author: true, why: 'seed: the Author signed the Summary off (L-7)' },
+            [{ id: summary.id, rev: summary.rev }]
+        );
+        world.store.stories.update(
+            lockedStory.id,
+            { summary_locked: true, status: 'pending', pending_kind: 'phase_signoff' },
+            { run_ref: null, author: true, why: 'seed: the phase is signed off (L-7, L-29)' },
+            [{ id: lockedStory.id, rev: lockedStory.rev }]
+        );
+
+        // Story B: another group-managed book, one install deep. The delete is scoped by `story_id`, so
+        // B's addresses, texts and history keep their exact values.
+        const createdB = await call(world.app, 'POST', '/stories', {
+            title: 'The Signalman',
+            idea: 'A signalman answers a letter written after his death.',
+            chapter_count: 1,
+            summary_mode: 'groups'
+        });
+        const storyB = (createdB.body as StoryRow).id;
+
+        installGroupRevisions(
+            world.store,
+            world.store.stories.require(storyB),
+            groupsOf(storyB).map((group) => ({ group, content: `${group.key}: B keeps this text.` })),
+            AUTHOR_ATTR,
+            { runRef: 'run_b', workItemRef: 'wi_draft_groups_b_1' }
+        );
+
+        const rowShape = (rows: { id: string; content: string; revision: number }[]) =>
+            rows.map((row) => `${row.id}:${row.content}:${row.revision}`);
+        const beforeB = rowShape(groupsOf(storyB));
+        const historyB = world.store.groupRevisions.list().filter((row) => row.story_id === storyB);
+
+        const deleted = await call(world.app, 'DELETE', `/stories/${storyId}`);
+
+        expect(deleted).toEqual({ status: 200, body: { deleted: storyId } });
+
+        // The three Summary Phrase collections go in the same commit as the §4 rows (P1): nothing may
+        // keep a `story_id` the store no longer holds — not the Overview, not the Author-imported
+        // groups, not one archived revision of a scrapped pass.
+        expect(world.store.phrases.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.phraseGroups.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.groupRevisions.list().filter((row) => row.story_id === storyId)).toEqual([]);
+
+        // And the rows that JOIN on those ids go with them (findings/tasks ride the §4 deletes).
+        expect(world.store.findings.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.tasks.list().filter((row) => row.story_id === storyId)).toEqual([]);
+
+        // Story B is untouched by any of it — same ids, same texts, same five revisions.
+        expect(rowShape(groupsOf(storyB))).toEqual(beforeB);
+        expect(world.store.groupRevisions.list().filter((row) => row.story_id === storyB).length).toBe(
+            historyB.length
+        );
+        expect(world.store.phrases.list().filter((row) => row.story_id === storyB)).toHaveLength(1);
     });
 
     it('keeps the global template catalogue: a template is the Author’s, not the Story’s', async () => {

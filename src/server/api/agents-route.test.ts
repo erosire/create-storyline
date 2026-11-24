@@ -111,7 +111,7 @@ describe('GET /agents', () => {
 
         store.runs.create(
             {
-                story_id: 'story_1',
+                story_id: 'story_0',
                 work_item_ref: 'wi_check_chapters_1',
                 role: 'checker',
                 state: 'failed',
@@ -144,7 +144,7 @@ describe('GET /agents', () => {
         expect(checker?.status).toBe('idle');
         expect(checker?.recent).toHaveLength(1);
         expect(checker?.recent[0]).toMatchObject({
-            run_id: 'run_1',
+            run_id: 'run_0',
             work_item: 'wi_check_chapters_1',
             state: 'failed',
             no_op: true

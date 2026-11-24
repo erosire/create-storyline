@@ -10,6 +10,14 @@ import { STORE_ROOT_ENVIRONMENT, packageRootOf, resolveStoreRoot } from '../../c
 import type { StorylineRuntime } from '../../api/server';
 
 // A minimal runtime stand-in: the cache only touches lifecycle members on `dispose`.
+//
+// S-RUNTIME: `dispose` no longer walks the runtime's own members — it calls the ONE shutdown the
+// runtime exposes, `runtime.runtimes.close()` (runtime-cache.ts:106-118). That coordinator close IS
+// the old per-member shutdown, in its documented order (stop the sweep → settle the runs →
+// dispose every Story's harness → close each knowledge projection → flush each Story book and the
+// app book), so the stand-in performs exactly those steps here: the `stopped`/`closed` flags the
+// assertions below read are still "the sweep stopped" and "the books flushed", and a runtime that
+// never got a `close` still answers false for both (the post-dispose boot at the end of the file).
 const fakeRuntime = (): StorylineRuntime & { stopped: boolean; closed: boolean } => {
     const runtime = {
         stopped: false,
@@ -26,6 +34,13 @@ const fakeRuntime = (): StorylineRuntime & { stopped: boolean; closed: boolean }
         },
         knowledge: {
             close: async () => undefined
+        },
+        runtimes: {
+            close: async () => {
+                runtime.engine.stop();
+                await runtime.store.close();
+                await runtime.knowledge.close();
+            }
         }
     };
 

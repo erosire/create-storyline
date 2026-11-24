@@ -30,7 +30,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // files once, because a crew that re-files a repaired flaw would spin the loop forever. The
         // Idea the L-37 round files is §15 step 5's completion tray.
         // SCHEDULING FIXTURE, not the shipped default. The `step 3a` assertion below pins WHICH chapter the
-        // crew's single critical finding lands on (`finding_1` → `chapter_3`), and that is decided by the
+        // crew's single critical finding lands on (`finding_0` → `chapter_2`), and that is decided by the
         // order the sweeps complete the chapter-check runs in — a function of S-5's fan-out ceiling. The
         // shipped ceiling is 12 (`loop/types.ts:304`); this fixture pins the engine back to 4 so the
         // dispatch order, and the finding's `target_ref`, are fixed rather than emergent. `api/server.ts:234`
@@ -57,9 +57,9 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
 
     it('step 3: the Plotlines lock materialises exactly `chapter_count` chapters, none of them written yet (D-3c, L-8)', async () => {
         expect(chapterStates(fixture.store, storyId)).toEqual([
-            { id: 'chapter_1', order: 1, state: 'outlined' },
-            { id: 'chapter_2', order: 2, state: 'outlined' },
-            { id: 'chapter_3', order: 3, state: 'outlined' }
+            { id: 'chapter_0', order: 1, state: 'outlined' },
+            { id: 'chapter_1', order: 2, state: 'outlined' },
+            { id: 'chapter_2', order: 3, state: 'outlined' }
         ]);
 
         const row = await storyRow(fixture, storyId);
@@ -93,12 +93,12 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // kept as a second row, so the ledger is exactly one `selected` draft per unit. Phase ①
         // truncates its losing samples the same way (§6.6), so the surviving Summary is one row.
         expect(revisionStates(fixture.store, storyId)).toEqual([
-            'revision_1:summary_1/selected',
+            'revision_0:summary_0/selected',
             // The summary round used revision ids 2 and 3 for its losing samples; the ids are not
-            // reused after the truncation, so chapter 1's winner is revision_4.
-            'revision_4:chapter_1/selected',
-            'revision_6:chapter_2/selected',
-            'revision_8:chapter_3/selected'
+            // reused after the truncation, so chapter 1's winner is revision_3.
+            'revision_3:chapter_0/selected',
+            'revision_5:chapter_1/selected',
+            'revision_7:chapter_2/selected'
         ]);
 
         const runs = (await fixture.api<Array<Record<string, unknown>>>('GET', `/runs?story_id=${storyId}`)).body;
@@ -109,12 +109,12 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
                 .map((run) => `${run.work_item_ref}[${run.template_ref}]`)
                 .sort()
         ).toEqual([
+            'wi_write_chapter_0_1_a1[writer-chapters]',
+            'wi_write_chapter_0_1_a2[writer-chapters]',
             'wi_write_chapter_1_1_a1[writer-chapters]',
             'wi_write_chapter_1_1_a2[writer-chapters]',
             'wi_write_chapter_2_1_a1[writer-chapters]',
-            'wi_write_chapter_2_1_a2[writer-chapters]',
-            'wi_write_chapter_3_1_a1[writer-chapters]',
-            'wi_write_chapter_3_1_a2[writer-chapters]'
+            'wi_write_chapter_2_1_a2[writer-chapters]'
         ]);
     });
 
@@ -122,36 +122,39 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // The dial was open when the finding landed, so the whole ladder ran without an Author click:
         // open → verified → approved → task → repaired. Settling on the task being `done` is the proof
         // the ladder completed; what the finding row then reads is asserted below.
-        await fixture.settle(async () => findingStates(fixture.store, storyId).includes('finding_1:fixed/critical'), 24);
+        await fixture.settle(async () => findingStates(fixture.store, storyId).includes('finding_0:fixed/critical'), 24);
 
-        expect(findingStates(fixture.store, storyId)).toEqual(['finding_1:fixed/critical']);
+        expect(findingStates(fixture.store, storyId)).toEqual(['finding_0:fixed/critical']);
 
         const view = await storyView(fixture, storyId);
 
         // The finding is the Checker's (`raiseFinding` on the chapter unit, C-7). The Editor's quick
         // validity check confirms it and keeps the filed cost — re-weighting is an explicit
         // correction, not part of marking the finding valid (D-33, D-34).
-        // `target_ref: 'chapter_3'` is the FIRST unit the checker crew finished judging, which the ceiling
+        // `target_ref: 'chapter_2'` is the FIRST unit the checker crew finished judging, which the ceiling
         // pinned in `beforeAll` is what makes deterministic; it is not a rule of the ladder. The subject
         // here is the ladder's walk (open → verified → approved → task → repaired).
         expect(view.findings[0]).toMatchObject({
-            id: 'finding_1',
+            id: 'finding_0',
             cost: 'critical',
             state: 'fixed',
-            target_ref: 'chapter_3',
+            target_ref: 'chapter_2',
             criterion_ref: 'C-7',
-            title: 'Chapter 3 does not deliver its contract'
+            // The scripted Checker titles the finding from the unit it judged (`harness.ts:813` prints
+            // `Chapter ${unit.split('_')[1]}`), so with story-local counters the unit `chapter_2` — the
+            // order-3 chapter — is titled from its id, not its order.
+            title: 'Chapter 2 does not deliver its contract'
         });
 
         // A Task is the loop's unit of assigned repair, and it carries no finding pointer of its own:
         // the chain lives in the work item refs the runs were spawned for (§5.1's Task shape).
         expect(fixture.store.tasks.list().map((task) => `${task.id}:${task.state}/${task.kind}`)).toEqual([
-            'task_1:done/fix'
+            'task_0:done/fix'
         ]);
 
         // The repair was a Writer run on the finding's own unit, and the crew hit no tool rule doing it.
         // The `wi_fix_*` filter pins the whole repair leg rather than one member of it: exactly one run, on
-        // the finding's own unit (`chapter_3` — the ceiling pinned in `beforeAll` is what fixes that unit),
+        // the finding's own unit (`chapter_2` — the ceiling pinned in `beforeAll` is what fixes that unit),
         // named by the finding and the task it came from.
         expect(
             (
@@ -159,7 +162,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
             ).body
                 .filter((run) => String(run.work_item_ref).startsWith('wi_fix_'))
                 .map((run) => `${run.work_item_ref}[${run.template_ref}]`)
-        ).toEqual(['wi_fix_chapter_3_1_finding_1_task_1[writer-chapters]']);
+        ).toEqual(['wi_fix_chapter_2_1_finding_0_task_0[writer-chapters]']);
         expect([
             ...new Set(fixture.refusals.map((refusal) => `${refusal.template}/${refusal.tool}/${refusal.rule}`))
         ]).toEqual(['writer-plotlines/createPlotline/T-4', 'writer-plotlines/createPlotline/T-11']);
@@ -172,9 +175,9 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         );
 
         expect(chapterStates(fixture.store, storyId)).toEqual([
-            { id: 'chapter_1', order: 1, state: 'done' },
-            { id: 'chapter_2', order: 2, state: 'done' },
-            { id: 'chapter_3', order: 3, state: 'done' }
+            { id: 'chapter_0', order: 1, state: 'done' },
+            { id: 'chapter_1', order: 2, state: 'done' },
+            { id: 'chapter_2', order: 3, state: 'done' }
         ]);
 
         const row = await storyRow(fixture, storyId);
@@ -225,10 +228,10 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // tray — so hiding it here was the "decision the machine made by silence" in dashboard form.
         // The queue, the drained row and the preview now count the same rows from the same sets, so the
         // Author cannot be shown a decision in one pane and a zero in another.
-        expect((await queue(fixture)).map((item) => `${item.kind}:${item.id}`)).toEqual(['idea:idea_1']);
+        expect((await queue(fixture)).map((item) => `${item.kind}:${item.id}`)).toEqual(['idea:idea_0']);
         // §4.17: `verified` is the EDITOR's answer (D-27/C-15), and the Editor run that filed it is the
         // loop's own — the Author never had to clear the desk first for the fact-check to happen.
-        expect(ideaStates(fixture.store, storyId)).toEqual([{ id: 'idea_1', state: 'verified', kind: 'possibility' }]);
+        expect(ideaStates(fixture.store, storyId)).toEqual([{ id: 'idea_0', state: 'verified', kind: 'possibility' }]);
 
         // The ledger the pane reads: one current Digest, and the chapter set it was written from.
         const digests = fixture.store.digests.list();
@@ -237,7 +240,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
             digests[digests.length - 1].id
         ]);
         expect(digests[digests.length - 1].body).toContain('3 · Chapter 3 — The 3th gallery');
-        expect(fixture.store.findings.require('finding_1').state).toBe('fixed');
+        expect(fixture.store.findings.require('finding_0').state).toBe('fixed');
     });
 
     it('step 5: the Author accepting the proposal is what completes the Story, tray and all (L-25, U-17)', async () => {
@@ -265,6 +268,6 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // The row keeps saying why, in the engine's own words. And the tray is cleared by completion:
         // an Idea nobody decided is decided FOR them once the Story is finished (D-36's other half).
         expect(String(row.status_reason)).toMatch(/complet/i);
-        expect(ideaStates(fixture.store, storyId)).toEqual([{ id: 'idea_1', state: 'discarded', kind: 'possibility' }]);
+        expect(ideaStates(fixture.store, storyId)).toEqual([{ id: 'idea_0', state: 'discarded', kind: 'possibility' }]);
     });
 });

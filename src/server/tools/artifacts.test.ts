@@ -12,7 +12,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ChapterSection, Revision } from '../../shared/types';
-import { revisionBody, revisionBodyFields, revisionBodySections } from './artifacts';
+import { Store } from '../store/store';
+import { compareNewestFirst, revisionBody, revisionBodyFields, revisionBodySections, revisionRows } from './artifacts';
 
 /** A stored draft row, with only the fields these two readers touch. */
 function draft(unitKind: Revision['unit_kind'], body: unknown): Revision {
@@ -92,5 +93,118 @@ describe('the §4.15 draft-body contract (D-21, D-22)', () => {
         expect(revisionBody('plotline', { fields: { heading: 'h' } })).toEqual({ fields: { heading: 'h' } });
         expect(revisionBody('summary', { premise: 'p' })).toEqual({ fields: { premise: 'p' } });
         expect(revisionBody('summary', null)).toEqual({ fields: {} });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The newest-first ordering the row readers promise (D-3d/D-21/D-38a/D-17d)
+// ---------------------------------------------------------------------------
+
+/**
+ * PHASE ① WRITES A WHOLE FAN-OUT INSIDE ONE SWEEP, so eleven drafts of one unit can carry the SAME
+ * `created_at` down to the millisecond. `created_at` desc then needs a tie-break, and a §4 row carries
+ * no ordering field — `rev` is the CAS token — so the ONLY creation signal is the id the store minted
+ * (`store/store.ts:Collection.create` counts `<singular>_<n>`, ZERO-BASED and monotonic).
+ *
+ * Why it lives in this file: `artifacts.ts` is the one place the newest-first contract of the
+ * ideas/revisions/verdicts/findings readers is written down, and a tie cannot be produced through the
+ * store on purpose (the store stamps `created_at` itself and a caller cannot set it), so the comparator
+ * is the deterministic unit under test. The eleven ids cross 10 on purpose: BELOW 10 a lexical tie-break
+ * and a numeric one agree, which is exactly why the defect survived — every hand-written expectation in
+ * the suite uses single-digit ids.
+ */
+describe('the newest-first ordering the row readers promise (D-3d, D-21, D-38a, D-17d)', () => {
+    /** The one millisecond every row of a fan-out is stamped with. */
+    const SAME_MS = '2026-11-24T09:00:00.000Z';
+
+    /** A draft with only the fields the ordering reads. */
+    const row = (id: string, created_at: string): Revision => ({ id, created_at }) as Revision;
+
+    /** Eleven drafts, newest minted last: the order the readers owe a same-millisecond fan-out. */
+    const NEWEST_FIRST = [
+        'revision_10',
+        'revision_9',
+        'revision_8',
+        'revision_7',
+        'revision_6',
+        'revision_5',
+        'revision_4',
+        'revision_3',
+        'revision_2',
+        'revision_1',
+        'revision_0'
+    ];
+
+    it('breaks a same-millisecond tie by the minted id, so `revision_10` is the newest draft', () => {
+        const rows = Array.from({ length: 11 }, (_, index) => row(`revision_${index}`, SAME_MS));
+
+        // A bare `localeCompare` on the ids answers `revision_2` before `revision_10` — the OLDEST of the
+        // eleven reported as the newest — which is the regression `mintedSuffix` exists to prevent.
+        expect([...rows].sort(compareNewestFirst).map((draft) => draft.id)).toEqual(NEWEST_FIRST);
+    });
+
+    it('keeps `created_at` the first key: a bigger minted id never outranks a newer row', () => {
+        // `revision_10` is the older write here, so the timestamp decides and the suffix must not.
+        const rows = [row('revision_9', '2026-01-02T00:00:00.000Z'), row('revision_10', '2026-01-01T00:00:00.000Z')];
+
+        expect([...rows].sort(compareNewestFirst).map((draft) => draft.id)).toEqual(['revision_9', 'revision_10']);
+    });
+
+    it('falls back to code units for an id the store did not mint, so the order is locale-independent', () => {
+        // `revision_1a` has no numeric suffix, so `mintedSuffix` declines to answer and the pair is
+        // ordered by UTF-16 CODE UNITS, descending. `localeCompare` is collation- and ICU-version
+        // dependent, so the fallback cannot be one: the row order a Reader sees must not move with the
+        // host's locale. A `revision_0`-vs-`revision_1a` pair is where a numeric-only comparator would
+        // have thrown or guessed instead of answering deterministically.
+        const rows = [row('revision_1a', SAME_MS), row('revision_0', SAME_MS), row('revision_2', SAME_MS)];
+
+        expect([...rows].sort(compareNewestFirst).map((draft) => draft.id)).toEqual([
+            'revision_2',
+            'revision_1a',
+            'revision_0'
+        ]);
+    });
+
+    it('answers `revisionRows` newest-first across the tenth draft, not in insertion order', () => {
+        // THE READER-LEVEL HALF. Eleven drafts written in one synchronous burst: whether the clock ticks
+        // over inside the loop is irrelevant, because creation order, minted-suffix order and
+        // `created_at` order all agree. So this pins the READER rather than racing the clock — and under
+        // the shipped comparator, whose tie-break compared a row's id with ITSELF and therefore always
+        // answered 0, the list came back in the store's insertion order: the OLDEST draft first.
+        const store = Store.empty();
+        const story = store.stories.create(
+            {
+                title: 'The Light Keeper',
+                phase: 'summary',
+                idea: 'A lighthouse keeper learns the light was never the point.',
+                summary_locked: false,
+                plotlines_locked: false,
+                pending_kind: 'none',
+                status: 'ready',
+                trend: 'unknown',
+                auto_approve: ['critical'],
+                author_stop: false,
+                digest_rev: 0,
+                template_refs: [],
+                chapter_deps: {}
+            },
+            { why: 'seed: story created' }
+        );
+
+        for (let index = 0; index < 11; index += 1) {
+            store.revisions.create(
+                {
+                    story_id: story.id,
+                    unit_kind: 'summary',
+                    unit_ref: 'summary_0',
+                    body: { fields: { premise: `draft ${index}` } },
+                    state: 'drafted',
+                    verdict_refs: []
+                },
+                { why: `seed: competing draft ${index}` }
+            );
+        }
+
+        expect(revisionRows(store, story.id).map((draft) => draft.id)).toEqual(NEWEST_FIRST);
     });
 });

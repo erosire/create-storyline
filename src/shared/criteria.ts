@@ -177,14 +177,24 @@ export const BUILT_IN_CRITERIA: Criterion[] = [
     {
         // C-14 is the level "the Author did not name and Phase 1 requires": if the Summary
         // drifts from the Seed, every later level can pass while the book is wrong (§5.2).
+        //
+        // THE SEED IS GENERAL ON PURPOSE, so C-14 is a CONTRADICTION test, not a checklist. The
+        // Author's Seed states a few things firmly and leaves the rest open; the Writer's job is to
+        // fill the open part with compatible specifics. An older wording ("nothing central … is
+        // missing from it") turned every silence into an unmet promise, and Readers spent rounds on
+        // details the Seed never stated (stakes it left open, a refuge that appears only in the
+        // ending). So the three fields below state the admissible grounds — contradiction, a broken
+        // explicit commitment, a broken promise of the Summary's own — and say in words that
+        // omission from a general Seed is not evidence. The controls that matter stay: an explicit
+        // commitment the Summary drops still fails this line.
         id: 'C-14',
-        label: 'the Summary delivers the Seed: nothing central to `stories.idea` is missing from it, and nothing in it contradicts the Seed',
+        label: 'the Summary delivers the Seed: nothing in it contradicts what the Seed states, and no commitment the Seed states explicitly goes unpaid',
         question:
-            'Does the Summary deliver the Seed \u2014 is nothing central to stories.idea missing from it, and does nothing in it contradict the Seed?',
+            'Does the Summary deliver the Seed \u2014 is it free of anything that contradicts what the Seed states, and does it leave no commitment the Seed states explicitly unpaid? The Seed is general, not an outline, and the Writer may supply any detail the Seed does not rule out, so an absence alone \u2014 a detail the Seed never stated, stakes it left open, setup the Summary did not promise \u2014 does not fail this line; a quote of what the Summary contradicts, or of the commitment it breaks, does.',
         checker: 'judge',
         hard: true,
         fix_hint:
-            'Expand the Summary to carry everything central to the Seed, and remove what contradicts it (P5: the Seed is never edited to pass).'
+            'Remove what contradicts the Seed, repair what contradicts the Summary\u2019s own promise, and add only a commitment the Seed states explicitly that the Summary does not carry; what the Seed leaves open is the Writer\u2019s to fill with any compatible detail, so its absence is not a defect to fix (P5: the Seed is never edited to pass).'
     },
     {
         // C-15 is code because it reads a stored record, not the prose: an unverified sourced

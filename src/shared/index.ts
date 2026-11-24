@@ -4,3 +4,6 @@
 export * from './types';
 export * from './criteria';
 export * from './chapter';
+// The Summary Phrase catalog (R1). Browser-safe like the rest of this barrel: `./phrase` imports
+// `./types` for TYPES ONLY, so the dashboard can render group titles without the server.
+export * from './phrase';

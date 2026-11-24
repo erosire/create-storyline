@@ -33,14 +33,17 @@ import {
     repeatIdeas,
     researchGate,
     roundRevisions,
-    sampleAttempts,
+    // G1 — the drain probe names the plateau the moment the accepted-revision audit says the hill has
+    // stopped moving, so the `unmet` list the Author sees matches the queue row and the arming rule.
+    revisionReviewProgressOf,
     samplingArmed,
-    // T12/P3: the drain's sampling clause reads the ACTIVE wave's attempt count against the engine's own
-    // cap helper, so both numbers come from the same definitions `./work` and `./records` dispatch by.
-    samplingCapOf,
+    // T12/P3 + HILL CLIMB: the drain's sampling clause reads the ACTIVE wave's attempt count against the
+    // wave's own budget — the static cap, extended by proven improvements and cut short by the
+    // no-progress streak — so the drain, `./work`'s queue and `./records`' leg gate cannot disagree
+    // about whether the round still owes samples.
+    samplingProgressOf,
     samplingRoundOf,
     samplingSizeOf,
-    samplingWaveOf,
     screensFor,
     // T-10 / the G-9 fix: the drain probe has to name the stage the round is actually waiting on. A
     // Researcher-owned `fix` row is invisible to the Writer-side reads (it is not in the prompt, the
@@ -62,6 +65,11 @@ import {
     unitsWithCompetingRevisions,
     unitsWithPendingRevisions
 } from './records';
+// SUMMARY PHRASE (hardening, drain/sign-off parity): the group pipeline's owed-work read lives on the
+// phrase surface (`phrase/exclusion.ts:groupPipelineOwed`) — the SAME rules `work.ts` builds its
+// candidates from — because a grouped book has no sampling rows for §6.4's clauses to describe, and
+// the rail (`api/projections.ts`) already answers "what still owes a review?" with these reads.
+import { groupPipelineOwed, isGroupManagedStory, isGroupPipelineRun } from '../phrase';
 import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
 import type { CompletionProposal, LoopStory, ProbeState } from './types';
@@ -166,6 +174,28 @@ export function drainPreconditions(store: Store, story: Story): { met: boolean; 
 const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
 
 /**
+ * H2/R1's drain sentence — one copy for BOTH pipelines.
+ *
+ * These rows are not in `phase1Unmet`'s writer reads (no draft is asked to resolve them, and
+ * `run/phase1-prompt.ts` keeps them out of the Writer's block), so the only way the drain probe can
+ * tell the truth about a round held behind one is to read the prerequisite set itself. The cap is
+ * named too: at the cap the row is no longer work the crew can do, and the Author question the queue
+ * opens is what the decision machine then reads (H2/R2).
+ */
+function pushResearchPrerequisites(store: Store, story: Story, unmet: string[]): void {
+    const prerequisites = openResearchFixPrerequisites(store, story.id);
+
+    if (prerequisites.length > 0) {
+        unmet.push(
+            `${prerequisites.length} open fix task${prerequisites.length === 1 ? '' : 's'} a Researcher must ground (${prerequisites
+                .slice(0, 3)
+                .map((task) => `${task.id}, pass ${researchPrerequisiteAttempts(store, task.id)}/${RESEARCH_PREREQUISITE_CAP}`)
+                .join(', ')}): a draft cannot resolve an external fact, so the round waits for the pass (§6.4 step 2, T-10)`
+        );
+    }
+}
+
+/**
  * Phase ①'s stage-by-stage drain reasons (documents/phase-1-research-pipeline.md §6.7):
  *
  *   1. no accepted Seed Brief for the CURRENT Seed (`seed_hash` mismatch counts as none);
@@ -177,6 +207,9 @@ const PHASE1_PIPELINE_RUN = /^wi_(sample|screen)_/;
  * Clause 3 only speaks when the round is ARMED (`records.ts:samplingArmed`): after a clean deep
  * review with no open fix task the next round is deliberately not owed, and reporting "0 of 3
  * samples exist" there would keep the Story from ever reading as drained (§6.8's stop rule).
+ *
+ * HARDENING: for a GROUP-managed book the clauses below are replaced by the group pipeline's own
+ * reads (see the branch inside), which answer the same §6.4 stages for a book that has no samples.
  */
 function phase1Unmet(store: Store, story: Story): string[] {
     const brief = currentSeedBrief(store, story);
@@ -206,6 +239,48 @@ function phase1Unmet(store: Store, story: Story): string[] {
 
     if (summary === undefined) return unmet;
 
+    // SUMMARY PHRASE (hardening) — a group-managed book has none of the sampling machinery clauses
+    // 3-6 below describe: no sample drafts, no screening set, no round to arm, and no accepted-
+    // revision audit to plateau. What phase ① still OWES there — and therefore what this probe has
+    // to name before the Story may read `drained` (L-37: "out of authorised work") — is the group
+    // pipeline: live runs, the groups that owe a draft or a fix pass, and the review seats of the
+    // CURRENT vector that have not reported yet. Every line comes from
+    // `phrase/exclusion.ts:groupPipelineOwed`, which is built from `work.ts:phase1GroupCandidates`'
+    // own gates, so the probe and the queue cannot tell two stories about the same book — the same
+    // shared-predicate discipline `researchGate` above enforces for the sampling pipeline. The
+    // phase-① sign-off gate (`decideStory`) holds on these same reads.
+    if (isGroupManagedStory(story)) {
+        // Step 0 of the pipeline is SHARED (`work.ts:phase1FixPrerequisites` runs before the mode
+        // switch), so the Researcher-owned rows hold a grouped round's drain with the same sentence.
+        pushResearchPrerequisites(store, story, unmet);
+
+        const groupLive = liveRuns(store, story.id).filter((run) => isGroupPipelineRun(run));
+
+        if (groupLive.length > 0)
+            unmet.push(
+                `${groupLive.length} group-pipeline run${groupLive.length === 1 ? '' : 's'} still in flight (R5, §6.4 steps 3-6)`
+            );
+
+        const owedGroups = groupPipelineOwed(store, story);
+
+        if (owedGroups.drafts > 0)
+            unmet.push(
+                `${owedGroups.drafts} group${owedGroups.drafts === 1 ? '' : 's'} still owe the Overview a draft or a fix pass (R2, §6.4 step 3)`
+            );
+
+        if (owedGroups.structuredReviews > 0)
+            unmet.push(
+                `${owedGroups.structuredReviews} Reader pass${owedGroups.structuredReviews === 1 ? '' : 'es'} still owed on the installed group Overview (R3, R5, §6.4 step 4)`
+            );
+
+        if (owedGroups.deepReviews > 0)
+            unmet.push(
+                `${owedGroups.deepReviews} deep-review pass${owedGroups.deepReviews === 1 ? '' : 'es'} still owed for the installed group Overview (§6.4 step 6, R5)`
+            );
+
+        return unmet;
+    }
+
     const live = liveRuns(store, story.id).filter((run) => PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? ''));
 
     if (live.length > 0)
@@ -228,34 +303,26 @@ function phase1Unmet(store: Store, story: Story): string[] {
             `${owed} sample${owed === 1 ? '' : 's'} still owe screening passes (${screeningSizeOf(story)} per sample, §6.4 step 4)`
         );
 
-    // H2/R1 — the round's RESEARCHER-owned targets. They are not in `phase1Unmet`'s writer reads (no
-    // draft is asked to resolve them, and `run/phase1-prompt.ts` keeps them out of the Writer's block),
-    // so the only way the drain probe can tell the truth about a round held behind one is to read the
-    // prerequisite set itself. The cap is named too: at the cap the row is no longer work the crew can
-    // do, and the Author question the queue opens is what the decision machine then reads (H2/R2).
-    const prerequisites = openResearchFixPrerequisites(store, story.id);
-
-    if (prerequisites.length > 0) {
-        unmet.push(
-            `${prerequisites.length} open fix task${prerequisites.length === 1 ? '' : 's'} a Researcher must ground (${prerequisites
-                .slice(0, 3)
-                .map((task) => `${task.id}, pass ${researchPrerequisiteAttempts(store, task.id)}/${RESEARCH_PREREQUISITE_CAP}`)
-                .join(', ')}): a draft cannot resolve an external fact, so the round waits for the pass (§6.4 step 2, T-10)`
-        );
-    }
+    // H2/R1 — the round's RESEARCHER-owned targets (one sentence, both pipelines: step 0 of the
+    // generator is shared, so the grouped book holds its drain on the same rows).
+    pushResearchPrerequisites(store, story, unmet);
 
     const round = samplingRoundOf(story);
     const have = roundRevisions(store, story.id, round).length;
     const size = samplingSizeOf(story);
-    // T12/P3 — the count has to be the one the ENGINE spends its cap by: the ACTIVE wave's attempts
-    // (`work.ts:507` and `records.ts:samplingLegClosed` both pass `samplingWaveOf(story)`, because the
+    // T12/P3 — the count has to be the one the ENGINE spends its budget by: the ACTIVE wave's attempts
+    // (`work.ts` and `records.ts:samplingLegClosed` both read `samplingWaveOf(story)`, because the
     // Author's clear of a sampling escalation re-arms the round in a NEW wave, T12/E). Read without the
     // wave, `sampleAttempts` returns the whole round family — every wave's spent runs — so a round the
     // Author just re-armed looked spent and this sentence went silent over samples the sweep is about to
     // dispatch, while a round whose NEW wave has spent its cap looked the same as one that had not.
-    const attempts = sampleAttempts(store, summary.id, round, samplingWaveOf(story));
+    //
+    // HILL CLIMB — and the budget is the wave's, not the constant: it grows while an attempt proves a
+    // lower unresolved-blocking-fix count and closes early when the no-progress streak stops the round.
+    // Naming the constant here would keep the drain blocking on samples the loop has stopped buying.
+    const progress = samplingProgressOf(store, story, round);
 
-    if (samplingArmed(store, story, round) && have < size && attempts < samplingCapOf(story))
+    if (samplingArmed(store, story, round) && have < size && progress.attempts < progress.ceiling && !progress.stalledForProgress)
         unmet.push(
             `${have} of ${size} sample${size === 1 ? '' : 's'} exist for round ${round} and retries remain (§6.4 step 3)`
         );
@@ -267,6 +334,23 @@ function phase1Unmet(store: Store, story: Story): string[] {
     if (owedReview > 0)
         unmet.push(
             `${owedReview} deep-review pass${owedReview === 1 ? '' : 'es'} still owed for the selected Summary revision (§6.4 step 6)`
+        );
+
+    // G1 — the ACCEPTED-REVISION plateau (the gap §6.8's drain leaves open). Three accepted revisions in
+    // a row that did not lower the blocking bar are the same "the hill is not moving" signal the
+    // candidate-level streak answers, one level up: the loop keeps paying for full rounds that buy
+    // nothing. The sampling legs are closed (`records.ts:samplingArmed`) so clause 3 above went silent,
+    // and this line is what stops the Story from reading `drained` — the crew is NOT out of authorised
+    // work, it is out of authorised work THAT HELPS, and only the Author's clear re-arms the wave
+    // (`engine.ts:rearmSamplingWave`). It names the number the escalation row carries, so a pane and a
+    // queue row cannot disagree.
+    const plateau = revisionReviewProgressOf(store, story);
+
+    if (plateau.plateaued)
+        unmet.push(
+            `${plateau.noImprovement} accepted Summary revision${
+                plateau.noImprovement === 1 ? '' : 's'
+            } in a row left the blocking count at ${plateau.bestBlockingFound ?? 0} or worse, so sampling has stopped — clear the Author question to re-arm the wave (G1)`
         );
 
     return unmet;
@@ -555,9 +639,21 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // §6.4 step 6: the deep review of the selected revision is the phase's evidence. Signing off
     // after one pass of five would lock a Summary nobody finished reviewing, so the owed passes hold
     // the stop exactly like an open fix task does.
+    //
+    // HARDENING (sign-off/projection parity): a group-managed book has NO selected Summary revision
+    // — the legacy read above answers "nothing owed" unconditionally there — so on that book the
+    // phase's evidence is the CURRENT vector's review seats, structured passes and deep cross-group
+    // passes alike, counted by the same closed-run rule the Author's rail shows
+    // (`api/projections.ts:phraseView`'s `reviews_on_current_vector` / `deep_reviews_on_current_vector`
+    // and `loop/work.ts`'s seat gates). The gate gets tighter to match the rail; it is never loosened
+    // to let a lock through over an unread Overview.
+    const groupOwedForSignoff =
+        story.phase === 'summary' && isGroupManagedStory(story) ? groupPipelineOwed(store, story) : undefined;
     const reviewOwed =
         story.phase === 'summary'
-            ? deepReviewPassesOwed(store, story, selectedSummaryRevision(store, story.id)) > 0
+            ? groupOwedForSignoff !== undefined
+                ? groupOwedForSignoff.structuredReviews + groupOwedForSignoff.deepReviews > 0
+                : deepReviewPassesOwed(store, story, selectedSummaryRevision(store, story.id)) > 0
             : false;
     const summaryRoundQueued =
         story.phase === 'summary'

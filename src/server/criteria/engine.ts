@@ -31,6 +31,7 @@ import {
     type Goal,
     type LedgerEntry,
     type Plotline,
+    type Revision,
     type Story,
     type StoryPhase,
     type Summary,
@@ -224,6 +225,101 @@ function storyChapters(store: Store, storyId: string): Chapter[] {
 
 function storyLedger(store: Store, storyId: string): LedgerEntry[] {
     return store.ledger.list().filter((entry) => entry.story_id === storyId);
+}
+
+/**
+ * CS-VERDICT-1b — the Summary draft the Summary row CURRENTLY carries, or undefined when the
+ * Summary has no installed draft.
+ *
+ * WHY IT IS COMPUTED HERE INSTEAD OF IMPORTED FROM `../loop/records`: that module
+ * (`records.ts:selectedSummaryRevision`) is the loop's answer to the same question and stays the
+ * authority for the sweep, the drain preconditions and the rail, but importing it would pull the
+ * loop's RUNTIME into a checker the server runs after every commit (this file's header: only the
+ * store's TYPES are imported, so the "no model, no write, no loop" property stays provable) and
+ * would put criteria → loop on the module graph. The predicate is three filters over the store the
+ * caller already holds, so the criteria layer keeps its own copy and pins the agreement with
+ * `engine.test.ts` instead of an import.
+ *
+ * IT IS SCOPED TO THE SUMMARY BEING GRADED (`unit_ref === summaryId`), which is narrower than the
+ * loop's Story-wide question: a verdict about some other Summary row is never evidence here.
+ * Only `state === 'selected'` counts — a `drafted`/`competing` sibling is still under comparison
+ * (D-21), and a `discarded` one is history the next round re-reads fresh (D-22), so neither can
+ * decide the Goal. The order matches `records.ts:summaryRevisionsFor` (`created_at`, then `id`):
+ * if a store somehow carries two selected rows, both layers pick the same one.
+ */
+function selectedSummaryDraftId(store: Store, storyId: string, summaryId: string): string | undefined {
+    let newest: Revision | undefined;
+
+    for (const revision of store.revisions.list()) {
+        if (
+            revision.story_id !== storyId ||
+            revision.unit_kind !== 'summary' ||
+            revision.unit_ref !== summaryId ||
+            revision.state !== 'selected'
+        )
+            continue;
+
+        if (
+            newest === undefined ||
+            revision.created_at > newest.created_at ||
+            (revision.created_at === newest.created_at && revision.id > newest.id)
+        )
+            newest = revision;
+    }
+
+    return newest?.id;
+}
+
+/**
+ * CS-VERDICT-1b — the verdict targets that count as evidence for each in-scope target of a
+ * `summary`-level criterion (C-14). Returns `summary id → [currently selected draft id]`, or
+ * `undefined` for everything this must not touch.
+ *
+ * WHY IT EXISTS AT ALL: phase ①'s deep review reads ONE record — the Selected Summary revision
+ * (§6.4 step 6) — and a Reader that filed its rating there, instead of at the Summary row, produced
+ * a verdict the Goal could not see. The book then reports `summary_17: no verdict yet` forever while
+ * the crew panel shows twenty finished reviews, and the phase lock stays shut on an artifact that
+ * HAS been judged. Reading the selected draft's verdict as the Summary's is the honest reading of
+ * that review: the review's subject is the text the Summary currently carries.
+ *
+ * FOUR WAYS IT STAYS NARROW:
+ * 1. `summary`-level criteria only (`placementOf`) — C-14 is the only built-in one; chapters,
+ *    plotlines and the whole-Story level keep judging their own targets, and the competing-draft
+ *    aggregation of phases ②/③ (§6.2a: one verdict per revision, D-21) is untouched, because that
+ *    path goes through `chapterGoalStatus` → `aggregateJudgeWithTargets` with NO extra refs.
+ * 2. Only the CURRENTLY SELECTED draft ({@link selectedSummaryDraftId}) — a `competing`/`drafted`
+ *    sibling under comparison and a `discarded` loser are not the Summary's text, so their verdicts
+ *    stay per-draft display (U-13) and cannot decide the Goal.
+ * 3. It is EXTRA evidence, never a replacement: the Summary row's own verdicts are still read, and
+ *    both kinds are sorted by one recency rule, so an older Summary-row pass cannot mask a newer
+ *    failure filed at the draft (W3, P2).
+ * 4. `unitIsChecked` (loop/records.ts:872-903) is untouched — the loop's review debt already
+ *    accepts either target, and this change does not make a draft verdict look like a whole-book
+ *    pass (those rows are keyed off the `wi_whole_check` run, records.ts:wholeStoryVerdicts).
+ */
+function summaryDraftEvidenceRefs(
+    store: Store,
+    storyId: string,
+    criterionId: string,
+    targetRefs: string[]
+): Map<string, string[]> | undefined {
+    if (placementOf(criterionId) !== 'summary') return undefined;
+
+    const summary = storySummary(store, storyId);
+
+    if (summary === undefined) return undefined;
+
+    const draftId = selectedSummaryDraftId(store, storyId, summary.id);
+
+    if (draftId === undefined || draftId === summary.id) return undefined;
+
+    const refs = new Map<string, string[]>();
+
+    for (const targetRef of targetRefs) {
+        if (targetRef === summary.id) refs.set(targetRef, [draftId]);
+    }
+
+    return refs.size > 0 ? refs : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +752,11 @@ export class CriteriaEngine {
      *   describes the artifact as it stands);
      * - failing evidence comes from the verdict line, falling back to the finding it links (D-15).
      *
+     * THE ONE NARROW EXCEPTION — CS-VERDICT-1b, and only at the `summary` level: a verdict filed
+     * against the Summary's CURRENTLY SELECTED draft also speaks for the Summary row, because in
+     * phase ① that draft IS the Summary's text (§6.4 step 6 reviews that revision and nothing else).
+     * See {@link summaryDraftEvidenceRefs} for why, and for the four ways it stays narrow.
+     *
      * A caller that passes a `code` criterion id gets verdict aggregation anyway — the level
      * evaluation below routes by `checker`, so only the tool surface could ask for this.
      */
@@ -663,12 +764,20 @@ export class CriteriaEngine {
         return criterionIds.map((id) => this.aggregateJudgeFor(store, storyId, id));
     }
 
-    /** The single-target override form: judge `criterionId` against exactly these targets. */
+    /**
+     * The single-target override form: judge `criterionId` against exactly these targets.
+     *
+     * `draftEvidenceRefs` maps an in-scope target to the extra refs whose verdicts count as
+     * evidence FOR that target (CS-VERDICT-1b). It is a parameter rather than something computed
+     * here because the two callers scope differently: the per-chapter Goal judges chapters, where no
+     * draft verdict may stand in, and only {@link aggregateJudgeFor} asks the Summary question.
+     */
     private aggregateJudgeWithTargets(
         store: Store,
         storyId: string,
         criterionId: string,
-        targetRefs: string[]
+        targetRefs: string[],
+        draftEvidenceRefs?: Map<string, string[]>
     ): CriterionResult {
         const verdicts = store.verdicts.list().filter((verdict) => verdict.story_id === storyId);
 
@@ -685,14 +794,21 @@ export class CriteriaEngine {
         let findingRef: string | undefined;
 
         for (const targetRef of targetRefs) {
+            // The record itself plus, at the Summary level only, the draft it currently carries.
+            const evidenceRefs = [targetRef, ...(draftEvidenceRefs?.get(targetRef) ?? [])];
+
             // Latest verdict FOR THIS TARGET that actually speaks to this criterion. A later verdict
             // that is silent about the criterion does not erase the earlier answer: §8.3 lets a run
             // report a subset (`submitVerdict(target_ref, criteria_passed[])`), so silence is scope,
             // not a retraction.
+            //
+            // CS-VERDICT-1b: the unit-targeted and selected-draft-targeted verdicts are sorted in the
+            // SAME list, so one recency rule decides — an older pass filed at the Summary row cannot
+            // outvote a newer failure filed at the draft, and vice versa.
             const candidates = verdicts
                 .filter(
                     (verdict) =>
-                        verdict.target_ref === targetRef &&
+                        evidenceRefs.includes(verdict.target_ref) &&
                         verdict.criteria_passed.some((line) => line.criterion === criterionId)
                 )
                 .sort(verdictRecency);
@@ -712,7 +828,11 @@ export class CriteriaEngine {
 
             if (!findingRef && line.finding_ref) findingRef = line.finding_ref;
 
-            failing.push(`${targetRef}: ${evidenceOf(store, line, criterionId)}`);
+            // The citation names the record the winning verdict is filed on (D-15/P6), which after
+            // CS-VERDICT-1b may be the draft rather than the Summary row: saying which one is the
+            // honest line, and for a unit-targeted verdict it is byte-identical to what this printed
+            // before.
+            failing.push(`${latest.target_ref}: ${evidenceOf(store, line, criterionId)}`);
         }
 
         if (failing.length === 0) {
@@ -743,17 +863,21 @@ export class CriteriaEngine {
 
     /** Judge one criterion against whatever §5.2 says its scope is. */
     private aggregateJudgeFor(store: Store, storyId: string, criterionId: string): CriterionResult {
+        const targetRefs = this.scopeTargets(store, storyId, criterionId);
+
         return this.aggregateJudgeWithTargets(
             store,
             storyId,
             criterionId,
-            this.scopeTargets(store, storyId, criterionId)
+            targetRefs,
+            summaryDraftEvidenceRefs(store, storyId, criterionId, targetRefs)
         );
     }
 
     /**
      * §5.2's scope per level:
-     * - `summary` → the Story's Summary record (one per Story, §4.2);
+     * - `summary` → the Story's Summary record (one per Story, §4.2). Its currently selected draft
+     *   is accepted as EXTRA evidence for that one row — see {@link summaryDraftEvidenceRefs};
      * - `plotlines` → each plotline, EXCEPT C-4, which is a cross-plotline consistency check and so
      *   is judged against the set as a whole — the Story record, the only id that names the set
      *   (§8.3's `submitVerdict` takes a `target_ref`, and for "these plotlines contradict each

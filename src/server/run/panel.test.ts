@@ -95,9 +95,9 @@ function rig(agents: number, aggregate: RoleAggregation) {
 
     const chapter = seedChapter(store, story.id);
     const drafts = [
-        seedRevision(store, story.id, chapter.id, 'DRAFT ONE — the steeple appears, and she lies about it.', 'run_2'),
-        seedRevision(store, story.id, chapter.id, 'DRAFT TWO — the steeple is named but never seen.', 'run_3'),
-        seedRevision(store, story.id, chapter.id, 'DRAFT THREE — she hears the bell under the water.', 'run_4')
+        seedRevision(store, story.id, chapter.id, 'DRAFT ONE — the steeple appears, and she lies about it.', 'run_1'),
+        seedRevision(store, story.id, chapter.id, 'DRAFT TWO — the steeple is named but never seen.', 'run_2'),
+        seedRevision(store, story.id, chapter.id, 'DRAFT THREE — she hears the bell under the water.', 'run_3')
     ];
 
     const template = seedTemplate(store, {
@@ -112,9 +112,9 @@ function rig(agents: number, aggregate: RoleAggregation) {
     // run's identity and permission row (D-38, T-2b, P11).
     const parentContext = runtime.createContext({
         storyId: story.id,
-        runId: 'run_1',
-        runRef: 'run_1',
-        sessionRef: 'sess_run_1',
+        runId: 'run_0',
+        runRef: 'run_0',
+        sessionRef: 'sess_run_0',
         templateRef: 'editor-panel',
         roleName: 'editor',
         roleKind: 'editor'
@@ -131,11 +131,11 @@ function rig(agents: number, aggregate: RoleAggregation) {
         roleKind: 'editor',
         templateRef: 'editor-panel',
         storyId: story.id,
-        runId: 'run_1',
+        runId: 'run_0',
         count: agents,
         aggregate,
         selectionRules: template.selection_rules ?? '',
-        jobSummary: 'panel agent of select for chapter chapter_1',
+        jobSummary: 'panel agent of select for chapter chapter_0',
         parentContext,
         createContext: (session, hooks) => runtime.createContext(session, hooks),
         delegate: async () => ({ ok: true, summary: 'delegated answer' }),
@@ -147,7 +147,17 @@ function rig(agents: number, aggregate: RoleAggregation) {
     return { store, story, chapter, drafts, template, runtime, parentContext, delegated, executed, spec };
 }
 
-/** An agent that picks `revisionId` and then answers. */
+/**
+ * An agent that picks `revisionId` and then answers.
+ *
+ * AGENT NUMBERS ARE 1-BASED, DRAFT IDS ARE NOT. `panel.ts:333` labels each agent `position + 1`, and
+ * `harness.ts:132`'s preamble says "You are agent N of M", so `panelClient` reads N out of that prompt
+ * and scripts agent 1…N. The rig's three drafts are the store's own zero-based rows
+ * (`seedRevision` → `revision_0`, `revision_1`, `revision_2`). A fixture that wants "agent N prefers
+ * draft N" — the author-facing numbering D-38's aggregator quote uses ("take the bell from draft 3") —
+ * therefore maps `revision_${index - 1}`; mapping the raw prompt index would point the third agent at a
+ * `revision_3` this Story never drafted, and the executed write would land on a row that does not exist.
+ */
 function picker(revisionId: string, note: string, answer: string) {
     return (index: number, turn: number): AssistantMessage =>
         turn === 0
@@ -156,7 +166,7 @@ function picker(revisionId: string, note: string, answer: string) {
                       {
                           name: 'selectRevision',
                           args: {
-                              unit_ref: 'chapter_1',
+                              unit_ref: 'chapter_0',
                               revision_id: revisionId,
                               selection_note: note,
                               expects: [{ id: revisionId, rev: 1 }],
@@ -261,7 +271,7 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
     });
 
     it('groups two agents that want the same change, ignoring revs and prose (D-38)', () => {
-        const base = { unit_ref: 'chapter_1', revision_id: 'revision_2', selection_note: 'a' };
+        const base = { unit_ref: 'chapter_0', revision_id: 'revision_1', selection_note: 'a' };
 
         // `expects` and `why` are volatile: two agents that want the identical change but read the
         // record at different revs hold the SAME preference, and splitting them would make every
@@ -274,9 +284,11 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
                 why: 'x'
             })
         ).toBe(proposalKey('selectRevision', { ...base, expects: [{ id: 'revision_2', rev: 1 }], why: 'y' }));
-        // The deciding argument is what separates two decisions.
+        // The deciding argument is what separates two decisions. The base already names `revision_1`,
+        // so the comparison has to name ANOTHER draft — re-asserting `revision_1` here compared the base
+        // with itself and proved nothing.
         expect(
-            proposalKey('selectRevision', { ...base, revision_id: 'revision_1' }) ===
+            proposalKey('selectRevision', { ...base, revision_id: 'revision_2' }) ===
                 proposalKey('selectRevision', base)
         ).toBe(false);
         // An unknown write falls back to the stabilised payload, so it still groups.
@@ -289,14 +301,14 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
         const proposals: PanelProposal[] = [
             { tool: 'createTask', args: { title: 'tighten the opening' } },
             { tool: 'verifyFinding', args: { finding_id: 'finding_1', verdict: 'confirmed' } },
-            { tool: 'submitVerdict', args: { target_ref: 'chapter_1', recommendation: 'fix' } }
+            { tool: 'submitVerdict', args: { target_ref: 'chapter_0', recommendation: 'fix' } }
         ];
 
         // A checker that filed a task and then submitted its verdict is reporting the VERDICT;
         // counting both would double-weight it.
         expect(primaryActionOf(proposals)).toEqual({
             tool: 'submitVerdict',
-            args: { target_ref: 'chapter_1', recommendation: 'fix' }
+            args: { target_ref: 'chapter_0', recommendation: 'fix' }
         });
         // With no report call, the last write is the position.
         expect(primaryActionOf([proposals[0]])).toEqual(proposals[0]);
@@ -304,8 +316,8 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
 
         // The labels are what the dissent sentence is built from (D-38's example quotes "draft 1").
         expect(describeProposal('selectRevision', { revision_id: 'revision_2' })).toBe('revision_2');
-        expect(describeProposal('rejectAll', { unit_ref: 'chapter_1' })).toBe('rejecting every draft');
-        expect(describeProposal('requestMerge', { unit_ref: 'chapter_1' })).toBe('merge of chapter_1');
+        expect(describeProposal('rejectAll', { unit_ref: 'chapter_0' })).toBe('rejecting every draft');
+        expect(describeProposal('requestMerge', { unit_ref: 'chapter_0' })).toBe('merge of chapter_0');
         expect(describeProposal('verifyFinding', { finding_id: 'finding_1', verdict: 'confirmed' })).toBe(
             'finding_1 as confirmed'
         );
@@ -329,7 +341,7 @@ describe('panel — aggregation primitives (D-38)', () => {
         index,
         label: `editor#agent_${index}`,
         text: `agent ${index} answer`,
-        proposals: [{ tool: 'selectRevision', args: { unit_ref: 'chapter_1', revision_id: revisionId } }],
+        proposals: [{ tool: 'selectRevision', args: { unit_ref: 'chapter_0', revision_id: revisionId } }],
         tokens: 280
     });
 
@@ -416,22 +428,22 @@ describe('panel — D-38 interception (the tool layer holds no panel concept)', 
         const wrapped = interceptingRuntime(inner, 2, proposals);
         const context = wrapped.createContext({
             storyId: story.id,
-            runId: 'run_1',
-            runRef: 'run_1',
+            runId: 'run_0',
+            runRef: 'run_0',
             templateRef: 'editor-panel',
             roleName: 'editor',
             roleKind: 'editor'
         });
 
         // A read runs through to the store (a panel agent that cannot read cannot judge).
-        const read = await wrapped.execute(context, 'readChapter', { chapter_id: 'chapter_1' });
+        const read = await wrapped.execute(context, 'readChapter', { chapter_id: 'chapter_0' });
 
         expect(read.ok).toBe(true);
         expect(read.proposed).toBeUndefined();
 
         // A write is recorded and answered, and never reaches the tool layer at all — T3's hook bag
         // has no interception seam, so the panel owns this decision.
-        const write = await wrapped.execute(context, 'editChapter', { chapter_id: 'chapter_1', summary: 'rewritten' });
+        const write = await wrapped.execute(context, 'editChapter', { chapter_id: 'chapter_0', summary: 'rewritten' });
 
         expect(write).toEqual({
             ok: true,
@@ -439,8 +451,8 @@ describe('panel — D-38 interception (the tool layer holds no panel concept)', 
                 "recorded as agent 2's proposal — the run aggregates its panel and executes one winning set (D-38)",
             proposed: true
         });
-        expect(proposals).toEqual([{ tool: 'editChapter', args: { chapter_id: 'chapter_1', summary: 'rewritten' } }]);
-        expect(store.chapters.get('chapter_1')?.summary).toBe(
+        expect(proposals).toEqual([{ tool: 'editChapter', args: { chapter_id: 'chapter_0', summary: 'rewritten' } }]);
+        expect(store.chapters.get('chapter_0')?.summary).toBe(
             'Maren reaches the ridge and does not recognise her own map.'
         );
         expect(inner.calls.map((call) => call.name)).toEqual(['readChapter']);
@@ -460,12 +472,12 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
             agent: (index, turn) =>
                 index === 3
                     ? picker(
-                          'revision_2',
+                          'revision_1',
                           'agent 3 prefers the bell under the water',
                           `agent 3 chose the bell`
                       )(index, turn)
                     : picker(
-                          'revision_1',
+                          'revision_0',
                           `agent ${index} prefers the map paid off on the page`,
                           `agent ${index} chose the steeple`
                       )(index, turn)
@@ -478,18 +490,18 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         // because the wrapper short-circuits before the tool layer.
         expect(agents.runtime.calls.map((call) => call.name)).toEqual(['selectRevision']);
         expect(agents.runtime.calls[0]).toEqual({
-            runRef: 'run_1',
+            runRef: 'run_0',
             roleName: 'editor',
             roleKind: 'editor',
             name: 'selectRevision',
             args: {
-                unit_ref: 'chapter_1',
-                revision_id: 'revision_1',
+                unit_ref: 'chapter_0',
+                revision_id: 'revision_0',
                 // The winning agent's own reasoning first, the split appended: D-38 requires the
                 // dissent IN the note, and P11 keeps the reasoning auditable.
                 selection_note:
-                    'agent 1 prefers the map paid off on the page | 2 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_1 on majority 2 of 3',
-                expects: [{ id: 'revision_1', rev: 1 }],
+                    'agent 1 prefers the map paid off on the page | 2 of 3 preferred revision_0; 1 of 3 preferred revision_1; selected revision_0 on majority 2 of 3',
+                expects: [{ id: 'revision_0', rev: 1 }],
                 why: 'T-2a: the rule I applied'
             }
         });
@@ -499,30 +511,30 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const survivors = agents.store.revisions.list();
 
         expect(survivors).toHaveLength(1);
-        expect(survivors[0].id).toBe('revision_1');
+        expect(survivors[0].id).toBe('revision_0');
         expect(survivors[0].state).toBe('selected');
         expect(survivors[0].selection_note).toBe(
-            'agent 1 prefers the map paid off on the page | 2 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_1 on majority 2 of 3'
+            'agent 1 prefers the map paid off on the page | 2 of 3 preferred revision_0; 1 of 3 preferred revision_1; selected revision_0 on majority 2 of 3'
         );
-        expect(agents.store.chapters.get('chapter_1')?.current_revision).toBe('revision_1');
+        expect(agents.store.chapters.get('chapter_0')?.current_revision).toBe('revision_0');
 
         // S-7: the three agents nest under the run — no Work Item, no run row of their own.
         expect(roleOrder(agents.delegated)).toEqual([
             {
                 role: 'editor#agent_1',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 1 chose the steeple',
                 tokens: 280
             },
             {
                 role: 'editor#agent_2',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 2 chose the steeple',
                 tokens: 280
             },
             {
                 role: 'editor#agent_3',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 3 chose the bell',
                 tokens: 280
             }
@@ -531,7 +543,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         expect(agents.executed).toEqual(['selectRevision']);
         expect(outcome).toEqual({
             text: 'agent 1 chose the steeple',
-            dissent: '2 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_1 on majority 2 of 3',
+            dissent: '2 of 3 preferred revision_0; 1 of 3 preferred revision_1; selected revision_0 on majority 2 of 3',
             answered: 3
         });
         // S-6: the run's total is its internals' total — three agents, two turns each.
@@ -545,7 +557,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const agents = rig(3, 'majority');
         const client = panelClient({
             agent: (index, turn) =>
-                picker(`revision_${index}`, `agent ${index} note`, `agent ${index} answer`)(index, turn)
+                picker(`revision_${index - 1}`, `agent ${index} note`, `agent ${index} answer`)(index, turn)
         });
 
         await runPanel({ chat: client.client, runtime: agents.runtime }, agents.spec, createTally());
@@ -580,7 +592,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const agents = rig(3, 'merge');
         const client = panelClient({
             agent: (index, turn) =>
-                picker(`revision_${index}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
+                picker(`revision_${index - 1}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
             aggregator: () =>
                 '{"agent":3,"reason":"the must_change rule","synthesis":"take the bell from draft 3 and the map from draft 1; the Writer writes the seam"}'
         });
@@ -599,10 +611,10 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         expect(aggregator.messages[1]?.content).toContain('selectRevision');
 
         // The pick decides which SET executes — the aggregation cannot invent a fourth draft (L-19).
-        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_3');
-        expect(agents.store.revisions.list()[0]?.id).toBe('revision_3');
+        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_2');
+        expect(agents.store.revisions.list()[0]?.id).toBe('revision_2');
         expect(agents.store.revisions.list()[0]?.selection_note).toBe(
-            'agent 3 note | 1 of 3 preferred revision_1; 1 of 3 preferred revision_2; 1 of 3 preferred revision_3; selected revision_3 on the must_change rule'
+            'agent 3 note | 1 of 3 preferred revision_0; 1 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_2 on the must_change rule'
         );
 
         expect(outcome.text).toBe('take the bell from draft 3 and the map from draft 1; the Writer writes the seam');
@@ -616,7 +628,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const agents = rig(3, 'lead');
         const client = panelClient({
             agent: (index, turn) =>
-                picker(`revision_${index}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
+                picker(`revision_${index - 1}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
             aggregator: () => 'they are all fine, I would pick whichever'
         });
 
@@ -624,9 +636,9 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
 
         // A panel that failed to aggregate would leave the run with NO report, which is worse for the
         // Author than a deterministic pick with the reason recorded. Earliest agent takes the tie.
-        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_1');
+        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_0');
         expect(agents.store.revisions.list()[0]?.selection_note).toBe(
-            'agent 1 note | 1 of 3 preferred revision_1; 1 of 3 preferred revision_2; 1 of 3 preferred revision_3; selected revision_1 on majority tie at 1 of 3 — earliest agent taken; the aggregator gave no usable pick, so the count decided'
+            'agent 1 note | 1 of 3 preferred revision_0; 1 of 3 preferred revision_1; 1 of 3 preferred revision_2; selected revision_0 on majority tie at 1 of 3 — earliest agent taken; the aggregator gave no usable pick, so the count decided'
         );
         expect(outcome.text).toBe('agent 1 answer');
     });
@@ -635,7 +647,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const partial = rig(2, 'majority');
         const partialClient = panelClient({
             agent: (index, turn) =>
-                picker(`revision_${index}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
+                picker(`revision_${index - 1}`, `agent ${index} note`, `agent ${index} answer`)(index, turn),
             lost: [2]
         });
 
@@ -652,7 +664,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         expect(roleOrder(partial.delegated)).toEqual([
             {
                 role: 'editor#agent_1',
-                task: 'panel agent of select for chapter chapter_1',
+                task: 'panel agent of select for chapter chapter_0',
                 summary: 'agent 1 answer',
                 tokens: 280
             }
@@ -694,7 +706,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const client = panelClient({
             agent: (index, turn) =>
                 picker(
-                    'revision_2',
+                    'revision_1',
                     `agent ${index} prefers the bell under the water`,
                     `agent ${index} agrees`
                 )(index, turn)
@@ -703,7 +715,7 @@ describe('panel — D-38: N agents of one role, one answer per run', () => {
         const outcome = await runPanel({ chat: client.client, runtime: agents.runtime }, agents.spec, createTally());
 
         expect(outcome.dissent).toBe('');
-        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_2');
+        expect(agents.runtime.calls[0]?.args.revision_id).toBe('revision_1');
         // Every agent proposed the same thing; the winner's note is its own, verbatim.
         expect(agents.store.revisions.list()[0]?.selection_note).toBe('agent 1 prefers the bell under the water');
     });

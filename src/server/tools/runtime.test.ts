@@ -105,7 +105,7 @@ function sessionFor(
 
 /**
  * Seeds one competing draft of the test chapter (§4.15). The store mints the ids, so the first
- * draft a test creates is `revision_1` and the next is `revision_2` — the D-22 tests below name
+ * draft a test creates is `revision_0` and the next is `revision_1` — the D-22 tests below name
  * them exactly rather than reading them back.
  */
 function seedRevision(store: Store, storyId: string, unitRef: string, text: string): Revision {
@@ -129,7 +129,7 @@ function seedRevision(store: Store, storyId: string, unitRef: string, text: stri
  * what `selectRevision` must therefore accept and store unchanged.
  */
 const DISSENT_NOTE =
-    'It keeps the bell under the water. | 2 of 3 preferred revision_1; selected revision_2 on the must_happen rule';
+    'It keeps the bell under the water. | 2 of 3 preferred revision_0; selected revision_1 on the must_happen rule';
 
 describe('the W2 call pipeline', () => {
     let store: Store;
@@ -233,7 +233,7 @@ describe('the W2 call pipeline', () => {
 
         const result = await call('writer', 'editSummary', {
             premise: 'A rewrite the lock should stop.',
-            expects: [{ id: 'summary_1', rev: 1 }],
+            expects: [{ id: 'summary_0', rev: 1 }],
             why: 'The premise reads thin.'
         });
 
@@ -243,13 +243,13 @@ describe('the W2 call pipeline', () => {
             'Rule: P5 — the Summary is locked (`summary_locked` is true), so it is read-only for every agent'
         );
         expect(result.field).toBe('summary_locked');
-        expect(store.summaries.require('summary_1').premise).toBe('A keeper, a light, a debt.');
+        expect(store.summaries.require('summary_0').premise).toBe('A keeper, a light, a debt.');
     });
 
     it('refuses a write outside phase `summary` naming T-3c, when the lock is not the blocker', async () => {
         const result = await call('writer', 'editSummary', {
             premise: 'Rewritten in the wrong phase.',
-            expects: [{ id: 'summary_1', rev: 1 }],
+            expects: [{ id: 'summary_0', rev: 1 }],
             why: 'Trying anyway.'
         });
 
@@ -284,7 +284,7 @@ describe('the W2 call pipeline', () => {
 
         const first = await call('writer', 'editSummary', {
             premise: 'The lamp logs its own keepers.',
-            expects: [{ id: 'summary_1', rev: 1 }],
+            expects: [{ id: 'summary_0', rev: 1 }],
             why: 'the first block'
         });
 
@@ -297,7 +297,7 @@ describe('the W2 call pipeline', () => {
 
         const second = await call('writer', 'editSummary', {
             tone: 'close third person, tidal',
-            expects: [{ id: 'summary_1', rev: 1 }],
+            expects: [{ id: 'summary_0', rev: 1 }],
             why: 'the tone block'
         });
 
@@ -379,7 +379,7 @@ describe('the W2 call pipeline', () => {
         expect(result.summary).toBe('Chapter 1 section section_1 written');
         expect(result.rev).toBe(2);
         expect(result.data).toEqual({
-            id: 'chapter_1',
+            id: 'chapter_0',
             order: 1,
             title: 'Sign off',
             section_id: 'section_1',
@@ -518,14 +518,14 @@ describe('the W2 call pipeline', () => {
 
         expect(result.ok).toBe(true);
         expect(result.data).toEqual({
-            chapter_id: 'chapter_1',
+            chapter_id: 'chapter_0',
             chapter_state: 'drafting',
-            task_id: 'task_1',
+            task_id: 'task_0',
             open_findings: 0,
             state_changed: false
         });
         expect(store.chapters.require(chapter.id).state).toBe('drafting');
-        expect(store.tasks.require('task_1')).toMatchObject({
+        expect(store.tasks.require('task_0')).toMatchObject({
             kind: 'signoff',
             title: 'Sign off chapter 1: Sign off',
             owner_role: 'author',
@@ -548,10 +548,10 @@ describe('the W2 call pipeline', () => {
             job: 'Compare this chapter against the Author\u2019s earlier draft.',
             needed: 'A read of archived drafts.',
             tried: 'Read the current draft and the digest instead.',
-            task_id: 'task_1',
+            task_id: 'task_0',
             owner_role: 'author'
         });
-        expect(store.tasks.require('task_1')).toMatchObject({
+        expect(store.tasks.require('task_0')).toMatchObject({
             kind: 'capability_gap',
             owner_role: 'author',
             priority: 60
@@ -572,7 +572,7 @@ describe('the W2 call pipeline', () => {
         const second = await call('reader', 'reportGap', args);
 
         expect(first.repeat).toBeUndefined();
-        expect(second).toMatchObject({ ok: true, repeat: true, task_id: 'task_1' });
+        expect(second).toMatchObject({ ok: true, repeat: true, task_id: 'task_0' });
         expect(store.tasks.list().length).toBe(1);
     });
 
@@ -612,18 +612,18 @@ describe('the W2 call pipeline', () => {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
             why: 'It breaks the promise of the first chapter.'
         };
         const first = await call('checker', 'raiseFinding', args);
         const second = await call('checker', 'raiseFinding', args);
 
-        expect(first.data).toMatchObject({ id: 'finding_1', state: 'unconfirmed', seen_count: 1, cost: 'major' });
-        expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_1' });
+        expect(first.data).toMatchObject({ id: 'finding_0', state: 'unconfirmed', seen_count: 1, cost: 'major' });
+        expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
         expect(store.findings.list().length).toBe(1);
-        expect(store.findings.require('finding_1').seen_count).toBe(2);
-        expect(store.findings.require('finding_1').state).toBe('unconfirmed');
+        expect(store.findings.require('finding_0').seen_count).toBe(2);
+        expect(store.findings.require('finding_0').state).toBe('unconfirmed');
     });
 
     it('reports an already-decided Idea instead of re-opening it (D-32, D-26)', async () => {
@@ -651,10 +651,10 @@ describe('the W2 call pipeline', () => {
             why: 'It would sharpen the opening.'
         });
 
-        expect(result).toMatchObject({ ok: true, repeat: true, idea_id: 'idea_1' });
+        expect(result).toMatchObject({ ok: true, repeat: true, idea_id: 'idea_0' });
         expect((result.notes as string[])[0]).toContain('Rule D-32');
         expect(store.ideas.list().length).toBe(1);
-        expect(store.ideas.require('idea_1').state).toBe('discarded');
+        expect(store.ideas.require('idea_0').state).toBe('discarded');
     });
 
     it('files a proposal instead of rewriting a span the Author wrote (P9, T-2)', async () => {
@@ -667,11 +667,11 @@ describe('the W2 call pipeline', () => {
         });
 
         expect(result.ok).toBe(true);
-        expect(result.summary).toBe('Chapter 1 change filed as proposal proposal_1 (P9)');
+        expect(result.summary).toBe('Chapter 1 change filed as proposal proposal_0 (P9)');
         expect(result.data).toEqual({
-            proposal_id: 'proposal_1',
-            id: 'chapter_1',
-            target_ref: 'chapter_1',
+            proposal_id: 'proposal_0',
+            id: 'chapter_0',
+            target_ref: 'chapter_0',
             target_field: 'sections',
             state: 'pending',
             proposed: true,
@@ -680,8 +680,8 @@ describe('the W2 call pipeline', () => {
             current_rev: 1
         });
         expect(store.chapters.require(chapter.id).sections).toEqual([WRITER_SECTION, AUTHOR_SECTION]);
-        expect(store.proposals.require('proposal_1')).toMatchObject({
-            target_ref: 'chapter_1',
+        expect(store.proposals.require('proposal_0')).toMatchObject({
+            target_ref: 'chapter_0',
             target_field: 'sections',
             state: 'pending'
         });
@@ -722,8 +722,8 @@ describe('the W2 call pipeline', () => {
         const result = await call('checker', 'submitVerdict', {
             target_ref: chapter.id,
             criteria_passed: [
-                { criterion: 'C-3', result: true, evidence: 'chapter_1 section_1 changes his mind.' },
-                { criterion: 'C-7', result: false, evidence: 'chapter_1 never climbs the tower.' }
+                { criterion: 'C-3', result: true, evidence: 'chapter_0 section_1 changes his mind.' },
+                { criterion: 'C-7', result: false, evidence: 'chapter_0 never climbs the tower.' }
             ],
             recommendation: 'fix',
             why: 'The contract is half delivered.'
@@ -731,8 +731,8 @@ describe('the W2 call pipeline', () => {
 
         expect(result.ok).toBe(true);
         expect(result.data).toMatchObject({
-            id: 'verdict_1',
-            target_ref: 'chapter_1',
+            id: 'verdict_0',
+            target_ref: 'chapter_0',
             target_kind: 'chapter',
             round: 1,
             hard_pass: false,
@@ -741,7 +741,7 @@ describe('the W2 call pipeline', () => {
             recommendation: 'fix'
         });
         expect(store.chapters.require(chapter.id).state).toBe('drafting');
-        expect(store.verdicts.require('verdict_1').criteria_passed[1].finding_ref).toBeUndefined();
+        expect(store.verdicts.require('verdict_0').criteria_passed[1].finding_ref).toBeUndefined();
     });
 
     // ── §6.2a / D-21 / U-13: a verdict may name a competing DRAFT ────────────
@@ -750,10 +750,10 @@ describe('the W2 call pipeline', () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
         const result = await call('checker', 'submitVerdict', {
-            target_ref: 'revision_1',
+            target_ref: 'revision_0',
             criteria_passed: [
-                { criterion: 'C-3', result: true, evidence: 'revision_1 section_1 climbs the tower.' },
-                { criterion: 'C-7', result: false, evidence: 'revision_1 never pays the bell off.' }
+                { criterion: 'C-3', result: true, evidence: 'revision_0 section_1 climbs the tower.' },
+                { criterion: 'C-7', result: false, evidence: 'revision_0 never pays the bell off.' }
             ],
             recommendation: 'fix',
             why: 'The draft is one beat short.'
@@ -761,8 +761,8 @@ describe('the W2 call pipeline', () => {
 
         expect(result.ok).toBe(true);
         expect(result.data).toMatchObject({
-            id: 'verdict_1',
-            target_ref: 'revision_1',
+            id: 'verdict_0',
+            target_ref: 'revision_0',
             // §4.9 → §4.4 vocabulary: the collection the ref resolved to becomes the target kind, so
             // U-13's pane can tell a draft verdict from the unit's (story-contract.ts:draftVerdicts).
             target_kind: 'revision',
@@ -772,9 +772,9 @@ describe('the W2 call pipeline', () => {
             state_changed: false,
             recommendation: 'fix'
         });
-        expect(store.verdicts.require('verdict_1')).toMatchObject({
+        expect(store.verdicts.require('verdict_0')).toMatchObject({
             story_id: story.id,
-            target_ref: 'revision_1',
+            target_ref: 'revision_0',
             target_kind: 'revision'
         });
         // The draft is not an artifact the loop advances: filing against it changes no chapter state (D-1).
@@ -789,36 +789,36 @@ describe('the W2 call pipeline', () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
         const first = await call('checker', 'submitVerdict', {
-            target_ref: 'revision_1',
-            criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'revision_1 section_1 climbs the tower.' }],
+            target_ref: 'revision_0',
+            criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'revision_0 section_1 climbs the tower.' }],
             recommendation: 'advance',
             why: 'The draft delivers the contract.'
         });
 
         expect(first.ok).toBe(true);
-        expect(store.revisions.require('revision_1').verdict_refs).toEqual(['verdict_1']);
+        expect(store.revisions.require('revision_0').verdict_refs).toEqual(['verdict_0']);
 
         // One commit, in the order the tool performed it: the verdict row, then the ref that points at it.
         expect(
             store.journal
                 .filter((event) => event.commit_label === 'tool:submitVerdict')
                 .map((event) => `${event.collection}:${event.op}:${event.id}`)
-        ).toEqual(['verdicts:create:verdict_1', 'revisions:update:revision_1']);
+        ).toEqual(['verdicts:create:verdict_0', 'revisions:update:revision_0']);
 
         // Additive, never a replace: a second checker pass on the same draft grows the list in order, and
         // the draft's own fields are untouched (D-1: a verdict judges, it does not decide).
         const second = await call('checker', 'submitVerdict', {
-            target_ref: 'revision_1',
-            criteria_passed: [{ criterion: 'C-7', result: false, evidence: 'revision_1 never pays the bell off.' }],
+            target_ref: 'revision_0',
+            criteria_passed: [{ criterion: 'C-7', result: false, evidence: 'revision_0 never pays the bell off.' }],
             recommendation: 'fix',
             why: 'The beat is missing.'
         });
 
         expect(second.ok).toBe(true);
 
-        const draft = store.revisions.require('revision_1');
+        const draft = store.revisions.require('revision_0');
 
-        expect(draft.verdict_refs).toEqual(['verdict_1', 'verdict_2']);
+        expect(draft.verdict_refs).toEqual(['verdict_0', 'verdict_1']);
         expect({ state: draft.state, selection_note: draft.selection_note ?? '' }).toEqual({
             state: 'competing',
             selection_note: ''
@@ -830,13 +830,13 @@ describe('the W2 call pipeline', () => {
 
         const result = await call('checker', 'submitVerdict', {
             target_ref: chapter.id,
-            criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'chapter_1 section_1 climbs the tower.' }],
+            criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'chapter_0 section_1 climbs the tower.' }],
             recommendation: 'advance',
             why: 'The unit delivers the contract.'
         });
 
         expect(result.ok).toBe(true);
-        expect(store.revisions.require('revision_1').verdict_refs).toEqual([]);
+        expect(store.revisions.require('revision_0').verdict_refs).toEqual([]);
         // The §4.15 row is not touched at all: the unit verdict rides §4.9, matched by `target_ref`.
         expect(store.journal.filter((event) => event.commit_label === 'tool:submitVerdict')).toHaveLength(1);
     });
@@ -845,10 +845,10 @@ describe('the W2 call pipeline', () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
         const result = await call('checker', 'raiseFinding', {
-            target_ref: 'revision_1',
+            target_ref: 'revision_0',
             criterion_ref: 'C-3',
             title: 'A defect aimed at a draft',
-            evidence: 'revision_1 section_1',
+            evidence: 'revision_0 section_1',
             cost: 'major',
             why: 'Triage.'
         });
@@ -860,10 +860,10 @@ describe('the W2 call pipeline', () => {
         expect(result).toEqual({
             ok: false,
             refused: 'T-11',
-            error: 'Rule: T-11 — "revision_1" is a revision, not a story or summary or plotline or chapter, so the rule cannot apply to it',
+            error: 'Rule: T-11 — "revision_0" is a revision, not a story or summary or plotline or chapter, so the rule cannot apply to it',
             message:
-                'Rule: T-11 — "revision_1" is a revision, not a story or summary or plotline or chapter, so the rule cannot apply to it',
-            ref: 'revision_1',
+                'Rule: T-11 — "revision_0" is a revision, not a story or summary or plotline or chapter, so the rule cannot apply to it',
+            ref: 'revision_0',
             kind: 'revisions',
             expected_kinds: ['stories', 'summaries', 'plotlines', 'chapters'],
             fix: 'read stories or summaries or plotlines or chapters first and pass one of those'
@@ -985,7 +985,7 @@ describe('the W2 call pipeline', () => {
 
         const result = await call('editor', 'selectRevision', {
             unit_ref: chapter.id,
-            revision_id: 'revision_2',
+            revision_id: 'revision_1',
             selection_note: 'It keeps the bell under the water.',
             expects: [{ id: chapter.id, rev: chapter.rev }]
         });
@@ -995,28 +995,28 @@ describe('the W2 call pipeline', () => {
         expect(result).toEqual({
             ok: true,
             data: {
-                id: 'revision_2',
-                unit_ref: 'chapter_1',
+                id: 'revision_1',
+                unit_ref: 'chapter_0',
                 unit_kind: 'chapter',
-                deleted_drafts: ['revision_1'],
+                deleted_drafts: ['revision_0'],
                 installed_rev: 2,
                 selection_note: 'It keeps the bell under the water.',
-                next: 'A fresh Writer now sees exactly one text for chapter_1; a checker run judges it and reports with submitVerdict.'
+                next: 'A fresh Writer now sees exactly one text for chapter_0; a checker run judges it and reports with submitVerdict.'
             },
             // T-8: the rev the call READ for the winner, which is what a follow-up `expects` sends.
             rev: 1,
-            summary: 'Selected revision_2 for chapter_1; 1 draft deleted'
+            summary: 'Selected revision_1 for chapter_0; 1 draft deleted'
         });
 
         // D-22: the loser is deleted, not parked in another state — the next Writer cannot inherit
         // two texts, which is the whole reason the selection is one commit.
-        expect(store.revisions.list().map((row) => row.id)).toEqual(['revision_2']);
-        expect(store.revisions.get('revision_1')).toBeUndefined();
-        expect(store.revisions.require('revision_2').state).toBe('selected');
+        expect(store.revisions.list().map((row) => row.id)).toEqual(['revision_1']);
+        expect(store.revisions.get('revision_0')).toBeUndefined();
+        expect(store.revisions.require('revision_1').state).toBe('selected');
 
         // The install itself, and D-24's trail: the unit records which draft it now holds.
-        const installed = store.chapters.require('chapter_1');
-        expect(installed.current_revision).toBe('revision_2');
+        const installed = store.chapters.require('chapter_0');
+        expect(installed.current_revision).toBe('revision_1');
         // D-7: the text lives in `sections`; the draft's body is what replaces them.
         expect(installed.sections.map((section) => section.text)).toEqual(['The bell under the water.']);
         expect(installed.rev).toBe(2);
@@ -1027,7 +1027,7 @@ describe('the W2 call pipeline', () => {
             store.journal
                 .filter((event) => event.commit_label === 'tool:selectRevision')
                 .map((event) => `${event.collection}:${event.op}:${event.id}`)
-        ).toEqual(['chapters:update:chapter_1', 'revisions:update:revision_2', 'revisions:delete:revision_1']);
+        ).toEqual(['chapters:update:chapter_0', 'revisions:update:revision_1', 'revisions:delete:revision_0']);
     });
 
     it('stores the selection note verbatim, including the dissent the run layer appends (D-38, U-8d, T-2a)', async () => {
@@ -1036,7 +1036,7 @@ describe('the W2 call pipeline', () => {
 
         const result = await call('editor', 'selectRevision', {
             unit_ref: chapter.id,
-            revision_id: 'revision_2',
+            revision_id: 'revision_1',
             // The run executor composes this: the agent's own sentence, then `' | '`, then the
             // panel's split (`withDissent`/`dissentSentence` in src/server/run/panel.ts).
             selection_note: DISSENT_NOTE,
@@ -1046,7 +1046,7 @@ describe('the W2 call pipeline', () => {
         // Appended dissent is ALLOWED, and nothing truncates or rewrites it: it is part of the
         // Author's record of how the choice was made, so it survives to the row and the journal.
         expect((result.data as Record<string, unknown>).selection_note).toBe(DISSENT_NOTE);
-        expect(store.revisions.require('revision_2').selection_note).toBe(DISSENT_NOTE);
+        expect(store.revisions.require('revision_1').selection_note).toBe(DISSENT_NOTE);
         expect(
             store.journal.find(
                 (event) => event.commit_label === 'tool:selectRevision' && event.collection === 'revisions'
@@ -1066,7 +1066,7 @@ describe('the W2 call pipeline', () => {
 
         const result = await call('editor', 'selectRevision', {
             unit_ref: chapter.id,
-            revision_id: 'revision_2',
+            revision_id: 'revision_1',
             selection_note: '   ',
             expects: [{ id: chapter.id, rev: chapter.rev }]
         });
@@ -1085,7 +1085,7 @@ describe('the W2 call pipeline', () => {
         });
         // Nothing moved: a refused selection leaves both drafts competing (D-21's inbox intact).
         expect(store.revisions.list().map((row) => row.state)).toEqual(['competing', 'competing']);
-        expect(store.chapters.require('chapter_1').rev).toBe(1);
+        expect(store.chapters.require('chapter_0').rev).toBe(1);
     });
 
     // ── L-11a: `related_refs` carries a finding across chapters ───────────
@@ -1095,15 +1095,15 @@ describe('the W2 call pipeline', () => {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
             // Out of order, doubled, blank and padded — the tool normalises, it does not guess.
-            related_refs: ['chapter_3', ' chapter_2 ', '', 'chapter_3', 'plotline_1'],
+            related_refs: ['chapter_2', ' chapter_1 ', '', 'chapter_2', 'plotline_0'],
             why: 'It spoils the middle of the book.'
         });
 
-        expect((result.data as Record<string, unknown>).related_refs).toEqual(['chapter_3', 'chapter_2', 'plotline_1']);
-        expect(store.findings.require('finding_1').related_refs).toEqual(['chapter_3', 'chapter_2', 'plotline_1']);
+        expect((result.data as Record<string, unknown>).related_refs).toEqual(['chapter_2', 'chapter_1', 'plotline_0']);
+        expect(store.findings.require('finding_0').related_refs).toEqual(['chapter_2', 'chapter_1', 'plotline_0']);
     });
 
     it('leaves related_refs off the record when the reporter names none (L-11a, §8 call shape)', async () => {
@@ -1111,7 +1111,7 @@ describe('the W2 call pipeline', () => {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
             why: 'It spoils the middle of the book.'
         });
@@ -1119,7 +1119,7 @@ describe('the W2 call pipeline', () => {
         // §8's row is unchanged: an omitted arg answers `[]`, and the record carries no empty array
         // that a later reader would have to distinguish from "there are none".
         expect((result.data as Record<string, unknown>).related_refs).toEqual([]);
-        expect('related_refs' in store.findings.require('finding_1')).toBe(false);
+        expect('related_refs' in store.findings.require('finding_0')).toBe(false);
     });
 
     it('merges new related_refs into the open row on a deduped repeat (L-11a, D-16)', async () => {
@@ -1127,21 +1127,21 @@ describe('the W2 call pipeline', () => {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
-            related_refs: ['chapter_2'],
+            related_refs: ['chapter_1'],
             why: 'It spoils the middle of the book.'
         };
         const first = await call('checker', 'raiseFinding', args);
         // The same defect, seen from another chapter: the fingerprint matches (D-16), so the row is
         // reused — and the new unit has to ride along or the propagation dies at the dedupe.
-        const second = await call('checker', 'raiseFinding', { ...args, related_refs: ['chapter_7', 'chapter_2'] });
+        const second = await call('checker', 'raiseFinding', { ...args, related_refs: ['chapter_6', 'chapter_1'] });
 
-        expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_1' });
+        expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
         expect(store.findings.list().length).toBe(1);
-        expect((second.data as Record<string, unknown>).related_refs).toEqual(['chapter_2', 'chapter_7']);
-        expect(store.findings.require('finding_1').related_refs).toEqual(['chapter_2', 'chapter_7']);
-        expect(store.findings.require('finding_1').seen_count).toBe(2);
+        expect((second.data as Record<string, unknown>).related_refs).toEqual(['chapter_1', 'chapter_6']);
+        expect(store.findings.require('finding_0').related_refs).toEqual(['chapter_1', 'chapter_6']);
+        expect(store.findings.require('finding_0').seen_count).toBe(2);
     });
 
     it('journals only the seen_count bump when a repeat adds no refs (D-16)', async () => {
@@ -1187,9 +1187,9 @@ describe('the W2 call pipeline', () => {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
-            related_refs: ['chapter_3'],
+            related_refs: ['chapter_2'],
             why: 'It spoils the middle of the book.'
         });
 
@@ -1197,18 +1197,18 @@ describe('the W2 call pipeline', () => {
         const page = result.data as Record<string, unknown>;
 
         expect((page.items as Record<string, unknown>[])[0]).toEqual({
-            id: 'finding_1',
-            target_ref: 'chapter_1',
+            id: 'finding_0',
+            target_ref: 'chapter_0',
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
             detail: '',
-            evidence: 'chapter_1 section_2: "he already knew"',
+            evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
             state: 'unconfirmed',
             confirmed_by: '',
             approved_by: '',
             seen_count: 1,
-            related_refs: ['chapter_3'],
+            related_refs: ['chapter_2'],
             rev: 1
         });
     });
@@ -1258,9 +1258,13 @@ describe('the W2 call pipeline', () => {
 
         expect(written.ok).toBe(true);
         expect(written.data).toEqual({
-            knowledge_id: 'knowledge_entry_1',
-            id: 'knowledge_entry_1',
-            fingerprint: 'k_e53db99a',
+            knowledge_id: 'knowledge_entry_0',
+            id: 'knowledge_entry_0',
+            // The dedupe key is STORY-scoped (S-RUNTIME): `knowledgeFingerprint(storyId, topic, claim)`
+            // is `k_` + FNV over `story_0|1880 service revolver|an 1880 service revolver holds six rounds`
+            // (tools/knowledge.ts:74). Pinned because it is the row's identity, and derived by running that
+            // function over this fixture's Story id (`story_0` — the counter id an unbound Store mints).
+            fingerprint: 'k_46c87e11',
             topic: '1880 service revolver',
             importance: 'critical',
             reaches_sampling: true,
@@ -1268,7 +1272,7 @@ describe('the W2 call pipeline', () => {
             sources: 1,
             current_rev: 1
         });
-        expect(written.summary).toBe('Knowledge knowledge_entry_1 recorded (tech, critical)');
+        expect(written.summary).toBe('Knowledge knowledge_entry_0 recorded (tech, critical)');
 
         // §7.2: only the Researcher writes `knowledge`; every other kind reads it. The refusal
         // names P10 and routes the job, exactly as a Checker's or a Reader's prose refusal does.
@@ -1292,7 +1296,7 @@ describe('the W2 call pipeline', () => {
     it("refuses a Researcher's Summary write naming P10, so research never becomes prose (§7.2)", async () => {
         const refused = await call('researcher', 'editSummary', {
             premise: 'The researcher decides the book.',
-            expects: [{ id: 'summary_1', rev: 1 }],
+            expects: [{ id: 'summary_0', rev: 1 }],
             why: 'It read a good source.'
         });
 
@@ -1338,9 +1342,11 @@ describe('the W2 call pipeline', () => {
         expect({ repeat: second.repeat, data: second.data }).toEqual({
             repeat: true,
             data: {
-                knowledge_id: 'knowledge_entry_1',
-                id: 'knowledge_entry_1',
-                fingerprint: 'k_e53db99a',
+                knowledge_id: 'knowledge_entry_0',
+                id: 'knowledge_entry_0',
+                // Same key as the first write: the topic's new capitalisation normalises away, and the
+                // Story half of the key is unchanged, so the repeat carries the first row's fingerprint.
+                fingerprint: 'k_46c87e11',
                 topic: '1880 service revolver',
                 importance: 'high',
                 kind: 'tech',
@@ -1480,7 +1486,7 @@ describe('the W2 call pipeline', () => {
 
         expect(accepted.ok).toBe(true);
         expect(accepted.data).toMatchObject({
-            seed_brief_id: 'seed_brief_1',
+            seed_brief_id: 'seed_brief_0',
             seed_hash: seedHashOf(story.idea),
             status: 'accepted'
         });
@@ -1545,8 +1551,8 @@ describe('the W2 call pipeline', () => {
 
         expect(accepted.ok).toBe(true);
         expect(store.seedBriefs.list().map((brief) => [brief.id, brief.status])).toEqual([
-            ['seed_brief_1', 'draft'],
-            ['seed_brief_2', 'accepted']
+            ['seed_brief_0', 'draft'],
+            ['seed_brief_1', 'accepted']
         ]);
     });
 
@@ -1591,7 +1597,7 @@ describe('the W2 call pipeline', () => {
             next: 'the pipeline may now sample: this brief waives the research leg (D-51), so no Researcher is dispatched for it — a Seed edit re-arms the structuring'
         });
         expect(store.seedBriefs.list().map((brief) => [brief.id, brief.research_questions])).toEqual([
-            ['seed_brief_1', []]
+            ['seed_brief_0', []]
         ]);
 
         // A re-dispatched Editor converges on the row it already wrote, and the repeat answers WITH the
@@ -1599,7 +1605,7 @@ describe('the W2 call pipeline', () => {
         const again = await call('editor', 'structureSeed', { ...seedCall(), research_questions: [] });
 
         expect(again.repeat).toBe(true);
-        expect(again.data).toMatchObject({ seed_brief_id: 'seed_brief_1', research_questions: [], research_waived: true });
+        expect(again.data).toMatchObject({ seed_brief_id: 'seed_brief_0', research_questions: [], research_waived: true });
     });
 
     it('refuses a structureSeed call whose research_questions is not an array (D-51, T-11)', async () => {
@@ -1634,12 +1640,12 @@ describe('the W2 call pipeline', () => {
         });
 
         expect(reported.ok).toBe(true);
-        expect(reported.summary).toBe('Research pass closed with nothing to record (Seed Brief seed_brief_1)');
+        expect(reported.summary).toBe('Research pass closed with nothing to record (Seed Brief seed_brief_0)');
         expect(reported.data).toEqual({
             research: 'none',
             // The brief is named from the RECORD, not from an arg: a run cannot answer a brief that is
             // not there, the same "compare, never trust" rule `structureSeed`'s hash enforces.
-            seed_brief_id: 'seed_brief_1',
+            seed_brief_id: 'seed_brief_0',
             seed_hash: seedHashOf(story.idea),
             research_questions: [],
             research_waived: true,
@@ -1655,7 +1661,7 @@ describe('the W2 call pipeline', () => {
         // R1d's "nothing is manufactured": the store gained no Knowledge row, and the brief was not even
         // touched — an unchanged rev is the proof the pass wrote nothing at all.
         expect(store.knowledge.list()).toEqual([]);
-        expect(store.seedBriefs.list().map((brief) => [brief.id, brief.rev])).toEqual([['seed_brief_1', 1]]);
+        expect(store.seedBriefs.list().map((brief) => [brief.id, brief.rev])).toEqual([['seed_brief_0', 1]]);
 
         // §7.1/§7.2: the answer is the Researcher's alone, even though every kind holds `read` on
         // `knowledge` — a Writer answering its own research question would be an unlogged decision.
@@ -1747,7 +1753,7 @@ describe('the W2 call pipeline', () => {
         expect(reported.ok).toBe(true);
         expect(reported.data).toEqual({
             research: 'none',
-            seed_brief_id: 'seed_brief_1',
+            seed_brief_id: 'seed_brief_0',
             seed_hash: seedHashOf(story.idea),
             // `null`, NOT `[]`: the record states nothing, and `[]` would be the Editor's answer.
             research_questions: null,
@@ -1809,7 +1815,7 @@ describe('the W2 call pipeline', () => {
 
         expect(again.repeat).toBe(true);
         expect(again.data).toMatchObject({
-            seed_brief_id: 'seed_brief_1',
+            seed_brief_id: 'seed_brief_0',
             research_questions: null,
             research_waived: false
         });
@@ -1870,8 +1876,8 @@ describe('the W2 call pipeline', () => {
         });
 
         const retired = await call('researcher', 'retireKnowledge', {
-            knowledge_id: 'knowledge_entry_1',
-            expects: [{ id: 'knowledge_entry_1', rev: 1 }],
+            knowledge_id: 'knowledge_entry_0',
+            expects: [{ id: 'knowledge_entry_0', rev: 1 }],
             why: 'The scene moved south.'
         });
 
@@ -1882,8 +1888,8 @@ describe('the W2 call pipeline', () => {
         });
 
         const again = await call('researcher', 'retireKnowledge', {
-            knowledge_id: 'knowledge_entry_1',
-            expects: [{ id: 'knowledge_entry_1', rev: 2 }],
+            knowledge_id: 'knowledge_entry_0',
+            expects: [{ id: 'knowledge_entry_0', rev: 2 }],
             why: 'Nothing changed.'
         });
 
@@ -1900,11 +1906,11 @@ describe('the W2 call pipeline', () => {
             why: 'It decides the finale.'
         });
         // Move the row, so the rev the caller read is stale.
-        store.knowledge.update('knowledge_entry_1', { seen_count: 2 }, { why: 'moved by another run' });
+        store.knowledge.update('knowledge_entry_0', { seen_count: 2 }, { why: 'moved by another run' });
 
         const stale = await call('researcher', 'retireKnowledge', {
-            knowledge_id: 'knowledge_entry_1',
-            expects: [{ id: 'knowledge_entry_1', rev: 1 }],
+            knowledge_id: 'knowledge_entry_0',
+            expects: [{ id: 'knowledge_entry_0', rev: 1 }],
             why: 'The scene moved south.'
         });
 
@@ -2088,7 +2094,7 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         ) as Revision;
     }
 
-    /** Phase ① with a completed selection: `revision_1` is carried and `revision_2` was set aside. */
+    /** Phase ① with a completed selection: `revision_0` is carried and `revision_1` was set aside. */
     beforeEach(() => {
         const world = seedWorld();
 
@@ -2097,8 +2103,8 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         chapter = world.chapter;
 
         store.stories.update(story.id, { phase: 'summary' }, { why: 'seed: phase ①' });
-        seedSummaryRevision('summary_1', 'selected', 2);
-        seedSummaryRevision('summary_1', 'competing', 1);
+        seedSummaryRevision('summary_0', 'selected', 2);
+        seedSummaryRevision('summary_0', 'competing', 1);
     });
 
     async function file(args: Record<string, unknown>, roleKind = 'checker'): Promise<ToolResult> {
@@ -2106,10 +2112,10 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         const context: RunToolContext = runtime.createContext(sessionFor(story.id, roleKind));
 
         return runtime.execute(context, 'raiseFinding', {
-            target_ref: 'summary_1',
+            target_ref: 'summary_0',
             criterion_ref: 'C-3',
             title: 'The relief arrives before the storm',
-            evidence: 'summary_1 logline',
+            evidence: 'summary_0 logline',
             cost: 'major',
             why: 'Triage.',
             ...args
@@ -2123,8 +2129,8 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
             ok: false,
             refused: 'D-33',
             field: 'related_refs',
-            expected: ['revision_1'],
-            fix: 'call raiseFinding again with related_refs including revision_1 — the Summary revision you actually read'
+            expected: ['revision_0'],
+            fix: 'call raiseFinding again with related_refs including revision_0 — the Summary revision you actually read'
         });
         expect(result.message).toContain('has to name the draft it describes');
         // The row is not filed "with the ref missing": an unattributable phase-① defect is the exact
@@ -2133,29 +2139,29 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
     });
 
     it('refuses a finding naming a draft the selection set aside, and names the draft that replaced it', async () => {
-        const result = await file({ related_refs: ['revision_2'] });
+        const result = await file({ related_refs: ['revision_1'] });
 
         expect({ ok: result.ok, refused: result.refused, field: result.field, expected: result.expected }).toEqual({
             ok: false,
             refused: 'D-33',
             field: 'related_refs',
-            expected: ['revision_1']
+            expected: ['revision_0']
         });
         expect(result.message).toBe(
-            'Rule: D-33 — revision_2 is not the draft the Summary carries — the selection replaced it with revision_1, ' +
+            'Rule: D-33 — revision_1 is not the draft the Summary carries — the selection replaced it with revision_0, ' +
                 'so a defect written about it is history, not work the round can act on (D-33, §6.6).'
         );
         expect(store.findings.list()).toEqual([]);
     });
 
     it('files the finding that names the carried draft, keeping the refs it propagates on (L-11a)', async () => {
-        const result = await file({ related_refs: ['revision_1'] });
+        const result = await file({ related_refs: ['revision_0'] });
 
         expect(result.ok).toBe(true);
         expect(store.findings.list().map((finding) => `${finding.id}:${finding.target_ref}:${finding.state}`)).toEqual([
-            'finding_1:summary_1:unconfirmed'
+            'finding_0:summary_0:unconfirmed'
         ]);
-        expect(store.findings.list()[0].related_refs).toEqual(['revision_1']);
+        expect(store.findings.list()[0].related_refs).toEqual(['revision_0']);
     });
 
     it('leaves the shapes the rule is not about alone: a whole-Story defect, a chapter defect, and a round before its first selection', async () => {
@@ -2180,10 +2186,10 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
             runtime.createContext(sessionFor(fresh.story.id, 'checker')),
             'raiseFinding',
             {
-                target_ref: 'summary_1',
+                target_ref: 'summary_0',
                 criterion_ref: 'C-3',
                 title: 'Filed before the first selection',
-                evidence: 'summary_1 premise',
+                evidence: 'summary_0 premise',
                 cost: 'major',
                 why: 'Triage.'
             }
@@ -2191,7 +2197,7 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
 
         expect(beforeSelection.ok).toBe(true);
         expect(fresh.store.findings.list().map((finding) => `${finding.id}:${finding.target_ref}`)).toEqual([
-            'finding_1:summary_1'
+            'finding_0:summary_0'
         ]);
     });
 });

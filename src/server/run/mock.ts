@@ -44,6 +44,9 @@ import {
     type UpdatePatch
 } from '../store';
 import { BUILT_IN_CRITERIA, defaultGoal } from '../../shared/criteria';
+// HARDENING (R6): the mock crew implements the SAME contract as `tools/writer.ts:editSummary`,
+// and a group-managed book must not get its mirror written through the double either.
+import { isGroupManagedStory } from '../phrase';
 // The Seed's change-detector hash, shared with `structureSeed` (tools/knowledge.ts) so the mock's
 // P5 refusal fires on exactly the value the real tool would compare (documents/…§3.3).
 import { seedHashOf } from '../../shared/seed-hash';
@@ -700,6 +703,16 @@ function defaultTools(): Record<string, MockToolHandler> {
             }
         },
         editSummary: async (ctx, args, runtime) => {
+            // HARDENING (R6): mirror the real tool's group-book refusal (tools/writer.ts) — the
+            // five prose fields are the install's projection on a grouped book, here too.
+            if (isGroupManagedStory(runtime.store.stories.get(ctx.storyId)))
+                return {
+                    ok: false,
+                    refused: 'R6',
+                    message:
+                        'this book writes its Summary group by group, so the prose fields are the mirror the install writes (R6) — use the grouped draft_groups job or the per-group revise route'
+                };
+
             const summary = runtime.store.summaries.list().find((row) => row.story_id === ctx.storyId);
 
             if (summary === undefined) {

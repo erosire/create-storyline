@@ -44,6 +44,25 @@
 # are `PATCH` (`/stories/{id}`, `/stories/{id}/goal`, `/stories/{id}/chapters/{chapterId}/bar`,
 # `/templates/{templateId}`). Deletion is `DELETE /stories/{id}`. There is no second spelling
 # of a mutation and no client-side state-changing shortcut.
+# ONE WORKSPACE, MANY BOOKS (S-RUNTIME). A Story is a book: `<root>/stories/<uuid>/` holds its
+# `store.json`, its `journal.jsonl`, and its own `harness/` (knowledge articles and the retained
+# thread log). `<root>/server/` is the app book: the crew catalogue and the host settings (the fan-out
+# ceiling, the roster's model choices) — no Story rows, and no Story journal of its own. Two
+# consequences the contract shows:
+#
+#   * A COLLECTION id is local to one book. `run_0`, `finding_3` and `thread_9` are not unique across
+#     the workspace, which is why every aggregate row carries `story_id` and why a follow-up verb is
+#     addressed through the Story that owns it (`/stories/{id}/findings/{findingId}/approve`). The
+#     Story ids themselves are uuids and are unique across the workspace.
+#   * An AGGREGATE route (`/stories`, `/queue`, `/runs`, `/agents`, `/agents/{kind}/threads`) answers
+#     the union of the books' own correct answers, in a Story-keyed order — it never merges two
+#     Stories' same-named records into one row, and never re-derives a projection over a combined row
+#     set. `/stream` fans every book, including a Story created after the client connected.
+#
+# The three CONFIGURATION writes (`POST/PATCH /templates`, `PATCH /agents/{kind}`, `PATCH /loop`)
+# write host configuration in the app book, and the server then mirrors it into every open Story's
+# book, because that copy is what a Story's crew and roster actually read. They answer the same shape
+# as before; a built-in crew card stays read-only (409, D-17).
 openapi: 3.0.3
 info:
   title: Storyline API
@@ -228,10 +247,14 @@ paths:
       operationId: deleteStory
       summary: Delete a Story and everything its harness owns
       description: >-
-        Stops the Story, removes its knowledge directory, deletes every Story-scoped §4 record,
-        disposes its harness sessions and threads, and removes its retained thread log. The
-        receipt names the Story that is gone. There is no cascade in the other direction: a
-        delete of one Story never touches another.
+        One coordinated purge. The Story is paused so no sweep starts a run behind the delete, its
+        runs in flight are killed and awaited, every Story-scoped §4 record goes in one commit with
+        its harness session, its retained threads are pruned, its knowledge directory is removed and
+        its projection closed, and only then is its book closed and its `stories/<uuid>/` directory -
+        `store.json`, `journal.jsonl` and the whole `harness/` tree - deleted. A restarted workspace
+        therefore never reopens a Story the Author deleted. The receipt names the Story that is gone.
+        There is no cascade in the other direction: the host configuration at `server/` and every
+        other Story's book, rows, journal and harness files are left exactly as they were.
       responses:
         '200':
           description: Deletion receipt.
@@ -268,6 +291,103 @@ paths:
                 $ref: '#/components/schemas/StoryKnowledgeTree'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/storyline/stories/{id}/phrases:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    get:
+      tags: [Stories]
+      operationId: getStoryPhrases
+      summary: Read the Summary as groups (phrases, groups, findings, tasks, review state)
+      description: >-
+        The Summary Phrase view (R6): the catalog groups with their current text, revision numbers and
+        retained history, the composed Overview, every finding with its group scope and R3's resolution
+        (which targeted groups already have a revision written to answer it), the open group tasks, and
+        the review state — which groups are still unwritten, the current group vector, how many Reader
+        seats have reported on THAT text, and whether the legacy `summaries` prose still agrees with the
+        groups it mirrors. A pure read: nothing here migrates or rewrites a book. A Story written before
+        the redesign answers `mode: sampling` with empty groups rather than 404, because an absent
+        `summary_mode` means the legacy whole-Summary pipeline, and its rows stay exactly as they are.
+      responses:
+        '200':
+          description: The group view of one Story.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/storyline/stories/{id}/phrases/import:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: importStoryPhrases
+      summary: Turn a legacy flat Summary into groups (the one explicit upgrade step)
+      description: >-
+        The only way a book written before the Summary Phrase redesign becomes group-managed (R6). A
+        read never migrates anything, and moving the Author's prose into a group history is their
+        decision, so this call is the switch: it creates any missing catalog rows, gives every group
+        whose legacy field is non-empty exactly one revision at number 1 (`state: latest`, `run_ref:
+        null` — no run wrote it, the existing text is preserved rather than re-authored), leaves an
+        empty group at revision 0, and sets `summary_mode` to `groups`. Idempotent by SKIPPING: a group
+        that already has a revision is untouched, so pressing again writes nothing and a partial first
+        attempt is safe to retry. The `summaries` row itself is not rewritten — the mirror's direction
+        is groups → legacy, and it belongs to the install commit.
+      responses:
+        '200':
+          description: The import result plus the fresh group view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseImportResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/groups/{groupId}/revise:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - name: groupId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The `phrase_groups.id` (a UUID the `GET …/phrases` view reports), not the catalog key. An id
+          this Story does not own is 404 rather than a write against a group nobody named.
+    post:
+      tags: [Stories]
+      operationId: revisePhraseGroup
+      summary: The Author rewrites one Summary group
+      description: >-
+        The Author's own write on one group, through the same install the loop uses: a new revision row
+        at THAT group's next number, the text it replaces archived and retained, every sibling group
+        untouched with its own number unchanged, the Overview recomposed from the rows, and the legacy
+        `summaries` prose fields rewritten in the same commit (R2, R6). The row claims to resolve no
+        finding — `finding_refs` stays off it — so a hand edit cannot close a finding on the evidence
+        rule that belongs to a dispatched pass (R3). A `summary_mode: sampling` book is 409: it has no
+        group rows, and importing is an explicit decision. A group a LIVE Writer pass is rewriting is 409
+        as well, naming the run that holds it: this route is one Writer operation on that group, and R4
+        allows only one at a time — the edit lands unchanged once that run closes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhraseGroupReviseRequest'
+      responses:
+        '200':
+          description: The install report plus the fresh group view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseGroupReviseResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/storyline/stories/{id}/stop:
     parameters:
       - $ref: '#/components/parameters/StoryId'
@@ -321,7 +441,10 @@ paths:
       description: >-
         Phase ①'s "not final yet". Queues a Writer round of `summary_sampling` fresh Summary
         drafts from the selected revision. Nothing is deleted; the selected revision remains
-        the base. The answer is the refreshed Story row.
+        the base. The answer is the refreshed Story row. A `summary_mode: groups` book is 409
+        instead: it has no whole-Summary round to ask for — a Writer result installs when it is
+        accepted, and one group is rewritten with `POST …/phrases/groups/{groupId}/revise` (R2, R5) —
+        and the refusal queues nothing, so the rail is never left showing a round nobody can run.
       requestBody:
         required: false
         content:
@@ -1138,7 +1261,9 @@ paths:
       description: >-
         §4.13 rows. Without `story_id`, every Story's runs; with it, only that Story's. A run row
         exists from spawn to teardown and records why it ended (S-3), so the crew panel can show
-        a failed thread after it is gone.
+        a failed thread after it is gone. A run id is local to one Story's book — two Stories each
+        have a `run_0` — so the aggregate keeps those rows separate and each one carries the
+        `story_id` that scopes a kill.
       parameters:
         - name: story_id
           in: query
@@ -1158,6 +1283,15 @@ paths:
   /v1/storyline/runs/{runId}/kill:
     parameters:
       - $ref: '#/components/parameters/RunId'
+      - name: story_id
+        in: query
+        required: false
+        description: >-
+          The Story whose executor stops the run. Optional only while the local run id is unique across
+          this workspace's books; when two Stories hold the same id (each Story mints its own `run_0`) an
+          unscoped kill is 409 rather than a guess by book order.
+        schema:
+          type: string
     post:
       tags: [Runs]
       operationId: killRun
@@ -1165,7 +1299,11 @@ paths:
       description: >-
         P8/U-7's cord. Aborts the run's own controller; the executor closes the row in its
         `finally` block (S-3). The answer is the row as it stands immediately after the kill
-        request; a later stream frame carries the closed row. An unknown run is 404.
+        request; a later stream frame carries the closed row. A run id is local to the Story that
+        started it, and the server stops it THROUGH THAT STORY's executor - a run id no Story
+        holds is 404, and killing `run_0` never touches another Story's `run_0`. Send `story_id`
+        to name the Story; without it, an id more than one Story holds is 409 and nothing is
+        killed.
       responses:
         '200':
           description: Run row.
@@ -1175,6 +1313,10 @@ paths:
                 $ref: '#/components/schemas/Run'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            More than one Story holds this local run id and the request named none - re-send with
+            `story_id`.
   /v1/storyline/queue:
     get:
       tags: [Queue]
@@ -1203,8 +1345,9 @@ paths:
       description: >-
         S-5's one global ceiling: how many threads the sweep may have live at once across EVERY Story,
         and how many are live right now, counted from the durable run rows (L-2). It is host
-        configuration rather than a §4 record - remembered in the store's non-journaled `settings`
-        section beside the roster's model choices, and pinned at boot by
+        configuration rather than a §4 record - remembered in the APP book's non-journaled `settings`
+        section (`<root>/server/`, beside the roster's model choices) and mirrored into every Story's
+        book, since that copy is what a Story's own sweep reads - and pinned at boot by
         `STORYLINE_GLOBAL_MAX_CONCURRENT` when an operator exported one - so it has no Story row to read
         it off and no Story pane owns the control. The workstation shows it on the global employee rail,
         where a thread belongs.
@@ -2686,7 +2829,13 @@ components:
           $ref: '#/components/schemas/SeedBriefState'
     SamplingSample:
       type: object
-      description: One sample's screening tally, as the selector ranked it (§6.5).
+      description: >-
+        One sample's screening tally, as the selector ranked it (§6.5). This is the WINNER'S surface:
+        `sampling.selected` carries only the counts that installed the draft. The hill's per-candidate
+        fields (`outcome`, the origin split, the minimality counts) live on the HISTORY line instead —
+        that is where they have to survive the selection commit's hard truncate (§6.6/P13), and this
+        projection reads them off the kept row rather than duplicating them here
+        (`api/projections.ts:samplingView`).
       required: [revision_id, critical, high]
       additionalProperties: false
       properties:
@@ -2694,27 +2843,111 @@ components:
           type: string
         critical:
           type: integer
+          description: >-
+            Screening issues at severity `critical` across every screening review of this draft
+            (`sample-select.ts:ScoredSample.critical`).
         high:
           type: integer
+          description: >-
+            Screening issues at severity `high`. `high` IS a finding at cost `major`
+            (`shared/types.ts:SampledIssue` maps the two one-to-one), so `critical` + `high` is THE
+            blocking pair everywhere in this contract — in the screening answer, in the selection
+            gates, and in the Author's escalation.
     SamplingHistorySample:
       type: object
-      description: One sample of a completed round — its tally plus whether its screening list validated.
-      required: [revision_id, critical, high, valid]
+      description: >-
+        One sample of a completed round — its tally, whether its screening list validated, and the half
+        of the record that ONLY this line carries. The selection commit hard-deletes every losing draft
+        AND its `sample_reviews` rows (§6.6/P13/D-22), so the outcome, the reason and the outstanding
+        fixes exist nowhere else afterwards.
+      required: [revision_id, critical, high, valid, unresolved_fixes]
       additionalProperties: false
       properties:
         revision_id:
           type: string
         critical:
           type: integer
+          description: Screening issues at `critical` across every screening review of this draft.
         high:
           type: integer
+          description: Screening issues at `high` (a finding at cost `major`).
         valid:
           type: boolean
+          description: >-
+            False when no screening review of this draft can carry a verdict at all — every screening
+            attempt failed the output schema, or every row persisted invalid. An invalid candidate is
+            never the winner; it is a rejection, and the reason is the `reject_reason` line.
+        unresolved_fixes:
+          type: array
+          description: >-
+            The STILL-OPEN fix task ids this candidate did not clear — its blocking screening issues
+            plus the demanded fixes a Reader marked `unresolved`/`unknown` or never answered. Present on
+            EVERY line, including the winner's and including a row written before the field existed
+            (normalised to `[]`, `api/projections.ts:samplingView`), so a consumer reads one shape and
+            never branches on which build wrote the row. `[]` means "this candidate owed nothing, or
+            cleared everything it owed"; the demand as it stood at the SELECTION, so a task the Author
+            settled first reads `[]` too.
+          items:
+            type: string
+        outcome:
+          type: string
+          description: >-
+            What became of this candidate in the round. ABSENT only on a row written before the hill —
+            inventing `rejected` there would state a judgement the book never recorded.
+          enum:
+            - accepted # the draft this commit installed — the row's `selected` id
+            - eligible # it cleared every gate and ranked below the winner (a smaller change won)
+            - rejected # it was never selectable, for the reason in `reject_reason`
+        reject_reason:
+          type: string
+          description: >-
+            Why a `rejected` candidate was refused, in one clause the Author can act on — each is the
+            literal string `loop/sample-select.ts` pushes (e.g. `fix task_1 not certified with evidence`,
+            `introduced 1 critical / 0 major the accepted draft did not have`, `the screening leg
+            answered nothing an auditor could read`). Derived from the recorded counts, never from a
+            model (P6). Absent on an `accepted`/`eligible` line, which owed no explanation.
+        introduced_critical:
+          type: integer
+          description: >-
+            Blocking `critical` issues this candidate CREATED — defects the accepted draft it replaces
+            did not carry. Any of them makes the candidate ineligible. Sent only in a refinement round
+            (a first round has no incumbent to regress against), and an issue whose origin no screening
+            pass stated counts HERE, not in `inherited_*` — fail closed: a pass handed the base and
+            silent about the origin cannot swear the draft is no worse than the text it replaces.
+        introduced_high:
+          type: integer
+          description: The same split at `high` (a finding at cost `major`).
+        inherited_critical:
+          type: integer
+          description: >-
+            Blocking `critical` issues the ACCEPTED draft already had and this candidate still carries.
+            They cost the candidate nothing on their own — Revision N was accepted with them, and the
+            Author decides which become work — so "inherited" means "not a regression", never "excused":
+            one inherited defect the Author DID targeted is an open fix task in the candidate's demand.
+            Sent only in a refinement round.
+        inherited_high:
+          type: integer
+          description: The same split at `high`.
+        changed_fields:
+          type: integer
+          description: >-
+            Minimality: how many of the six §4.2 prose fields (`premise`, `promise`, `theme`, `tone`,
+            `ending`, `world_rules`) this candidate changed against the accepted draft. THE TIE-BREAK,
+            not a quality score (P6): among candidates that cleared the same certified work the loop
+            takes the smallest edit. Absent in a first round, where there is no accepted text to be
+            minimal about.
+        changed_characters:
+          type: integer
+          description: >-
+            The size of those changes in characters — what the accepted draft loses PLUS what it gains,
+            per changed field, measured as the smallest span that explains each change (common prefix
+            and suffix stripped). The last measurement key before creation order.
     SamplingHistoryRow:
       type: object
       description: >-
         §3.6/§6.6 — one completed sampling round's P11 audit line. The losing samples are hard-deleted
-        by the selection commit, so this row is the surviving record of what competed.
+        by the selection commit, so this row is the surviving record of what competed — and the hill's
+        ledger (which WAVE ran, what it spent, what it proved) survives only here.
       required: [round, at, samples, selected]
       additionalProperties: false
       properties:
@@ -2722,23 +2955,73 @@ components:
           type: integer
         at:
           type: string
+          format: date-time
+          description: When the selection commit wrote this line (ISO-8601).
         samples:
           type: array
+          description: >-
+            EVERY attempt the round made — the drafts it came with AND the ones the retry allowance
+            bought — in creation order, including the ungradeable and rejected ones the commit deleted.
           items:
             $ref: '#/components/schemas/SamplingHistorySample'
         selected:
           type: string
+          description: The revision this commit installed; it is the sample line whose `outcome` is `accepted`.
+        wave:
+          type: integer
+          description: >-
+            The SAMPLING WAVE these attempts belong to (`stories.sampling_wave`, D-34's arm/disarm
+            counter). Attempts, improvements and the no-progress streak are scoped to a wave, not to a
+            round, so two lines for the same round — one at wave 0, one at wave 1 — are a stall and the
+            restart after the Author cleared the escalation. That is the difference between "the hill
+            stalled again" and "the hill moved", and it is why the pane needs the number. Absent only on
+            a row written before the hill.
+        attempts:
+          type: integer
+          description: >-
+            The wave's attempt count AT THE MOMENT this install happened — the same number the
+            escalation and the work queue derive from the ledger, so the three can never disagree and a
+            restart cannot re-buy attempts that were already spent.
+        improvements:
+          type: integer
+          description: How many times this wave measured a STRICTLY LOWER unresolved-blocking count than its own best so far. Each one buys one attempt beyond the static cap.
+        ceiling:
+          type: integer
+          description: >-
+            The attempt ceiling this wave was allowed — the Author's `summary_sampling` PLUS the
+            sampling retry allowance PLUS one per measured improvement. `attempts >= ceiling` is what
+            the work queue reads as "buy nothing more".
+        unresolved_blocking:
+          type: integer
+          description: >-
+            The unresolved-blocking count of the draft this install put in — THE BAR the next candidate
+            has to beat, since only a strictly lower count counts as an improvement. `0` when the wave
+            demanded no fixes at all.
     SamplingView:
       type: object
       description: >-
-        §10/§6.5-§6.6 — phase ①'s sampling state: the last completed round, the sample the last
-        selection installed (with the counts that won it), and the bounded audit history.
-      required: [round, history]
+        §10/§6.5-§6.6 — phase ①'s sampling state: the last COMPLETED round, the round IN FLIGHT, the
+        sample the last selection installed (with the counts that won it), and the bounded audit
+        history.
+      required: [round, active_round, history]
       additionalProperties: false
       properties:
         round:
           type: integer
-          description: Last completed round — `sampling_round ?? 1` (the in-flight round is one higher).
+          description: >-
+            Last COMPLETED round — `sampling_round ?? 1`, exactly `loop/records.ts:deepReviewRoundOf`.
+            It is the round the deep review is dispatched for and the number §10's pane prints, and it is
+            `0` on a Story whose counter an Author reset (a Seed edit or a backtrack to `summary` zeroes
+            it, so the reopened phase samples round 1 again); the projection reports the stored 0 as-is.
+        active_round:
+          type: integer
+          description: >-
+            The round the loop is WORKING — `(sampling_round ?? 0) + 1`, the loop's own read
+            (`loop/records.ts:samplingRoundOf`), which is also what decides whether a `drafted` Summary
+            row is live work or a loser the loop set aside
+            (`loop/records.ts:isSupersededSummaryDraft`). It travels because `round` ALONE IS AMBIGUOUS
+            at the boundary that matters: a Story that has never selected and a Story whose round 1 just
+            closed both say `round: 1`. The client is forbidden from recomputing the +1.
         selected:
           $ref: '#/components/schemas/SamplingSample'
         history:
@@ -3049,6 +3332,391 @@ components:
         chapter_count:
           type: integer
           minimum: 1
+        summary_mode:
+          type: string
+          enum: [groups, sampling]
+          description: >-
+            How phase ① writes the Summary. `groups` (the default for a NEW Story) makes the five
+            catalog groups the unit of work: one Writer pass per batch, each accepted result installed
+            as that group's next revision, no whole-Summary sampling and no draft selection (R5).
+            `sampling` keeps the pre-redesign pipeline. Omitting it is the NEW default, not the old
+            behaviour — an existing book with no `summary_mode` on its row is legacy by definition and
+            needs no migration (R6). A value outside the two words is 400, because a typo would
+            otherwise book the Author into a pipeline they did not ask for.
+    PhraseView:
+      type: object
+      additionalProperties: false
+      required: [story_id, mode, phrase_id, revision, overview, groups, findings, tasks, review]
+      properties:
+        story_id:
+          type: string
+        mode:
+          type: string
+          enum: [groups, sampling]
+          description: >-
+            `story.summary_mode`, echoed rather than derived (R6): the switch is a Setting, so a book
+            with group rows it has not opted into still reads `sampling`.
+        phrase_id:
+          type: string
+          nullable: true
+          description: The Summary Phrase row, or null on a book that has none yet (R6's legacy shape).
+        revision:
+          type: integer
+          minimum: 0
+          description: The Overview's revision number — the phrase row's, incremented by each install.
+        overview:
+          type: string
+          description: >-
+            The composed Overview, read from the group rows (R2): `## <title>` per non-empty group in
+            catalog order, one blank line between them. A read, never a stored second source.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseGroupRow'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseFindingRow'
+        tasks:
+          type: array
+          description: The tasks that are not `done` — the queue the group pipeline is working through.
+          items:
+            $ref: '#/components/schemas/PhraseTaskRow'
+        review:
+          $ref: '#/components/schemas/PhraseReviewState'
+    PhraseGroupRow:
+      type: object
+      additionalProperties: false
+      required: [id, key, title, description, order, content, revision, updated_by, history, owed_by_findings, writer_busy]
+      properties:
+        id:
+          type: string
+          description: The `phrase_groups.id` a revise call addresses.
+        key:
+          type: string
+          enum: [premise, promise, theme, tone, ending]
+          description: The catalog key — also the legacy `summaries` field this group mirrors (R6).
+        title:
+          type: string
+        description:
+          type: string
+        order:
+          type: integer
+          description: Composition order; the Overview is built in this order and so is every batch.
+        content:
+          type: string
+          description: The current text; empty means the group has never been written (revision 0).
+        revision:
+          type: integer
+          minimum: 0
+          description: The number of the `latest` row, per GROUP (R2 — one group never renumbers another).
+        updated_by:
+          type: string
+          nullable: true
+          description: The run that wrote the current text, or null for a legacy import or an Author edit.
+        history:
+          type: array
+          description: >-
+            Every revision of this group, newest first, the superseded texts INCLUDED (R2: history is
+            archived and retained, and hidden from the current view rather than deleted).
+          items:
+            $ref: '#/components/schemas/PhraseRevisionRow'
+        owed_by_findings:
+          type: array
+          items:
+            type: string
+          description: >-
+            Findings that target this group and have no revision of IT written to answer them (R3). This
+            is the debt the next Writer batch is routed against.
+        writer_busy:
+          type: boolean
+          description: >-
+            A live Writer pass holds this group right now, so the text shown is about to move (R4). Derived
+            from the Story's live `runs` rows rather than from a flag anyone sets, so it is the same answer
+            the server gives after a restart and the same read `POST …/phrases/groups/{groupId}/revise`
+            refuses a hand edit with — the dashboard disables its edit button off this flag and cannot
+            disagree with the route. A live holding run that named no `group_refs` counts as holding every
+            group of the Story.
+    PhraseRevisionRow:
+      type: object
+      additionalProperties: false
+      required: [id, number, state, at, run_ref, finding_refs, task_refs, chars]
+      properties:
+        id:
+          type: string
+        number:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum: [latest, archived]
+        at:
+          type: string
+        run_ref:
+          type: string
+          nullable: true
+        finding_refs:
+          type: array
+          items:
+            type: string
+          description: The findings this text was written to answer — R3's closure anchor.
+        task_refs:
+          type: array
+          items:
+            type: string
+        chars:
+          type: integer
+          description: The text's length; the body itself is not repeated per historical row.
+    PhraseFindingRow:
+      type: object
+      additionalProperties: false
+      required: [id, title, cost, state, seen_count, group_refs, unscoped, targeted, resolved, missing, resolved_all]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        cost:
+          type: string
+          enum: [critical, major, minor, taste]
+        state:
+          type: string
+          enum: [unconfirmed, confirmed, approved, fixed, disputed, discarded]
+        seen_count:
+          type: integer
+        group_refs:
+          type: array
+          items:
+            type: string
+          description: The group ids on the record; empty is the legacy "the whole Overview" reading.
+        unscoped:
+          type: boolean
+          description: True when the record named no group, spelled out so no client infers it from emptiness.
+        targeted:
+          type: array
+          items:
+            type: string
+          description: The groups it targets after the book's own rows are applied, in catalog order.
+        resolved:
+          type: array
+          items:
+            type: string
+        missing:
+          type: array
+          items:
+            type: string
+          description: The targeted groups still owed a revision. Empty means the finding may close.
+        resolved_all:
+          type: boolean
+          description: R3 — every targeted group has a revision written to answer it.
+    PhraseTaskRow:
+      type: object
+      additionalProperties: false
+      required: [id, title, state, owner_role, attempts, finding_ref]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        state:
+          type: string
+          enum: [open, claimed, blocked, done, wontfix]
+        owner_role:
+          type: string
+          nullable: true
+        attempts:
+          type: integer
+        finding_ref:
+          type: string
+          nullable: true
+          description: >-
+            The finding this row was armed by. The row closes only when THAT finding is resolved in every
+            group it targets (R3) — never because a run finished. The close is the same rule whenever it
+            becomes legal: a Writer batch may install the answer while the defect is still in front of the
+            Editor (the batch is planned off an OPEN finding), and R3 refuses to close an unapproved row,
+            so when the approval lands afterwards the loop's next sweep performs the close and consumes
+            this row in the same commit. That is why `attempts` can legitimately read 0 on a row that was
+            armed after its own fix had already been installed.
+    PhraseReviewState:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          mode,
+          unwritten_groups,
+          written_groups,
+          vector,
+          vector_hash,
+          review_seats,
+          reviews_on_current_vector,
+          deep_reviews_on_current_vector,
+          open_findings,
+          blocking_findings,
+          open_tasks,
+          mirror
+        ]
+      properties:
+        mode:
+          type: string
+          enum: [groups, sampling]
+        unwritten_groups:
+          type: array
+          items:
+            type: string
+          description: Catalog keys with no revision yet; empty means the Overview is fully written.
+        written_groups:
+          type: integer
+        vector:
+          type: object
+          additionalProperties:
+            type: integer
+          description: '`{phrase_groups.id: revision number}` — the identity a review pass is keyed by.'
+        vector_hash:
+          type: string
+        review_seats:
+          type: integer
+          description: The Reader seats the Author's dial asks for on the current text.
+        reviews_on_current_vector:
+          type: integer
+          description: Closed structured review passes over THIS vector (counted from the run ledger, L-3).
+        deep_reviews_on_current_vector:
+          type: integer
+          description: Closed tool-carrying deep-review passes over THIS vector (the findings' source).
+        open_findings:
+          type: integer
+        blocking_findings:
+          type: integer
+          description: The critical/major rows the sign-off treats as blocking (§6.8's bar).
+        open_tasks:
+          type: integer
+        mirror:
+          type: object
+          additionalProperties: false
+          required: [summary_id, in_sync, locked, fields]
+          description: >-
+            R6's compatibility mirror, READ rather than trusted: whether the legacy `summaries` prose
+            still says what the groups say. `in_sync: false` with `locked: true` is the Author's own
+            doing (signed prose is not rewritten under them).
+          properties:
+            summary_id:
+              type: string
+              nullable: true
+            in_sync:
+              type: boolean
+            locked:
+              type: boolean
+            fields:
+              type: array
+              items:
+                type: string
+    PhraseImportResult:
+      type: object
+      additionalProperties: false
+      required: [story_id, phrase_id, imported, seeded, story_switched, view]
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+        imported:
+          type: integer
+          description: Revision rows THIS call seeded. `0` means the book already had them (idempotent).
+        seeded:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, revision_id, number, group_key]
+            properties:
+              group_id:
+                type: string
+              revision_id:
+                type: string
+              number:
+                type: integer
+              group_key:
+                type: string
+        story_switched:
+          type: boolean
+          description: True when this call moved the Story's `summary_mode` to `groups` (R6).
+        view:
+          $ref: '#/components/schemas/PhraseView'
+    PhraseGroupReviseRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          description: The group's new text, verbatim. An empty text is a refusal, not a revision (R2).
+        note:
+          type: string
+          description: Why the Author changed it — it rides onto the journal line the install writes (P11).
+    PhraseGroupReviseResult:
+      type: object
+      additionalProperties: false
+      required: [story_id, phrase_id, revision, installed, archived, mirror, view]
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+        revision:
+          type: integer
+        installed:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_key, revision_id, number]
+            properties:
+              group_id:
+                type: string
+              group_key:
+                type: string
+              revision_id:
+                type: string
+              number:
+                type: integer
+        archived:
+          type: array
+          description: The rows THIS install moved into history — one per written group that had a latest.
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_key, revision_id, number]
+            properties:
+              group_id:
+                type: string
+              group_key:
+                type: string
+              revision_id:
+                type: string
+              number:
+                type: integer
+        mirror:
+          type: object
+          additionalProperties: false
+          required: [summary_id, fields, written]
+          properties:
+            summary_id:
+              type: string
+              nullable: true
+            fields:
+              type: array
+              items:
+                type: string
+            written:
+              type: boolean
+            reason:
+              type: string
+              enum: [locked, no_summary]
+              description: >-
+                Why the mirror was skipped, when it was — L-7a: a locked Summary is not rewritten under
+                the Author's hands.
+        view:
+          $ref: '#/components/schemas/PhraseView'
     PatchStoryRequest:
       type: object
       minProperties: 1

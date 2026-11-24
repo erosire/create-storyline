@@ -22,10 +22,10 @@ import type { RunToolContext, RunToolSession } from './types';
 
 /** The session a loop runs as — T3's five bound fields (T-3). */
 const SESSION: RunToolSession = {
-    storyId: 'story_1',
-    runId: 'run_1',
-    runRef: 'run_1',
-    sessionRef: 'sess_run_1',
+    storyId: 'story_0',
+    runId: 'run_0',
+    runRef: 'run_0',
+    sessionRef: 'sess_run_0',
     templateRef: 'writer-prose',
     roleName: 'writer',
     roleKind: 'writer'
@@ -57,7 +57,7 @@ function harness(turns: Array<(request: ChatRequest) => ChatResponse>) {
 
 /** The loop's spec, with the context supplied — the only field a caller cannot know in advance. */
 const specFor = (context: RunToolContext) => ({
-    label: 'run_1',
+    label: 'run_0',
     system: 'THE BRIEF',
     kickoff: 'Carry out THE JOB.',
     model: 'gpt-5',
@@ -203,7 +203,7 @@ describe('loop — the turn engine (S-2, S-4, T-6a, T-4, T-11, S-4a)', () => {
         const h = harness([
             () => {
                 controller.abort(
-                    Object.assign(new Error('run run_1 killed by the Author (P8, U-7)'), { name: 'AbortError' })
+                    Object.assign(new Error('run run_0 killed by the Author (P8, U-7)'), { name: 'AbortError' })
                 );
 
                 return { message: msg({ toolCalls: calls([{ name: 'ping', args: {} }]) }) };
@@ -217,7 +217,7 @@ describe('loop — the turn engine (S-2, S-4, T-6a, T-4, T-11, S-4a)', () => {
                 { ...specFor(h.context), signal: controller.signal },
                 createTally()
             )
-        ).rejects.toThrow('run run_1 killed by the Author (P8, U-7)');
+        ).rejects.toThrow('run run_0 killed by the Author (P8, U-7)');
 
         // The kill landed before the second request, so the run spent exactly one turn (P8: the cord
         // works between turns, not only inside the transport).

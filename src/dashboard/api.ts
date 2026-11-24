@@ -46,6 +46,7 @@ import type {
     StoryStatus,
     Summary,
     Plotline,
+    Task,
     Template,
     PendingKind,
     Trend,
@@ -151,11 +152,34 @@ export interface SeedBriefView {
     status: SeedBriefState;
 }
 
-/** One sample's screening tally, as the selector ranked it (§6.5: critical, then high, then total). */
+/**
+ * One sample's screening tally, as the selector ranked it (§6.5: critical, then high, then total),
+ * PLUS the half of the record that only the hill-climb audit carries.
+ *
+ * `outcome` is why a candidate is on this line at all: `accepted` (the one the round installed),
+ * `eligible` (it could have been, and lost to a smaller change), or `rejected` (the gate refused it).
+ * The selection commit hard-deletes the losing draft AND its `sample_reviews` rows (P13/§6.6), so this
+ * field and `reject_reason` are the only surviving answer to "why did the round not install it" — a
+ * count tells the Author the draft had a high; the reason says whether it was a regression, an
+ * uncertified fix, or a screening leg that never answered.
+ *
+ * The origin split (`introduced_*` / `inherited_*`) and the minimality counts (`changed_*`) exist only
+ * for a candidate measured AGAINST AN ACCEPTED DRAFT: in round 1 there is nothing to inherit and
+ * nothing to be minimal about, so their absence is a fact about the round, not a missing value. A
+ * history line written before the hill exists omits all of them.
+ */
 export interface SamplingSample {
     revision_id: string;
     critical: number;
     high: number;
+    outcome?: 'accepted' | 'eligible' | 'rejected';
+    reject_reason?: string;
+    introduced_critical?: number;
+    introduced_high?: number;
+    inherited_critical?: number;
+    inherited_high?: number;
+    changed_fields?: number;
+    changed_characters?: number;
 }
 
 /**
@@ -169,12 +193,26 @@ export interface SamplingSample {
  * time the Author reads this pane. The projection sends it as a list on EVERY row — `[]` means "this
  * candidate owed nothing, or cleared everything it owed", and a history line written before the field
  * existed is normalised to `[]` rather than sent as absent, so a consumer never branches on the build.
+ *
+ * THE HILL'S LEDGER (H2) is the other half: which WAVE this round ran in, how many attempts the wave
+ * spent, how many improvements it proved, the ceiling that bounded it, and the unresolved-blocking bar
+ * the install left behind. They are sent as a group and only when the row recorded them: unlike
+ * `unresolved_fixes`, a zero here would be a FALSE fact rather than an empty list — a pre-hill row does
+ * not know how many attempts it spent — so the absence is the honest payload and the pane renders it as
+ * "not recorded" rather than as 0. The wave number is what tells the Author whether the row predates
+ * their clear (wave 0) or came after it (wave 1+), which is the difference between a hill that stalled
+ * and a hill that was restarted.
  */
 export interface SamplingHistoryRow {
     round: number;
     at: string;
     samples: Array<SamplingSample & { valid: boolean; unresolved_fixes: string[] }>;
     selected: string;
+    wave?: number;
+    attempts?: number;
+    improvements?: number;
+    ceiling?: number;
+    unresolved_blocking?: number;
 }
 
 /**
@@ -268,6 +306,163 @@ export interface StoryView {
      * additive convention: the shipped server always sends it (`round: sampling_round ?? 1`).
      */
     sampling?: SamplingView;
+}
+
+// ---------------------------------------------------------------------------
+// SUMMARY PHRASE — the group read (`GET /stories/:id/phrases`), R1-R6
+//
+// WHY A SECOND READ AND NOT A WIDER `StoryView`: `StoryView` is the PINNED wire contract the whole
+// desk renders from, and the group rail is a new surface rather than a field of the old one
+// (`server/api/projections.ts`'s phrase section says the same thing from the server's side). The
+// shapes below are field-for-field the projection's: this file is the dashboard's copy of the wire,
+// so the panes never import a server module and a server that renames a field breaks the client
+// contract test rather than a component.
+//
+// WHAT THE GROUPS ARE (R1): the Summary is five named, separately revisable groups — premise,
+// promise, theme, tone, ending — that compose into one Overview. WHICH groups exist, their titles,
+// their descriptions and their order is SERVER/product data on the rows; nothing here hardcodes the
+// five labels, and `world_rules` is deliberately not one of them (R1 retires it as a group).
+//
+// NO FULL ARCHIVED TEXT (R2): a group row carries the CURRENT text; `history` is the retained
+// ledger of superseded revisions with metadata and a char count only. A pane may promise "3
+// archived" and the current text; it may not promise the prose of an archived revision, because the
+// projection does not send it.
+// ---------------------------------------------------------------------------
+
+/** One revision of one group, current or archived. `chars` is its length, never its text (R2). */
+export interface PhraseRevisionRow {
+    id: string;
+    /** 1-based, per group (R2) — the number the detail pane labels its status with. */
+    number: number;
+    /** `latest` for the row that stands, `archived` for one a later install superseded. */
+    state: string;
+    at: string;
+    /** The run that wrote it, or null for an Author edit / legacy import. */
+    run_ref: string | null;
+    /** R3: the findings this text was written to answer — the anchor a closure is judged on. */
+    finding_refs: string[];
+    task_refs: string[];
+    chars: number;
+}
+
+/** One group: its current text, its number, its retained history, and the findings it still owes. */
+export interface PhraseGroupRow {
+    /** The UUID the rail addresses this group by — a selection ref, never an array index (U2). */
+    id: string;
+    key: string;
+    title: string;
+    description: string;
+    /** Composition order; the rail and the Overview both follow it, and it is NOT an identity. */
+    order: number;
+    content: string;
+    revision: number;
+    updated_by: string | null;
+    /** Newest first, `latest` included. Metadata only — see the note above. */
+    history: PhraseRevisionRow[];
+    /** Open findings that target this group and have no revision of ITS own answering them (R3). */
+    owed_by_findings: string[];
+    /**
+     * F8 / R4 — a live Writer pass holds this group right now, so the text on screen is about to
+     * move. It is the SAME read the revise route refuses with, so a disabled button and a 409 cannot
+     * disagree: the control is disabled off this flag, never off a guess from run rows.
+     */
+    writer_busy: boolean;
+}
+
+/** A finding with its group attribution and R3's resolution against the book as it stands. */
+export interface PhraseFindingRow {
+    id: string;
+    title: string;
+    cost: Cost;
+    state: Finding['state'];
+    seen_count: number;
+    /** The ids on the record; empty is the legacy "the whole Overview" reading. */
+    group_refs: string[];
+    /** True when the record named none — spelled out so a pane never infers it from an empty array. */
+    unscoped: boolean;
+    /** Every group this finding is aimed at; `unscoped` means every group of this Story. */
+    targeted: string[];
+    resolved: string[];
+    missing: string[];
+    /** R3: every targeted group has a revision written to answer it, so the row may close. */
+    resolved_all: boolean;
+}
+
+/** A task in the group queue, with what it is waiting on. */
+export interface PhraseTaskRow {
+    id: string;
+    title: string;
+    state: Task['state'];
+    owner_role: string | null;
+    attempts: number;
+    finding_ref: string | null;
+}
+
+/** The state of the group pipeline: what is written, what is reviewed, and whether the mirror agrees. */
+export interface PhraseReviewState {
+    /** `story.summary_mode`, echoed — the switch is a Setting, not a derived fact (R6). */
+    mode: 'groups' | 'sampling';
+    /** Catalog keys with no revision yet; empty means the Overview is fully written. */
+    unwritten_groups: string[];
+    written_groups: number;
+    /** `{groupId: revisionNumber}` — the identity reviews and deferrals are keyed by. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** Reader seats the Author's dial asks for on this vector, and how many have reported. */
+    review_seats: number;
+    reviews_on_current_vector: number;
+    deep_reviews_on_current_vector: number;
+    open_findings: number;
+    /** The critical/major rows the sign-off treats as blocking (§6.8's bar, unchanged by R6). */
+    blocking_findings: number;
+    open_tasks: number;
+    /** R6's compatibility mirror: does the legacy `summaries` prose still say what the groups say? */
+    mirror: { summary_id: string | null; in_sync: boolean; locked: boolean; fields: string[] };
+}
+
+/** The whole group surface for one Story — the one read the Summary rail and its panes render (R6). */
+export interface PhraseView {
+    story_id: string;
+    mode: 'groups' | 'sampling';
+    phrase_id: string | null;
+    /** The Overview's revision number (the phrase row), or 0 when the book has no phrase row. */
+    revision: number;
+    /** The composed Overview, from the group rows as they are (R2: the composition is a read). */
+    overview: string;
+    groups: PhraseGroupRow[];
+    findings: PhraseFindingRow[];
+    tasks: PhraseTaskRow[];
+    review: PhraseReviewState;
+}
+
+/**
+ * `POST /stories/:id/phrases/groups/:groupId/revise` body (R2) — the Author rewrites ONE group.
+ * The route trims `content` and refuses an empty one, and it deliberately claims to resolve no
+ * finding: `finding_refs` stay off the row, so a hand edit cannot close a finding on R3's evidence rule.
+ */
+export interface PhraseGroupReviseInput {
+    content: string;
+    note?: string;
+}
+
+/** One group's install, as the route reports it: which number is current, which one moved to history. */
+export interface PhraseGroupInstallRow {
+    group_id: string;
+    group_key: string;
+    revision_id: string;
+    number: number;
+}
+
+/** What the group revise route answers — including the refreshed `view`, so the pane re-reads nothing by hand. */
+export interface PhraseGroupReviseResult {
+    story_id: string;
+    phrase_id: string;
+    revision: number;
+    installed: PhraseGroupInstallRow[];
+    archived: PhraseGroupInstallRow[];
+    /** What happened to the legacy `summaries` mirror (R6): `written: false` with a reason is a fact, not a failure. */
+    mirror: { summary_id: string | null; fields: string[]; written: boolean; reason?: 'locked' | 'no_summary' };
+    view: PhraseView;
 }
 
 /**
@@ -589,6 +784,26 @@ export interface ApiClient {
      */
     deleteStory(storyId: string): Promise<{ deleted: string }>;
     getStory(storyId: string): Promise<StoryView>;
+    /**
+     * R6 — the SUMMARY PHRASE read: the five groups with their current text, numbers and retained
+     * history, the composed Overview, every finding with its group scope and R3's resolution, the open
+     * group tasks, and whether the legacy Summary mirror still agrees.
+     *
+     * A pure read, so it is safe on a legacy book: a Story with no `summary_mode` answers
+     * `mode:'sampling'` with empty groups rather than 404, and the rail shows that book its compact
+     * upgrade state instead of the group rail (R6's "readable, not migrated").
+     */
+    getPhrase(storyId: string): Promise<PhraseView>;
+    /**
+     * R2 — the Author rewrites ONE group by hand. Same install the loop uses, so the group gets a new
+     * numbered revision, the text it replaces is archived and retained, its siblings keep their own
+     * numbers, the Overview recomposes, and the legacy mirror is rewritten in the same commit (R6).
+     *
+     * 409 while a Writer holds that group (F8/R4 — `PhraseGroupRow.writer_busy` is the same read, so the
+     * control is already disabled), and 409 on a `summary_mode:'sampling'` book, which has no group rows
+     * to revise. It answers the refreshed `view`, which is what the store commits.
+     */
+    revisePhraseGroup(storyId: string, groupId: string, input: PhraseGroupReviseInput): Promise<PhraseGroupReviseResult>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
     /** The global employee roster: Writer/Editor/Reader/Checker, their models and live threads. */
@@ -671,8 +886,13 @@ export interface ApiClient {
     patchTemplate(templateId: string, patch: Partial<Template>): Promise<Template>;
     /** §4.13 — `storyId` omitted lists every Story's runs. */
     listRuns(storyId?: string): Promise<Run[]>;
-    /** S-3 — teardown with a recorded reason; the Author's kill (U-7). */
-    killRun(runId: string): Promise<Run>;
+    /**
+     * S-3 — teardown with a recorded reason; the Author's kill (U-7). S-RUNTIME: a run id is LOCAL to one
+     * Story's book, so `storyId` names which book's executor aborts the thread. Omit it only when the id is
+     * unique across the workspace's books — several Stories holding the same local id answer 409, because
+     * stopping one of them by book order would stop a thread the Author never pointed at.
+     */
+    killRun(runId: string, storyId?: string): Promise<Run>;
     /** U-10 — the cross-Story queue that is the home screen. */
     getQueue(): Promise<QueueItem[]>;
     /** §8.6 — the assistant tool the locked panes offer (U-4). */
@@ -847,6 +1067,15 @@ export const api: ApiClient = {
     createStory: (input) => post<StoryRow>('/stories', input),
     deleteStory: (storyId) => del<{ deleted: string }>(storyPath(storyId)),
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
+    // R6 — the group read. One route per Story, because the rail is one read of the whole Summary Phrase.
+    getPhrase: (storyId) => request<PhraseView>(storyPath(storyId, '/phrases')),
+    // R2 — the Author's hand edit of ONE group. The group is addressed by its UUID, so a refetch that
+    // reorders the catalog cannot move the write onto a sibling group.
+    revisePhraseGroup: (storyId, groupId, input) =>
+        post<PhraseGroupReviseResult>(
+            storyPath(storyId, `/phrases/groups/${encodeURIComponent(groupId)}/revise`),
+            input.note === undefined ? { content: input.content } : { content: input.content, note: input.note }
+        ),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),
     listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
@@ -909,7 +1138,8 @@ export const api: ApiClient = {
     createTemplate: (input) => post<Template>('/templates', input),
     patchTemplate: (templateId, body) => patch<Template>(`/templates/${encodeURIComponent(templateId)}`, body),
     listRuns: (storyId) => request<Run[]>(`/runs${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
-    killRun: (runId) => post<Run>(`/runs/${encodeURIComponent(runId)}/kill`),
+    killRun: (runId, storyId) =>
+        post<Run>(`/runs/${encodeURIComponent(runId)}/kill${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
     getQueue: () => request<QueueItem[]>('/queue'),
     requestAssistant: (storyId, body) => post<Run>(storyPath(storyId, '/assistant'), body),
     subscribeEvents

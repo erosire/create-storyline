@@ -32,11 +32,29 @@ import type { RoleAggregation, UnitKind } from '../../shared/types';
  * `seed_review` was REPLACED by `structure_seed` (no backward compatibility: the sweep and the
  * brief are the only readers of this vocabulary and both moved in the same wave).
  */
+/**
+ * SUMMARY PHRASE (R2/R5): the two jobs that REPLACE phase ①'s competing sampling for a
+ * group-managed Story, and the reason `sample_unit`/`screen_samples` are still in this union.
+ *
+ *   - `draft_groups` — the Writer's one-turn, NO-TOOL structured answer (`GroupDraft`), for ONE or
+ *     MANY groups at once (`WorkItem.groupRefs`). An accepted answer is INSTALLED immediately
+ *     (R5): there is no round, no competing set, and no selection to lose. It is the only kind that
+ *     HOLDS a group, which is what makes R4's exclusion meaningful.
+ *   - `review_groups` — the Reader's one-turn, NO-TOOL structured answer (`GroupReview`), reading
+ *     the INSTALLED Overview and naming, group by group, what is wrong with it (R3) and fix by fix
+ *     whether the approved work is in it.
+ *
+ * `sample_unit` and `screen_samples` stay in the union, and stay renderable in `run/brief.ts`,
+ * because run rows and work items written before the redesign still name them (R6: a legacy book is
+ * readable with no migration). A group-managed Story simply never generates either of them.
+ */
 export const WORK_ITEM_KINDS = [
     'structure_seed',
     'research',
     'sample_unit',
     'screen_samples',
+    'draft_groups',
+    'review_groups',
     'write_unit',
     'check_unit',
     'select',
@@ -91,6 +109,26 @@ export interface WorkItem {
      * verification evidence (R4).
      */
     fixRefs?: string[];
+    /**
+     * SUMMARY PHRASE R2/R4 — the `phrase_groups` ids this job writes or reads, in CATALOG ORDER.
+     *
+     * WHY THE JOB CARRIES THE SET AT ALL, three separate reasons, all of them load-bearing:
+     *   - R4's exclusion is enforced from PERSISTED state. `run/executor.ts` copies this list onto the
+     *     Run row (`Run.group_refs`) when the row is created, so a restart re-derives "which groups
+     *     are already being written" from the live rows the lease sweep already walks — no in-memory
+     *     semaphore has to agree with the book;
+     *   - R2's atomicity needs the EXPECTED set. The Writer's `GroupDraft` answer is validated
+     *     against it (`phrase/revisions.ts:parseGroupDraftAnswer`): an answer that skips a named group
+     *     or writes one nobody asked for is refused whole, rather than installing a partial batch;
+     *   - a review pass must be able to name the groups it judged, and its findings' `group_refs`
+     *     (R3) have to be ids that were actually in front of it.
+     *
+     * It is NOT `taskRefs`: that field means "tasks this run CLOSES when it finishes" (`settleJob`
+     * marks them `done`), and a group draft closes nothing on completion — the fix tasks and their
+     * findings close on the EVIDENCE the install and the review leave in the book. Same distinction
+     * `fixRefs` already draws for a sampling job.
+     */
+    groupRefs?: string[];
     /** Findings to verify (D-33) or to fix (D-34). */
     findingRefs?: string[];
     /** Ideas this job must absorb or verify (D-29, D-27). */

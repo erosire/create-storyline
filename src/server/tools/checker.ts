@@ -13,6 +13,11 @@
  */
 import type { Finding, Task, Verdict, VerdictCriterion } from '../../shared/types';
 import { criterionById } from '../../shared/criteria';
+// SUMMARY PHRASE R3: the group-managed switch and the book's group rows. Imported from the domain's
+// one surface (`../phrase`), because `raiseFinding` must apply the SAME reading of an absent
+// `group_refs` that `phrase/findings.ts:findingGroupScope` applies when it decides closure — two
+// copies of that rule is how a finding ends up open against a group nobody was told about.
+import { isGroupManagedStory, phraseGroupsOf } from '../phrase';
 // U-3a: only the ID crosses this boundary — `digest_gap` is the §4.6 open-thread ref D-13 gives a crew
 // for reporting a bad Digest, and the builder is the module that owns the name (src/server/digest).
 import { DIGEST_GAP_CRITERION } from '../digest/digest';
@@ -172,8 +177,11 @@ function verdictTally(
  * §6.2a's "verdicts per revision" is served by the same call with a `revisions` target: the loop's
  * per-draft checker jobs (`wi_check_<unit>_<gen>_<revision_id>`) name the draft in the job line, and
  * filing against it is what gives U-13's side-by-side view a verdict per draft. The criteria engine
- * aggregates per TARGET (criteria/engine.ts:aggregateJudgeWithTargets), so a draft verdict can never
- * displace the artifact verdict the Goal is measured on.
+ * aggregates per TARGET (criteria/engine.ts:aggregateJudgeWithTargets), so a draft verdict cannot
+ * displace the artifact verdict the Goal is measured on — with ONE narrow exception: at the
+ * `summary` level, a verdict filed against the draft the Summary row CURRENTLY carries is read as
+ * evidence for the Summary too (criteria/engine.ts:summaryDraftEvidenceRefs), because in phase ① that
+ * draft is the Summary's text. A competing or discarded sibling's verdict still decides nothing.
  *
  * §8 lists no `why` on this row, but the store refuses an unattributed write (P11), so the
  * reason is synthesised from the call itself (see `whyOptional` in `types.ts`).
@@ -363,6 +371,14 @@ function relatedRefsOf(value: unknown): string[] {
 const RELATED_REF_LIMIT = 12;
 
 /**
+ * R3: `group_refs` normalised by the SAME rule as `related_refs` — trim, drop blanks, dedupe,
+ * first-seen order, capped. Only five groups exist, so the 12-ref cap is never the binding limit;
+ * reusing the normaliser is the point, because two near-copies of that loop are how a dedupe rule
+ * starts to differ between the two fields.
+ */
+const groupRefsOf = (value: unknown): string[] => relatedRefsOf(value);
+
+/**
  * L-11a: the refs to keep on a REPEAT sighting (D-16). The open row's refs win, in order, and a
  * new sighting only ever adds — losing `related_refs` on a dedupe is how a cross-chapter defect
  * silently stops being cross-chapter. Returns undefined when nothing new arrived, so an identical
@@ -389,7 +405,7 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 const raiseFinding: ToolDefinition = {
     name: 'raiseFinding',
     description:
-        'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16).',
+        'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
     inputSchema: {
         type: 'object',
         properties: {
@@ -403,6 +419,16 @@ const raiseFinding: ToolDefinition = {
             related_refs: arr(
                 'Other records this defect touches (chapter, plotline or summary ids), so the finding propagates across chapters (L-11a).',
                 str('One related record ref.')
+            ),
+            // SUMMARY PHRASE R3: which Summary GROUPS this defect is about. Optional on the schema so a
+            // phase ②/③ call and a legacy (non-group) book are untouched; REQUIRED in practice on a
+            // group-managed book's Summary finding, which the handler below enforces with a refusal that
+            // lists the ids. It is the field R3's closure rule runs on: a finding closes when every
+            // group it names has a revision written to answer it, so an unscoped finding means "the
+            // whole Overview" and the next Writer batch rewrites all five groups to answer one sentence.
+            group_refs: arr(
+                'The Summary groups this defect is about, as the phrase_groups ids in your brief (premise, promise, theme, tone, ending). Name every group it crosses, and all five when the Overview itself is what is wrong: on a group-managed book a Summary finding with no groups is refused, because the repair is routed by these ids and the finding closes only once every group it names has been revised. Only on a legacy whole-Summary book does an omitted list mean the whole Overview (R3).',
+                str('One phrase_groups id.')
             ),
             why: whyArg('Optional: why this is worth the Author attention.')
         },
@@ -442,6 +468,12 @@ const raiseFinding: ToolDefinition = {
         // L-11a: normalised before the dedupe lookup, so a repeat that only adds refs is still
         // recognised as the same finding (the fingerprint never looks at them).
         const relatedRefs = relatedRefsOf(ctx.args.related_refs);
+        // SUMMARY PHRASE R3: the groups this defect is about, normalised the same way.
+        const groupRefs = groupRefsOf(ctx.args.group_refs);
+        // The book's own group rows, read ONCE and used twice: to refuse an id the Story does not have,
+        // and to tell the reporter which ids it may name. A non-group book has none, and every group
+        // rule below is inert for it (R6: a legacy Story's finding keeps its old meaning).
+        const ownedGroups = isGroupManagedStory(ctx.story) ? phraseGroupsOf(ctx.store, ctx.storyId) : [];
 
         // T6/R2c: phase ①'s defect must say WHICH DRAFT it describes, at the moment it is filed.
         //
@@ -461,8 +493,11 @@ const raiseFinding: ToolDefinition = {
         //     the note on that constant above), so "the Summary" is the shape a phase-① draft defect
         //     takes, and the Story-targeted whole-Story findings L-11a propagates stay untouched;
         //   * only once a selection has installed a draft — before the first selection there is nothing
-        //     to name, so the rule cannot hold the very first round.
-        if (ctx.story.phase === 'summary' && target.collection === 'summaries') {
+        //     to name, so the rule cannot hold the very first round;
+        //   * never on a group-managed book — there is no competing draft there at all (R5), so the id
+        //     this rule demands does not exist; the group finding is scoped by `group_refs` instead,
+        //     which the block below requires.
+        if (ctx.story.phase === 'summary' && target.collection === 'summaries' && !isGroupManagedStory(ctx.story)) {
             const drafts = revisionRows(ctx.store, ctx.storyId).filter((row) => row.unit_kind === 'summary');
             const carried = drafts.find((row) => row.state === 'selected');
 
@@ -488,6 +523,68 @@ const raiseFinding: ToolDefinition = {
             }
         }
 
+        // SUMMARY PHRASE R3 — the group attribution, checked against the BOOK before any row moves.
+        //
+        // Two rules, both of them because R3's closure is a JOIN on these ids:
+        //
+        //   * an id the Story does not have is refused. Silently dropping it would make the finding
+        //     mean something other than what the reporter said — and if it were the finding's ONLY ref,
+        //     the row would silently become "the whole Overview", which is the most expensive reading
+        //     there is here (every group re-written to answer one sentence);
+        //   * on a group-managed book, a phase ① finding ON THE SUMMARY must name its groups. Omitting
+        //     `group_refs` is still legal for a cross-cutting defect that genuinely spans the whole
+        //     Overview — but the reporter has to have the ids in front of it when it decides that, so
+        //     the refusal lists them and the loop never files a Summary defect the planner can only
+        //     route to all five.
+        //
+        // A phase ②/③ finding (chapter, plotline) and a legacy book's Summary finding are untouched: the
+        // argument stays optional, and an absent `group_refs` keeps its old whole-Overview meaning.
+        if (groupRefs.length > 0) {
+            const owned = new Set(ownedGroups.map((group) => group.id));
+            const unknown = groupRefs.filter((ref) => !owned.has(ref));
+
+            if (unknown.length > 0) {
+                throw new ToolRefusal(
+                    'R3',
+                    `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not ${owned.size === 0 ? 'a group of this Story' : 'a group of this Story — its groups are ' + ownedGroups.map((group) => `${group.key}=${group.id}`).join(', ')}. A defect cannot be closed against a group that does not exist (R3).`,
+                    {
+                        field: 'group_refs',
+                        expected: [...owned],
+                        // HARDENING (R3): this used to offer "omit group_refs" to EVERY book, but on a
+                        // grouped book omission is refused by the rule immediately below — the only
+                        // honest reading of "the whole Overview" THERE is naming all owned.length ids,
+                        // because closure is a JOIN on them (`phrase/findings.ts:findingGroupScope`).
+                        // `owned.size === 0` is the legacy whole-Summary book (no catalog), and there
+                        // omission keeps its old whole-Overview meaning, so the fix branches with the
+                        // message above rather than contradicting it.
+                        fix:
+                            owned.size === 0
+                                ? 'omit group_refs — this book has no phrase groups, so its Summary is one whole text'
+                                : `call raiseFinding again with group_refs naming every group the defect crosses — a whole-Overview defect names all ${owned.size} ids listed; this book has no unscoped Summary path`
+                    }
+                );
+            }
+        }
+
+        if (
+            ownedGroups.length > 0 &&
+            ctx.story.phase === 'summary' &&
+            target.collection === 'summaries' &&
+            groupRefs.length === 0
+        ) {
+            throw new ToolRefusal(
+                'R3',
+                `this Summary is written group by group, so a defect on it has to say which groups it is about: ${ownedGroups
+                    .map((group) => `${group.key}=${group.id}`)
+                    .join(', ')}. A finding that names none is read as "the whole Overview", and the fix would rewrite all five groups to answer one sentence (R3).`,
+                {
+                    field: 'group_refs',
+                    expected: ownedGroups.map((group) => group.id),
+                    fix: 'call raiseFinding again with group_refs naming every group the defect crosses'
+                }
+            );
+        }
+
         const fingerprint = fingerprintFinding(target.id, criterionRef, title);
         const duplicate = duplicateFinding(ctx.store, ctx.storyId, fingerprint);
         const why = whyOf(ctx) || `Finding on ${target.id} for ${criterionRef}: ${title}`;
@@ -496,8 +593,11 @@ const raiseFinding: ToolDefinition = {
         // with the same attribution discipline as a new row (P11).
         if (duplicate) {
             // L-11a: the bump also keeps any unit the earlier sighting did not name, so propagation
-            // survives dedupe instead of being paid for with a second row.
+            // survives dedupe instead of being paid for with a second row. R3's `group_refs` follow the
+            // same merge: a repeat that names one more group widens the scope of the row the loop is
+            // already working on rather than filing a second claim against the same defect.
             const mergedRefs = mergedRelatedRefs(duplicate.related_refs, relatedRefs);
+            const mergedGroups = mergedRelatedRefs(duplicate.group_refs, groupRefs);
             const bumped = (await commitAs(
                 ctx,
                 'raiseFinding',
@@ -506,7 +606,8 @@ const raiseFinding: ToolDefinition = {
                         duplicate.id,
                         {
                             seen_count: duplicate.seen_count + 1,
-                            ...(mergedRefs ? { related_refs: mergedRefs } : {})
+                            ...(mergedRefs ? { related_refs: mergedRefs } : {}),
+                            ...(mergedGroups ? { group_refs: mergedGroups } : {})
                         },
                         buildAttribution(ctx, `${why} (already filed)`)
                     ),
@@ -524,7 +625,9 @@ const raiseFinding: ToolDefinition = {
                     target_ref: bumped.target_ref,
                     // L-11a: what the open row now says it touches, so the reporter knows the
                     // propagation it asked for is on the record (an empty array means none).
-                    related_refs: bumped.related_refs ?? []
+                    related_refs: bumped.related_refs ?? [],
+                    // R3: and which groups the open row now targets (empty = the whole Overview).
+                    group_refs: bumped.group_refs ?? []
                 },
                 { finding_id: bumped.id }
             );
@@ -566,8 +669,12 @@ const raiseFinding: ToolDefinition = {
                         approved_by: null,
                         seen_count: 1,
                         // L-11a: omitted rather than stored empty, so a record that names nothing
-                        // looks exactly like a record raised before the field existed.
-                        ...(relatedRefs.length ? { related_refs: relatedRefs } : {})
+                        // looks exactly like a record raised before the field existed. R3's
+                        // `group_refs` follow the same discipline: an absent field is the legacy
+                        // whole-Overview meaning, and `phrase/findings.ts:findingGroupScope` is the one
+                        // place that reading is written down.
+                        ...(relatedRefs.length ? { related_refs: relatedRefs } : {}),
+                        ...(groupRefs.length ? { group_refs: groupRefs } : {})
                     },
                     buildAttribution(ctx, why)
                 ),
@@ -588,6 +695,10 @@ const raiseFinding: ToolDefinition = {
                 // L-11a: echoed so the run can see what it propagated, and so a reader of the
                 // transcript does not have to re-read the record to learn the fan-out.
                 related_refs: written.related_refs ?? [],
+                // R3: and the groups the row now targets, echoed the same way. An empty array here means
+                // "the whole Overview" — which on a group-managed book the handler has just refused, so
+                // the only way a caller sees `[]` is a phase ②/③ finding or a legacy Summary one.
+                group_refs: written.group_refs ?? [],
                 // D-34: the cost the Author's dial auto-approves starts work without a gate.
                 auto_approved_cost: ctx.story.auto_approve.includes(written.cost),
                 current_rev: written.rev

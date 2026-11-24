@@ -18,6 +18,10 @@ import {
     type Verdict
 } from '../../shared/types';
 import { SEED_STRUCTURE_AREAS, type SeedStructureArea } from '../../shared/summary';
+// HARDENING (R2/R5/R6): the selection tools must know which pipeline the BOOK runs — a grouped
+// book has no Summary selection at all (each group installs its own revision), and sending it to
+// `listRevisions`/`selectRevision` points the crew at a workflow the redesign removed.
+import { isGroupManagedStory } from '../phrase';
 import {
     chapterRows,
     collectionOf,
@@ -60,6 +64,13 @@ import {
     whyOf
 } from './utilities';
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from './types';
+// HILL CLIMB: the blocking bar is the loop's OWN predicates, not the tool's copy of them, so the
+// Editor's `auto` approval, the engine's sweep, the arming rule, the sign-off and the drain cannot
+// disagree about whether a confirmed `minor` is work (D-30, D-35). `isBlockingCost` is phase-aware
+// (D-33: every cost blocks outside phase ①) and `summaryBlockingCost` is the Summary artifact's bar
+// (critical/major, plus minor while the dial covers it, taste never). `loop/records` imports nothing
+// from the tool layer, so this adds no cycle.
+import { isBlockingCost, summaryBlockingCost } from '../loop/records';
 
 /** §4.15's unit kinds, in the order the resolver tries them. */
 const UNIT_COLLECTIONS = ['summaries', 'plotlines', 'chapters'] as const;
@@ -185,6 +196,23 @@ const selectRevision: ToolDefinition = {
     async execute(ctx, expects): Promise<ToolResult> {
         const { store, storyId } = ctx;
         const { target, unitKind } = await resolveUnit(ctx, ctx.args.unit_ref);
+
+        // SUMMARY PHRASE R2/R5 (hardening) — on a group-managed book there is no Summary selection
+        // to make: each group installs its own revision and `installGroupRevisions` recomposes the
+        // Overview and the mirror in the same commit, so a hand-picked draft here would install text
+        // the group rows do not hold and leave the mirror out of step (R6). The argument is aimed
+        // at the Summary unit specifically: chapter/plotline selection (phases ②/③) and every
+        // legacy book keep the workflow they always had.
+        if (unitKind === 'summary' && isGroupManagedStory(ctx.story))
+            throw new ToolRefusal(
+                'R5',
+                'this book writes its Summary group by group, so there is no Summary draft to select: each group installs its own revision and the install recomposes the Overview (R2, R5). Raise a finding naming the groups the defect crosses and let the grouped draft job fix them.',
+                {
+                    unit_ref: target.id,
+                    fix: 'raiseFinding with group_refs naming every group the defect crosses — the grouped draft_groups job installs the fix'
+                }
+            );
+
         const winner = resolvedRevision(await mustResolveRef(ctx, ctx.args.revision_id, 'revision_id', ['revisions']));
 
         // A draft of another unit is the usual wrong-pick mistake: refusing with the unit named
@@ -253,9 +281,16 @@ const selectRevision: ToolDefinition = {
                     (finding) =>
                         finding.story_id === storyId &&
                         finding.state === 'unconfirmed' &&
-                        // Phase ①'s bar is critical/major: minor/taste notes are recorded, not
-                        // show-stoppers, so they must not hold the choice (D-30, D-34).
-                        (finding.cost === 'critical' || finding.cost === 'major') &&
+                        // Phase ①'s bar is the Summary's OWN predicate, shared with the sweep, the arming
+                        // rule, the sign-off and the drain (`loop/records.ts:summaryBlockingCost`): critical
+                        // and major always, and `minor` only while the Author's dial makes minor work — a
+                        // note that is not blocking is recorded, never a hold on the choice (D-30, D-34).
+                        // The later phases keep this tool's original bar (critical/major): D-33's all-costs
+                        // rule there governs the CHAPTER's drain, not the Editor's pick of one draft among
+                        // its siblings, and this gate is about the draft, not the unit's sign-off.
+                        (ctx.story.phase !== 'summary'
+                            ? finding.cost === 'critical' || finding.cost === 'major'
+                            : summaryBlockingCost(ctx.story, finding.cost)) &&
                         (finding.target_ref === target.id ||
                             (finding.related_refs ?? []).some((ref) => draftIds.has(ref)))
                 );
@@ -382,12 +417,22 @@ const requestMerge: ToolDefinition = {
         // composed from several drafts, and the Author's loop is deliberately a choice between
         // three complete versions, not a fourth draft assembled by the Editor.
         if (unitKind === 'summary' && ctx.story.phase === 'summary') {
+            // HARDENING (D-23, R2/R5): the message has always branched by pipeline, but the
+            // structured `fix` told BOTH books to run the selection workflow — and on a grouped
+            // book that workflow is gone (each group installs its own revision, R2/R5). The fix
+            // now branches with the message so a group book is never directed at a removed tool.
+            const grouped = isGroupManagedStory(ctx.story);
+
             throw new ToolRefusal(
                 'D-23',
-                'phase ① chooses one best Summary; it does not merge drafts — call selectRevision on exactly one, or rejectAll if none deserves the Author',
+                grouped
+                    ? 'phase ① chooses one best Summary; it does not merge drafts — on a book written group by group there is nothing to select, because each group is installed as its own revision (R2, R5), so raise a finding naming the groups instead'
+                    : 'phase ① chooses one best Summary; it does not merge drafts — call selectRevision on exactly one, or rejectAll if none deserves the Author (D-23)',
                 {
                     unit_ref: target.id,
-                    fix: `listRevisions ${target.id}, then selectRevision`
+                    fix: grouped
+                        ? 'raiseFinding with group_refs naming every group the defect crosses — the grouped draft_groups job installs the fix'
+                        : `listRevisions ${target.id}, then selectRevision`
                 }
             );
         }
@@ -1030,6 +1075,28 @@ const approveFinding: ToolDefinition = {
                     }
                 );
             }
+
+            // HILL CLIMB — and the phase-① bar is the ONE predicate the engine's auto-approve sweep,
+            // the arming rule, the sign-off and the drain all read (`loop/records.ts:isBlockingCost`),
+            // so the tool cannot approve into work the sweep would refuse to act on, and cannot refuse
+            // work the sweep would create. `minor` rides the Author's dial here exactly as it rides it
+            // everywhere else: dial covers minor → the confirmed note becomes fix work; dial leaves it
+            // out → the note stays confirmed and non-blocking. `taste` never costs a sampling round,
+            // because the sentences a taste note prefers between were never written (phase ③ writes them).
+            if (!isBlockingCost(ctx.story, finding.cost)) {
+                throw new ToolRefusal(
+                    'D-30',
+                    `phase ① does not turn a ${finding.cost} note into work: its bar is critical and major, plus minor only while the Story's auto_approve covers it, so this note is recorded and the round goes on`,
+                    {
+                        finding_id: finding.id,
+                        cost: finding.cost,
+                        phase: ctx.story.phase,
+                        auto_approve: ctx.story.auto_approve,
+                        fix: 'leave the note confirmed (it blocks nothing), or widen the switch if minor is work the Summary must answer (D-30, D-35)'
+                    }
+                );
+            }
+
             approvedBy = 'auto';
         }
 

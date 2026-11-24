@@ -292,7 +292,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
         await rig.step();
         await rig.step();
 
-        expect(summaryDraftRows(rig)).toEqual(['revision_1:r1:drafted', 'revision_2:r1:drafted']);
+        expect(summaryDraftRows(rig)).toEqual(['revision_0:r1:drafted', 'revision_1:r1:drafted']);
         // The reference row: nothing has completed, so the in-flight round IS 1 — `sampling.round` alone
         // (also 1) cannot express that, which is the whole reason `active_round` exists.
         expect(roundNumbers(rig)).toEqual({
@@ -305,13 +305,13 @@ describe('T12/P1 — the active round means the same thing on the server, on the
             'carried': undefined
         });
         expect(supersessionRows(rig)).toEqual([
-            'revision_1:r1:drafted server=false dashboard=false',
-            'revision_2:r1:drafted server=false dashboard=false'
+            'revision_0:r1:drafted server=false dashboard=false',
+            'revision_1:r1:drafted server=false dashboard=false'
         ]);
         // The consequence the Author sees: the round is really in flight, so both readers count it.
         expect(competition(rig)).toEqual({
             server: [summaryOf(rig).id],
-            dashboard: ['revision_1', 'revision_2']
+            dashboard: ['revision_0', 'revision_1']
         });
         // The gate says so too — and it is the SAME sentence the engine's own drain probe owes this state
         // (`status.ts:phase1Unmet` counts the two un-screened samples), Goal line included.
@@ -332,8 +332,8 @@ describe('T12/P1 — the active round means the same thing on the server, on the
         expect(summaryDraftRows(rig)).toEqual([
             // The loser the selection hard-deleted: the projection recovers it from the journal as
             // `discarded`, so the rail keeps its history while the competition count stays clean.
-            'revision_1:r1:selected',
-            'revision_2:r1:discarded',
+            'revision_0:r1:selected',
+            'revision_1:r1:discarded',
             `${survivor.id}:r1:drafted`
         ]);
         expect(roundNumbers(rig)).toEqual({
@@ -344,11 +344,11 @@ describe('T12/P1 — the active round means the same thing on the server, on the
             'wire.activeRound': 2,
             'dashboard.round': 1,
             'dashboard.activeRound': 2,
-            'carried': 'revision_1'
+            'carried': 'revision_0'
         });
         expect(supersessionRows(rig)).toEqual([
-            'revision_1:r1:selected server=false dashboard=false',
-            'revision_2:r1:discarded server=false dashboard=false',
+            'revision_0:r1:selected server=false dashboard=false',
+            'revision_1:r1:discarded server=false dashboard=false',
             `${survivor.id}:r1:drafted server=true dashboard=true`
         ]);
         expect(competition(rig)).toEqual({ server: [], dashboard: [] });
@@ -366,13 +366,13 @@ describe('T12/P1 — the active round means the same thing on the server, on the
         await rig.step();
 
         expect(storyOf(rig).sampling_round).toBe(1);
-        // The survivor took `revision_3` (revisions come from one counter), so round 2's first sample is
-        // `revision_4` — the round number, not the id, is what both sides compare.
+        // The survivor took `revision_2` (revisions come from one counter), so round 2's first sample is
+        // `revision_3` — the round number, not the id, is what both sides compare.
         expect(summaryDraftRows(rig)).toEqual([
-            'revision_1:r1:selected',
-            'revision_2:r1:discarded',
+            'revision_0:r1:selected',
+            'revision_1:r1:discarded',
             `${survivor.id}:r1:drafted`,
-            'revision_4:r2:drafted'
+            'revision_3:r2:drafted'
         ]);
         expect(roundNumbers(rig)).toEqual({
             'server.deepReview': 1,
@@ -381,17 +381,17 @@ describe('T12/P1 — the active round means the same thing on the server, on the
             'wire.activeRound': 2,
             'dashboard.round': 1,
             'dashboard.activeRound': 2,
-            'carried': 'revision_1'
+            'carried': 'revision_0'
         });
         expect(supersessionRows(rig)).toEqual([
-            'revision_1:r1:selected server=false dashboard=false',
-            'revision_2:r1:discarded server=false dashboard=false',
+            'revision_0:r1:selected server=false dashboard=false',
+            'revision_1:r1:discarded server=false dashboard=false',
             `${survivor.id}:r1:drafted server=true dashboard=true`,
-            'revision_4:r2:drafted server=false dashboard=false'
+            'revision_3:r2:drafted server=false dashboard=false'
         ]);
         // The same rail, one row live and one retired: the count the Author reads is the live one, and the
         // override list offers only this round's draft (`summaryRevisionUnit` = the Author's Select).
-        expect(competition(rig)).toEqual({ server: [summaryOf(rig).id], dashboard: ['revision_4'] });
+        expect(competition(rig)).toEqual({ server: [summaryOf(rig).id], dashboard: ['revision_3'] });
         expect(lockCheck(projected(rig)).reasons).toEqual([
             '1 Summary revision still in this round — the engine selects the winner once every draft has its screening reviews (§16.6)',
             '1 approved critical/major finding on the selected Summary — the next Summary round writes fresh drafts to clear them (D-34)'
@@ -421,7 +421,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
         // The Author's override (D-24, `POST /revisions/:id/select`): the rail demotes the draft the loop
         // carries, and round 1's winner is the Summary on record again.
         rig.store.revisions.update(
-            'revision_3',
+            'revision_2',
             { state: 'discarded' },
             { run_ref: null, why: 'test: the Author stopped carrying round 2’s draft (D-24)' }
         );
@@ -435,15 +435,15 @@ describe('T12/P1 — the active round means the same thing on the server, on the
             'wire.activeRound': 3,
             'dashboard.round': 2,
             'dashboard.activeRound': 3,
-            'carried': 'revision_1'
+            'carried': 'revision_0'
         });
         // The override changed which draft the Summary carries. It did not re-arm round 1: its rival is
         // still superseded on both sides, and neither the rail nor the drain treats it as work.
         expect(supersessionRows(rig)).toEqual([
-            'revision_1:r1:selected server=false dashboard=false',
-            'revision_2:r1:discarded server=false dashboard=false',
+            'revision_0:r1:selected server=false dashboard=false',
+            'revision_1:r1:discarded server=false dashboard=false',
+            'revision_2:r2:discarded server=false dashboard=false',
             'revision_3:r2:discarded server=false dashboard=false',
-            'revision_4:r2:discarded server=false dashboard=false',
             `${survivor.id}:r1:drafted server=true dashboard=true`
         ]);
         // The review debt, read the same way by both sides (`records.ts:isDeepReviewSelection` and the

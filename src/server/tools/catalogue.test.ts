@@ -240,9 +240,10 @@ const SPEC_TOOL_CONTRACT: Record<
         allow: 'yyyy'
     },
     raiseFinding: {
-        // §8.3's row plus the one additive arg W2 carries for L-11a (`related_refs`), which is
-        // optional so every §8-shaped call still validates exactly as §8 describes it.
-        args: ['target_ref', 'criterion_ref', 'title', 'detail', 'evidence', 'cost', 'related_refs', 'why'],
+        // §8.3's row plus the two additive args it carries: `related_refs` for L-11a's propagation, and
+        // `group_refs` for the Summary Phrase redesign's R3 closure rule. Both are optional, so every
+        // §8-shaped call still validates exactly as §8 describes it.
+        args: ['target_ref', 'criterion_ref', 'title', 'detail', 'evidence', 'cost', 'related_refs', 'group_refs', 'why'],
         required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
         writes: 'findings',
         level: 'write',
@@ -491,7 +492,7 @@ async function callAs(
     args: Record<string, unknown>
 ): Promise<ToolResult> {
     const runtime = createToolRuntime(store);
-    const context: RunToolContext = runtime.createContext(sessionFor('story_1', roleKind));
+    const context: RunToolContext = runtime.createContext(sessionFor('story_0', roleKind));
     return runtime.execute(context, name, args);
 }
 
@@ -733,7 +734,7 @@ describe('the §8 catalogue', () => {
         expect(result.data).toEqual({
             name: 'raiseFinding',
             description:
-                'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16).',
+                'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
             required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
             fields: [
                 {
@@ -781,6 +782,17 @@ describe('the §8 catalogue', () => {
                     required: false,
                     description:
                         'Other records this defect touches (chapter, plotline or summary ids), so the finding propagates across chapters (L-11a).'
+                },
+                {
+                    // SUMMARY PHRASE R3: the second additive arg, optional on the SCHEMA (a phase ②/③
+                    // finding and a legacy book's Summary finding keep their old shape) and required by
+                    // the handler on a group-managed book's Summary defect. `describeTool` is where a
+                    // fresh run learns the ids it may name, so the wording is part of the contract.
+                    name: 'group_refs',
+                    type: 'array',
+                    required: false,
+                    description:
+                        'The Summary groups this defect is about, as the phrase_groups ids in your brief (premise, promise, theme, tone, ending). Name every group it crosses, and all five when the Overview itself is what is wrong: on a group-managed book a Summary finding with no groups is refused, because the repair is routed by these ids and the finding closes only once every group it names has been revised. Only on a legacy whole-Summary book does an omitted list mean the whole Overview (R3).'
                 },
                 {
                     name: 'why',

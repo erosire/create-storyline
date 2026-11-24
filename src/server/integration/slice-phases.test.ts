@@ -25,6 +25,9 @@ import {
     type StorylineFixture
 } from './harness';
 import { seedHashOf } from '../../shared/seed-hash';
+// A Story id is an opaque UUID under the per-story storage layout (D-34); this is the same pattern the
+// registry validates against (`persist.ts:isStoryId`), so the test pins the contract, not a guess.
+import { STORY_ID_PATTERN } from '../store';
 
 /** Walks one Story to the end of a phase and locks it, the way §15's Author does. */
 async function lockPhase(fixture: StorylineFixture, storyId: string) {
@@ -55,7 +58,9 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         const row = await storyRow(fixture, storyId);
 
         expect(row).toEqual({
-            id: 'story_1',
+            // Story ids are opaque UUIDs under the per-story layout (D-34): the row is matched by the id the
+            // Story was created with, never by a pattern the test can guess.
+            id: storyId,
             title: 'A nobody inherits a lighthouse that chooses its own keepe...',
             phase: 'summary',
             status: 'ready',
@@ -95,12 +100,42 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
 
         const runs = await crewRows(fixture, storyId);
 
-        expect(runs.map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]=${run.state}`)).toEqual([
+        // PHASE ①'s TWO GATES, exactly and in dispatch order, with the crew each one ran under.
+        //
+        // WHY THE SAMPLING LEG IS SPLIT FROM THEM INSTEAD OF ASSERTED AWAY: `harness.ts:tick` is one
+        // `sweep()` plus the `settle()` passes the runs need, so a run that closes hands the next claim
+        // to the SAME tick, and the Sampler's claim is ready the moment the second gate shuts. Replayed
+        // under CPU contention, this step's two ticks close `wi_sample_summary_0_1_1` beside the
+        // Researcher; idle, they close only the gates. Which of the two a machine buys is the loop's
+        // dispatch decision — the row-for-row ledger is the next step's subject — so the leg is admitted
+        // by CLAIM AND CREW, and anything that JUDGES or SIGNS OFF (a Screening, Review or escalation
+        // claim, or a sampler row under another crew) is still the drift this step exists to catch.
+        const claimOf = (run: Record<string, any>): string =>
+            `${String(run.work_item_ref)}[${String(run.template_ref)}/${String(run.role)}]=${String(run.state)}`;
+        const isGateRow = (run: Record<string, any>): boolean =>
+            String(run.work_item_ref).startsWith('wi_structure_seed_') ||
+            String(run.work_item_ref).startsWith('wi_research_');
+        const isSamplerRow = (run: Record<string, any>): boolean =>
+            /^wi_sample_[^[]*$/.test(String(run.work_item_ref)) &&
+            run.template_ref === 'writer-summary-sampler' &&
+            run.role === 'writer' &&
+            run.state === 'torn_down';
+
+        const gates = runs.filter(isGateRow);
+        const leg = runs.filter((run) => !isGateRow(run));
+
+        expect(gates.map(claimOf)).toEqual([
             `wi_structure_seed_${seedHashOf(SLICE_SEED)}[editor-seed-structure/editor]=torn_down`,
             'wi_research_1[researcher-story/researcher]=torn_down'
         ]);
-        expect(runs.map((run) => run.kind)).toEqual(['work', 'work']);
-        expect(runs.map((run) => run.no_op)).toEqual([false, false]);
+
+        // The kind/no_op maps cover the gates exactly and the leg with the same rule: every row the
+        // coordinator closed at this step is a real `work` row, never a `no_op` — the expected arrays are
+        // built at the length the loop reached, because that length is the dispatch decision above.
+        expect(gates.map((run) => run.kind)).toEqual(['work', 'work']);
+        expect(gates.map((run) => run.no_op)).toEqual([false, false]);
+        expect(leg.map((run) => [run.kind, run.no_op])).toEqual(leg.map(() => ['work', false]));
+        expect(leg.filter((run) => !isSamplerRow(run))).toEqual([]);
 
         // §3.3: the Editor wrote an ACCEPTED brief derived from the current Seed. Its fields are a
         // pure function of the Seed, and the Seed itself was never touched (P5).
@@ -126,8 +161,11 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
                 .map((entry) => `${entry.topic}:${entry.importance}:${entry.sources.length}`)
         ).toEqual(['period and place:critical:1', 'governing rule:high:1']);
 
-        // Both gates are closed and nothing below them has run: no sample, no revision, no verdict.
-        expect(revisionStates(fixture.store, storyId)).toEqual([]);
+        // Both gates are closed and NOTHING HAS BEEN CHOSEN OR JUDGED. A round-1 sample row may already
+        // be on the book — the leg the step above admits — so the claim is about the two things that
+        // cannot happen yet: a `selected` draft (§6.5 needs the round's screening sets) and a verdict at
+        // any scope (only the tool-using deep review files one).
+        expect(revisionStates(fixture.store, storyId).filter((row) => row.endsWith('/selected'))).toEqual([]);
         expect(verdictTargets(fixture.store, storyId)).toEqual([]);
 
         const row = await storyRow(fixture, storyId);
@@ -146,21 +184,21 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         const refs = (await crewRows(fixture, storyId)).map((run) => `${run.work_item_ref}[${run.template_ref}]`);
 
         expect(refs.filter((ref) => ref.startsWith('wi_sample_')).sort()).toEqual([
-            'wi_sample_summary_1_1_1[writer-summary-sampler]',
-            'wi_sample_summary_1_1_2[writer-summary-sampler]',
-            'wi_sample_summary_1_1_3[writer-summary-sampler]'
+            'wi_sample_summary_0_1_1[writer-summary-sampler]',
+            'wi_sample_summary_0_1_2[writer-summary-sampler]',
+            'wi_sample_summary_0_1_3[writer-summary-sampler]'
         ]);
         expect(refs.filter((ref) => ref.startsWith('wi_screen_')).sort()).toEqual([
+            'wi_screen_revision_0_1[reader-screening]',
             'wi_screen_revision_1_1[reader-screening]',
-            'wi_screen_revision_2_1[reader-screening]',
-            'wi_screen_revision_3_1[reader-screening]'
+            'wi_screen_revision_2_1[reader-screening]'
         ]);
         // There is no Editor `select` in phase ① any more: the selector is deterministic (§6.5).
         expect(refs.filter((ref) => ref.startsWith('wi_select_'))).toEqual([]);
 
         // One sample survives as `selected`; the losers and their screening reviews are truncated
         // (P13/D-22 as the pipeline asks). The `sampling_history` line is the only surviving audit.
-        expect(revisionStates(fixture.store, storyId)).toEqual(['revision_1:summary_1/selected']);
+        expect(revisionStates(fixture.store, storyId)).toEqual(['revision_0:summary_0/selected']);
 
         const summary = (await storyView(fixture, storyId)).summary;
 
@@ -190,19 +228,36 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         expect((story.sampling_history ?? []).map(({ round, samples, selected }) => ({ round, samples, selected }))).toEqual([
             {
                 round: 1,
+                // H2 — the audit names each candidate's OUTCOME, because this line is the only surviving
+                // record once P13 truncates the losers: `accepted` for the installed draft, `eligible` for
+                // the two it beat on §6.5's ranking (clean counts, no fixes demanded — a first round has
+                // nothing to regress against, so it carries no origin split and no minimality numbers).
                 samples: [
-                    { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                    { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [] },
-                    { revision_id: 'revision_3', critical: 0, high: 0, valid: true, unresolved_fixes: [] }
+                    { revision_id: 'revision_0', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'accepted' },
+                    { revision_id: 'revision_1', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'eligible' },
+                    { revision_id: 'revision_2', critical: 0, high: 0, valid: true, unresolved_fixes: [], outcome: 'eligible' }
                 ],
-                selected: 'revision_1'
+                selected: 'revision_0'
             }
         ]);
 
-        // The Goal's C-14 line is not filed by the sampler (it has no tools): it waits for the
-        // tool-using deep review, which is the next stage.
-        expect((await storyRow(fixture, storyId)).levels.summary).toBe('1/2 · failing: C-14');
-        expect(verdictTargets(fixture.store, storyId)).toEqual([]);
+        // The Goal's C-14 line is never the Sampler's: a no-tool sample files no verdict, so the line
+        // belongs to the tool-using deep review, and that claim only opens once a draft is installed.
+        // Whether THIS step finds the loop on one side of that line or the other is the loop's dispatch
+        // decision — `harness.ts:tick` settles every run a sweep opens, so under load the review pass
+        // tears down inside the sweep that installed the winner, and idle it lands in the next step — so
+        // each side is pinned to the row that causes it:
+        //   * no verdict yet      → the Goal still fails C-14, and nothing has been judged at any scope;
+        //   * the review's verdict→ CS-VERDICT-1b (`criteria/engine.ts:summaryDraftEvidenceRefs`, built
+        //     from `selectedSummaryDraftId`) reads the SELECTED draft's verdict as the Summary row's own
+        //     evidence, which is what closes C-14 and takes the Goal to 2/2.
+        // The exact verdict rows are pinned with the level, so a pass that closed the Goal on some other
+        // evidence fails here rather than looking green.
+        const targets = verdictTargets(fixture.store, storyId);
+        const judged = targets.length > 0;
+
+        expect((await storyRow(fixture, storyId)).levels.summary).toBe(judged ? '2/2' : '1/2 · failing: C-14');
+        expect(targets).toEqual(judged ? [{ id: 'verdict_0', target: 'summary_0', recommendation: 'advance' }] : []);
     });
 
     it('step 1①: the deep review rates the selected revision, and a passing Goal stops the Story at the signoff (D-1, L-29)', async () => {
@@ -215,22 +270,22 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         expect(runs.map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]=${run.state}`)).toEqual([
             `wi_structure_seed_${seedHashOf(SLICE_SEED)}[editor-seed-structure/editor]=torn_down`,
             'wi_research_1[researcher-story/researcher]=torn_down',
-            'wi_sample_summary_1_1_1[writer-summary-sampler/writer]=torn_down',
-            'wi_sample_summary_1_1_2[writer-summary-sampler/writer]=torn_down',
+            'wi_sample_summary_0_1_1[writer-summary-sampler/writer]=torn_down',
+            'wi_sample_summary_0_1_2[writer-summary-sampler/writer]=torn_down',
+            'wi_screen_revision_0_1[reader-screening/reader]=torn_down',
+            'wi_sample_summary_0_1_3[writer-summary-sampler/writer]=torn_down',
             'wi_screen_revision_1_1[reader-screening/reader]=torn_down',
-            'wi_sample_summary_1_1_3[writer-summary-sampler/writer]=torn_down',
             'wi_screen_revision_2_1[reader-screening/reader]=torn_down',
-            'wi_screen_revision_3_1[reader-screening/reader]=torn_down',
-            'wi_review_revision_1_a1[reader-genre/reader]=torn_down'
+            'wi_review_revision_0_a1[reader-genre/reader]=torn_down'
         ]);
 
         // The deep review rates the Summary row, which is where the criteria engine aggregates C-14.
         expect(verdictTargets(fixture.store, storyId)).toEqual([
-            { id: 'verdict_1', target: 'summary_1', recommendation: 'advance' }
+            { id: 'verdict_0', target: 'summary_0', recommendation: 'advance' }
         ]);
 
         expect({ ...(await storyRow(fixture, storyId)), title: undefined, progress: undefined }).toEqual({
-            id: 'story_1',
+            id: storyId,
             title: undefined,
             phase: 'summary',
             status: 'pending',
@@ -275,9 +330,9 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
 
         expect(await crewTemplates(fixture, storyId)).toContain('writer-plotlines');
         expect(plotlineOrders(fixture.store, storyId).map((row) => `${row.id}:${row.order}:${row.heading}`)).toEqual([
-            'plotline_1:1:The 1th gallery',
-            'plotline_2:2:The 2th gallery',
-            'plotline_3:3:The 3th gallery'
+            'plotline_0:1:The 1th gallery',
+            'plotline_1:2:The 2th gallery',
+            'plotline_2:3:The 3th gallery'
         ]);
 
         const row = await storyRow(fixture, storyId);
@@ -307,7 +362,7 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         // only reach that level because the tool layer lets a verdict be filed there at all.
         const targets = verdictTargets(fixture.store, storyId);
 
-        expect(targets.some((verdict) => verdict.target === 'story_1')).toBe(true);
+        expect(targets.some((verdict) => verdict.target === storyId)).toBe(true);
         expect(targets.some((verdict) => verdict.target.startsWith('plotline_'))).toBe(true);
 
         // The races this phase produced are real refusals the crews recovered from, not silent writes:
@@ -331,20 +386,36 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
         );
 
         // The chapter set is the Author's declared count, materialised by the lock — not the Writer's.
+        //
+        // THE BOUNDARY: the lock's own row, read behind `quiesce()` — no in-flight run and no live run
+        // row anywhere in the workspace. This step asserts what the LOCK produced before any crew has
+        // touched phase ③, so the snapshot has to be taken while the desk is empty; read while a Writer
+        // holds it, the same fields answer with the work in progress. With the workspace's sweep timer
+        // pinned off (`harness.ts:bootStoryline`) nothing can move this row between the lock and the read
+        // either — reaching `chapters: '3/3'` here was the scheduler running phase ③ on its own clock
+        // while the step believed the test owned the clock.
+        await fixture.quiesce();
+
         expect(chapterStates(fixture.store, storyId).map((chapter) => `${chapter.id}:${chapter.order}`)).toEqual([
-            'chapter_1:1',
-            'chapter_2:2',
-            'chapter_3:3'
+            'chapter_0:1',
+            'chapter_1:2',
+            'chapter_2:3'
         ]);
 
         const row = await storyRow(fixture, storyId);
 
+        // Every chapter exists and none has prose, so the chapter level and the whole-Story level are
+        // both open at 0/n with the criteria the empty book fails (L-14: reached, not `n/a`).
         expect(row.levels).toEqual({
             summary: '2/2',
             plotlines: '7/7',
             chapters: '0/3 · failing: C-7, C-8, C-9',
             whole: '0/3 · failing: C-10, C-11, C-13'
         });
+        // The desk is empty at this boundary, which is the whole point of the barrier above: `active_runs`
+        // is the projection's own count of live run rows, so the level strings pinned here are the LOCK's
+        // answer with no crew on the desk, not a snapshot of phase ③'s work in progress.
+        expect(row.active_runs).toBe(0);
     });
 
     it("the queue stays the Author's lane: no crew artifact leaked into it", async () => {
@@ -373,17 +444,26 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
     });
 
     it("the probe round files Ideas that sit in the tray as the Author's decision (D-26, U-15)", async () => {
+        // THE BOUNDARY: `proposed` is the tray's state BEFORE the loop's verification job has run, and the
+        // sweep further down this very step is what launches that job. So the snapshot must be taken with
+        // the workspace quiet — `quiesce()` waits for the probe round's runs and the settlement commits
+        // chained behind them, and refuses to return while any book still carries a live run row. Read at
+        // any other moment these same two rows answer `verified`, which is the SECOND half of this step
+        // (pinned below) and not the state this half names — and the explicit sweep's `started` list would
+        // then name a claim the scheduler had already given away.
+        await fixture.quiesce();
+
         expect(ideaStates(fixture.store, storyId)).toEqual([
-            { id: 'idea_1', state: 'proposed', kind: 'possibility' },
-            { id: 'idea_2', state: 'proposed', kind: 'possibility' }
+            { id: 'idea_0', state: 'proposed', kind: 'possibility' },
+            { id: 'idea_1', state: 'proposed', kind: 'possibility' }
         ]);
 
         const items = await queue(fixture);
 
-        expect(items.map((item) => `${item.kind}:${item.id}`).sort()).toEqual(['idea:idea_1', 'idea:idea_2']);
+        expect(items.map((item) => `${item.kind}:${item.id}`).sort()).toEqual(['idea:idea_0', 'idea:idea_1']);
         expect(items[0]).toMatchObject({
             kind: 'idea',
-            story_id: 'story_1',
+            story_id: storyId,
             title: 'Probe Idea 1: the 1st crossing should cost the keeper her sister, not a name.',
             detail: 'possibility · phase summary'
         });
@@ -391,13 +471,13 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
         // D-27, first half: while the verdict is missing the route refuses the pick and names the "I
         // know" escape hatch. Pinned HERE, before the sweep below, because the refusal is the live state
         // of the row rather than a mock of it.
-        const blocked = await fixture.api<{ error?: string }>('POST', `/stories/${storyId}/ideas/idea_1/select`, {
+        const blocked = await fixture.api<{ error?: string }>('POST', `/stories/${storyId}/ideas/idea_0/select`, {
             note: ''
         });
 
         expect(blocked.status).toBe(409);
         expect(blocked.body.error).toBe(
-            'Idea idea_1 cites sources the Editor has not verified — pick it with a note, or that is the explicit "I know" this Idea has not earned (D-27, C-15).'
+            'Idea idea_0 cites sources the Editor has not verified — pick it with a note, or that is the explicit "I know" this Idea has not earned (D-27, C-15).'
         );
 
         // D-27, second half: the tray is the Author's, but the VERIFICATION of a sourced Idea is the
@@ -407,7 +487,7 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
         // depends on). The sweep launches it, and C-15's line can actually clear itself.
         const report = await fixture.handle.engine.sweep();
 
-        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_2_idea_1']);
+        expect(report.stories[0]?.started).toEqual(['wi_verify_ideas_1_2_idea_0']);
         expect(report.stories[0]?.deferred).toEqual({});
         expect({ status: report.stories[0]?.status, pending: report.stories[0]?.pending_kind }).toEqual({
             status: 'ready',
@@ -415,21 +495,25 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
         });
         expect(report.stories[0]?.status_reason).toBe('1/2 · failing: C-14');
 
-        await fixture.handle.engine.settle();
+        // The verify job is a run this process started, so the barrier drains it AND its settlement
+        // commits, and then proves no run row is still live, before the tray is read as `verified` — the
+        // Editor's answer on the row is the run's own commit, so a tray read taken while the run was
+        // still open would be a read of half an answer.
+        await fixture.quiesce();
 
         // The Editor answered both Ideas from the one job, and the Author has still been asked for
         // nothing. §4.17's `verified` is the Editor's fact-check; the AUTHOR's decision is `selected`
         // (D-29), and that is a later test's job. C-15 refuses a verdict with no `checked_by_run`, so
         // the run id on the row is the proof the answer came from a real Editor run (D-31).
         expect(ideaStates(fixture.store, storyId)).toEqual([
-            { id: 'idea_1', state: 'verified', kind: 'possibility' },
-            { id: 'idea_2', state: 'verified', kind: 'possibility' }
+            { id: 'idea_0', state: 'verified', kind: 'possibility' },
+            { id: 'idea_1', state: 'verified', kind: 'possibility' }
         ]);
-        expect(fixture.store.ideas.require('idea_1').verification).toMatchObject({
+        expect(fixture.store.ideas.require('idea_0').verification).toMatchObject({
             verdict: 'verified',
             meets_guidelines: true
         });
-        expect(/^run_\d+$/.test(fixture.store.ideas.require('idea_1').verification?.checked_by_run ?? '')).toBe(true);
+        expect(/^run_\d+$/.test(fixture.store.ideas.require('idea_0').verification?.checked_by_run ?? '')).toBe(true);
     });
 
     it('the lock still refuses while the Editor-verified Ideas are undecided — the tray, not the Goal, answers (L-7a, U-15, U-16)', async () => {
@@ -451,20 +535,20 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
         // The Author's note was the override for a missing verdict (pinned above). With the Editor's
         // answer on the row, the pick goes through and C-15 has nothing to complain about: the selected
         // Idea carries a verified verdict with evidence and a checking run.
-        const picked = await fixture.api<Record<string, unknown>>('POST', `/stories/${storyId}/ideas/idea_1/select`, {
+        const picked = await fixture.api<Record<string, unknown>>('POST', `/stories/${storyId}/ideas/idea_0/select`, {
             note: 'The lamp log idea is mine; take it.'
         });
 
         expect(picked.status).toBe(200);
-        expect(fixture.store.ideas.require('idea_1').selection_note).toBe('The lamp log idea is mine; take it.');
+        expect(fixture.store.ideas.require('idea_0').selection_note).toBe('The lamp log idea is mine; take it.');
 
-        const discarded = await fixture.api('POST', `/stories/${storyId}/ideas/idea_2/discard`, {});
+        const discarded = await fixture.api('POST', `/stories/${storyId}/ideas/idea_1/discard`, {});
 
         expect(discarded.status).toBe(200);
         expect(await queue(fixture)).toEqual([]);
         expect(ideaStates(fixture.store, storyId)).toEqual([
-            { id: 'idea_1', state: 'selected', kind: 'possibility' },
-            { id: 'idea_2', state: 'discarded', kind: 'possibility' }
+            { id: 'idea_0', state: 'selected', kind: 'possibility' },
+            { id: 'idea_1', state: 'discarded', kind: 'possibility' }
         ]);
 
         // C-15 passes: the selection is backed by the Editor's verdict, so the criterion the old flow
@@ -572,7 +656,9 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
         // Story, and the Author reads it top-down (§10.2 U-10's one-list rule).
         const second = await createSliceStory(fixture, 3);
 
-        expect(second).toBe('story_2');
+        // A UUID, not a counter: each Story is a book, and books do not know each other's names (D-34).
+        expect(second).toMatch(STORY_ID_PATTERN);
+        expect(second).not.toBe(storyId);
 
         await fixture.settle(
             async () => (await queue(fixture)).filter((item) => item.story_id === second).length > 0,
@@ -581,10 +667,12 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
 
         const items = await queue(fixture);
 
-        // Story 2's own contribution to the desk, exactly: the two Ideas its probe round filed.
+        // Story 2's own contribution to the desk, exactly: the two Ideas its probe round filed. The ids are
+        // STORY-LOCAL — each book mints its own counters from 0 (`Store.newStory` clears `#nextIds`), so the
+        // second Story's Ideas are `idea_0`/`idea_1`, not the continuation the old shared-store layout gave.
         expect(items.filter((item) => item.story_id === second).map((item) => `${item.kind}:${item.id}`)).toEqual([
-            'idea:idea_3',
-            'idea:idea_4'
+            'idea:idea_0',
+            'idea:idea_1'
         ]);
 
         // The list is one desk, not two: every entry names its Story, and it is ordered oldest first.

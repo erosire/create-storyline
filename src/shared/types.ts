@@ -302,6 +302,30 @@ export interface Story extends StoredRecord {
     /** Phase ①: how many Readers critique each Summary draft before the Editor sees it (default 5). */
     summary_readers?: number;
     /**
+     * SUMMARY PHRASE (additive, §4 allows adding fields): which Summary authoring model this Story
+     * uses.
+     *
+     * - `'groups'` — the Summary Phrase redesign. The five catalog groups
+     *   ({@link PHRASE_GROUP_KEYS} in `shared/phrase.ts`) are the writable truth, each with its own
+     *   sequential revision line ({@link GroupRevision}), and the `summaries` row's prose fields are
+     *   a GENERATED MIRROR written in the same commit as a new latest group revision (R6). The
+     *   whole-Summary competing-sampling machinery (draft sets, Editor/sample selection) does not
+     *   run for such a Story: an accepted Writer result installs immediately (R5).
+     * - `'sampling'` — the pre-redesign path: one Writer pass writes all six Summary fields as one
+     *   draft, N drafts compete, and the deterministic selector installs the winner.
+     *
+     * ABSENT MEANS `'sampling'`, and that is what makes legacy books readable with no migration (R6):
+     * a Story written before the redesign has no `phrase_groups` rows, so nothing may claim its
+     * Summary is group-managed. `server/phrase/catalog.ts:isGroupManagedStory` is the ONE predicate
+     * that decides, and every guard in the loop reads it from there.
+     *
+     * It is a Story setting rather than a derived fact because the Author owns the switch. Only two
+     * things set it to `'groups'`: `engine.ts:createStory` (every NEW Story starts in the group
+     * model) and the explicit legacy import (`POST /stories/:id/phrases/import`). A pure read never
+     * writes it, and no code path flips a Story back to `'sampling'` behind the Author's back.
+     */
+    summary_mode?: 'groups' | 'sampling';
+    /**
      * Phase ①'s P11 audit for samples that were truncated (documents/phase-1-research-pipeline.md
      * §3.6/§6.6). The selection commit hard-deletes the losing `revisions` rows and their
      * `sample_reviews` (P13/D-22 as the new pipeline asks), so this line — ids, issue counts and
@@ -311,6 +335,34 @@ export interface Story extends StoredRecord {
     sampling_history?: Array<{
         round: number;
         at: string;
+        /**
+         * HILL CLIMB, ADDED (additive): the SAMPLING WAVE these attempts belong to (D-34's arm/disarm
+         * counter). Attempts, improvements and the no-progress streak are scoped to a wave, not to a
+         * round — clearing the Author escalation and re-arming starts a fresh baseline, and this line is
+         * what lets an audit tell a stalled wave from a wave that has not started yet.
+         */
+        wave?: number;
+        /**
+         * HILL CLIMB, ADDED: the wave's attempt count AT THE MOMENT this install happened — the same
+         * number `records.ts:samplingProgressOf` derives from the ledger, so the escalation, the work
+         * queue and this line can never disagree, and a restart recomputes it instead of re-buying
+         * attempts that were already spent (requirement 9).
+         */
+        attempts?: number;
+        /** HILL CLIMB, ADDED: how many times this wave measured a LOWER unresolved-fix count than before. */
+        improvements?: number;
+        /**
+         * HILL CLIMB, ADDED: the attempt ceiling this wave was allowed — the Author's sampling size
+         * (`samplingCapOf`) PLUS one per measured improvement (requirement 5). `attempts >= ceiling` is
+         * what the work queue reads as "buy nothing more".
+         */
+        ceiling?: number;
+        /**
+         * HILL CLIMB, ADDED: the unresolved blocking count of the draft this install put in — THE BAR the
+         * next candidate has to beat, since only a strictly lower count counts as an improvement
+         * (requirement 2). 0 when the wave demanded no fixes at all.
+         */
+        unresolved_blocking?: number;
         samples: Array<{
             revision_id: string;
             critical: number;
@@ -326,9 +378,97 @@ export interface Story extends StoredRecord {
              * unresolved fixes are the audit of a hill that was not climbed (R4).
              */
             unresolved_fixes?: string[];
+            /**
+             * HILL CLIMB, ADDED (additive) — what became of this candidate in the round:
+             *   `accepted` — it is the draft the commit installed (the line's `selected` id);
+             *   `eligible` — it cleared every gate and ranked below the winner;
+             *   `rejected` — it was never selectable, for the reason in `reject_reason`.
+             *
+             * This is the field that makes a REJECTED attempt auditable after the commit deleted the
+             * draft and its screening rows. A rejected candidate closed no task, closed no finding and
+             * did not advance the round, so this line — not the Revision row — is the only record that
+             * the attempt happened at all.
+             */
+            outcome?: 'accepted' | 'eligible' | 'rejected';
+            /**
+             * HILL CLIMB, ADDED: why a `rejected` candidate was refused, in one clause the Author can
+             * act on (e.g. `fix task_1 not certified`, `introduced 1 critical / 0 major`,
+             * `ungradeable screening set`). Absent on an eligible/accepted line, which owed no reason.
+             */
+            reject_reason?: string;
+            /**
+             * HILL CLIMB, ADDED: the candidate's blocking issues SPLIT BY ORIGIN relative to the
+             * accepted draft it replaces. `introduced_*` are defects this draft created — any of them
+             * makes the candidate ineligible — and `inherited_*` are defects the accepted text already
+             * had, which cost the candidate nothing on their own. An issue whose origin the Reader
+             * did not state counts in `introduced_*` (fail closed).
+             */
+            introduced_critical?: number;
+            introduced_high?: number;
+            inherited_critical?: number;
+            inherited_high?: number;
+            /**
+             * HILL CLIMB, ADDED: the minimality of this candidate against the accepted draft — how
+             * many of the six §4.2 prose fields it changed, and the size of those changes in
+             * characters. THE TIE-BREAK, not a quality score (P6): among candidates that cleared the
+             * same certified work, the loop takes the smallest edit, and these two numbers are the
+             * whole rule. Absent in a first round, where there is no accepted text to be minimal about.
+             */
+            changed_fields?: number;
+            changed_characters?: number;
         }>;
         selected: string;
     }>;
+    /**
+     * G1 — the ACCEPTED-REVISION audit: one entry per accepted Summary revision whose DEEP REVIEW has
+     * closed, oldest first (the counterpart of `sampling_history`, which records candidate attempts).
+     *
+     * WHY A SECOND LEDGER IS NEEDED: the sampling hill (`samplingProgressOf`) bounds CANDIDATE ATTEMPTS
+     * inside one round, and F1's adversarial review proved it does not bound the loop BETWEEN rounds — a
+     * candidate can certify the old fix and introduce nothing (so it is eligible and installs) while the
+     * accepted revision's own deep review files a fresh blocking finding, forever, one accepted revision
+     * at a time. Only the count of blocking findings a review actually raised can say whether revision
+     * N+1 is better than revision N, and that number cannot be re-derived later: the selection closes
+     * the findings its candidate certified (`fixed`) and truncates drafts, so this line is the record.
+     *
+     * THE NUMBER IS COUNTED, NEVER NAMED: `blocking_found` counts FINDING ROWS raised by that revision's
+     * deep-review runs and judged blocking by the dial-aware Summary bar (`critical`/`major` always,
+     * `minor` only when `auto_approve` covers it, `taste` never). It never reads a title or a
+     * fingerprint, so a re-worded restatement of the same defect is not progress and one defect described
+     * in ten ways is not ten regressions (`records.ts:revisionBlockingFindings`).
+     */
+    summary_review_history?: SummaryReviewHistoryEntry[];
+}
+
+/**
+ * G1 — one row of `Story.summary_review_history` (§3.6, ADDITIVE).
+ *
+ * Written ONCE per accepted revision, by the sweep step that finds the revision's deep review closed
+ * and its blocking suspicions decided (`engine.ts:trackRevisionProgress`), and keyed by `revision_id` so
+ * a restarted loop cannot append the same audit twice. `wave` is the sampling wave the entry belongs to
+ * (`stories.sampling_wave` at the moment it was recorded): the plateau policy counts a WAVE's entries,
+ * which is what makes the Author's clear of the plateau escalation a fresh baseline rather than a
+ * longer streak (`engine.ts:rearmSamplingWave`).
+ */
+export interface SummaryReviewHistoryEntry {
+    /** The sampling round whose selection installed this revision (§6.6). */
+    round: number;
+    /** The sampling wave this revision was reviewed in — the plateau's partition key. */
+    wave: number;
+    /** The accepted `Revision` row this audit describes. */
+    revision_id: string;
+    at: string;
+    /**
+     * How many blocking findings this revision's deep review raised — THE BAR the next accepted revision
+     * has to beat. The first entry of a wave is the baseline, not an improvement; only a STRICTLY lower
+     * count is progress (`records.ts:revisionReviewProgressOf`).
+     */
+    blocking_found: number;
+    /**
+     * The finding rows behind `blocking_found`, so the audit names its evidence and a later Editor
+     * downgrade or discard can be reconciled against what the loop actually counted at the time.
+     */
+    finding_refs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +737,20 @@ export interface Finding extends StoredRecord {
      * second one — which is exactly how a defect first seen in chapter 3 reaches chapter 7.
      */
     related_refs?: string[];
+    /**
+     * SUMMARY PHRASE R3 (additive) — the `phrase_groups` ids this defect is about: one, several, or
+     * (for a defect that crosses the whole Overview) all five. A group id is a UUID, so
+     * `related_refs` cannot carry it unambiguously alongside chapter/plotline refs and the deep
+     * review names the groups here instead.
+     *
+     * WHY IT IS OPTIONAL: a finding raised before the redesign, or one raised against a
+     * `'sampling'` Story, names none, and that reads as UNSCOPED — the legacy reading, where the
+     * defect belongs to the Summary as a whole. `server/phrase/findings.ts:findingGroupRefs` is the
+     * one place that interprets absence, and `server/phrase/findings.ts:findingIsResolvedBy` is the
+     * one place that closes a finding: a multi-group finding goes `fixed` only when EVERY group it
+     * names has a revision written to resolve it, so a partial fix stays open (R3).
+     */
+    group_refs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +910,21 @@ export interface Run extends StoredRecord {
     end_reason?: string;
     /** S-7: delegated sub-contexts, nested here rather than in their own rows. */
     delegated: RunDelegation[];
+    /**
+     * SUMMARY PHRASE R4 (additive) — the `phrase_groups` ids this run holds while it works, copied
+     * off the Work Item (`WorkItem.groupRefs`) by `run/executor.ts` when the row is created.
+     *
+     * WHY IT LIVES ON THE RUN ROW AND NOT ONLY ON THE WORK ITEM: the Writer exclusion is enforced
+     * from PERSISTED state (R4/L-5/L-3). A restart re-derives "which group is already being written"
+     * from the live `runs` rows the sweep already sweeps for leases, so no in-memory semaphore has to
+     * agree with the book, and a batch whose group set intersects a live writer set defers instead of
+     * racing the compare-and-swap on the mirror.
+     *
+     * Absent means "this run holds no group" — every legacy run row, and every group-less job
+     * (`structure_seed`, `research`, a tool-carrying deep review). `server/phrase/exclusion.ts` is the
+     * only reader.
+     */
+    group_refs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,6 +1189,13 @@ export interface SeedBrief extends StoredRecord {
  * breach — because the screening schema closes `severity`, not the criterion vocabulary.
  */
 export interface SampledIssue {
+    /**
+     * The screening Reader's two severities. THE WORDS ARE NOT THE FINDING'S WORDS: screening's
+     * `critical` is a finding at cost `critical`, and screening's `high` is a finding at cost
+     * `major` — the screening schema closes at two values (§4.3) while the finding ladder has four
+     * (§4.10), and the mapping is one-to-one. Everything in the loop that says "blocking" means
+     * exactly this pair (`sample-select.ts`, `records.ts:summaryBlockingFindings`).
+     */
     severity: 'critical' | 'high';
     /** 'C-14', 'C-15', or 'seed' for a Seed-contract breach. */
     criterion: string;
@@ -1027,6 +1203,36 @@ export interface SampledIssue {
     quote: string;
     detail: string;
     fix_hint?: string;
+    /**
+     * HILL CLIMB (accepted-revision rounds), ADDED — where this blocking issue came from, relative
+     * to the ACCEPTED draft the candidate replaces (the `## SELECTED DRAFT` section the screen is
+     * handed whenever the round carries fix tasks).
+     *
+     * WHY THE CANDIDATE HAS TO SAY: an accepted Revision N already carries defects the Author has
+     * not targeted yet. If a candidate inherits one, the round must not read it as the draft
+     * breaking something — a rewrite that carries the same known flaw is not a regression, and
+     * rejecting it for that reason is the loop refusing every draft it can write. Symmetrically, a
+     * flaw the ACCEPTED text did not have is a regression, and no number of certified fixes buys it
+     * (`sample-select.ts:scoreSample` makes it ineligible).
+     *
+     * `inherited` therefore means "this is already in the text I was told to revise" — the Reader
+     * saw it in the base — and `introduced` means "this draft created it". Absent or `unknown`
+     * FAILS CLOSED as `introduced` in a round that has an accepted base: a screening pass that was
+     * handed the base and did not classify the issue cannot claim the round is no worse than the
+     * text it replaces. In a first round (no accepted base) the field means nothing, and nothing
+     * reads it.
+     */
+    origin?: 'introduced' | 'inherited' | 'unknown';
+    /**
+     * SUMMARY PHRASE R3 (additive) — the `phrase_groups` ids this complaint is about, filled in by a
+     * `review_groups` pass (the structured cross-group review of an INSTALLED group revision set).
+     *
+     * It is the screening answer's half of the group attribution: the persisted
+     * `sample_reviews.issues` row keeps the group ids, so a later pass can tell "this group's review
+     * still names the defect" from "no review names it", and a legacy screening row (a `'sampling'`
+     * Story, or a pre-redesign row) simply carries none.
+     */
+    group_refs?: string[];
 }
 
 /**
@@ -1091,11 +1297,162 @@ export interface SampleReview extends StoredRecord {
 }
 
 // ---------------------------------------------------------------------------
+// SUMMARY PHRASE — `phrases`, `phrase_groups`, `group_revisions`
+//
+// WHY THREE COLLECTIONS INSTEAD OF ONE: the redesign's unit of work is a GROUP of the Summary
+// (premise / promise / theme / tone / ending — the five fields the `summaries` row already had,
+// now first-class), and the unit of AUDIT is a revision of one group. Splitting them gives the
+// three things the spec of this redesign asks for: a group can be rewritten without touching its
+// siblings (R2), a defect can name the groups it is about (R3), and the Author's history is
+// per-group instead of per-draft-set. The `summaries` row stays exactly as §4 defines it — it
+// becomes a generated compatibility MIRROR of the latest group revisions (R6), which is what lets
+// every existing reader (dashboard, Digest, criteria, phases ②/③) keep working untouched.
+//
+// ADDITIVE LIKE THE OTHER THREE PHASE-① COLLECTIONS (`knowledge`, `seed_briefs`,
+// `sample_reviews`): the names are appended to {@link COLLECTION_NAMES}, every snapshot reader
+// walks that registry, so a `store.json` written before the redesign loads with these three empty
+// and the Story keeps its `'sampling'` behaviour (R6 — readable, not migrated).
+// ---------------------------------------------------------------------------
+
+/**
+ * `group_revisions.state` — the two positions one group's revision line can hold.
+ *
+ * R2, stated exactly: revisions are created in order, one per accepted Writer result for that
+ * group; the HIGHEST number is `latest` and is the text every read of "current" serves; installing
+ * a new latest flips the previous one to `archived` IN THE SAME COMMIT, so an archived row is
+ * retained history (reconstructible, P11/D-12a) but is hidden from the latest view (the projection
+ * lists it separately, never in place of the current text). Nothing deletes a group revision: the
+ * whole point of the redesign is that a superseded group text is history, not a loser to truncate.
+ *
+ * Order of the array is the lifecycle order (archived → latest), matching the enum style at the top
+ * of this file; the numbers are derived per group, never globally.
+ */
+export const GROUP_REVISION_STATES = ['archived', 'latest'] as const;
+export type GroupRevisionState = (typeof GROUP_REVISION_STATES)[number];
+
+/**
+ * `phrases` — one Story's phrase: the thing the Author reads as a whole, composed from its groups.
+ *
+ * Only ONE phrase kind exists today — the Summary Phrase — and {@link PHRASE_CATALOG}
+ * (`shared/phrase.ts`) is the data that says so: a catalog entry carries `enabled`, and only
+ * Summary is enabled (R1), so the loop creates exactly one of these rows per Story and never
+ * invents a kind. The row carries the catalog's `title`/`description` AS WRITTEN AT CREATION TIME:
+ * the catalog is the source, but a Story's rows are the record of what that Story's phrase was
+ * called, so a later catalog edit cannot rewrite history (D-12a) and an import can be audited.
+ *
+ * `content` is the GENERATED composition of the latest revision of each group, in catalog order —
+ * the Overview the deep review reads and the Author's dashboard renders. It is derived, never
+ * authored, and it is rewritten in the same commit as the group revision that caused it.
+ */
+export interface Phrase extends StoredRecord {
+    story_id: string;
+    /** The catalog kind — `'summary'` for every row this build creates ({@link PHRASE_SUMMARY_KEY}). */
+    key: string;
+    title: string;
+    description: string;
+    /** Generated: the latest text of every group, composed in catalog order. Never hand-written. */
+    content: string;
+    /** Catalog order. Only one phrase exists today, so this is its definition's `order`. */
+    order: number;
+    /**
+     * The number of group revisions this phrase has had installed — 0 until the first group draft
+     * lands. It is bumped in the install commit (once per install, not once per group), so it is the
+     * phrase-level "how many times has the Overview changed" counter the projection shows beside the
+     * per-group numbers.
+     */
+    revision: number;
+    /** The group ids in catalog order — the ordered key list the projection and the review brief read. */
+    group_refs: string[];
+}
+
+/**
+ * `phrase_groups` — one writable part of a phrase, holding its CURRENT text.
+ *
+ * The id is a persisted UUID (R1) rather than a `${singular}_${n}` row id, because the id is the
+ * group's ADDRESS: `POST /stories/:id/phrases/groups/{groupId}/revise`, a finding's `group_refs`,
+ * a run row's `group_refs` and a revision row's `group_id` all name it, and an address that is
+ * stable across a restart is what makes the R4 exclusion and the R3 closure provable from the book.
+ * `store.ts:createWithId` is the write that preserves it; `persist.ts:newRecordUid()` mints it.
+ *
+ * `key` is the catalog key ({@link PHRASE_GROUP_KEYS}) and also the legacy `summaries` field this
+ * group mirrors — the identity is deliberate ({@link SUMMARY_MIRROR_FIELDS}), because the five keys
+ * ARE the five Summary prose fields §4.2 already defines. `content`/`revision` are the latest
+ * revision's text and number: denormalised on purpose, so "what is the current premise" is one row
+ * read rather than a sort, and both are rewritten in the same commit as the revision row that made
+ * them, so they cannot drift.
+ *
+ * There is deliberately NO `state` here: the latest/archived distinction belongs to the revision
+ * row (the single source), and a second copy on the group row is a field that can disagree with it.
+ */
+export interface PhraseGroup extends StoredRecord {
+    story_id: string;
+    /** The phrase this group belongs to (its `Phrase.id`). */
+    phrase_id: string;
+    /** Catalog key: `premise` | `promise` | `theme` | `tone` | `ending`. */
+    key: string;
+    title: string;
+    description: string;
+    /** Catalog order (1-based, the order the Overview composes in). */
+    order: number;
+    /** The LATEST revision's text. `''` means the group has never been written. */
+    content: string;
+    /** The LATEST revision's number, 0 = never written (R2 — the first install makes this 1). */
+    revision: number;
+    /** The run that installed the current text (P11), or null while the group is unwritten. */
+    updated_by?: string | null;
+}
+
+/**
+ * `group_revisions` — one superseded-or-current text of ONE group (R2's history).
+ *
+ * One row per accepted Writer result for that group, numbered from 1 within the group. The row is
+ * the redesign's replacement for the whole-Summary draft set: there is no competing round and no
+ * selection to lose, because the accepted result IS installed (R5) and what it replaced is kept
+ * here as an `archived` row. `content` is the group's text verbatim — the Writer's answer, not a
+ * body shape to interpret.
+ *
+ * R3 rides on `task_refs`/`finding_refs`: they say which approved work this revision was WRITTEN to
+ * resolve. A resolving revision is decided from those ids rather than from timestamps, so a restart
+ * re-derives the same closure from the journal instead of re-reading a clock, and a multi-group
+ * finding can be proved open or closed group by group.
+ */
+export interface GroupRevision extends StoredRecord {
+    story_id: string;
+    phrase_id: string;
+    /** The group this revision belongs to (its `PhraseGroup.id`, a UUID). */
+    group_id: string;
+    /** Denormalised catalog key, so history stays readable after a catalog title/description edit. */
+    group_key: string;
+    /** 1-based, sequential WITHIN the group (R2). `number` is what the Author's rail labels. */
+    number: number;
+    /** The group's text, verbatim, as the Writer answered it. */
+    content: string;
+    /** {@link GROUP_REVISION_STATES}: exactly one `latest` per group; every earlier one `archived`. */
+    state: GroupRevisionState;
+    /** The run that produced it (P11), or null when a legacy import seeded it. */
+    run_ref?: string | null;
+    /** The Work Item that asked for it, so the ledger can attribute an install to a job. */
+    work_item_ref?: string;
+    /**
+     * R3 — the open `fix` task ids this revision was written to answer (from
+     * `WorkItem.taskRefs`/`fixRefs`, frozen at dispatch so a late task cannot claim an old revision).
+     */
+    task_refs?: string[];
+    /** R3 — the finding ids those tasks named: the closure anchor a multi-group finding is judged on. */
+    finding_refs?: string[];
+    /** Knowledge fingerprints the draft leaned on, for the audit and the next prompt. */
+    knowledge_used?: string[];
+    /** Byte-stable prompt hash (the compiler's 16-char sha256 prefix) — §5's cache key, P11. */
+    prompt_hash?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Collection registry
 // ---------------------------------------------------------------------------
 
 /**
- * The 20 §4 collection names, in §4 order. Exported as data so the store, the persistence
+ * The 20 §4 collection names plus the three the Summary Phrase redesign appends, in §4 order.
+ * Exported as data so the store, the persistence
  * layer and the dashboard can enumerate the model without hardcoding the list in three
  * places (P15: adding a collection must touch one file).
  *
@@ -1125,7 +1482,12 @@ export const COLLECTION_NAMES = [
     'proposals',
     'knowledge',
     'seed_briefs',
-    'sample_reviews'
+    'sample_reviews',
+    // SUMMARY PHRASE (R1/R2): appended, never inserted, exactly as the phase-① pipeline's three were.
+    // Every snapshot reader walks this registry, so an old `store.json` loads these three empty.
+    'phrases',
+    'phrase_groups',
+    'group_revisions'
 ] as const;
 
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
@@ -1155,6 +1517,9 @@ export interface CollectionRecords {
     knowledge: KnowledgeEntry;
     seed_briefs: SeedBrief;
     sample_reviews: SampleReview;
+    phrases: Phrase;
+    phrase_groups: PhraseGroup;
+    group_revisions: GroupRevision;
 }
 
 /** Any §4 record — the type the journal, the audit trail and generic tool plumbing need. */
@@ -1185,5 +1550,42 @@ export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
     proposals: 'proposal',
     knowledge: 'knowledge_entry',
     seed_briefs: 'seed_brief',
-    sample_reviews: 'sample_review'
+    sample_reviews: 'sample_review',
+    // The Summary Phrase collections. `phrase_group` (not `phrase_groups`) is the id singular the
+    // store's `${singular}_${n}` scheme would mint. `phrases` and `phrase_groups` never use that
+    // scheme — their rows carry a persisted UUID minted by `persist.ts:newRecordUid` and preserved by
+    // `store.ts:createWithId` (R1: a group id is an ADDRESS a route, a finding and a run row name).
+    // `group_revisions` DOES use the counter, because a group revision is addressed by
+    // (group id, number) and an Author reading history wants `group_revision_3`, not a UUID.
+    phrases: 'phrase',
+    phrase_groups: 'phrase_group',
+    group_revisions: 'group_revision'
 };
+
+/**
+ * The collections whose ids are ADDRESSES their owner mints — `persist.ts:newRecordUid` creating,
+ * `store.ts:createWithId` preserving — rather than `${singular}_${n}` labels this registry mints.
+ *
+ * WHY THIS IS A CONSTANT AND NOT A COMMENT. `store.ts:_resolveId` recognises a record's family by
+ * id PREFIX, so the registry has to stay unambiguous (`types.test.ts`'s singular rule). R1 adds
+ * `phrases`/`phrase_groups`, whose singulars are `phrase` and `phrase_group` — a strict prefix pair
+ * that would read as that bug if it were left implicit. It is not a bug, and the reason is exactly
+ * what this list states:
+ *
+ *   * those two collections never mint a counter id in production, so nothing in them can be shaped
+ *     like `phrase_3` or `phrase_group_3`, and the two families cannot claim the same id shape; and
+ *   * `group_revisions` is NOT in this list: its rows are addressed by (group id, number), and an
+ *     Author reading history wants `group_revision_3`, so it takes the counter like every other
+ *     collection — which is why the rule below is about COUNTER families only.
+ *
+ * A prefix collision is still possible in one situation, and the store answers it correctly: a row
+ * hand-created by `Collection.create` (which mints a counter id whatever the family) or an id quoted
+ * after its row was deleted. `_resolveId` returns the record when a family has it, and when none does
+ * it reports the MOST SPECIFIC family it recognised — the registry order puts `phrase_groups` after
+ * `phrases`, and `_resolveId` keeps the last prefix match. `store/record-identity.test.ts` pins both
+ * halves, so this contract is a behaviour and not an intention.
+ */
+export const UID_ADDRESSED_COLLECTIONS = ['phrases', 'phrase_groups'] as const;
+
+/** One of {@link UID_ADDRESSED_COLLECTIONS}. */
+export type UidAddressedCollection = (typeof UID_ADDRESSED_COLLECTIONS)[number];

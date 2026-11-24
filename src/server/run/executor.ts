@@ -51,7 +51,13 @@ import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
 import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
-import { compileSamplePrompt, compileScreenPrompt, type CompiledPrompt } from './phase1-prompt';
+import {
+    compileGroupDraftPrompt,
+    compileGroupReviewPrompt,
+    compileSamplePrompt,
+    compileScreenPrompt,
+    type CompiledPrompt
+} from './phase1-prompt';
 import { runEngineAgent, StoryHarnessManager } from './story-engine';
 import { resolveAggregation } from './types';
 import type { StoryThreadLog, StoryThreadRecord, StoryThreadState } from './thread-log';
@@ -360,7 +366,15 @@ export class RunExecutor {
                 // §8.6's Author-invoked run is the other kind of run this layer can spawn.
                 kind: item.kind === 'assistant' ? 'assistant' : 'work',
                 no_op: false,
-                delegated: []
+                delegated: [],
+                // SUMMARY PHRASE R4 — the group set this run HOLDS, copied off the item at the moment
+                // the row is created. It has to be the row's own field (not re-derived from
+                // `work_item_ref`) because the exclusion is judged from persisted state: a restart, a
+                // lease expiry and a second engine all read the same answer from the live rows, and a
+                // claim key's hash is not something the exclusion should have to re-parse.
+                ...(item.groupRefs === undefined || item.groupRefs.length === 0
+                    ? {}
+                    : { group_refs: [...item.groupRefs] })
             },
             { run_ref: null, why: `run spawned for work item ${item.id} (${item.kind}) — S-1` }
         );
@@ -667,6 +681,31 @@ export class RunExecutor {
      */
     private compilePrompt(scope: RunScope): CompiledPrompt {
         const { item } = scope;
+
+        // SUMMARY PHRASE (R2/R3/R5): the group model's two one-turn jobs. Both read the ITEM for what
+        // they are about, exactly as the sampling pair does, so every pass of one batch renders
+        // byte-identical bytes (§5's cache argument) and a restart recompiles the same prompt.
+        if (item.kind === 'draft_groups') {
+            if (item.groupRefs === undefined || item.groupRefs.length === 0) {
+                // A Writer with no group to write has no answer to give; refusing here keeps a batch
+                // that empty from spending a run on `{"groups":[]}` (which the parser then refuses).
+                throw new Error('a draft_groups item must name the groups it writes in groupRefs (§R2)');
+            }
+
+            return compileGroupDraftPrompt(this.store, item.storyId, {
+                groupRefs: item.groupRefs,
+                fixRefs: item.fixRefs
+            });
+        }
+
+        if (item.kind === 'review_groups') {
+            return compileGroupReviewPrompt(this.store, item.storyId, {
+                // An empty set is legal here (unlike a draft): a review with no group rows can only
+                // report against the Seed, and the compiler says so in the prompt rather than throwing.
+                groupRefs: item.groupRefs ?? [],
+                fixRefs: item.fixRefs
+            });
+        }
 
         if (item.kind === 'screen_samples') {
             if (item.revisionRef === undefined || item.revisionRef.length === 0) {

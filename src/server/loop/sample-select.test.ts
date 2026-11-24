@@ -8,10 +8,19 @@
 // have CERTIFIED the fixes the round handed it, so the round climbs instead of re-drawing. The cases
 // below pin every way a certificate can be faked — silence, a verdict with no evidence, a pass that
 // was never asked, an invalid pass, and a majority vote.
+//
+// THE HILL CLIMB added the third axis, and it is not a score either: with an accepted Summary Revision
+// as the base, a candidate is judged on the fixes it CERTIFIED, the critical/major it INTRODUCED (its
+// own, not the ones it INHERITED — `IssueItem.origin`), and how little of the accepted text it CHANGED
+// (`minimalityOf`, the tie-break among candidates that did the same work). A refinement round with no
+// eligible candidate has NO winner: `selectSample` returns `undefined` and the caller re-samples rather
+// than installing a draft worse than the one the Author signed (requirement 7).
 import { describe, expect, it } from 'vitest';
 
 import {
+    bestUnresolvedBlocking,
     eligibleSamples,
+    minimalityOf,
     requiresFixCertification,
     scoreSample,
     selectSample,
@@ -33,13 +42,24 @@ const revision = (id: string): Revision => ({
     verdict_refs: []
 });
 
-/** One screening issue; only the severity matters to the counts. */
-const issue = (severity: SampledIssue['severity']): SampledIssue => ({
+/** A Summary revision carrying an explicit set of §4.2 prose fields (the minimality cases need more than one). */
+const revisionWith = (id: string, fields: Record<string, string>): Revision => ({
+    ...revision(id),
+    body: { fields }
+});
+
+/**
+ * One screening issue; `origin` is the hill's question — did THIS draft create it, or did it inherit it
+ * from the accepted text? Absent and `unknown` are the Reader declining to say, and the scorer refuses to
+ * take that as "not this draft's fault" (fail closed).
+ */
+const issue = (severity: SampledIssue['severity'], origin?: SampledIssue['origin']): SampledIssue => ({
     severity,
     criterion: 'C-14',
     location: 'premise',
     quote: `sample: ${severity}`,
-    detail: `a ${severity} defect`
+    detail: `a ${severity} defect`,
+    ...(origin === undefined ? {} : { origin })
 });
 
 /**
@@ -77,16 +97,39 @@ const review = (input: {
             })
 });
 
-const sample = (id: string, critical: number, high: number, total = critical + high): ScoredSample => ({
+/**
+ * A ready-ranked candidate for the §6.5 ranking cases. Every field `ScoredSample` requires is spelled
+ * out — the hill added the introduced/inherited split, `unresolvedBlocking`, `minimality`, `gradeable`
+ * and `screenedValid`, and a partial literal here would silently stop typechecking the real shape.
+ * The overrides let a ranking case name the key it is about without hand-writing 18 defaults.
+ */
+const sample = (
+    id: string,
+    critical: number,
+    high: number,
+    total = critical + high,
+    overrides: Partial<ScoredSample> = {}
+): ScoredSample => ({
     revision: revision(id),
     critical,
     high,
     total,
+    introducedCritical: 0,
+    introducedHigh: 0,
+    inheritedCritical: 0,
+    inheritedHigh: 0,
+    blockingIntroduced: 0,
+    refinement: false,
     fixRefs: [],
     fixesCleared: [],
     fixesUnresolved: [],
+    unresolvedBlocking: 0,
+    minimality: { changedFields: 0, changedCharacters: 0 },
+    gradeable: true,
     eligible: critical === 0 && high === 0,
-    legacyScreening: true
+    legacyScreening: true,
+    screenedValid: true,
+    ...overrides
 });
 
 describe('§6.5 — selectSample', () => {
@@ -116,11 +159,92 @@ describe('§6.5 — selectSample', () => {
         ).toBe('revision_1');
     });
 
-    it('breaks a full tie on the EARLIEST sample, not the lowest string id', () => {
-        // `revision_10` sorts before `revision_9` as a string; creation order is the numeric suffix,
-        // so the earlier sample (revision_9) is the one §6.5's "earliest" means.
+    it('breaks a full tie on CREATION ORDER — the caller’s array index, never a parsed id', () => {
+        // Requirement: ids are never parsed. §4 leaves their shape to the store, they are becoming
+        // per-story and opaque, and a numeric suffix that happens to be chronological is a detail an id
+        // change would silently invert. The caller (`records.ts:roundRevisions`) hands the candidates in
+        // creation order, so the FIRST entry wins — here, the candidate whose id sorts WORSE.
         expect(
             selectSample([sample('revision_10', 0, 0), sample('revision_9', 0, 0)])?.revision.id
+        ).toBe('revision_10');
+
+        // …and the same rule the other way: id order and creation order agree on the winner only when
+        // the earlier candidate also sorts first, so the assertion above cannot be read as "lowest id".
+        expect(
+            selectSample([sample('revision_9', 0, 0), sample('revision_10', 0, 0)])?.revision.id
+        ).toBe('revision_9');
+    });
+
+    it('ranks a refinement round by the hill, not by the §6.5 counts', () => {
+        // With an accepted base the ranking is: fewest unresolved fixes → fewest new critical → fewest
+        // new major → fewest changed fields → fewest changed characters → creation order. The counts
+        // `critical`/`high`/`total` no longer decide anything, because they describe the candidate, not
+        // the step it took from the accepted text (requirements 2 and 3).
+        const fewerFixes = sample('revision_1', 4, 4, 8, { refinement: true, unresolvedBlocking: 1 });
+        const moreFixes = sample('revision_2', 0, 0, 0, { refinement: true, unresolvedBlocking: 2 });
+
+        expect(selectSample([moreFixes, fewerFixes])?.revision.id).toBe('revision_1');
+
+        // Equal unresolved count, equal new-critical: the one with no NEW major wins, whatever its own
+        // issue counts say.
+        const cleanMajor = sample('revision_1', 3, 3, 6, { refinement: true, unresolvedBlocking: 0 });
+        const newMajor = sample('revision_2', 0, 1, 1, {
+            refinement: true,
+            unresolvedBlocking: 0,
+            introducedHigh: 1,
+            blockingIntroduced: 1
+        });
+
+        expect(selectSample([newMajor, cleanMajor])?.revision.id).toBe('revision_1');
+
+        // …and new critical outranks new major.
+        const oneNewCritical = sample('revision_1', 0, 0, 0, {
+            refinement: true,
+            unresolvedBlocking: 0,
+            introducedCritical: 1,
+            introducedHigh: 1,
+            blockingIntroduced: 2
+        });
+        const oneNewMajor = sample('revision_2', 0, 0, 0, {
+            refinement: true,
+            unresolvedBlocking: 0,
+            introducedCritical: 0,
+            introducedHigh: 1,
+            blockingIntroduced: 1
+        });
+
+        expect(selectSample([oneNewCritical, oneNewMajor])?.revision.id).toBe('revision_2');
+
+        // Fully tied on the measurements: the SMALLEST change of the accepted text wins, and only then
+        // creation order. This is the P6 tie-break — a tie-break, not a quality score.
+        const biggerEdit = sample('revision_1', 0, 0, 0, {
+            refinement: true,
+            minimality: { changedFields: 1, changedCharacters: 120 }
+        });
+        const smallerEdit = sample('revision_2', 0, 0, 0, {
+            refinement: true,
+            minimality: { changedFields: 1, changedCharacters: 7 }
+        });
+
+        expect(selectSample([biggerEdit, smallerEdit])?.revision.id).toBe('revision_2');
+
+        const fewerFields = sample('revision_1', 0, 0, 0, {
+            refinement: true,
+            minimality: { changedFields: 1, changedCharacters: 400 }
+        });
+        const moreFields = sample('revision_2', 0, 0, 0, {
+            refinement: true,
+            minimality: { changedFields: 2, changedCharacters: 9 }
+        });
+
+        expect(selectSample([fewerFields, moreFields])?.revision.id).toBe('revision_1');
+
+        // Identical on every measurement, including minimality: creation order, first entry wins.
+        expect(
+            selectSample([
+                sample('revision_9', 0, 0, 0, { refinement: true }),
+                sample('revision_1', 0, 0, 0, { refinement: true })
+            ])?.revision.id
         ).toBe('revision_9');
     });
 
@@ -142,6 +266,9 @@ describe('§6.5 — selectSample', () => {
 describe('H1/R2/R3 — scoreSample: the fix certificate', () => {
     it('scores a clean unverified round as eligible with nothing to certify', () => {
         // Round 1 keeps §6.5's shape: no fix list, no certificate, and the counts alone decide (R5).
+        // The full object is pinned because the hill added eight fields to this shape, and a candidate
+        // with NO accepted base must score them as "nothing measured" (minimality 0/0, no introduced and
+        // no inherited counts), not as a regression.
         expect(
             scoreSample({ revision: revision('revision_1'), reviews: [review({}), review({})], fixRefs: [] })
         ).toEqual({
@@ -149,11 +276,21 @@ describe('H1/R2/R3 — scoreSample: the fix certificate', () => {
             critical: 0,
             high: 0,
             total: 0,
+            introducedCritical: 0,
+            introducedHigh: 0,
+            inheritedCritical: 0,
+            inheritedHigh: 0,
+            blockingIntroduced: 0,
+            refinement: false,
             fixRefs: [],
             fixesCleared: [],
             fixesUnresolved: [],
+            unresolvedBlocking: 0,
+            minimality: { changedFields: 0, changedCharacters: 0 },
+            gradeable: true,
             eligible: true,
-            legacyScreening: true
+            legacyScreening: true,
+            screenedValid: true
         });
     });
 
@@ -487,5 +624,230 @@ describe('H1/R3 — the pool a round may choose from', () => {
 
         expect(noisy.eligible).toBe(false);
         expect(selectSample(eligibleSamples([noisy, clean]))?.revision.id).toBe('revision_3');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// THE HILL — an accepted Summary Revision is a STATE, so the only questions about a candidate are (a)
+// did it fix what was demanded, and (b) did it create a new critical/major OF ITS OWN. `origin` is how
+// the screening Reader answers (b), and `minimality` is the tie-break among candidates that did the same
+// certified work. Requirements 3, 5 and 7 live or die on these numbers, and none of them is a score.
+// ---------------------------------------------------------------------------
+describe('HILL CLIMB — origin, minimality and the bar the hill is climbed by', () => {
+    /** The accepted text the candidates are measured against (the base switches the origin rule on). */
+    const base = { fields: { premise: 'the keeper lies at dawn', ending: 'she forgives him', tone: 'elegiac' } };
+    const body = (fields: Record<string, string>) => ({ fields });
+
+    it('splits blocking issues into introduced and inherited when the round has an accepted base', () => {
+        // One inherited critical (the accepted draft already had it) and one UNCLASSIFIED high. The
+        // inherited one costs the candidate nothing; the unclassified one is counted against it.
+        const scored = scoreSample({
+            revision: revisionWith('revision_2', { ...base.fields, premise: 'the keeper waits at dawn' }),
+            reviews: [
+                review({
+                    issues: [
+                        issue('critical', 'inherited'),
+                        issue('high')
+                    ],
+                    fixRefs: ['task_1'],
+                    resolved: ['task_1']
+                })
+            ],
+            fixRefs: ['task_1'],
+            base
+        });
+
+        expect({
+            critical: scored.critical,
+            high: scored.high,
+            total: scored.total,
+            introducedCritical: scored.introducedCritical,
+            introducedHigh: scored.introducedHigh,
+            inheritedCritical: scored.inheritedCritical,
+            inheritedHigh: scored.inheritedHigh,
+            blockingIntroduced: scored.blockingIntroduced,
+            refinement: scored.refinement,
+            eligible: scored.eligible,
+            rejectReason: scored.rejectReason
+        }).toEqual({
+            critical: 1,
+            high: 1,
+            total: 2,
+            introducedCritical: 0,
+            introducedHigh: 1,
+            inheritedCritical: 1,
+            inheritedHigh: 0,
+            blockingIntroduced: 1,
+            refinement: true,
+            eligible: false,
+            rejectReason: 'introduced 0 critical / 1 major the accepted draft did not have'
+        });
+    });
+
+    it('fails an origin the Reader did not state CLOSED (requirement 3)', () => {
+        // A pass handed the accepted text that does not classify its own issue cannot swear the draft is
+        // no worse than the text it replaces — so `unknown` and absent both land in `introduced_*`.
+        for (const origin of ['unknown', undefined] as const) {
+            const scored = scoreSample({
+                revision: revisionWith('revision_2', { ...base.fields, premise: 'the keeper waits at dawn' }),
+                reviews: [
+                    review({ issues: [issue('critical', origin)], fixRefs: ['task_1'], resolved: ['task_1'] })
+                ],
+                fixRefs: ['task_1'],
+                base
+            });
+
+            expect({
+                origin,
+                introducedCritical: scored.introducedCritical,
+                inheritedCritical: scored.inheritedCritical,
+                blockingIntroduced: scored.blockingIntroduced,
+                eligible: scored.eligible
+            }).toEqual({
+                origin,
+                introducedCritical: 1,
+                inheritedCritical: 0,
+                blockingIntroduced: 1,
+                eligible: false
+            });
+        }
+    });
+
+    it('makes an `inherited` claim worth nothing when there is no base to inherit from', () => {
+        // Without a base the origin field is INERT: there is no accepted draft to be relative to, so the
+        // split reports 0/0 and §6.5's first-round rule decides on its own counts — a critical is still a
+        // critical. That is the fail-closed half of the rule seen from the other side: a candidate cannot
+        // buy an excuse in round 1 that only a round WITH an incumbent could ever grant it.
+        const scored = scoreSample({
+            revision: revisionWith('revision_1', base.fields),
+            reviews: [review({ issues: [issue('critical', 'inherited')] })],
+            fixRefs: []
+        });
+
+        expect({
+            refinement: scored.refinement,
+            critical: scored.critical,
+            introducedCritical: scored.introducedCritical,
+            inheritedCritical: scored.inheritedCritical,
+            blockingIntroduced: scored.blockingIntroduced,
+            eligible: scored.eligible
+        }).toEqual({
+            refinement: false,
+            critical: 1,
+            introducedCritical: 0,
+            inheritedCritical: 0,
+            blockingIntroduced: 0,
+            eligible: false
+        });
+    });
+
+    it('clears a candidate whose only blocking issues are the base’s own (a fix is not punished for them)', () => {
+        const scored = scoreSample({
+            revision: revisionWith('revision_2', { ...base.fields, premise: 'the keeper waits at dawn' }),
+            reviews: [
+                review({
+                    issues: [issue('critical', 'inherited'), issue('high', 'inherited')],
+                    fixRefs: ['task_1'],
+                    resolved: ['task_1']
+                })
+            ],
+            fixRefs: ['task_1'],
+            base
+        });
+
+        expect({
+            blockingIntroduced: scored.blockingIntroduced,
+            inheritedCritical: scored.inheritedCritical,
+            inheritedHigh: scored.inheritedHigh,
+            unresolvedBlocking: scored.unresolvedBlocking,
+            eligible: scored.eligible,
+            minimality: scored.minimality
+        }).toEqual({
+            blockingIntroduced: 0,
+            inheritedCritical: 1,
+            inheritedHigh: 1,
+            unresolvedBlocking: 0,
+            eligible: true,
+            // 'the keeper lies at dawn' → 'the keeper waits at dawn' is one field and the smallest span
+            // that explains it — the shared 's' at the end of both words is not part of the edit.
+            minimality: { changedFields: 1, changedCharacters: 7 }
+        });
+    });
+
+    it('measures minimality as the smallest span that explains each change, per prose field', () => {
+        // P6: this is a TIE-BREAK, not a quality score. The numbers are hand-checked: only the six §4.2
+        // prose fields count, an unchanged field costs 0, and a change costs (chars removed + chars
+        // added) over the span left after the shared prefix and suffix are stripped.
+        expect([
+            // Identical text: nothing changed.
+            minimalityOf(base, base),
+            // One clause appended: the 16 appended characters, nothing else.
+            minimalityOf(base, body({ ...base.fields, premise: 'the keeper lies at dawn beside the tide' })),
+            // 'lies' → 'waits' inside the same sentence: 3 removed + 4 added (the trailing 's' is shared).
+            minimalityOf(base, body({ ...base.fields, premise: 'the keeper waits at dawn' })),
+            // Two fields changed: the two spans, summed.
+            minimalityOf(
+                base,
+                body({ ...base.fields, premise: 'the keeper waits at dawn', ending: 'she never speaks of it' })
+            ),
+            // All three fields rewritten.
+            minimalityOf(base, body({ premise: 'x', ending: 'y', tone: 'z' })),
+            // A field the candidate dropped reads as empty text, so it costs its whole length.
+            minimalityOf(base, body({ premise: 'the keeper lies at dawn' }))
+        ]).toEqual([
+            { changedFields: 0, changedCharacters: 0 },
+            { changedFields: 1, changedCharacters: 16 },
+            { changedFields: 1, changedCharacters: 7 },
+            { changedFields: 2, changedCharacters: 37 },
+            { changedFields: 3, changedCharacters: 49 },
+            { changedFields: 2, changedCharacters: 23 }
+        ]);
+    });
+
+    it('lets only a gradeable, regression-free candidate set the bar the retry is measured against', () => {
+        // `records.ts:samplingProgressOf` extends the wave's budget only while a candidate proves a
+        // LOWER unresolved-fix count WITHOUT a new critical/major. A regression that fixed more than the
+        // incumbent did must not move the bar, or a draft nobody would install keeps buying attempts.
+        const incumbent = sample('revision_1', 0, 0, 0, {
+            refinement: true,
+            gradeable: true,
+            blockingIntroduced: 0,
+            unresolvedBlocking: 2
+        });
+        const regression = sample('revision_2', 0, 1, 1, {
+            refinement: true,
+            gradeable: true,
+            blockingIntroduced: 1,
+            unresolvedBlocking: 0
+        });
+        const ungradeable = sample('revision_3', 0, 0, 0, {
+            refinement: true,
+            gradeable: false,
+            blockingIntroduced: 0,
+            unresolvedBlocking: 0
+        });
+        const climber = sample('revision_4', 0, 0, 0, {
+            refinement: true,
+            gradeable: true,
+            blockingIntroduced: 0,
+            unresolvedBlocking: 1
+        });
+
+        expect(bestUnresolvedBlocking([incumbent, regression])).toBe(2);
+        expect(bestUnresolvedBlocking([incumbent, regression, climber])).toBe(1);
+        expect(bestUnresolvedBlocking([regression])).toBeUndefined();
+        expect(bestUnresolvedBlocking([ungradeable])).toBeUndefined();
+        expect(bestUnresolvedBlocking([])).toBeUndefined();
+    });
+
+    it('requires certification in ANY refinement round, even one that currently demands nothing', () => {
+        // The mode flag is `refinement`, not "are there fix ids right now": a round with an accepted base
+        // is a hill, and its candidates are graded against the incumbent. A first round is the only
+        // round that can be judged on counts alone (R5).
+        const firstRound = sample('revision_1', 0, 0, 0, { refinement: false, fixRefs: [] });
+        const settledDemand = sample('revision_2', 0, 0, 0, { refinement: true, fixRefs: [] });
+
+        expect(requiresFixCertification([firstRound])).toBe(false);
+        expect(requiresFixCertification([settledDemand])).toBe(true);
     });
 });
