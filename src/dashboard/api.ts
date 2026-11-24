@@ -34,6 +34,7 @@ import type {
     Chapter,
     Digest,
     Finding,
+    FindingKind,
     Goal,
     Idea,
     LedgerEntry,
@@ -324,9 +325,9 @@ export interface StoryView {
 // five labels, and `world_rules` is deliberately not one of them (R1 retires it as a group).
 //
 // NO FULL ARCHIVED TEXT (R2): a group row carries the CURRENT text; `history` is the retained
-// ledger of superseded revisions with metadata and a char count only. A pane may promise "3
-// archived" and the current text; it may not promise the prose of an archived revision, because the
-// projection does not send it.
+// ledger of superseded revisions with metadata and a char count only. The one exception is
+// `previous_content` — the revision immediately before the latest — which the pane diffs the
+// current text against; every older body stays off the wire.
 // ---------------------------------------------------------------------------
 
 /** One revision of one group, current or archived. `chars` is its length, never its text (R2). */
@@ -357,6 +358,12 @@ export interface PhraseGroupRow {
     content: string;
     revision: number;
     updated_by: string | null;
+    /**
+     * R2 / U3 — the revision immediately before the latest one, verbatim, or `''` at revision 1.
+     * It is the ONLY archived body on the wire: the pane renders the current text as a diff against
+     * it, and every older revision stays metadata.
+     */
+    previous_content: string;
     /** Newest first, `latest` included. Metadata only — see the note above. */
     history: PhraseRevisionRow[];
     /** Open findings that target this group and have no revision of ITS own answering them (R3). */
@@ -495,6 +502,12 @@ export type QueueItemKind = (typeof QUEUE_ITEM_KINDS)[number];
  */
 export interface QueueItem {
     kind: QueueItemKind;
+    /**
+     * T5 (additive) — the FINDING's claim type, on the `finding` rows only. It cannot be called `kind`:
+     * that field is already this row's queue discriminator ('finding' | 'idea' | ...). Absent on the
+     * other three flavours, and `'issue'` for a finding raised before the field existed.
+     */
+    finding_kind?: FindingKind;
     story_id: string;
     story_title: string;
     id: string;

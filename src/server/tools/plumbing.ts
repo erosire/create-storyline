@@ -420,7 +420,10 @@ const readChapter: ToolDefinition = {
                 open_findings: openFindings.map((finding) => ({
                     id: finding.id,
                     criterion_ref: finding.criterion_ref,
-                    cost: finding.cost
+                    cost: finding.cost,
+                    // T5: the Writer fixing an open finding has to know whether it is repairing a break
+                    // or delivering a proposal; absence on a legacy row reads as `issue`.
+                    kind: finding.kind ?? 'issue'
                 }))
             },
             { rev: chapter.rev }
@@ -924,6 +927,10 @@ const readFindings: ToolDefinition = {
             detail: clip(finding.detail ?? '', 1500),
             evidence: clip(finding.evidence, 800),
             cost: finding.cost,
+            // T5: which claim the row is. Surfaced with the same default the record reads at: a row
+            // raised before the field existed claimed a defect, and so does one raised without `kind`.
+            // The Editor reading its own queue needs the marker to know which question it is answering.
+            kind: finding.kind ?? 'issue',
             state: finding.state,
             confirmed_by: finding.confirmed_by ?? '',
             approved_by: finding.approved_by ?? '',

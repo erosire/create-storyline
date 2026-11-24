@@ -252,7 +252,11 @@ describe('brief — S-2 assembly', () => {
         expect(text).not.toContain('Done means: every proposal is filed as an Idea with its sources');
         expect(text).toContain('Done means: every critical and major issue you found is filed');
         expect(text).toContain('do not propose Ideas in this pass');
-        expect(text).toContain('REVIEW PASS: report defects, do not propose Ideas');
+        // D-33b: the Ideas ban is unchanged, and the sentence now names the pass's one legitimate outlet
+        // for a proposal, which is the half whose absence had the Reader filing wishes as defects.
+        expect(text).toContain(
+            'REVIEW PASS: report defects and file genuine improvements as `kind: improvement` findings — do not propose Ideas.'
+        );
         // The sample and the Seed are in the brief, so the pass does not need to go looking.
         expect(text).toContain('DRAFT ONE — the valley under water.');
         expect(text).toContain('call `readSummary` only if the brief does not carry the sample');
@@ -410,6 +414,16 @@ describe('brief — S-2 assembly', () => {
         expect(text).toContain(
             'Admissible proof is a quotation: file what you can quote the draft contradicting, and nothing that rests on an absence alone.'
         );
+        // D-33b — the outlet the stand-down used to leave empty. The pass may not file an absence as a
+        // defect AND may not file an Idea, so without this sentence the Reader's only move was to dress a
+        // proposal in defect wording and watch the Editor dispute it. Pinned with the job line's own words:
+        // the marker, the proposing title, and the fact that the Editor's rule for it is different.
+        expect(text).toContain(
+            'An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: improvement`'
+        );
+        expect(text).toContain(
+            'a marked improvement is weighed on whether the story the Seed promises is better for it'
+        );
         // The phrasing rule: in the shipped sweep note this sentence started at character 1,320, i.e. it
         // was never sent at all, while the rounds it was meant to prevent kept happening.
         expect(text).toContain(
@@ -426,6 +440,12 @@ describe('brief — S-2 assembly', () => {
         );
         expect(text).toContain(
             'A finding must quote that evidence \u2014 a finding that quotes only an absence, and cannot quote what it contradicts, is not admissible.'
+        );
+        // D-33b — the exception belongs in the banner too, not only in the four Author-editable angle
+        // templates: this text declares itself the override, so an improvement rule stated anywhere else
+        // is a rule an Author rewrite can delete.
+        expect(text).toContain(
+            'The one exception is a PROPOSAL: a change that would genuinely improve the book while contradicting nothing is filed with `kind: improvement`'
         );
 
         // R3 — the gates T3 does NOT relax, pinned in the same text so a future softening of the rule is
@@ -479,6 +499,18 @@ describe('brief — S-2 assembly', () => {
         expect(verifyText).toContain(
             'is an INVALID finding however true the absence is: `dispute` it and name the silence as the reason'
         );
+        // D-33b — the SECOND evaluation mode, pinned beside the rule it is an exception to, in the one
+        // paragraph the verify thread works from. This is the behaviour fix the Author asked for: a
+        // proposal used to meet the absence rule and lose, every time, without being weighed.
+        expect(verifyText).toContain(
+            'A finding marked `improvement` in its bracket is the one claim this test does NOT judge: the Reader is proposing a change the Seed never had to promise, not reporting a defect, so the absence rule does not apply to it.'
+        );
+        expect(verifyText).toContain(
+            '`confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, and NEVER dispute it merely because the Seed never promised it.'
+        );
+        // And the scope of the old rule is now explicit, so a future edit cannot read it as a blanket ban
+        // on every claim that mentions a silence.
+        expect(verifyText).toContain('ADMISSIBILITY comes before accuracy: a defect is real only when');
         // The cost ladder is described the way the shipped dial actually behaves (no runtime change):
         // `taste` never blocks a phase-① round, and `minor` blocks exactly when the Story's
         // `auto_approve` costs cover it — which they do by default (`shared/types.ts:
@@ -507,6 +539,49 @@ describe('brief — S-2 assembly', () => {
         expect(confirmText).toContain(
             '`dispute` an omission-only claim on that ground, and `confirm` only a finding that quotes a commitment and shows the draft breaking it.'
         );
+    });
+
+    it('marks an improvement in the findings block, and renders a plain issue exactly as it always did (D-33b)', () => {
+        const { store, story } = seedStore();
+
+        // Two rows on purpose. The improvement has to be visible to the Editor INSIDE the record list the
+        // job carries — the bracket is the only place the finding itself is quoted to that thread — and
+        // the legacy row (no `kind` field at all) has to render byte-identically, because every existing
+        // brief, fixture and `brief_hash` depends on that line not moving.
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-11',
+            title: 'open the book on the lie instead of the truth',
+            detail: 'chapter_1 sec_1 has him tell the truth at once; the lie first gives chapter 2 its tension',
+            evidence: 'chapter_1 sec_1: "he told them the truth"',
+            cost: 'major',
+            kind: 'improvement'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-4',
+            title: 'the 1911 map is never paid off',
+            evidence: 'chapter_1 sec_1 mentions the map; nothing answers it',
+            cost: 'major'
+        });
+
+        const item = itemFor({
+            id: 'work_9',
+            kind: 'verify_findings',
+            templateRef: 'editor-general',
+            roleName: 'editor',
+            unit: { kind: 'summary', ref: 'summary_0' },
+            findingRefs: ['finding_0', 'finding_1']
+        });
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        expect(text).toContain(
+            '- finding_0 [unconfirmed, cost major, seen 1×, criterion C-11, improvement]: open the book on the lie instead of the truth'
+        );
+        expect(text).toContain(
+            '- finding_1 [unconfirmed, cost major, seen 1×, criterion C-4]: the 1911 map is never paid off'
+        );
+        // The marker is a marker, not a rewrite of the line: nothing else about either row moved.
+        expect(text).not.toContain('criterion C-4, improvement');
+        expect(text).not.toContain('criterion C-4, issue');
     });
 
     it('gives a Summary Writer the licence to invent what the Seed leaves silent, and withholds it from the other units (T3)', () => {

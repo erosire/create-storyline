@@ -74,6 +74,7 @@ import type { CommitEvent, Store } from '../store';
 import type {
     Cost,
     Finding,
+    FindingKind,
     Idea,
     Revision,
     RoleKind,
@@ -742,6 +743,10 @@ export function queueItems(store: Store): QueueItem[] {
                 story_title: titleFor(story.id),
                 id: finding.id,
                 title: finding.title,
+                // T5: the finding's own kind, under a name that cannot collide — this row's `kind` is
+                // already the queue discriminator (`'finding'`), so `finding_kind` is the honest spelling.
+                // Absence on a legacy row reads as `issue`, exactly as the record and the fingerprint do.
+                finding_kind: finding.kind ?? 'issue',
                 ...(finding.detail === undefined ? {} : { detail: finding.detail }),
                 evidence: finding.evidence,
                 cost: finding.cost,
@@ -1038,6 +1043,14 @@ export interface PhraseGroupRow {
     content: string;
     revision: number;
     updated_by: string | null;
+    /**
+     * R2 / U3 — the revision IMMEDIATELY BEFORE the latest one, verbatim, or `''` when this is the first.
+     *
+     * This is the ONE exception to "history is metadata only": the pane shows the latest revision as a
+     * diff against the text it replaced, so that one body has to be on the wire. Older archived revisions
+     * stay server-side (their `history` rows carry `chars`, never prose).
+     */
+    previous_content: string;
     /** Newest first, `latest` included — R2 keeps every superseded text, so the rail can show it. */
     history: PhraseRevisionRow[];
     /** Open findings that target this group and have no revision of IT resolving them (R3). */
@@ -1057,6 +1070,13 @@ export interface PhraseFindingRow {
     id: string;
     title: string;
     cost: Cost;
+    /**
+     * T5 (additive) — the claim type, defaulted so a rail never has to interpret absence: `issue` for
+     * a row raised before the field existed. The rail stays kind-blind in its layout; the field is here
+     * because an improvement and a defect are different work, and hiding that from the read forces a
+     * renderer to guess it from the title.
+     */
+    kind: FindingKind;
     state: Finding['state'];
     seen_count: number;
     /** The ids on the record; empty is the legacy "the whole Overview" reading. */
@@ -1163,6 +1183,9 @@ export function phraseView(store: Store, story: Story): PhraseView {
             id: finding.id,
             title: finding.title,
             cost: finding.cost,
+            // T5: defaulted on the way out, so the rail reads one shape for a pre-field row and a new
+            // one. No renderer changes: this is data the read carries, not a badge it draws.
+            kind: finding.kind ?? 'issue',
             state: finding.state,
             seen_count: finding.seen_count,
             group_refs: [...(finding.group_refs ?? [])],
@@ -1179,28 +1202,36 @@ export function phraseView(store: Store, story: Story): PhraseView {
     // fail-closed reading — the rail then disables five buttons rather than let an edit race a writer.
     const held = liveGroupRefs(store, story.id);
 
-    const groupRows: PhraseGroupRow[] = groups.map((group) => ({
-        id: group.id,
-        key: group.key,
-        title: group.title,
-        description: group.description,
-        order: group.order,
-        content: group.content,
-        revision: group.revision,
-        updated_by: group.updated_by ?? null,
-        history: groupRevisionHistory(store, group.id).map((revision) => ({
-            id: revision.id,
-            number: revision.number,
-            state: revision.state,
-            at: revision.created_at,
-            run_ref: revision.run_ref ?? null,
-            finding_refs: [...(revision.finding_refs ?? [])],
-            task_refs: [...(revision.task_refs ?? [])],
-            chars: revision.content.length
-        })),
-        owed_by_findings: owedByGroup.get(group.id) ?? [],
-        writer_busy: held.has(group.id)
-    }));
+    const groupRows: PhraseGroupRow[] = groups.map((group) => {
+        const history = groupRevisionHistory(store, group.id);
+        // The newest `archived` row IS the revision the latest one replaced. One body only: the pane's
+        // latest-vs-previous diff needs it, and nothing else in the history belongs on this read.
+        const replaced = history.find((revision) => revision.state === 'archived');
+
+        return {
+            id: group.id,
+            key: group.key,
+            title: group.title,
+            description: group.description,
+            order: group.order,
+            content: group.content,
+            revision: group.revision,
+            updated_by: group.updated_by ?? null,
+            previous_content: replaced?.content ?? '',
+            history: history.map((revision) => ({
+                id: revision.id,
+                number: revision.number,
+                state: revision.state,
+                at: revision.created_at,
+                run_ref: revision.run_ref ?? null,
+                finding_refs: [...(revision.finding_refs ?? [])],
+                task_refs: [...(revision.task_refs ?? [])],
+                chars: revision.content.length
+            })),
+            owed_by_findings: owedByGroup.get(group.id) ?? [],
+            writer_busy: held.has(group.id)
+        };
+    });
 
     const openFindings = findings.filter(
         (finding) => finding.state !== 'fixed' && finding.state !== 'discarded' && finding.state !== 'disputed'

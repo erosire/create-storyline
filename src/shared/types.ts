@@ -93,6 +93,24 @@ export type Cost = (typeof FINDING_COSTS)[number];
 export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major', 'minor'];
 
 /**
+ * §4.10 `kind` (additive) — WHAT a finding claims, as distinct from `cost`, which says only how much
+ * repairing it costs. The two are deliberately orthogonal: an improvement can be worth a `major` pass
+ * and a defect can be `taste`.
+ *
+ * `issue` is the §4.10 claim: a defect, admissible only by quoting a commitment and showing the
+ * artifact breaking it, which is why an Editor `dispute`s a claim whose whole case is an ABSENCE
+ * (D-33's admissibility gate). `improvement` is a PROPOSAL the Seed never had to promise: the absence
+ * rule does not apply to it, and the Editor weighs it on merit — does the change genuinely strengthen
+ * the story the Seed promises, is it worth a Writer pass, does it contradict the installed text?
+ *
+ * `issue` is FIRST because it is the default: a row raised before this field existed claimed a defect,
+ * and a raise that names no `kind` claims a defect. Order carries no other meaning (unlike `cost`,
+ * whose order is the triage scale).
+ */
+export const FINDING_KINDS = ['issue', 'improvement'] as const;
+export type FindingKind = (typeof FINDING_KINDS)[number];
+
+/**
  * §4.12 `roles[].kind` — selects the brief and the PERMISSION ROW, never the tool list
  * (D-17a, T-6a). All five kinds hold the whole catalogue; the server refuses the calls a
  * kind may not make (T-1a).
@@ -692,14 +710,17 @@ export interface Verdict extends StoredRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * §4.10 — a named defect with evidence and a fingerprint.
+ * §4.10 — a named claim with evidence and a fingerprint: a defect (`kind: 'issue'`, the default) or
+ * a proposal to improve the text (`kind: 'improvement'`).
  *
  * D-33: from a Reader or checker it starts `unconfirmed` — a suspicion worth nothing until
  * an Editor confirms it. D-34: the Editor rewrites it into the Author's reading surface and
  * sets the cost it actually deserves (D-34a: that triage is final, no appeal). D-16:
- * `fingerprint` = stable hash of (criterion, target, normalised subject); a repeat report
+ * `fingerprint` = stable hash of (criterion, target, kind, normalised subject); a repeat report
  * bumps `seen_count` instead of creating a new row, and that dedupe is what makes "no
- * progress" detectable in an amnesiac system (§6.7, L-16a).
+ * progress" detectable in an amnesiac system (§6.7, L-16a). `issue` is the unmarked form of that
+ * hash (see `kind` below), so a row raised before the field existed still dedupes against a new
+ * `issue` report byte for byte.
  *
  * `confirmed_by` / `approved_by` are §12 W1's named fields: `approved_by` is the Author, or
  * the literal `auto` when the Story's dial covered the cost (D-35).
@@ -713,6 +734,23 @@ export interface Finding extends StoredRecord {
     /** Required: D-15/T-11 — no verdict or finding without a citable line of evidence. */
     evidence: string;
     cost: Cost;
+    /**
+     * T5 (additive) — what the row CLAIMS: `issue` (a defect) or `improvement` (a proposal).
+     *
+     * ABSENT ⇒ `'issue'`. That is both the legacy reading (a row raised before the field existed
+     * claimed a defect) and the default of a new `raiseFinding` call that names no `kind`, and it is
+     * the form `tools/utilities.ts:findingFingerprint` hashes, so a legacy row and a new `issue`
+     * report with the same target/criterion/title still dedupe (D-16 back-compat is mandatory).
+     *
+     * WHY THE FIELD EXISTS: an Editor auto-`dispute`s a claim whose whole case is an absence, because
+     * the Seed is a commitment and not an outline. That gate is right for a defect and wrong for a
+     * proposal — a Reader that spots a change which would genuinely improve the book was having it
+     * rejected for describing something the Seed never promised. Marking the row `improvement` tells
+     * the Editor to weigh the change on merit (worth a Writer pass? does it break the installed text?)
+     * instead of disputing it on absence grounds. `critical` is refused for an improvement
+     * (`tools/checker.ts:raiseFinding`): a proposal is not a contradiction the text cannot live with.
+     */
+    kind?: FindingKind;
     fingerprint: string;
     state: FindingState;
     /** The Editor run that confirmed it (D-33), or empty. */

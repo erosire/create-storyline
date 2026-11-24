@@ -311,28 +311,43 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // accepts "any reasonable wording" is what let the clause be clipped out of the shipped brief
         // while its test still passed. If one of these sentences moves, the edit below has to move with
         // it deliberately — that is the point of the pin.
-        const scoping: Record<string, { silence: string; laterPhases: string }> = {
+        const scoping: Record<string, { silence: string; laterPhases: string; improvement: string }> = {
             'reader-genre': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460): the Seed is general, not an outline, and the Writer may invent any detail it does not contradict \u2014 so an added detail, a Seed question left open, stakes the Seed never stated, and a payoff that arrives without earlier planting are not genre defects at this phase.',
                 laterPhases:
-                    'The same setup-and-payoff checks stay in force in phases \u2461 and \u2462, where the plotlines and chapters do make those commitments.'
+                    'The same setup-and-payoff checks stay in force in phases \u2461 and \u2462, where the plotlines and chapters do make those commitments.',
+                // D-33b: the angle's own improvement outlet. Convention can be satisfied AND outdone, and
+                // the second half is a proposal, not the defect this prompt spends its standing on.
+                improvement:
+                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, file that with raiseFinding as `kind: improvement` (title it as a proposal, quote the passage it would improve, and say what changes and why the pass is worth it), because it is a proposal about a book that breaks nothing, not a defect.'
             },
             'reader-plausibility': {
                 silence:
                     'This is a plotline and chapter check: when the artifact under review is a SUMMARY (phase \u2460) there is no ledger and no earlier chapter yet, so "nothing established it" is not a factual doubt there, and the Writer is free to establish a fact the Seed never named as long as it contradicts nothing.',
                 laterPhases:
-                    'Phases \u2461 and \u2462 keep every check above unchanged: there the ledger and the earlier chapters DO make those promises, and a setup that never arrives is a defect again.'
+                    'Phases \u2461 and \u2462 keep every check above unchanged: there the ledger and the earlier chapters DO make those promises, and a setup that never arrives is a defect again.',
+                // D-33b: this angle is the one carrying a source, so its proposal is worth citing.
+                improvement:
+                    'And when the fact checks out but you can cite a better one, the truer detail the book could carry instead, say so with raiseFinding as `kind: improvement`: quote the passage it would improve, name the source that supports the better version, and keep it a proposal rather than a defect, because a text that is merely improvable has broken nothing.'
             },
             'reader-audience': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460), none of those complaints has a page to stand on unless the Summary itself promises the setup and then breaks it: the Seed is general, the Writer may invent any detail the Seed does not rule out, and an unpaid setup, an unstated stake or a consequence the Seed left open is not a reader complaint at this phase.',
-                laterPhases: 'Phases \u2461 and \u2462 keep the full list \u2014 there the book has made the promise and owes the payoff.'
+                laterPhases: 'Phases \u2461 and \u2462 keep the full list \u2014 there the book has made the promise and owes the payoff.',
+                // D-33b: this angle's signature complaint IS an absence ("the payoff arrived without the
+                // setup"). Stood down at phase ① it had nowhere to go; it now routes to the proposal kind.
+                improvement:
+                    'file it with raiseFinding as `kind: improvement`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.'
             },
             'reader-mystery': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460): there is no ledger and no chapter order yet, so do not file "it was never planted" or "the answer arrives without its setup" against one \u2014 the Writer is allowed to bring in what the Seed never stated, and the Summary\u2019s own ending is not owed an earlier hint.',
-                laterPhases: 'Phases \u2461 and \u2462 keep every setup-and-payoff check in this prompt unchanged.'
+                laterPhases: 'Phases \u2461 and \u2462 keep every setup-and-payoff check in this prompt unchanged.',
+                // D-33b: "this came too early" was the SUSPICION framing; at phase ① there is no planting
+                // to jump, so the sentence is really a reorder request.
+                improvement:
+                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: file it with raiseFinding as `kind: improvement`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.'
             }
         };
 
@@ -348,6 +363,13 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             // The later-phase half of the same breath — the reason deleting the clause is a regression
             // in phases ② and ③ and not just a relief in ①.
             expect(prompt).toContain(clauses.laterPhases);
+            // D-33b — the outlet, stated per angle in the angle's own terms, and each one carries the
+            // literal marker the Editor's two evaluation modes branch on. A role missing it can only
+            // report the observation as a defect or hold it back.
+            expect(prompt).toContain(clauses.improvement);
+            // And the Ideas ban survives the new permission: `proposeIdea` is still the job-asked path.
+            expect(prompt).toMatch(/review pass unless the job says otherwise/i);
+            expect(prompt).toContain('proposeIdea');
         }
 
         // The ledger machinery this angle is built on is still there for the phases that have a ledger.
@@ -371,6 +393,12 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(editor.prompt).toContain('a contradiction of the Seed, of critical Knowledge, or of the artifact');
         expect(editor.prompt).toContain('verifyFinding is a QUICK validity check');
         expect(editor.prompt).toContain('The phase waits on these verdicts, so be fast');
+        // D-33b — the template's mirror of the engine rule (the job line and the tool description carry the
+        // same two modes). Without it an Author reading only the template still believes every absence is
+        // a dispute, and the copy the loop runs on is the one the Author edits.
+        expect(editor.prompt).toContain(
+            'A finding marked `improvement` is the one claim this test does NOT judge: the Reader is proposing a change the Seed never had to promise, so weigh it on merit \u2014 `confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, never merely because the Seed never promised it.'
+        );
     });
 
     it('T3 — the Seed-structuring Editor records a silent field as open, not as an invented blank', () => {

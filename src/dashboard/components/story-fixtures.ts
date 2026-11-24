@@ -945,6 +945,7 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             content: '',
             revision: 0,
             updated_by: null,
+            previous_content: '',
             history: [],
             owed_by_findings: [],
             writer_busy: false,
@@ -971,10 +972,13 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             content: 'A keeper of a lighthouse begins lying to the sea, and the sea believes her.',
             revision: 3,
             updated_by: 'writer',
+            // The revision immediately before the latest, verbatim — the one body the wire sends so the pane
+            // can diff `begins` against the `starts` it replaced.
+            previous_content: 'A keeper of a lighthouse starts lying to the sea, and the sea believes her.',
             // Newest first, `latest` INCLUDED (R2) — the pane counts the archived rows and never opens them.
             history: [
                 revision('premise', 3, 'latest', 74),
-                revision('premise', 2, 'archived', 61),
+                revision('premise', 2, 'archived', 75),
                 revision('premise', 1, 'archived', 40)
             ]
         }),
@@ -982,7 +986,9 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             content: 'The reader is promised that the lie will cost her the light itself.',
             revision: 2,
             updated_by: 'writer',
-            history: [revision('promise', 2, 'latest', 68), revision('promise', 1, 'archived', 52)]
+            // Only the latest-vs-previous body; the older archived text stays off the wire.
+            previous_content: 'The reader is warned the lie will cost her the light itself.',
+            history: [revision('promise', 2, 'latest', 68), revision('promise', 1, 'archived', 60)]
         }),
         group('theme', {
             content: 'What the book is about: the price of a story told to keep the dark out.',

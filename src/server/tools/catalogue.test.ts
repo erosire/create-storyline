@@ -240,10 +240,22 @@ const SPEC_TOOL_CONTRACT: Record<
         allow: 'yyyy'
     },
     raiseFinding: {
-        // §8.3's row plus the two additive args it carries: `related_refs` for L-11a's propagation, and
-        // `group_refs` for the Summary Phrase redesign's R3 closure rule. Both are optional, so every
-        // §8-shaped call still validates exactly as §8 describes it.
-        args: ['target_ref', 'criterion_ref', 'title', 'detail', 'evidence', 'cost', 'related_refs', 'group_refs', 'why'],
+        // §8.3's row plus the additive args it carries: `related_refs` for L-11a's propagation,
+        // `group_refs` for the Summary Phrase redesign's R3 closure rule, and `kind` for D-33b's two
+        // claim types. All three are optional, so every §8-shaped call still validates exactly as §8
+        // describes it (an omitted `kind` is an `issue`).
+        args: [
+            'target_ref',
+            'criterion_ref',
+            'title',
+            'detail',
+            'evidence',
+            'cost',
+            'kind',
+            'related_refs',
+            'group_refs',
+            'why'
+        ],
         required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
         writes: 'findings',
         level: 'write',
@@ -734,7 +746,7 @@ describe('the §8 catalogue', () => {
         expect(result.data).toEqual({
             name: 'raiseFinding',
             description:
-                'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
+                'File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT, and the proof is a quotation — name the commitment the Seed or the artifact states and show the artifact breaking it; a claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. An `improvement` proposes a change the Seed never had to promise: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass — the Editor weighs it on merit, never on whether the Seed promised it, and `critical` is refused for it because a proposal is not a contradiction. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
             required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
             fields: [
                 {
@@ -753,19 +765,22 @@ describe('the §8 catalogue', () => {
                     name: 'title',
                     type: 'string',
                     required: true,
-                    description: 'The defect in one line, specific enough to act on (P4).'
+                    description:
+                        'The claim in one line, specific enough to act on (P4). For `kind: improvement` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'
                 },
                 {
                     name: 'detail',
                     type: 'string',
                     required: false,
-                    description: 'What is wrong and where — the lines or rows involved.'
+                    description:
+                        'What is wrong and where — the lines or rows involved. For `kind: improvement`: what to change, and why it is worth a Writer pass.'
                 },
                 {
                     name: 'evidence',
                     type: 'string',
                     required: true,
-                    description: 'The citable proof (D-15): a quote, a line range, a ledger row.'
+                    description:
+                        'The citable proof (D-15): a quote, a line range, a ledger row. For `kind: improvement`, the passage the change would improve.'
                 },
                 {
                     name: 'cost',
@@ -773,6 +788,17 @@ describe('the §8 catalogue', () => {
                     enum: ['critical', 'major', 'minor', 'taste'],
                     required: true,
                     description: 'How much the repair costs (D-35b triage scale).'
+                },
+                {
+                    // D-33b: the claim type, pinned because it is the marker the Editor's two evaluation
+                    // modes branch on, and because `describeTool` is where a fresh run learns that an
+                    // omitted `kind` is an `issue` and that an improvement may not be `critical`.
+                    name: 'kind',
+                    type: 'string',
+                    enum: ['issue', 'improvement'],
+                    required: false,
+                    description:
+                        '`issue` (the default) claims a defect and must quote a commitment the artifact breaks; `improvement` proposes a change the Seed never promised, which the Editor weighs on merit and may not cost `critical`.'
                 },
                 {
                     // L-11a: the additive arg, spelled out so a fresh run learns it from
@@ -801,7 +827,7 @@ describe('the §8 catalogue', () => {
                     description: 'Optional: why this is worth the Author attention.'
                 }
             ],
-            enums: { cost: ['critical', 'major', 'minor', 'taste'] },
+            enums: { cost: ['critical', 'major', 'minor', 'taste'], kind: ['issue', 'improvement'] },
             // T-4: `expects` is spelled out rather than guessed. `raiseFinding` CREATES a row, so
             // there is nothing to compare-and-swap against.
             expects: {

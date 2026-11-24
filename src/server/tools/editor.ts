@@ -927,11 +927,16 @@ const verifyIdea: ToolDefinition = {
  * or `disputed` and records the reason; the Reader already supplied the detail and the reference,
  * so a rewrite is optional rather than the job (D-34). Only a confirmed finding can be approved,
  * spawn a task, invalidate a chapter, or count toward `pending`.
+ *
+ * T5: the row's `kind` picks WHICH question the Editor answers. An `issue` is judged by admissibility
+ * (quote the commitment, show it broken, or dispute it); a row marked `improvement` is a proposal the
+ * Seed never had to promise, so the absence rule does not apply and the check is on merit — is the
+ * change worth a Writer pass, and does it break what the installed text already says?
  */
 const verifyFinding: ToolDefinition = {
     name: 'verifyFinding',
     description:
-        'Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Reader’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass.',
+        "Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Reader’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass. Two evaluation modes, and the row's `kind` says which applies: an `issue` is judged on admissibility — it must quote a commitment and show the artifact breaking it, and a claim whose whole case is an absence is disputed — while a finding marked `improvement` is a proposal the Seed never promised, judged on whether the change is worth a Writer pass and breaks the installed text, never for being an absence.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -986,6 +991,9 @@ const verifyFinding: ToolDefinition = {
             title: finding.title,
             detail: finding.detail ?? '',
             cost: finding.cost,
+            // T5: which claim was verified. Verification never rewrites the kind — an Editor weighs an
+            // improvement on merit, it does not relabel one as a defect — so it appears here as read.
+            kind: finding.kind ?? 'issue',
             evidence: finding.evidence
         };
 
@@ -1010,6 +1018,8 @@ const verifyFinding: ToolDefinition = {
                 id: written.id,
                 state: written.state,
                 cost: written.cost,
+                // T5: the row's claim type, echoed as stored (verify never changes it).
+                kind: written.kind ?? 'issue',
                 title: written.title,
                 original,
                 current_rev: written.rev,
@@ -1136,7 +1146,19 @@ const approveFinding: ToolDefinition = {
                         {
                             kind: 'fix',
                             title: `${finding.title}`,
-                            detail: `${finding.detail ?? ''}\nCost: ${finding.cost}\nCriterion: ${finding.criterion_ref}\nFinding: ${finding.id}\nApproved by: ${approvedBy}`,
+                            // T5: an approved IMPROVEMENT is work a Writer is delivering, not a break it is
+                            // repairing, and the difference has to be in the task text — the fix prompt
+                            // (`run/phase1-prompt.ts:renderFixTask`) otherwise reads a proposal as a defect
+                            // and makes the smallest change that removes something that was never broken.
+                            // Joined from lines so the kind line is the only thing an `issue` does not get.
+                            detail: [
+                                `${finding.detail ?? ''}`,
+                                `Cost: ${finding.cost}`,
+                                ...(finding.kind === 'improvement' ? ['Kind: improvement'] : []),
+                                `Criterion: ${finding.criterion_ref}`,
+                                `Finding: ${finding.id}`,
+                                `Approved by: ${approvedBy}`
+                            ].join('\n'),
                             owner_role: 'writer',
                             criterion_ref: finding.criterion_ref,
                             finding_ref: finding.id

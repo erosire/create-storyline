@@ -7,9 +7,10 @@
 // makes THIS group different (its purpose line, its findings, its history) and leaves the shared text to the
 // Summary overview pane.
 //
-// WHAT THE HISTORY MAY SAY (U4). `PhraseRevisionRow` is metadata and `chars` — the projection sends no prose for
-// a superseded revision. So the pane prints the CURRENT text and the COUNT of archived revisions, and offers no
-// control that would open one, because there is no text on the wire to open.
+// WHAT THE HISTORY MAY SAY (U4). `PhraseRevisionRow` is metadata and `chars`; the projection sends the prose of
+// exactly ONE superseded revision — the one immediately before the latest — so the pane can show the current
+// text as a diff against it (`previous_content`). Older archived rows stay metadata, so the pane still prints
+// the COUNT of archived revisions and offers no control that would open one.
 //
 // WHY ONE EDIT CONTROL, AND WHY IT IS SOMETIMES SHUT. `POST …/phrases/groups/:id/revise` (R2) is the Author's one
 // write against a group: the new text plus a note, and the Editor replans and the Writer rewrites from it. The
@@ -25,6 +26,7 @@
 import { useState } from 'react';
 import type { PhraseFindingRow, PhraseGroupRow } from '../api';
 import type { StoryActions, StoryViewData } from './story-contract';
+import { RevisionDiff } from './RevisionDiff';
 import {
     findingGroups,
     groupArchivedRevisions,
@@ -202,6 +204,9 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
     const blocking = groupBlockingFindings(view, group.id);
     const archived = groupArchivedRevisions(group);
     const latest = groupLatestRevision(group);
+    // R2 / U3 — the ONE archived body the wire carries: the revision immediately before the latest. The pane
+    // renders the current text as a grouped word diff against it, and stays a plain paragraph at revision 1.
+    const previous = group.previous_content;
     const busy = isGroupWriterBusy(group);
     const written = isGroupWritten(group);
     // The Author's one write against a group. R-T2/F6: the pane shows the group's text ONCE — the prose
@@ -274,13 +279,29 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
                 </p>
             ) : null}
 
-            <p className="sv-pane-label">Current content</p>
+            <p className="sv-pane-label">
+                Current content
+                {previous !== '' ? (
+                    <span className="sv-group-diff-label" data-testid="group-diff-from">
+                        {` · diff against Revision ${Math.max(1, group.revision - 1)}`}
+                    </span>
+                ) : null}
+            </p>
             {written && group.content ? (
-                /* R-T2/F6 — the ONE reading copy of the group's text. It is prose, not a control, so a screen
-                   reader reads the paragraph once; the field below is an empty edit, not a second copy. */
-                <p className="sv-summary-text sv-group-content" data-testid="group-content">
-                    {group.content}
-                </p>
+                previous !== '' ? (
+                    /* R2 / U3 — the latest revision against the one it replaced: deletions struck in red,
+                       additions in green. `previous_content` is the immediately preceding revision ONLY, so
+                       this is never a cumulative diff over the archived history. */
+                    <p className="sv-summary-text sv-group-content sv-group-diff" data-testid="group-content">
+                        <RevisionDiff previous={previous} current={group.content} />
+                    </p>
+                ) : (
+                    /* R-T2/F6 — the ONE reading copy of the group's text. It is prose, not a control, so a screen
+                       reader reads the paragraph once; the field below is an empty edit, not a second copy. */
+                    <p className="sv-summary-text sv-group-content" data-testid="group-content">
+                        {group.content}
+                    </p>
+                )
             ) : (
                 /* U4's purposeful empty state: why it is empty and what fills it. */
                 <p className="sv-group-quiet" data-testid="group-empty">
@@ -291,7 +312,8 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
             )}
 
             {/* The facts the wire actually supports: the current revision's own row, and the COUNT of superseded
-                ones. No archived prose exists on this read, so nothing here offers to open one. */}
+                ones. The revision directly before the latest is on the wire only for the diff above; no older
+                archived body is, so nothing here offers to open one. */}
             <dl className="sv-summary-fields">
                 <div className="sv-summary-field">
                     <dt>Status</dt>

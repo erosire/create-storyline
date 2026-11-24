@@ -11,7 +11,10 @@
  * (`raiseFinding`), and a failing criterion line with no evidence is invalid (`submitVerdict`,
  * D-15). Both are refused with the accepted value set, not repaired.
  */
-import type { Finding, Task, Verdict, VerdictCriterion } from '../../shared/types';
+// T5: `FINDING_KINDS` is the value the `kind` enum is built from, so the tool, the §4.10 record and
+// the dashboard read one list rather than three copies that can drift (`shared/types.ts`).
+import { FINDING_KINDS } from '../../shared/types';
+import type { Finding, FindingKind, Task, Verdict, VerdictCriterion } from '../../shared/types';
 import { criterionById } from '../../shared/criteria';
 // SUMMARY PHRASE R3: the group-managed switch and the book's group rows. Imported from the domain's
 // one surface (`../phrase`), because `raiseFinding` must apply the SAME reading of an absent
@@ -72,6 +75,16 @@ const TARGET_KINDS = ['stories', 'summaries', 'plotlines', 'chapters'] as const;
  * finding pointing at a row that no longer exists.
  */
 const VERDICT_TARGET_KINDS = [...TARGET_KINDS, 'revisions'] as const;
+
+/**
+ * T5: the claim type, normalised once at the top of `raiseFinding`.
+ *
+ * Anything that is not `improvement` is an `issue`. The schema enum already refuses a bad value with
+ * T-11, so the only thing that can reach here besides the two words is an OMISSION, which means the
+ * §4.10 default — and the same reading a row raised before the field existed carries (its stored
+ * `kind` is absent, and `tools/utilities.ts:findingFingerprint` hashes that form as `issue`).
+ */
+const kindOf = (value: unknown): FindingKind => (value === 'improvement' ? 'improvement' : 'issue');
 
 /** §4.9 → §4.4 vocabulary: the collection a target resolved to becomes the verdict's `target_kind`. */
 function targetKindOf(collection: string): string {
@@ -393,10 +406,15 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 }
 
 /**
- * §8.3 `raiseFinding`: a named defect with evidence, on a criterion. D-33: a checker's or a
- * Reader's finding starts `unconfirmed` — it is a suspicion until an Editor confirms it. D-16:
- * the same claim against the same criterion and target bumps `seen_count` instead of opening a
- * second row, which is what makes "no progress" detectable in an amnesiac system.
+ * §8.3 `raiseFinding`: a named claim with evidence, on a criterion, in one of two kinds (T5). An
+ * `issue` claims a DEFECT — the artifact fails the criterion — and its admissibility test is a
+ * quotation: name the commitment and show it broken. An `improvement` proposes a change the Seed
+ * never had to promise; the absence rule does not judge it, and the Editor weighs it on whether the
+ * book is better for the pass.
+ *
+ * D-33: a checker's or a Reader's finding starts `unconfirmed` — it is a suspicion until an Editor
+ * confirms it. D-16: the same claim against the same criterion, target and KIND bumps `seen_count`
+ * instead of opening a second row, which is what makes "no progress" detectable in an amnesiac system.
  *
  * `related_refs` is the one argument beyond §8's row (L-11a, authorized for W2): the other units
  * the defect touches, stored on the record so one report propagates instead of being re-raised per
@@ -405,16 +423,24 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 const raiseFinding: ToolDefinition = {
     name: 'raiseFinding',
     description:
-        'File a defect: the artifact, the criterion it fails, a title, the evidence, and a cost. Name related_refs — the other records the same defect touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
+        "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT, and the proof is a quotation — name the commitment the Seed or the artifact states and show the artifact breaking it; a claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. An `improvement` proposes a change the Seed never had to promise: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass — the Editor weighs it on merit, never on whether the Seed promised it, and `critical` is refused for it because a proposal is not a contradiction. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
     inputSchema: {
         type: 'object',
         properties: {
             target_ref: str('The artifact that fails (a chapter, plotline or summary id).'),
             criterion_ref: str('The criterion id it fails (readGoals lists them).'),
-            title: str('The defect in one line, specific enough to act on (P4).'),
-            detail: str('What is wrong and where — the lines or rows involved.'),
-            evidence: str('The citable proof (D-15): a quote, a line range, a ledger row.'),
+            title: str('The claim in one line, specific enough to act on (P4). For `kind: improvement` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'),
+            detail: str('What is wrong and where — the lines or rows involved. For `kind: improvement`: what to change, and why it is worth a Writer pass.'),
+            evidence: str('The citable proof (D-15): a quote, a line range, a ledger row. For `kind: improvement`, the passage the change would improve.'),
             cost: COST_ENUM,
+            // T5: which of the two claims this is. Optional, so every §8-shaped call still means exactly
+            // what it meant — an omitted `kind` is an `issue`, the same reading a row from before the
+            // field carries. `improvement` is the Reader's legitimate outlet for a proposal, and the
+            // marker is what stops the Editor's absence rule from disputing it (see the description).
+            kind: enumOf(
+                FINDING_KINDS,
+                '`issue` (the default) claims a defect and must quote a commitment the artifact breaks; `improvement` proposes a change the Seed never promised, which the Editor weighs on merit and may not cost `critical`.'
+            ),
             // L-11a: cross-chapter propagation. Optional, so §8's call shape is unchanged.
             related_refs: arr(
                 'Other records this defect touches (chapter, plotline or summary ids), so the finding propagates across chapters (L-11a).',
@@ -465,6 +491,28 @@ const raiseFinding: ToolDefinition = {
         const evidence = String(ctx.args.evidence ?? '').trim();
         const detail = typeof ctx.args.detail === 'string' ? ctx.args.detail : '';
         const cost = String(ctx.args.cost) as Finding['cost'];
+        // T5: which of the two claims this is. Normalised BEFORE anything else reads it — the
+        // fingerprint, the row, and both payloads — so an omitted `kind` cannot mean one thing to the
+        // dedupe and another to the Author's queue.
+        const kind = kindOf(ctx.args.kind);
+
+        // T5 — an improvement is a PROPOSAL, and `critical` is the ladder's word for a contradiction the
+        // text cannot live with. The combination is refused rather than quietly re-triaged: `critical`
+        // is on the Author's auto-approve dial by default (D-35), so a Reader that dressed a wish in
+        // `critical` would spend a Writer pass and skip the gate, which is the exact failure the
+        // `improvement` kind exists to make cheap to say honestly instead.
+        if (kind === 'improvement' && cost === 'critical') {
+            throw new ToolRefusal(
+                'D-33',
+                'a `kind: improvement` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.',
+                {
+                    field: 'cost',
+                    expected: ['major', 'minor', 'taste'],
+                    fix: "call raiseFinding again with cost `major` at most and kind `improvement`, or with kind `issue` if the draft contradicts something it states"
+                }
+            );
+        }
+
         // L-11a: normalised before the dedupe lookup, so a repeat that only adds refs is still
         // recognised as the same finding (the fingerprint never looks at them).
         const relatedRefs = relatedRefsOf(ctx.args.related_refs);
@@ -585,7 +633,11 @@ const raiseFinding: ToolDefinition = {
             );
         }
 
-        const fingerprint = fingerprintFinding(target.id, criterionRef, title);
+        // D-16: the fingerprint carries the kind (T5), so the same sentence filed once as a defect and
+        // once as a proposal is two rows — they are different claims, and the Editor decides them by
+        // opposite rules. An `issue` keeps the pre-field hash, so a row raised before `kind` existed
+        // still dedupes against a new `issue` report (L-16a: no silent second row for an old finding).
+        const fingerprint = fingerprintFinding(target.id, criterionRef, title, kind);
         const duplicate = duplicateFinding(ctx.store, ctx.storyId, fingerprint);
         const why = whyOf(ctx) || `Finding on ${target.id} for ${criterionRef}: ${title}`;
 
@@ -621,6 +673,9 @@ const raiseFinding: ToolDefinition = {
                     seen_count: bumped.seen_count,
                     state: bumped.state,
                     cost: bumped.cost,
+                    // T5: the kind the OPEN row actually carries. A legacy row has no `kind` field, and
+                    // `issue` is the honest reading of it — the same reading the fingerprint gave it.
+                    kind: bumped.kind ?? 'issue',
                     criterion_ref: bumped.criterion_ref,
                     target_ref: bumped.target_ref,
                     // L-11a: what the open row now says it touches, so the reporter knows the
@@ -663,6 +718,11 @@ const raiseFinding: ToolDefinition = {
                         detail,
                         evidence,
                         cost,
+                        // T5: stored EXPLICITLY, default included. `related_refs`/`group_refs` above are
+                        // omitted when empty because absence is their meaning; here absence means
+                        // `issue` too, but writing the word keeps a new row self-describing next to the
+                        // kind it dedupes against, and leaves the legacy rows as the only kind-less ones.
+                        kind,
                         fingerprint,
                         state: editorIssued ? 'confirmed' : 'unconfirmed',
                         confirmed_by: editorIssued ? (ctx.runId ?? null) : null,
@@ -689,6 +749,9 @@ const raiseFinding: ToolDefinition = {
                 criterion_ref: written.criterion_ref,
                 title: written.title,
                 cost: written.cost,
+                // T5: echoed so the run can see which claim it actually filed — an omitted `kind` comes
+                // back as the `issue` it was stored as, rather than as nothing.
+                kind: written.kind ?? 'issue',
                 state: written.state,
                 fingerprint: written.fingerprint,
                 seen_count: written.seen_count,
@@ -710,7 +773,15 @@ const raiseFinding: ToolDefinition = {
                 notes: editorIssued
                     ? undefined
                     : [
-                          'Unconfirmed until an Editor confirms, disputes or rewrites it (D-33). Nothing is repaired yet (D-34).'
+                          'Unconfirmed until an Editor confirms, disputes or rewrites it (D-33). Nothing is repaired yet (D-34).',
+                          // T5: an improvement is judged by the OPPOSITE test from a defect claim, and
+                          // saying so in the result the Reporter reads keeps it from re-filing a proposal
+                          // as a defect the round after the first one is disputed.
+                          ...(written.kind === 'improvement'
+                              ? [
+                                    'This is an improvement, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
+                                ]
+                              : [])
                       ]
             }
         );

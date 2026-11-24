@@ -336,7 +336,12 @@ function defaultTools(): Record<string, MockToolHandler> {
         raiseFinding: async (ctx, args, runtime) => {
             const criterionRef = str(args.criterion_ref);
             const targetRef = str(args.target_ref);
-            const fingerprint = `${criterionRef}|${targetRef}`;
+            // T5: the mock is KIND-TOLERANT. An omitted or unknown `kind` is an `issue`, the same reading
+            // the real tool normalises to, and the dedupe key follows `utilities.ts:findingFingerprint`'s
+            // rule: `issue` keeps the pre-field two-part key (so a scripted repeat still matches), and an
+            // `improvement` marks itself so a proposal does not collapse into the defect beside it.
+            const kind: Finding['kind'] = str(args.kind) === 'improvement' ? 'improvement' : 'issue';
+            const fingerprint = kind === 'improvement' ? `${criterionRef}|${targetRef}|improvement` : `${criterionRef}|${targetRef}`;
 
             // D-16/D-32: the dedupe lives in the tool layer, and the ANSWER names the existing
             // record — a fresh context that is told `repeat` can stop, which is the mechanism that
@@ -360,7 +365,14 @@ function defaultTools(): Record<string, MockToolHandler> {
                     )
                 );
 
-                return { ok: true, repeat: true, finding_id: bumped.id, rev: bumped.rev };
+                return {
+                    ok: true,
+                    repeat: true,
+                    finding_id: bumped.id,
+                    // T5: the kind the open row actually carries, echoed like the real tool does.
+                    kind: bumped.kind ?? 'issue',
+                    rev: bumped.rev
+                };
             }
 
             const created = await inCommit(runtime.store, 'raise_finding', () =>
@@ -373,6 +385,9 @@ function defaultTools(): Record<string, MockToolHandler> {
                         detail: str(args.detail) || undefined,
                         evidence: str(args.evidence),
                         cost: (str(args.cost) || 'minor') as Finding['cost'],
+                        // T5: stored explicitly, default included — the same discipline the real tool
+                        // follows, so a scripted row and a tool-written row read alike.
+                        kind,
                         fingerprint,
                         state: 'unconfirmed',
                         seen_count: 1
@@ -381,7 +396,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                 )
             );
 
-            return { ok: true, finding_id: created.id, rev: created.rev };
+            return { ok: true, finding_id: created.id, kind: created.kind ?? 'issue', rev: created.rev };
         },
         createTask: async (ctx, args, runtime) => {
             const created = await inCommit(runtime.store, 'create_task', () =>
@@ -1313,6 +1328,9 @@ export function seedFinding(
             detail: init.detail,
             evidence: init.evidence ?? 'chapter_1 sec_1 mentions the map; nothing answers it',
             cost: init.cost ?? 'major',
+            // T5/D-33b: the claim type, omitted unless a fixture asks for one — so a seeded row stays the
+            // kind-less legacy shape by default, which is exactly what the brief renderer must tolerate.
+            ...(init.kind === undefined ? {} : { kind: init.kind }),
             fingerprint: init.fingerprint ?? 'C-4|chapter_1',
             state: init.state ?? 'unconfirmed',
             seen_count: init.seen_count ?? 1,

@@ -14,6 +14,7 @@ import type {
     ChapterSection,
     Digest,
     Finding,
+    FindingKind,
     Goal,
     Idea,
     LedgerEntry,
@@ -930,9 +931,18 @@ export function sectionOffsets(
 
 // ── fingerprints (D-16/D-32) ────────────────────────────────────────────────
 
-/** The finding fingerprint, from the fields §4.10 dedupes on. */
-export function fingerprintFinding(targetRef: string, criterionRef: string, title: string): string {
-    return findingFingerprint(targetRef, criterionRef, title);
+/**
+ * The finding fingerprint, from the fields §4.10 dedupes on: target, criterion, KIND, normalised
+ * title. The kind is the T5 component (see `utilities.ts:findingFingerprint`) — `issue` keeps the
+ * pre-field hash, so a legacy row and a new `issue` report still dedupe.
+ */
+export function fingerprintFinding(
+    targetRef: string,
+    criterionRef: string,
+    title: string,
+    kind: FindingKind = 'issue'
+): string {
+    return findingFingerprint(targetRef, criterionRef, title, kind);
 }
 
 /** The Idea fingerprint (D-32): decided Ideas are the memory a repeat is checked against. */
@@ -951,7 +961,14 @@ export function decidedIdea(store: Store, storyId: string, body: string): Idea |
     );
 }
 
-/** A live finding with the same fingerprint — D-16's dedupe. */
+/**
+ * A live finding with the same fingerprint — D-16's dedupe.
+ *
+ * T5: the kind is INSIDE the hash (`utilities.ts:findingFingerprint`), so this lookup needs no branch
+ * and its semantics are otherwise exactly what they were: a repeat of the same claim against the same
+ * target and criterion, an `improvement` and an `issue` with identical wording are two rows because
+ * they are two claims.
+ */
 export function duplicateFinding(store: Store, storyId: string, fingerprint: string): Finding | undefined {
     return findingRows(store, storyId).find(
         (row) => row.fingerprint === fingerprint && row.state !== 'fixed' && row.state !== 'discarded'

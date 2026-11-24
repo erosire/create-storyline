@@ -544,8 +544,10 @@ export function renderSummaryBody(body: unknown): string {
  * the proof is, and the criterion's `fix_hint` says what done looks like (G-2). A Writer holding only
  * a title re-drafts; a Writer holding the evidence makes the smallest change that removes the defect.
  *
- * Every line below is optional except the header, and the order is FIXED (header, defect, evidence,
- * criterion question, hint) so two compiles over the same rows are byte-identical (§5's cache rule).
+ * Every line below is optional except the header, and the order is FIXED (header, work, kind, defect,
+ * evidence, criterion question, hint) so two compiles over the same rows are byte-identical (§5's cache
+ * rule). `kind` is the T5 addition and appears ONLY on a row marked `improvement`, so a finding raised
+ * before the field compiles exactly as it did before.
  */
 export function renderFixTask(task: Task, finding?: Finding, criterion?: Criterion): string {
     const lines: string[] = [
@@ -556,6 +558,11 @@ export function renderFixTask(task: Task, finding?: Finding, criterion?: Criteri
     // surface); the finding's detail is the defect as the Reader saw it. Both travel: one says what
     // to do, the other says why, and a sample that only knows the first rewrites the wrong thing.
     if (task.detail !== undefined && task.detail.trim().length > 0) lines.push(`  work: ${task.detail.trim()}`);
+    // T5: an approved IMPROVEMENT is a change the Writer is asked to make, not a break it is asked to
+    // repair. The label has to be in the prompt because the fix task's `work:` line was copied from the
+    // finding's defect wording, and a sample that reads "nothing pays the promise" re-drafts the
+    // paragraph instead of writing the better one the Reader proposed.
+    if (finding?.kind === 'improvement') lines.push('  kind: improvement (a proposal, not a defect)');
     if (finding?.detail !== undefined && finding.detail.trim().length > 0)
         lines.push(`  defect: ${finding.detail.trim()}`);
     // D-15/T-11: the evidence line is the citable proof the defect exists. Without it the Writer is

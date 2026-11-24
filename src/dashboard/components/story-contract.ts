@@ -950,9 +950,11 @@ export function lockCheck(view: StoryViewData): LockCheck {
 //     which for a grouped book is every group, so it must show against all five rather than vanish or
 //     claim one. Nothing here re-derives scope from `revision` numbers.
 //
-// ARCHIVED IS ARCHIVED AWAY (U3). `history` is newest-first and INCLUDES the `latest` row; the panes
-// may count the `archived` rows and print the current text, and the projection sends no archived prose
-// (`PhraseRevisionRow.chars`, not `.content`), so no pane may offer to open one.
+// ARCHIVED IS ARCHIVED AWAY (U3), WITH ONE BODY SENT. `history` is newest-first and INCLUDES the
+// `latest` row; the panes may count the `archived` rows, and the projection sends the prose of exactly
+// the revision immediately before the latest (`previous_content`) so the group pane can diff the current
+// text against it. Every older archived body stays server-side (`PhraseRevisionRow.chars`, not `.content`),
+// so no pane may offer to open one.
 // ---------------------------------------------------------------------------
 
 /** Whether this Story's Summary is group-managed, as the wire says (R6's echo, with the row as backup). */
@@ -1084,7 +1086,7 @@ export function groupOpenTasks(view: Pick<StoryViewData, 'phrase'>): PhraseTaskR
     return (view.phrase?.tasks ?? []).filter((task) => task.state !== 'done');
 }
 
-/** The revisions superseded on this group — countable, never expandable (the API sends no archived text). */
+/** The revisions superseded on this group — countable; only the latest's predecessor travels as prose. */
 export function groupArchivedRevisions(group: PhraseGroupRow): PhraseRevisionRow[] {
     return group.history.filter((revision) => revision.state === 'archived');
 }

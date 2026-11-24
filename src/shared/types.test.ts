@@ -11,6 +11,7 @@ import {
     DEFAULT_AUTO_APPROVE_COSTS,
     DIRECTIVE_STATES,
     FINDING_COSTS,
+    FINDING_KINDS,
     FINDING_STATES,
     IDEA_KINDS,
     IDEA_STATES,
@@ -58,6 +59,13 @@ describe('§4 enums', () => {
     it('the cost scale is ordered and its default dial is critical + major + minor (D-35)', () => {
         expect(FINDING_COSTS).toEqual(['critical', 'major', 'minor', 'taste']);
         expect(DEFAULT_AUTO_APPROVE_COSTS).toEqual(['critical', 'major', 'minor']);
+    });
+
+    // D-33b: the claim type. `issue` is FIRST because it is the default in both directions — the reading
+    // of a row raised before the field existed, and of a `raiseFinding` call that names no `kind` — and
+    // that default is what keeps D-16's fingerprint byte-compatible for every open finding.
+    it('a finding names which kind of claim it is, and issue is the default (D-33b)', () => {
+        expect(FINDING_KINDS).toEqual(['issue', 'improvement']);
     });
 
     it('the crew kinds and their aggregation modes are §4.12/D-38', () => {

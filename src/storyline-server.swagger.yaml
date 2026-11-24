@@ -2078,6 +2078,9 @@ components:
               type: string
             cost:
               $ref: '#/components/schemas/Cost'
+            kind:
+              type: string
+              enum: [issue, improvement]
             fingerprint:
               type: string
             state:
@@ -3045,6 +3048,17 @@ components:
           type: string
         title:
           type: string
+        finding_kind:
+          type: string
+          enum: [issue, improvement]
+          description: >-
+            D-33b — the CLAIM TYPE of the finding, present on `kind: finding` rows and on no others
+            (`api/projections.ts:queueItems` emits it with every finding row). It carries a different
+            name because this row's own `kind` is already the queue discriminator; the finding's kind
+            would otherwise be shadowed by it. `issue` claims a defect the artifact must answer by
+            quotation; `improvement` is a proposal the Seed never promised, which the Editor weighs on
+            merit and never disputes for resting on an absence. A row raised before the field existed is
+            reported as `issue`, so the desk reads one shape for both eras of row.
         detail:
           type: string
         evidence:
@@ -3387,7 +3401,7 @@ components:
     PhraseGroupRow:
       type: object
       additionalProperties: false
-      required: [id, key, title, description, order, content, revision, updated_by, history, owed_by_findings, writer_busy]
+      required: [id, key, title, description, order, content, revision, updated_by, previous_content, history, owed_by_findings, writer_busy]
       properties:
         id:
           type: string
@@ -3414,6 +3428,12 @@ components:
           type: string
           nullable: true
           description: The run that wrote the current text, or null for a legacy import or an Author edit.
+        previous_content:
+          type: string
+          description: >-
+            The text of the revision immediately before the latest one, verbatim, or '' when the group
+            is at revision 1. It is the ONE archived body on this read, sent so the pane can show the
+            latest revision as a diff against the one it replaced; every older revision stays metadata.
         history:
           type: array
           description: >-
@@ -3470,7 +3490,7 @@ components:
     PhraseFindingRow:
       type: object
       additionalProperties: false
-      required: [id, title, cost, state, seen_count, group_refs, unscoped, targeted, resolved, missing, resolved_all]
+      required: [id, title, cost, kind, state, seen_count, group_refs, unscoped, targeted, resolved, missing, resolved_all]
       properties:
         id:
           type: string
@@ -3479,6 +3499,17 @@ components:
         cost:
           type: string
           enum: [critical, major, minor, taste]
+        kind:
+          type: string
+          enum: [issue, improvement]
+          description: >-
+            D-33b — which of the two claims this row is, so the rail can tell a defect from a proposal
+            without guessing at the title. `issue` claims a break the artifact must answer by quotation;
+            `improvement` proposes a change the Seed never promised, which the Editor weighs on merit
+            (worth a Writer pass? does it contradict the installed text?) and never for resting on an
+            absence. Defaulted on the way out by `api/projections.ts:phraseView`: a row raised before
+            the field existed reads as `issue`, so a client never interprets absence. The rail's layout
+            stays kind-blind — this is data the read carries, not a badge it draws.
         state:
           type: string
           enum: [unconfirmed, confirmed, approved, fixed, disputed, discarded]

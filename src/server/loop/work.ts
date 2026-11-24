@@ -1592,7 +1592,11 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
             1,
             {
                 findingRefs: [finding.id],
-                note: `Verify finding ${finding.id} only. Confirm it when the defect is real, approve it in the same run, and dispute it when it is not — no other finding belongs to this thread.`
+                // T5: the note used to say "confirm it when the defect is real", which told the Editor to
+                // run the defect test on a row that is a PROPOSAL — and an improvement is never "real" in
+                // that sense, so it came back disputed without anyone weighing it. The note now names both
+                // questions; `run/brief.ts:jobStatement`'s `verify_findings` branch carries the full rule.
+                note: `Verify finding ${finding.id} only. Confirm it when the defect is real or the improvement is worth a pass, approve it in the same run, and dispute it when it is not — no other finding belongs to this thread.`
             }
         );
 

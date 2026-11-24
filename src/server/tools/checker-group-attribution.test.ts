@@ -229,6 +229,48 @@ describe('a Summary defect on a group book has to name its groups (R3)', () => {
         ]);
     });
 
+    it('scopes a proposal to its groups exactly as it scopes a defect (D-33b, R3)', async () => {
+        const book = seedBook('groups');
+        const [premise, ending] = ['premise', 'ending'].map((key) => idOf(book.groups, key));
+
+        // The two additive fields are independent and both are enforced on the same call: `group_refs`
+        // routes and closes the repair (R3), `kind` decides which rule the Editor runs on the claim
+        // (D-33b). A proposal on a grouped book pays the group rule exactly as a defect does.
+        const filed = await book.runtime.execute(
+            book.context,
+            'raiseFinding',
+            filing([premise, ending], {
+                kind: 'improvement',
+                criterion_ref: 'C-11',
+                title: 'let the promise arrive in the premise, not the ending',
+                detail: 'summary_0 promise states the return late; the premise already holds the map'
+            })
+        );
+
+        expect(filed.ok).toBe(true);
+        expect(book.store.findings.require('finding_0')).toMatchObject({
+            kind: 'improvement',
+            cost: 'major',
+            group_refs: [premise, ending]
+        });
+
+        // An unscoped proposal is refused by the SAME R3 rule, with the same ids handed back: marking a
+        // finding as a wish does not exempt it from saying which text the wish is about.
+        const unscoped = await book.runtime.execute(
+            book.context,
+            'raiseFinding',
+            filing(undefined, {
+                kind: 'improvement',
+                criterion_ref: 'C-13',
+                title: 'state the debt in the tone group',
+                detail: 'summary_0 tone never names the debt the premise owes'
+            })
+        );
+
+        expect(unscoped.ok).toBe(false);
+        expect(unscoped.refused).toBe('R3');
+    });
+
     it('widens the open row on a repeat sighting instead of filing a second claim (L-11a, R3)', async () => {
         const book = seedBook('groups');
         const [premise, promise] = ['premise', 'promise'].map((key) => idOf(book.groups, key));

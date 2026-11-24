@@ -98,6 +98,7 @@ describe('the grouped Summary Phrase on the wire', () => {
                     content: '',
                     revision: 0,
                     updated_by: null,
+                    previous_content: '',
                     history: [],
                     owed_by_findings: [],
                     writer_busy: false

@@ -709,6 +709,28 @@
     overflow-wrap: anywhere;
 }
 
+/* R2 / U3 — the latest revision against the one it replaced. The diff is prose, not a patch viewer: the
+   removed words of one change run are struck together in the palette's urgent red and the added words are
+   green together, while unchanged words stay unmarked. `del`/`ins` carry the meaning for a screen reader as
+   well, so the colour is reinforcement, not the message. */
+.sv-group-diff del {
+    background: var(--urgent-bg);
+    color: var(--urgent);
+    text-decoration: line-through;
+}
+
+.sv-group-diff ins {
+    background: var(--finished-bg);
+    color: var(--finished);
+    text-decoration: none;
+}
+
+.sv-group-diff-label {
+    color: var(--dim);
+    font-size: 0.68rem;
+    font-weight: 400;
+}
+
 /* The Reviewer's open findings, scoped to this group. Cross-group findings are the interesting ones,
     so the groups a finding spans are chips beside its title — the server's own titles, never an id. */
 .sv-group-findings {

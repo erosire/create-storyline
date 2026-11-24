@@ -173,6 +173,7 @@ export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView
         content: `${definition.title} — the text the Writer installed (group ${index + 1}).`,
         revision: 1,
         updated_by: 'writer',
+        previous_content: '',
         history: [
             {
                 id: `rev-${definition.key}-1`,

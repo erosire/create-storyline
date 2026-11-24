@@ -765,6 +765,11 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
                 story_title: 'First Book',
                 id: 'finding_0',
                 title: 'the bell is unpaid',
+                // D-33b: the claim type under a name that cannot collide — this row's `kind` is the
+                // queue discriminator ('finding'), so the finding's own kind is `finding_kind`. The
+                // seeded row carries no `kind` (it stands for a row written before the field existed),
+                // and the projection defaults it to `issue` so the desk reads one shape (T5).
+                finding_kind: 'issue',
                 evidence: 'ch2 sec_1',
                 cost: 'major'
             },
@@ -793,6 +798,46 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
                 id: 'task_1',
                 title: 'no tool writes a plotline',
                 evidence: 'C-1'
+            }
+        ]);
+    });
+
+    it('carries a proposal under its own name, where `kind` is already the row type (D-33b)', async () => {
+        const { app, store } = makeApp();
+
+        await call(app, 'POST', '/stories', { title: 'First Book', idea: 'A map.', chapter_count: 1 });
+        // The dial narrowed to `critical` so a `major` row is Author work rather than auto-approved (D-35).
+        await call(app, 'PATCH', '/stories/story_0', { auto_approve: ['critical'] });
+        seedFinding(store, 'story_0', {
+            state: 'confirmed',
+            cost: 'major',
+            // D-33b: a PROPOSAL on the desk. `critical` is refused at the tool for this kind, so `major`
+            // is also the honest top of a proposal's ladder.
+            kind: 'improvement',
+            title: 'let the keeper lie first',
+            detail: 'chapter_1 sec_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
+            evidence: 'ch1 sec_1: "he told them the truth"',
+            fingerprint: 'C-3|ch1|improvement'
+        });
+
+        const reply = await call(app, 'GET', '/queue');
+        const items = (reply.body as Array<Record<string, unknown>>).map(
+            ({ created_at: _created_at, ...rest }) => rest
+        );
+
+        // The row's `kind` is the queue discriminator, so the finding's kind travels as `finding_kind` —
+        // and the desk has nothing else on it, which is what makes this a pin about the field alone.
+        expect(items).toEqual([
+            {
+                kind: 'finding',
+                story_id: 'story_0',
+                story_title: 'First Book',
+                id: 'finding_0',
+                title: 'let the keeper lie first',
+                finding_kind: 'improvement',
+                detail: 'chapter_1 sec_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
+                evidence: 'ch1 sec_1: "he told them the truth"',
+                cost: 'major'
             }
         ]);
     });

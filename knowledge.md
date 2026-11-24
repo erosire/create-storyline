@@ -266,7 +266,8 @@ plus the count of blocking (critical/major, open) findings — the same read the
 sign-off gate use, so a badge can never disagree with the pane it points at. `Revision 1 … N` rows
 are gone from this rail: a grouped Story's rows are groups, not drafts, and a group's revision
 number lives in its own pane. Archived history is not a rail row either, because the projection sends
-metadata for superseded rows and no prose.
+metadata for superseded rows and only the revision immediately before the latest (the body the group
+pane diffs the current text against).
 
 Inside the Summary pane: `SummaryOverviewPane` (the composed Overview, one row per group with its
 revision number and its archived COUNT — never the archived text, and `0 archived` is printed only
@@ -433,8 +434,8 @@ yarn vite-node Temp/create-storyline-orchestrator/<task>/<probe>.ts   # never `n
   group lines, so anything that reads `store.revisions` for `unit_ref === <summary id>` sees the
   LEGACY audit only. `GET /stories/:id` still projects `sampling` for that reason; the grouped desk
   reads `GET /stories/:id/phrases` instead, and the grouped rail shows each group's latest text plus
-  a count of its archived revisions — the archived BODIES are not on the wire (they stay in the book
-  for the audit and for a later reading surface).
+  a count of its archived revisions — the archived bodies are not on the wire, except the one the
+  latest revision replaced, which the group pane renders as its latest-vs-previous diff.
 - **The group path never feeds the loop's sampling vocabulary, and since the 2026-11-24 hardening the
   drain probe reads the GROUP pipeline.** `loop/status.ts:phase1Unmet` branches: a group book answers
   from `phrase/exclusion.ts:groupPipelineOwed` (live group runs, groups owing a draft or fix pass, the
@@ -1320,9 +1321,11 @@ remains reportable is unchanged: a contradiction of the Seed, of critical Knowle
 artifact's own promise; a real contradiction inside the artifact; and a commitment the Seed states
 EXPLICITLY that the draft does not carry (`criteria.ts:C-14`'s label is that test, and
 `criteria/engine.ts` still grades C-14 against the raw Seed). Proof is a quotation, so a finding that
-quotes only an absence is inadmissible — the Editor `dispute`s it (`verify_findings`,
-`confirm_finding`) instead of confirming that something is missing. The rule is stated in FOUR places
-on purpose, two of them engine-owned and unclipped: `run/brief.ts:READER_REVIEW_MODE` and that file's
+quotes only an absence is inadmissible **as an `issue`** — the Editor `dispute`s it (`verify_findings`,
+`confirm_finding`) instead of confirming that something is missing, and the Reader's honest alternative
+is a marked `improvement` (D-33b, next paragraph) rather than a defect claim. The rule is stated in FOUR
+places on purpose, two of them engine-owned and unclipped: `run/brief.ts:READER_REVIEW_MODE` and that
+file's
 `check_unit` reader job line (the four angle templates are Author-editable copies, §4.12),
 `run/brief.ts:jobStatement` for `write_unit`/`verify_findings`/`confirm_finding`/`structure_seed`,
 `run/phase1-prompt.ts:SCREEN_INSTRUCTION` plus `SEED_CONTRACT_NOTE` on the tool-less paths, and the
@@ -1332,6 +1335,43 @@ leaves silent renders as `OPEN_SCALAR_MARKER`'s explicit "the Seed states nothin
 than a blank, because a `stakes:` line with nothing after it reads as an unpaid promise. Phases ② and
 ③ keep every setup-and-payoff check (C-4, C-5, C-6): the four angle prompts scope the stand-down with
 `When the artifact under review is a SUMMARY (phase ①)` and say the later phases keep it.
+
+**An improvement is a proposal, not a defect, and `kind` tells the Editor which rule to run (D-33b).**
+The rule above is a correct answer to "is this a defect" and a wrong answer to "is this worth doing":
+a Reader that compared the Overview to the Seed, found the Seed silent about something, and reported the
+silence earned a `dispute` it deserved — while the same pass had no honest way to say "here is a change
+that would make the book better", because the review pass bans Ideas (D-26, D-30). §4.10 therefore
+carries `kind`: `issue` (the default, and the reading of every row written before the field existed) or
+`improvement`, normalised on write by `tools/checker.ts:raiseFinding` and refused at `cost: 'critical'`
+— `critical` is the ladder's contradiction word and it is on the auto-approve dial by default, so a wish
+wearing `critical` buys a Writer pass and walks past the Author's gate. The Reader files it with a title
+that PROPOSES, `evidence` quoting the passage the change would improve, and `detail` saying what to
+change and why the pass is worth it.
+
+The Editor's `verify_findings` thread then answers a DIFFERENT question for that row, and the row itself
+says so: the brief's "Findings in front of you" bracket prints `, improvement` (only for those rows, so
+a plain issue renders byte-identically), and the job line scopes the absence rule to issues while
+sending improvements to a merit check — does the change strengthen the story the Seed promises, is it
+worth a pass, does it contradict the installed text — and forbids disputing one merely because the Seed
+never promised it (`run/brief.ts:jobStatement`, the `editor-general` template's FINDINGS paragraph,
+`tools/editor.ts:verifyFinding`'s description, and the sweep note in `loop/work.ts`). The same
+distinction reaches the Writer, because delivering a proposal is not repairing a break: an approved
+improvement carries `Kind: improvement` in the task detail and `kind: improvement (a proposal, not a
+defect)` in the compiled fix prompt (`tools/editor.ts:approveFinding`,
+`run/phase1-prompt.ts:renderFixTask`).
+
+Two rules make the field cheap to add to a running system. **Deduping:** the kind is a fingerprint
+component, and `issue` deliberately keeps the pre-field three-part form
+(`tools/utilities.ts:findingFingerprint`), so a legacy row and a new `issue` report still bump
+`seen_count` on one row while an improvement beside it stays a separate claim with its own verdict.
+**Plumbing:** `kind` rides every projection that enumerates fields instead of spreading the record —
+`tools/plumbing.ts:readFindings`, `readChapter.open_findings`, `tools/editor.ts:verifyFinding`'s
+original/result payloads, `api/projections.ts:phraseView`'s finding rows, the knowledge surface
+(`knowledge/story-knowledge.ts:findingEntries`), and `api/projections.ts:queueItems`, where it is named
+`finding_kind` because the queue row's own `kind` is its discriminator. The dashboard draws no badge and
+the Digest counts costs kind-blind: this field decides which rule a verifier runs, not what the loop
+treats as blocking work. The tool-less screening and group-review paths stay as they were — an
+`IssueList`/`GroupReview` answer has no findings to mark, so no kind to carry (R6's closed schema).
 
 **A Summary `minor` continues only when the dial says so — and every path reads that one rule.** In
 phase ① the blocking bar is `critical`/`major`, PLUS `minor` exactly when `auto_approve` includes

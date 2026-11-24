@@ -79,6 +79,7 @@ const groupShape = (reply: Reply) =>
         group.order,
         group.revision,
         group.content,
+        group.previous_content,
         group.updated_by,
         group.history,
         group.owed_by_findings
@@ -147,7 +148,7 @@ describe('POST /stories: the Summary switch is a setting on the Story (R1, R6)',
 
         expect(Object.keys(view)).toEqual(['story_id', 'mode', 'phrase_id', 'revision', 'overview', 'groups', 'findings', 'tasks', 'review']);
         // The group rows carry minted uuid addresses (`persist.ts` explains why a group id is an
-        // address), so the rows are normalised to the eight columns the rail reads — each one pinned —
+        // address), so the rows are normalised to the nine columns the rail reads — each one pinned —
         // and every other key of the projection is asserted as the whole object it is.
         expect({ ...view, groups: groupShape(reply) }).toEqual({
             story_id: 'story_0',
@@ -156,11 +157,11 @@ describe('POST /stories: the Summary switch is a setting on the Story (R1, R6)',
             revision: 0,
             overview: '',
             groups: [
-                ['premise', 'Premise', 1, 0, '', null, [], []],
-                ['promise', 'Promise', 2, 0, '', null, [], []],
-                ['theme', 'Theme', 3, 0, '', null, [], []],
-                ['tone', 'Tone', 4, 0, '', null, [], []],
-                ['ending', 'Ending', 5, 0, '', null, [], []]
+                ['premise', 'Premise', 1, 0, '', '', null, [], []],
+                ['promise', 'Promise', 2, 0, '', '', null, [], []],
+                ['theme', 'Theme', 3, 0, '', '', null, [], []],
+                ['tone', 'Tone', 4, 0, '', '', null, [], []],
+                ['ending', 'Ending', 5, 0, '', '', null, [], []]
             ],
             findings: [],
             tasks: [],
@@ -451,6 +452,10 @@ describe('POST /stories/:id/phrases/groups/:groupId/revise: the Author rewrites 
         // And the rail sees the history: the current text, the superseded one, and the composed Overview.
         const view = groupsOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
 
+        expect(view[0].previous_content).toBe(
+            'A return to a mapped valley that no longer matches the map.'
+        );
+
         expect(view[0].history).toEqual([
             {
                 id: 'group_revision_5',
@@ -475,6 +480,41 @@ describe('POST /stories/:id/phrases/groups/:groupId/revise: the Author rewrites 
                 chars: 59
             }
         ]);
+    });
+
+    it('sends only the immediately previous revision as the diff body, never the older history', async () => {
+        const world = await seedGroupStory();
+
+        writeLegacyProse(world.store);
+        await call(world.app, 'POST', '/stories/story_0/phrases/import');
+
+        const premiseId = world.store.phraseGroups.list().find((group) => group.key === 'premise')!.id;
+        const firstRevision = 'A return, on foot, into a valley the map still shows as dry.';
+        const secondRevision = 'A return, on foot, into a valley the map has not finished drawing.';
+
+        await call(world.app, 'POST', `/stories/story_0/phrases/groups/${premiseId}/revise`, {
+            content: firstRevision
+        });
+        await call(world.app, 'POST', `/stories/story_0/phrases/groups/${premiseId}/revise`, {
+            content: secondRevision
+        });
+
+        const premise = groupsOf(await call(world.app, 'GET', '/stories/story_0/phrases')).find(
+            (group) => group.key === 'premise'
+        )!;
+
+        expect(premise.content).toBe(secondRevision);
+        // U3's one comparison: the text the latest revision replaced. The legacy text below it (revision 1)
+        // is history metadata only, so the diff can never turn into a cumulative comparison.
+        expect(premise.previous_content).toBe(firstRevision);
+        expect(premise.history).toEqual([
+            expect.objectContaining({ number: 3, state: 'latest' }),
+            expect.objectContaining({ number: 2, state: 'archived' }),
+            expect.objectContaining({ number: 1, state: 'archived' })
+        ]);
+        expect(JSON.stringify(premise)).not.toContain(
+            'A return to a mapped valley that no longer matches the map.'
+        );
     });
 
     it('refuses an empty text, an unknown group, and a book that has no groups yet', async () => {
@@ -555,6 +595,10 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
                 id: 'finding_0',
                 title: 'the Ending does not keep the Promise',
                 cost: 'critical',
+                // D-33b (T5): the claim type is part of the rail's row, defaulted on the way out — this
+                // finding was written with no `kind`, and the projection reads that as `issue`. No badge
+                // is drawn from it; the field is data the read carries.
+                kind: 'issue',
                 state: 'approved',
                 seen_count: 1,
                 group_refs: [groupIds[4], groupIds[1]],
@@ -583,6 +627,8 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
                 id: 'finding_0',
                 title: 'the Ending does not keep the Promise',
                 cost: 'critical',
+                // The same defaulting read as the pin above (D-33b): the row is unchanged by the rewrite.
+                kind: 'issue',
                 state: 'approved',
                 seen_count: 1,
                 group_refs: [groupIds[4], groupIds[1]],
@@ -646,6 +692,57 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
             locked: true,
             fields: ['premise', 'promise', 'theme', 'tone', 'ending']
         });
+    });
+
+    it('says which kind of claim a rail row is, so a proposal reads as one (D-33b)', async () => {
+        const world = await seedGroupStory();
+
+        writeLegacyProse(world.store);
+        await call(world.app, 'POST', '/stories/story_0/phrases/import');
+
+        // A PROPOSAL, filed the way §8.4 files one: `kind` on the row, the passage it would improve as
+        // the evidence, and no `group_refs` — the whole-Overview reading. This pins the NON-default
+        // direction: the two big pins above prove a kind-less row reads as `issue`, and this one proves
+        // a marked row survives the projection as `improvement` instead of collapsing into the default.
+        world.store.findings.create(
+            {
+                story_id: 'story_0',
+                target_ref: 'summary_0',
+                criterion_ref: 'C-14',
+                title: 'name the map in the Premise, not only in the Ending',
+                detail: 'The Premise withholds the map; naming it there gives the reader the reconciliation to watch for.',
+                evidence: 'the Premise paragraph never mentions the map',
+                cost: 'major' as Cost,
+                kind: 'improvement',
+                fingerprint: 'C-14|summary_0|improvement',
+                state: 'approved',
+                seen_count: 1
+            },
+            { run_ref: null, author: true, why: 'seed: a proposal on the rail (D-33b)' }
+        );
+
+        const reply = await call(world.app, 'GET', '/stories/story_0/phrases');
+        const groupIds = world.store.phraseGroups.list().map((group) => group.id);
+
+        expect(viewOf(reply).findings).toEqual([
+            {
+                id: 'finding_0',
+                title: 'name the map in the Premise, not only in the Ending',
+                cost: 'major',
+                kind: 'improvement',
+                state: 'approved',
+                seen_count: 1,
+                // Unscoped on purpose: an improvement about the Overview as a whole names no group, and
+                // R3 reads that as "every group owes it" (the whole-Overview finding), so all five ids
+                // are targeted and none is resolved. Only the kind distinguishes this row from a defect.
+                group_refs: [],
+                unscoped: true,
+                targeted: groupIds,
+                resolved: [],
+                missing: groupIds,
+                resolved_all: false
+            }
+        ]);
     });
 });
 

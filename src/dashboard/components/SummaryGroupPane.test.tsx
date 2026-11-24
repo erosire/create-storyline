@@ -64,18 +64,34 @@ function renderGroup(
 }
 
 describe('SummaryGroupPane — the group stated by name, purpose, text and revision (U3)', () => {
-    it('shows Premise by title, its current content, and the revision number the rail stopped printing', () => {
+    it('shows Premise by title, its current text diffed against the revision it replaced, and its revision number', () => {
         const { container } = renderGroup('grp-premise');
 
         expect(screen.getByTestId('group-title').textContent).toBe('Premise');
         expect(screen.getByTestId('group-revision').textContent).toBe('Revision 3');
-        expect(screen.getByTestId('group-content').textContent).toBe(
-            'A keeper of a lighthouse begins lying to the sea, and the sea believes her.'
-        );
+        // R2/U3 — the current text is on screen against the text immediately before it. Only the words that
+        // moved are marked: the changed run is one struck block and one added block, and the rest of the
+        // sentence stays plain.
+        const prose = screen.getByTestId('group-content');
+
+        expect(prose.querySelector('del')?.textContent).toBe('starts ');
+        expect(prose.querySelector('ins')?.textContent).toBe('begins ');
+        expect(screen.getByTestId('group-diff-from').textContent).toBe(' · diff against Revision 2');
         // The status line is the CURRENT revision's own row: its number and its size, from the `latest`
         // history row the projection sends (R2).
         expect(screen.getByTestId('group-status').textContent).toBe('Revision 3 · 74 chars');
         expect(container.textContent).toContain('last written by writer');
+    });
+
+    it('prints a first revision as plain prose, because there is no previous revision to diff against', () => {
+        renderGroup('grp-theme');
+
+        const prose = screen.getByTestId('group-content');
+
+        expect(prose.textContent).toBe('What the book is about: the price of a story told to keep the dark out.');
+        expect(prose.querySelector('del')).toBeNull();
+        expect(prose.querySelector('ins')).toBeNull();
+        expect(screen.queryByTestId('group-diff-from')).toBeNull();
     });
 
     it('prints the catalog’s own purpose line for every group, so five panes are five sections of a book', () => {
@@ -125,16 +141,20 @@ describe('SummaryGroupPane — the group stated by name, purpose, text and revis
         expect(prose.getAttribute('aria-hidden')).toBeNull();
     });
 
-    it('counts the archived revisions and shows none of their prose, because the wire sends none (U3)', () => {        const { container } = renderGroup('grp-premise');
+    it('counts the archived revisions and shows only the immediately previous body, as the diff (U3)', () => {
+        const { container } = renderGroup('grp-premise');
 
-        // Premise's history is [latest 74, archived 61, archived 40] (R2: metadata and `chars`, never text).
+        // Premise's history is [latest 74, archived 75, archived 40] (R2: metadata and `chars`; only the
+        // revision directly before the latest travels as prose, for the diff).
         expect(screen.getByTestId('group-archived').textContent).toBe('2 archived');
         const text = String(container.textContent);
 
-        for (const proseOfAnArchivedRow of ['61 chars', '40 chars']) {
+        for (const proseOfAnArchivedRow of ['75 chars', '40 chars']) {
             expect(text.includes(proseOfAnArchivedRow), proseOfAnArchivedRow).toBe(false);
         }
-        // …and no control claims to open one.
+        // The one archived body on the wire is the revision the latest replaced — never the older one.
+        expect(screen.getByTestId('group-content').querySelectorAll('del')).toHaveLength(1);
+        // …and no control claims to open any archived revision.
         expect(screen.queryAllByRole('button', { name: /archived|history|previous/i })).toHaveLength(0);
     });
 

@@ -385,3 +385,118 @@ describe('StoryKnowledge — the research mirror (phase ①, §3.2/§10)', () =>
         });
     });
 });
+
+describe('StoryKnowledge — the finding card names its claim type (T5, D-33b)', () => {
+    it('prints the Kind line on a proposal only, and leaves a defect card as it was', () => {
+        const store = Store.empty();
+        const story = seedStory(store);
+
+        // A PROPOSAL. The directory is what a crew reads before it decides anything, and a card that
+        // does not say "proposal" gets weighed by the defect's admissibility rule — the exact mistake
+        // the `improvement` kind exists to stop.
+        store.findings.create(
+            {
+                story_id: story.id,
+                target_ref: 'summary_0',
+                criterion_ref: 'C-14',
+                title: 'let the keeper lie first',
+                detail: 'opening on the lie gives chapter 2 its tension',
+                evidence: 'section_1: "he told them the truth"',
+                cost: 'major',
+                kind: 'improvement',
+                fingerprint: 'C-14|summary_0|improvement',
+                state: 'approved',
+                seen_count: 2
+            },
+            attribution
+        );
+        // The default NAMED on the row, and a row written BEFORE the field existed. Both are `issue`,
+        // and neither may gain a line: the card byte-matches what a pre-T5 sync wrote, so a re-sync
+        // over legacy rows changes nothing.
+        store.findings.create(
+            {
+                story_id: story.id,
+                target_ref: 'summary_0',
+                criterion_ref: 'C-14',
+                title: 'the ending does not pay the promise',
+                detail: 'nothing in the ending answers the promise',
+                evidence: 'ending: she floods it',
+                cost: 'major',
+                kind: 'issue',
+                fingerprint: 'C-14|summary_0|issue',
+                state: 'confirmed',
+                seen_count: 1
+            },
+            attribution
+        );
+        store.findings.create(
+            {
+                story_id: story.id,
+                target_ref: 'chapter_0',
+                criterion_ref: 'C-9',
+                title: 'the 1911 map is never paid off',
+                detail: 'chapter_1 sec_1 mentions the map; nothing answers it',
+                evidence: 'chapter_1 sec_1',
+                cost: 'minor',
+                fingerprint: 'C-9|chapter_0',
+                state: 'unconfirmed',
+                seen_count: 1
+            },
+            attribution
+        );
+
+        const findings = StoryKnowledge.memory(store)
+            .tree(story.id)
+            ?.sections.find((section) => section.key === 'findings');
+
+        expect(findings?.title).toBe('Findings');
+        expect(findings?.entries).toEqual([
+            {
+                key: 'finding:finding_0',
+                title: 'major · let the keeper lie first',
+                // `Kind` sits right under `State` and only here: it is the claim type, not a status.
+                body:
+                    'State: approved\n' +
+                    'Kind: improvement\n' +
+                    'Target: summary_0\n' +
+                    'Criterion: C-14\n' +
+                    'Detail: opening on the lie gives chapter 2 its tension\n' +
+                    'Evidence: section_1: "he told them the truth"\n' +
+                    'Seen: 2',
+                tags: ['story:story_0', 'section:findings', 'entry:finding:finding_0']
+            },
+            {
+                key: 'finding:finding_1',
+                title: 'major · the ending does not pay the promise',
+                body:
+                    'State: confirmed\n' +
+                    'Target: summary_0\n' +
+                    'Criterion: C-14\n' +
+                    'Detail: nothing in the ending answers the promise\n' +
+                    'Evidence: ending: she floods it\n' +
+                    'Seen: 1',
+                tags: ['story:story_0', 'section:findings', 'entry:finding:finding_1']
+            },
+            {
+                // The legacy row: no `kind` stored, and the card reads exactly as it did before T5.
+                key: 'finding:finding_2',
+                title: 'minor · the 1911 map is never paid off',
+                body:
+                    'State: unconfirmed\n' +
+                    'Target: chapter_0\n' +
+                    'Criterion: C-9\n' +
+                    'Detail: chapter_1 sec_1 mentions the map; nothing answers it\n' +
+                    'Evidence: chapter_1 sec_1\n' +
+                    'Seen: 1',
+                tags: ['story:story_0', 'section:findings', 'entry:finding:finding_2']
+            }
+        ]);
+        // Marker-only rendering, asserted directly so a future "print the default too" change fails
+        // here rather than in a client that started depending on the extra line.
+        const bodies = (findings?.entries ?? []).map((entry) => entry.body);
+
+        expect(bodies[0]).toContain('Kind: improvement');
+        expect(bodies[1]).not.toContain('Kind');
+        expect(bodies[2]).not.toContain('Kind');
+    });
+});

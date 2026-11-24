@@ -15,7 +15,7 @@ import type { ToolSchema } from '../llm/client';
  * hint string depends on it, so a route change is a string edit here and nowhere else.
  */
 const DASHBOARD_URL_BASE = '/story/';
-import type { Chapter, ChapterSection, CollectionName, Digest, Story } from '../../shared/types';
+import type { Chapter, ChapterSection, CollectionName, Digest, FindingKind, Story } from '../../shared/types';
 import type { Attribution, CAS } from '../store/store';
 import type { ToolExecutionContext, ToolResult } from './types';
 
@@ -306,9 +306,30 @@ export function normalizeForFingerprint(text: string): string {
         .trim();
 }
 
-/** The finding fingerprint (D-16): same criterion, same target, same claim → one finding. */
-export function findingFingerprint(targetRef: string, criterionRef: string, title: string): string {
-    return computeFingerprint(`${targetRef}|${criterionRef}|${normalizeForFingerprint(title)}`);
+/**
+ * The finding fingerprint (D-16): same criterion, same target, same claim → one finding.
+ *
+ * T5 adds the KIND as a component — an `improvement` and an `issue` about the same passage with the
+ * same title are two different claims (one says the text is broken, one proposes a better text), and
+ * the Editor evaluates them by opposite rules, so they must not collapse into one row.
+ *
+ * `issue` deliberately keeps the PRE-T5 three-component form. That is how mandatory back-compat works
+ * here without re-hashing anything: a row stored before the field existed carries a three-component
+ * hash, and a new raise that names no `kind` (or names `issue`, which normalises to it) produces the
+ * identical string, so `artifacts.ts:duplicateFinding` still matches it and bumps `seen_count`
+ * (L-16a's "no progress" detection survives the additive field).
+ */
+export function findingFingerprint(
+    targetRef: string,
+    criterionRef: string,
+    title: string,
+    kind: FindingKind = 'issue'
+): string {
+    const claim = normalizeForFingerprint(title);
+
+    return kind === 'improvement'
+        ? computeFingerprint(`${targetRef}|${criterionRef}|improvement|${claim}`)
+        : computeFingerprint(`${targetRef}|${criterionRef}|${claim}`);
 }
 
 /** The Idea fingerprint (D-32): the body alone, so a re-phrase of a decided Idea still matches. */

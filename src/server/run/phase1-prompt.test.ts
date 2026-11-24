@@ -11,7 +11,8 @@ import {
     compileGroupReviewPrompt,
     compileSamplePrompt,
     compileScreenPrompt,
-    hashPhase1Prompt
+    hashPhase1Prompt,
+    renderFixTask
 } from './phase1-prompt';
 import { AUTHOR_ATTR, seedFinding, seedStory, seedTask, seedTemplate } from './mock';
 import { ensurePhraseCatalog } from '../phrase/catalog';
@@ -468,6 +469,108 @@ describe('phase1-prompt — the Writer sampler (§5)', () => {
             '(no role prompt from "writer-summary-sampler" was found in the catalogue, so this run is instructed by its output contract alone — treat the absence as a template defect to report, D-17a)\n\n' +
                 'Answer with ONE JSON object matching the `SummarySample` schema. You have no tools and exactly one turn. No prose outside the JSON.'
         );
+    });
+});
+
+describe('phase1-prompt — a fix task says whether it repairs or proposes (T5)', () => {
+    /**
+     * One fix task over three findings that differ ONLY in the claim type: a marked `improvement`, a
+     * row from before the field existed (no `kind` at all), and a row explicitly marked `issue`. The
+     * header line prints the TASK's `finding_ref` (`finding_0`) in all three cases, so the compiled
+     * blocks can differ by one thing only — the `kind:` line — which is what makes these exact pins.
+     */
+    function seedKindPair() {
+        const store = Store.empty();
+        const story = seedStory(store, { phase: 'summary', idea: 'A cartographer returns to a mapped valley.' });
+
+        const proposal = seedFinding(store, story.id, {
+            target_ref: 'summary_1',
+            criterion_ref: 'C-14',
+            title: 'let the keeper lie first',
+            detail: 'opening on the lie gives chapter 2 its tension',
+            evidence: 'sec_1: "he told them the truth"',
+            cost: 'major',
+            kind: 'improvement',
+            state: 'approved'
+        });
+
+        const task = seedTask(store, story.id, {
+            kind: 'fix',
+            title: 'open on the lie',
+            detail: 'move the lie into the first paragraph',
+            priority: 30,
+            criterion_ref: 'C-14',
+            finding_ref: proposal.id
+        });
+
+        // The same fix task over the two defect readings. `legacy` stands for a row raised before
+        // `kind` shipped; `marked` for one raised with the default named.
+        const legacy = seedFinding(store, story.id, {
+            target_ref: 'summary_1',
+            criterion_ref: 'C-14',
+            title: 'let the keeper lie first',
+            detail: 'opening on the lie gives chapter 2 its tension',
+            evidence: 'sec_1: "he told them the truth"',
+            cost: 'major',
+            state: 'approved'
+        });
+        const marked = seedFinding(store, story.id, {
+            target_ref: 'summary_1',
+            criterion_ref: 'C-14',
+            title: 'let the keeper lie first',
+            detail: 'opening on the lie gives chapter 2 its tension',
+            evidence: 'sec_1: "he told them the truth"',
+            cost: 'major',
+            kind: 'issue',
+            state: 'approved'
+        });
+
+        return { task, proposal, legacy, marked };
+    }
+
+    it('prints the kind line on a proposal, between the work and the defect (T5)', () => {
+        const { task, proposal } = seedKindPair();
+
+        // The line sits AFTER `work:` and BEFORE `defect:` because the block's order is fixed (§5's
+        // cache rule), and it has to be in front of the defect wording: that wording was copied from
+        // the Reader's complaint, and a sample that reads "nothing pays the promise" re-drafts the
+        // paragraph instead of writing the better one that was proposed.
+        expect(renderFixTask(task, proposal)).toBe(
+            '[task_0 · priority 30 · finding_0] open on the lie\n' +
+                '  work: move the lie into the first paragraph\n' +
+                '  kind: improvement (a proposal, not a defect)\n' +
+                '  defect: opening on the lie gives chapter 2 its tension\n' +
+                '  evidence: sec_1: "he told them the truth"\n' +
+                '  criterion: C-14'
+        );
+    });
+
+    it('renders a defect byte-for-byte as it did before the field, marker only on a proposal (T5)', () => {
+        const { task, legacy, marked } = seedKindPair();
+        // The header line prints the TASK's `finding_ref` (`finding_0`, the proposal this task was
+        // opened for), not the finding passed in — which is exactly why these two pins are the honest
+        // marker-only check: the only thing that may differ between a proposal card and a defect card
+        // is the `kind:` line.
+        const defectBlock =
+            '[task_0 · priority 30 · finding_0] open on the lie\n' +
+            '  work: move the lie into the first paragraph\n' +
+            '  defect: opening on the lie gives chapter 2 its tension\n' +
+            '  evidence: sec_1: "he told them the truth"\n' +
+            '  criterion: C-14';
+
+        // A row that predates `kind` compiles EXACTLY as it did pre-T5 — no marker, no blank, no
+        // re-labelled line. That is the back-compat half: a re-compile of a stored prompt over legacy
+        // rows must keep its `prompt_hash`.
+        expect(renderFixTask(task, legacy)).toBe(defectBlock);
+        // The explicit default reads the same as the absent one, which is what makes `kind: 'issue'`
+        // a no-op rather than a second rendering path.
+        const explicitIssue = renderFixTask(task, marked);
+
+        expect(explicitIssue).toBe(defectBlock);
+        expect(explicitIssue).toBe(renderFixTask(task, legacy));
+        // Marker-only rendering: nothing about the kind is printed unless the row IS a proposal.
+        expect(renderFixTask(task, legacy)).not.toContain('kind');
+        expect(explicitIssue).not.toContain('kind');
     });
 });
 

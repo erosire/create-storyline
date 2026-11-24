@@ -17,6 +17,11 @@ import type { ToolSchema } from '../llm/client';
 // gate agree on what counts as a waiver (T10/F1).
 import { researchGate, researchWaived } from '../loop/records';
 import { createToolRuntime, type RunToolContext, type ToolResult, type ToolRuntime } from './index';
+// D-33b: the fingerprint pair the legacy back-compat pin needs — the pre-`kind` three-part form built
+// from the same exported primitives, so the test states the OLD value instead of trusting the new
+// helper to agree with itself.
+import { fingerprintFinding } from './artifacts';
+import { computeFingerprint, normalizeForFingerprint } from './utilities';
 import type { RunSession } from './types';
 
 /** The exact section shape §4.4 stores; `content` is derived, never stored (D-7). */
@@ -1204,6 +1209,8 @@ describe('the W2 call pipeline', () => {
             detail: '',
             evidence: 'chapter_0 section_2: "he already knew"',
             cost: 'major',
+            // D-33b: the claim type, defaulted on the read — this raise named no `kind`.
+            kind: 'issue',
             state: 'unconfirmed',
             confirmed_by: '',
             approved_by: '',
@@ -2198,6 +2205,255 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         expect(beforeSelection.ok).toBe(true);
         expect(fresh.store.findings.list().map((finding) => `${finding.id}:${finding.target_ref}`)).toEqual([
             'finding_0:summary_0'
+        ]);
+    });
+});
+
+// ── D-33b / T5: the two finding kinds, and the fingerprint that separates them ────────────────
+//
+// WHY THIS BLOCK EXISTS: the Author's loop was spending rounds on disputes. A Reader compared the
+// text to the Seed, found the Seed silent about something, filed it, and the Editor's admissibility
+// rule (D-33) disputed it — correctly, because silence is not a defect — while the same pass had no
+// honest way to say "this change would make the book better", since a review pass bans Ideas (D-26,
+// D-30). §4.10 now carries `kind`, and three things have to stay true:
+//
+//   1. an `improvement` is ACCEPTED and travels (tool payload → row → every read), because the marker
+//      is the only thing that tells the Editor which of the two questions to answer;
+//   2. `issue` remains the default in both directions — a call that names no `kind` stores one, and a
+//      row written before the field existed still reads as one;
+//   3. D-16's dedupe is UNBROKEN by the new component. `issue` keeps the pre-field three-part hash, so
+//      a legacy row and a new `issue` report still merge, while an improvement with the same wording
+//      stays its own row on purpose (different claim, different Editor rule).
+//
+// The exact-value discipline holds: the refusal sentence, the stored field, the row ids and the
+// fingerprint equality are all pinned, because each is a contract another module reads.
+describe('the two finding kinds and the fingerprint that separates them (D-33b, D-16)', () => {
+    let store: Store;
+    let story: Story;
+    let chapter: Chapter;
+
+    beforeEach(() => {
+        const world = seedWorld();
+        store = world.store;
+        story = world.story;
+        chapter = world.chapter;
+    });
+
+    /** One `raiseFinding` call as one role kind, built the way the run layer builds a context. */
+    async function call(roleKind: string, args: Record<string, unknown>): Promise<ToolResult> {
+        const runtime = createToolRuntime(store);
+        return runtime.execute(runtime.createContext(sessionFor(story.id, roleKind)), 'raiseFinding', args);
+    }
+
+    /** The proposal the fix is about: `detail` is present so D-30 is never what these tests read. */
+    const proposal = (extra: Record<string, unknown> = {}) => ({
+        target_ref: chapter.id,
+        criterion_ref: 'C-3',
+        title: 'let the keeper lie first',
+        detail: 'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
+        evidence: 'chapter_0 section_1: "he told them the truth"',
+        cost: 'major',
+        kind: 'improvement',
+        why: 'It costs one line and pays the middle of the book.',
+        ...extra
+    });
+
+    /** The refusal prefix `tools/index.ts` adds before the sentence the crew reads. */
+    const refusal = (rule: string, message: string) => `Rule: ${rule} — ${message}`;
+
+    /**
+     * The fingerprint EXACTLY as §4.10 computed it before `kind` was a component: the three-part form,
+     * written out here rather than imported, so the test pins the legacy value and not a helper that
+     * could quietly move with the implementation.
+     */
+    const legacyFingerprint = (title: string) =>
+        computeFingerprint(`${chapter.id}|C-3|${normalizeForFingerprint(title)}`);
+
+    it('accepts an improvement, stores the kind on the row, and says the Editor will weigh it (D-33b)', async () => {
+        const result = await call('reader', proposal());
+
+        expect(result.ok).toBe(true);
+        expect(result.data).toMatchObject({
+            id: 'finding_0',
+            kind: 'improvement',
+            cost: 'major',
+            state: 'unconfirmed',
+            seen_count: 1
+        });
+        // The ROW carries it, not only the reply: the Editor's verify thread, the queue, and the Writer's
+        // fix prompt all read the record.
+        expect(store.findings.require('finding_0')).toMatchObject({ kind: 'improvement', cost: 'major' });
+        // The Reader is told, in the result it is reading right now, which rule the Editor will run —
+        // otherwise the next pass re-files the same wish as a defect.
+        expect((result.notes as string[])[1]).toBe(
+            'This is an improvement, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
+        );
+    });
+
+    it('stores an omitted kind as the issue it has always meant (D-33b, D-16)', async () => {
+        const { kind: _kind, ...withoutKind } = proposal();
+        const result = await call('reader', withoutKind);
+
+        expect(result.data).toMatchObject({ kind: 'issue' });
+        // Written explicitly, so a new row is self-describing; the kind-less row stays the legacy case
+        // and `tools/checker.ts:kindOf` is the one place the default is decided.
+        expect(store.findings.require('finding_0').kind).toBe('issue');
+    });
+
+    it('refuses an unknown kind at the schema, naming the accepted set, and files nothing (T-11, D-33b)', async () => {
+        // WHY THIS IS PINNED AND THE OMITTED CASE ALONE IS NOT ENOUGH: `tools/checker.ts:kindOf`
+        // coerces ANY unknown value to `issue` on purpose, so a row can only be trusted while the
+        // SCHEMA refuses first (T-11 puts enforcement in the tool, not the prompt). This is the pin
+        // that says a `kind: 'banana'` call never reaches that coercion — the Reader is sent the
+        // accepted set and the proposal is not silently re-classified into a defect claim the Editor
+        // will dispute on absence grounds. Were the enum ever loosened, this test fails instead of a
+        // coercion quietly deciding the claim type.
+        const result = await call('reader', proposal({ kind: 'banana' }));
+
+        expect(result.ok).toBe(false);
+        expect(result.refused).toBe('T-11');
+        expect(result.message).toBe(refusal('T-11', 'raiseFinding was called with an invalid request body'));
+        expect(result.tool).toBe('raiseFinding');
+        // The field, the accepted values, and what was actually sent — the three things that let the
+        // same pass fix the call in one turn rather than guess at another spelling.
+        expect(result.issues).toEqual([{ field: 'kind', expected: 'one of issue | improvement', received: 'banana' }]);
+        expect((result.shape as Record<string, unknown>).enums).toMatchObject({ kind: ['issue', 'improvement'] });
+        // Validation runs before the tool body, so nothing was half-filed and no coerced `issue` row
+        // exists wearing the proposal's title (P1).
+        expect(store.findings.list()).toEqual([]);
+    });
+
+    it('refuses an improvement at cost critical and sends it back as major at most (D-33b, D-35)', async () => {
+        const result = await call('reader', proposal({ cost: 'critical' }));
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33' });
+        expect(result.message).toBe(
+            refusal(
+                'D-33',
+                'a `kind: improvement` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.'
+            )
+        );
+        // The fix names the ladder the Reader may actually use, which is the difference between a
+        // proposal that comes back `major` and a pass that burns itself re-triaging. `refusalResult`
+        // spreads the ToolRefusal details at the top level of the result, so they are pinned there.
+        expect(result).toMatchObject({
+            ok: false,
+            refused: 'D-33',
+            field: 'cost',
+            expected: ['major', 'minor', 'taste'],
+            fix: "call raiseFinding again with cost `major` at most and kind `improvement`, or with kind `issue` if the draft contradicts something it states"
+        });
+        // Nothing half-filed (P1).
+        expect(store.findings.list()).toEqual([]);
+    });
+
+    it('keeps an improvement and an issue with identical wording apart, and dedupes each inside its kind (D-16, D-33b)', async () => {
+        const first = await call('reader', proposal());
+        // The same proposal seen again: D-16 counts it, it does not open a second claim.
+        const again = await call('reader', proposal());
+        // The SAME sentence filed as a defect claim: same target, same criterion, same title. It has to
+        // stay a second row, because one says "this is broken" and the other says "this would be better"
+        // and the Editor answers them by opposite rules.
+        const asIssue = await call('reader', proposal({ kind: 'issue' }));
+
+        expect(first).toMatchObject({ ok: true });
+        expect(again).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
+        // A new row carries no `repeat` flag at all (`utilities.ts:repeatResult` is the only thing that
+        // sets it), and the kind it filed is in the payload.
+        expect(asIssue).toMatchObject({ ok: true });
+        expect(asIssue.repeat).toBeUndefined();
+        expect(asIssue.data).toMatchObject({ id: 'finding_1', kind: 'issue' });
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}:${finding.seen_count}`)).toEqual([
+            'finding_0:improvement:2',
+            'finding_1:issue:1'
+        ]);
+        // The two rows are separated BY the fingerprint, not by an accident of insertion order.
+        const [improvement, issue] = store.findings.list();
+        expect(improvement.fingerprint).not.toBe(issue.fingerprint);
+        expect((asIssue.data as { fingerprint: string }).fingerprint).toBe(issue.fingerprint);
+    });
+
+    it('still dedupes a row written before the kind field against a new issue raise (D-16 back-compat)', async () => {
+        const title = 'The keeper knows the answer too early';
+        const args = {
+            target_ref: chapter.id,
+            criterion_ref: 'C-3',
+            title,
+            evidence: 'chapter_0 section_2: "he already knew"',
+            cost: 'major',
+            why: 'It spoils the middle of the book.'
+        };
+
+        // A row exactly as §4.10 stored it before `kind`: no `kind` field at all, and a three-part
+        // fingerprint. This is every open finding on every Story in the wild.
+        store.findings.create(
+            {
+                story_id: story.id,
+                target_ref: chapter.id,
+                criterion_ref: 'C-3',
+                title,
+                evidence: 'chapter_0 section_2: "he already knew"',
+                cost: 'major',
+                fingerprint: legacyFingerprint(title),
+                state: 'unconfirmed',
+                seen_count: 1
+            },
+            { why: 'seed: a finding raised before `kind` existed (D-16)' }
+        );
+
+        // The hash contract, pinned directly: `issue` IS the legacy form, which is why no stored row has
+        // to be re-hashed and why an old finding cannot silently open a second row.
+        expect(fingerprintFinding(chapter.id, 'C-3', title)).toBe(legacyFingerprint(title));
+        expect(fingerprintFinding(chapter.id, 'C-3', title, 'improvement')).not.toBe(legacyFingerprint(title));
+
+        // The behaviour that follows from it: a new raise that names no `kind` bumps the legacy row.
+        const repeat = await call('checker', args);
+
+        expect(repeat).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
+        expect(store.findings.list().length).toBe(1);
+        expect(store.findings.require('finding_0')).toMatchObject({ seen_count: 2 });
+        // The legacy row is still read as an issue by every projection that names the field.
+        expect(repeat.data).toMatchObject({ kind: 'issue' });
+
+        // And the same wording as a proposal is NEW information about the same passage, so it opens its
+        // own row rather than quietly counting against a defect nobody filed.
+        const improved = await call('checker', { ...args, kind: 'improvement' });
+
+        expect(improved).toMatchObject({ ok: true });
+        expect(improved.repeat).toBeUndefined();
+        expect(improved.data).toMatchObject({ id: 'finding_1', kind: 'improvement' });
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.seen_count}`)).toEqual([
+            'finding_0:2',
+            'finding_1:1'
+        ]);
+    });
+
+    it('refuses a Reader improvement with no detail, the same D-30 gate a defect pays (D-30, D-33b)', async () => {
+        const { detail: _detail, ...noDetail } = proposal();
+        const result = await call('reader', noDetail);
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-30' });
+        // A proposal the Editor has to re-read the draft to understand costs the very pass it proposes.
+        expect(store.findings.list()).toEqual([]);
+    });
+
+    it('tells the Writer it is delivering a proposal, on the task an approval opens (D-34, D-33b)', async () => {
+        const raised = await call('editor', proposal());
+        expect(raised).toMatchObject({ ok: true, data: { state: 'confirmed', kind: 'improvement' } });
+
+        const runtime = createToolRuntime(store);
+        const context = runtime.createContext(sessionFor(story.id, 'editor'));
+        const approved = await runtime.execute(context, 'approveFinding', {
+            finding_id: 'finding_0',
+            decision: 'approve',
+            why: 'The change is worth one line.'
+        });
+
+        expect(approved.ok).toBe(true);
+        // The task detail is what the fix prompt renders as `work:`; without the marker a sample reads a
+        // proposal as a break and makes the smallest change instead of the better one.
+        expect(store.tasks.list().map((task) => task.detail)).toEqual([
+            'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension\nCost: major\nKind: improvement\nCriterion: C-3\nFinding: finding_0\nApproved by: editor_1'
         ]);
     });
 });
