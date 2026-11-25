@@ -179,6 +179,8 @@ import {
     AUTO_APPROVED_BY,
     OPEN_FINDING_STATES,
     CLOSED_FINDING_STATES,
+    // D2 — the states that make a `fix` row naming a finding un-workable, so its row can be closed with it.
+    MOOT_FIX_TASK_FINDING_STATES,
     DEFAULT_GLOBAL_MAX_CONCURRENT,
     DEFAULT_LEASE_IDLE_MS,
     DEFAULT_SWEEP_INTERVAL_MS,
@@ -537,7 +539,9 @@ export class LoopEngine implements EngineApi {
                 // a throw — this loop is one commit over every confirmed row of the Story, and a refusal
                 // on one proposal would abort the sweep and strand the ISSUES that are the very work the
                 // rule wants done first. The row stays `confirmed` (nothing is lost), the Author still
-                // sees it in the queue, and the next sweep approves it the moment the last issue closes.
+                // sees it in the queue, and the next sweep approves it the moment the last issue leaves
+                // the holding set `ISSUE_HOLDING_STATES` — which excludes `disputed`, so a sweep cannot
+                // park a proposal behind a claim the Editor already called a non-defect.
                 // `auto_approved` reports what the sweep DID, so a skipped row is simply absent from it.
                 if (finding.kind === 'proposal' && openIssues.length > 0) continue;
                 // Phase ①'s bar is the deep review: the Editor's verification of a tool-using
@@ -633,6 +637,83 @@ export class LoopEngine implements EngineApi {
                 }
             });
         }
+
+        // D2 / D-11 / R3 — ORPHANED FIX ROWS CLOSE WITH THE FINDING THAT STOPPED BEING WORK.
+        //
+        // THE LEG ABOVE CLOSES A ROW ONLY WHEN THIS VERY PASS CLOSED THE FINDING — an install it made
+        // answered an `approved` row. A finding that reached `fixed` on some EARLIER settle
+        // (`phrase/findings.ts:closeFindingWhenGroupsResolved` at install time, `settleFixPrerequisites`
+        // grounding it, `settleJob`'s certificate closure), a finding the Author DISCARDED, and a
+        // finding the Editor DISPUTED each leave their `fix` rows behind with nobody left to close them.
+        // Measured on the live store: such a row sat open forever, because `dispatchableTasks`
+        // (`records.ts:160-164`) admits ANY `kind: 'fix'` row — so the orphan keeps L-37's drain unmet
+        // (`status.ts:135` — "N tasks still queued") and `decideStory`'s `phaseWorkQueued`
+        // (`status.ts:669-686`) refusing the phase sign-off, over a defect the book has already
+        // answered, retired, or called a non-defect. The planner never dispatches it again either: no
+        // group owes that finding. This is the same silent deadlock the `ISSUE_HOLDING_STATES` change
+        // removed one table earlier, and it is closed the same way — by reading the row's state, not by
+        // hoping a funnel remembers the row it left behind.
+        //
+        // WHY EXACTLY `MOOT_FIX_TASK_FINDING_STATES` (`types.ts`). `fixed`: the answer is installed, so
+        // the row was consumed by that install. `discarded`: the Author retired the defect, so its
+        // repair is not wanted. `disputed`: under D-33 a disputed claim is NOT a defect — it drives no
+        // work (`phrase/exclusion.ts`'s writer batch), earns no seat (`loop/work.ts`'s verify queue is
+        // `unconfirmed`-only) and, since the holding-set change, holds no gate — so a row naming it is
+        // un-workable dead weight that only blocks the queue. NOTHING IS LOST BY CLOSING IT: an Author
+        // who overturns the dispute approves the row, and `approveFinding` → `createWorkForFinding`
+        // opens a FRESH fix task precisely because no OPEN row names the finding (see the guard at
+        // `engine.ts`'s `createWorkForFinding`), so the work is re-armed through the findings, not
+        // through this row.
+        //
+        // THE `approved` LEG IS UNTOUCHED, and that is the control: a finding still `approved` (like one
+        // still `confirmed` or `unconfirmed`) keeps its rows, because those rows ARE its live work;
+        // install-settle closes them when the evidence lands.
+        //
+        // NOT SCOPED TO GROUP BOOKS, unlike the leg above. The orphan does not come from
+        // `group_revisions.finding_refs`, which only a group install writes — it comes from a finding
+        // leaving the workable set, which happens identically on a legacy `summary_mode: 'sampling'`
+        // Summary. The `isGroupManagedStory` guard exists to stop a VACUOUS `resolved_all` read from
+        // deleting real work; this read looks at row states only, so it has no vacuity to guard.
+        //
+        // A SWEEP STEP FOR THE SAME REASON AS THE LEG ABOVE: a finding reaches these states through five
+        // funnels (the install, the dial, the Editor's tool, the Author's routes, the completion-accept
+        // discard sweep) and a crash between any of them and the row close has to self-heal anyway, so
+        // one idempotent, restart-safe pass covers them all (L-3). It runs BEFORE `generateWork`, so an
+        // unserviceable orphan never buys a P7 Author question first — `work.ts:openFixTaskOwnerEscalation`
+        // reads a queue the row has already left — and `settleFixPrerequisites` retires any question an
+        // earlier sweep opened (T-10, P7).
+        //
+        // KIND-AGNOSTIC, MIRRORING THE LEG ABOVE: rows are matched by `finding_ref`, never by a `kind`
+        // filter. An `escalation` row that names the same finding follows it for the same reason the
+        // verify-stall row does — a question that outlived the finding it asked about (`escalateVerifyStall`'s
+        // closing half, T6/R2d).
+        await store.commit('loop_close_moot_fix_rows', () => {
+            // Findings of THIS Story only, by id: a row whose `finding_ref` names nothing — or another
+            // Story's finding — has no readable state here, and an unknown state means "leave it alone"
+            // (the conservative reading every other rule in this file uses).
+            const stateById = new Map(storyFindings(store, story.id).map((finding) => [finding.id, finding.state]));
+
+            for (const task of openTasks(store, story.id)) {
+                if (task.finding_ref === undefined) continue;
+
+                const state = stateById.get(task.finding_ref);
+
+                if (state === undefined || !MOOT_FIX_TASK_FINDING_STATES.includes(state)) continue;
+
+                store.tasks.update(
+                    task.id,
+                    { state: 'done' },
+                    {
+                        run_ref: null,
+                        why:
+                            state === 'disputed'
+                                ? `${task.finding_ref} is disputed — a disputed claim is not a defect (D-33), so the fix row that named it is moot and is closed here; an Author overturn re-arms the work through the findings, not through this row (D-11, D-34a)`
+                                : `${task.finding_ref} is ${state}, so the fix row that named it is consumed — the defect is answered or retired, and an open row over it holds L-37's drain with nothing left to run (D-11, R3)`
+                    },
+                    [{ id: task.id, rev: task.rev }]
+                );
+            }
+        });
 
         // D-12/D-12a/D-14: the Digest is derived by the engine, and a stale Digest blocks a REVIEW but
         // not a fix — so the refresh happens here, before any candidate is generated, which is what

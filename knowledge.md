@@ -54,7 +54,7 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 | Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Reader/Critic/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`, `reportNoResearch`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules, and the group-book refusals (`tools/writer.ts:editSummary` → `R6`, `tools/editor.ts:selectRevision` on the Summary unit → `R5`, `tools/reader.ts:raiseFinding` on a grouped Summary → `R3`), the issues-first gates (`tools/reader.ts:raiseFinding` → `D-33c` in both directions, `tools/editor.ts:approveFinding` → `D-33d`, all four approval funnels reading the one predicate in `loop/records.ts`), each refusal carrying a `fix` — the group refusals point at GROUPED work rather than at the retired selection, and the `D-33c`/`D-33d` refusals name the open rows they are waiting on. A refusal names its rule id and the row it refused on. |
 | Brief     | `src/server/run/brief.ts` | The artefact a tool-carrying crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2). A `toolMode: 'none'` run is given the compiled phase-① prompt instead (`run/phase1-prompt.ts`), and its hash is what the row carries. |
 | Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`) — EXCEPT a `toolMode: 'none'` run (phase ①'s group drafts and group reviews, and, on a legacy book, its samples and screens), which calls `chat.complete` directly from `run/executor.ts`, gets no tool context and therefore opens no engine thread. The Run row is where a group batch lives: `run/executor.ts` copies the Work Item's `group_refs` onto it, and `phrase/exclusion.ts` reads THAT as the live hold.                                                                 |
-| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ① is `phase1GroupCandidates` now, `phase1PipelineCandidates` on a legacy book), the group install in the settle path (`engine.ts:1445-1528` → `phrase/revisions.ts:installGroupRevisions`), the sweep's group-finding reconciliation (`engine.ts:560-595`, group books only), phase ①'s LEGACY deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`, and `status.ts:decideStory` which reads `phrase/exclusion.ts:groupPipelineOwed` on a group book), drain and completion (L-35b, L-37, L-25 — `status.ts:phase1Unmet` has a group branch and a sampling branch, never both), directives, backtrack, kill. |
+| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ① is `phase1GroupCandidates` now, `phase1PipelineCandidates` on a legacy book), the group install in the settle path (`engine.ts:1445-1528` → `phrase/revisions.ts:installGroupRevisions`), the sweep's group-finding reconciliation (`engine.ts:604-639`, group books only), phase ①'s LEGACY deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`, and `status.ts:decideStory` which reads `phrase/exclusion.ts:groupPipelineOwed` on a group book), drain and completion (L-35b, L-37, L-25 — `status.ts:phase1Unmet` has a group branch and a sampling branch, never both), directives, backtrack, kill. |
 | Runtime   | `src/server/runtime/`     | S-RUNTIME: one ISOLATED runtime per Story book — its own `LoopEngine`, `RunExecutor`, tool catalogue, knowledge projection and thread log — behind `StoryRuntimes`, which is the loop the HTTP layer talks to (`EngineApi` + routing by the Story id the path names, `ownerOf` for child ids). It owns the ONE sweep timer (contexts are built `autoSweep: false` and sweep sequentially, because the shared ceiling is a view over the books), the one S-5 ceiling (`runtime/ceiling.ts`), the commit fan-in for `/stream`, and shutdown (settle → dispose → close every book). `runtime/server-config.ts` is the app book's side: the crew catalogue and the host settings, copied non-journaled into each Story's book (`_state()`/`_restore()`) and re-mirrored when the Author edits a crew, a roster choice or the ceiling. |
 | API       | `src/server/api/`         | `routes.ts` is the Author's verbs — a Story-scoped handler shadows `store` with the book its `:id` names, so a sibling's rows cannot be touched, and a Story id no book holds is a 404, not a wrong row; `projections.ts` is what the panel and the desk read (an aggregate is the union of each book's correct answer, never a merge of same-named child ids); `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`) and composes both shapes — `openStorylineRuntime` for a workspace, sync `buildStorylineRuntime` for one book. `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport. |
 | Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`, with `phrases` + `phraseErrors` beside the §4 rows), the panels in `components/` (`SummaryOverviewPane` + `SummaryGroupPane` for a grouped Summary, `SummaryPane` for a legacy one), the rail rules in `components/story-nav.ts`, the sign-off derivations in `components/story-contract.ts`, the shell in `StorylineApp.tsx`.                                                                                                                                                                          |
@@ -113,8 +113,8 @@ which book is which; every guard in the loop reads it from there.
 | The write allowance and what the pipeline still OWES | `src/server/phrase/exclusion.ts` — `GROUP_WRITE_ATTEMPT_CAP` (215), `groupWriteAttempts` (288), the journal baseline `writeBaselineOf` (264), the seat keys `groupReviewSeatKey`/`groupCheckSeatKey` (366/370), `isGroupPipelineRun` (384) and `groupPipelineOwed` (415) — the one read the queue, the drain and the sign-off share |
 | The drain and the sign-off on a group book | `src/server/loop/status.ts` — `phase1Unmet`'s group branch (252-283, the four §6.4 sentences) and `decideStory`'s owed-seat clause (650-657) |
 | The crew's group-book refusals | `src/server/tools/writer.ts:editSummary` → `R6`, `tools/editor.ts:selectRevision` → `R5` and `requestMerge`'s branching `fix`, `tools/reader.ts:raiseFinding` → `R3` twice (unknown id 547-566, missing groups 568-586) and `D-33b` twice (`proposal`+`critical` 515-525, `issue`+`taste` 527-537) |
-| The issues-first gates (D-33c, D-33d) | ONE predicate pair in `src/server/loop/records.ts` — `isOpenIssueFinding`/`openIssueFindings` (453-495: `kind: issue` including an absent kind, unresolved unless the state is in `CLOSED_FINDING_STATES`) and `findingsRaisedByRun` (498-520: the run's own rows, read out of the journal because §4.10 has no `run_ref`) — read by `tools/reader.ts:raiseFinding` (`D-33c` twice: proposal-over-issues 594-610, issue-after-proposal 625-642), `tools/editor.ts:approveFinding` (`D-33d` 1152-1168), `loop/engine.ts`'s `loop_auto_approve` sweep (510-528, SKIPS the proposal), `loop/engine.ts:approveFinding` (the Author's API, 409 with the same sentence) and `api/routes.ts`'s approve-all (the proposal is filtered out of the batch, which is computed BEFORE any approval runs) |
-| Finding scope and closure | `src/server/phrase/findings.ts` — `findingGroupScope`, `findingGroupsStillOwed`, `closeFindingWhenGroupsResolved`, `closeFindingAnsweredByInstalls` (re-run by the sweep at `loop/engine.ts:560-595`, group books only) |
+| The issues-first gates (D-33c, D-33d) | ONE predicate pair in `src/server/loop/records.ts` — `isOpenIssueFinding`/`openIssueFindings` (457-518: `kind: issue` including an absent kind, unresolved exactly when the state is in `ISSUE_HOLDING_STATES` — `unconfirmed`, `confirmed`, `approved` — so a `disputed` row releases it like `fixed`/`discarded`, 2026-11-25) and `findingsRaisedByRun` (520-549: the run's own rows, read out of the journal because §4.10 has no `run_ref`) — read by `tools/reader.ts:raiseFinding` (`D-33c` twice: proposal-over-issues 600-616, issue-after-proposal 618-648), `tools/editor.ts:approveFinding` (`D-33d` 1148-1172), `loop/engine.ts`'s `loop_auto_approve` sweep (523-546, SKIPS the proposal), `loop/engine.ts:approveFinding` (the Author's API, 3469, with the same sentence at 46-49) and `api/routes.ts`'s approve-all (the proposal is filtered out of the batch, 1688, which is computed BEFORE any approval runs). The sign-off is NARROWER than this set and never wider: `summaryBlockingFindings` (337, its state gate at 343) keeps only `confirmed`/`approved` at a blocking cost |
+| Finding scope and closure | `src/server/phrase/findings.ts` — `findingGroupScope`, `findingGroupsStillOwed`, `closeFindingWhenGroupsResolved`, `closeFindingAnsweredByInstalls` (re-run by the sweep at `loop/engine.ts:604-639`, group books only). The rows follow the findings: the same sweep closes an open task whose `finding_ref` names a finding in `MOOT_FIX_TASK_FINDING_STATES` (`loop/types.ts` — `fixed`, `discarded`, `disputed`) in the `loop_close_moot_fix_rows` leg (`loop/engine.ts:641-716`, every story mode), because an open `fix` row over a settled defect holds L-37's drain with nothing left to run |
 | Purge and reset of the group book | `src/server/loop/engine.ts` — `deleteStory`'s three Phrase deletes (2673-2675), `editSeed`'s in-place row reset (3111-3135); `src/server/loop/invalidation.ts:scrapPhasesAfter`'s `groupRevisions` count (313/319/344-359) |
 | The grouped loop | `src/server/loop/work.ts:phase1GroupCandidates` (batch, review seats, deep review) and `groupWorkTargets`/`groupWriteAttempts`/`GROUP_WRITE_ATTEMPT_CAP`; the install fires in the settle path at `src/server/loop/engine.ts:1445-1528`; what the pipeline still OWES is read from `src/server/phrase/exclusion.ts:groupPipelineOwed`, which `loop/status.ts` uses for both the drain and the sign-off |
 | The Author's phrase verbs | `src/server/api/routes.ts` — `GET /stories/:id/phrases` (720), `POST /stories/:id/phrases/import` (740), `POST /stories/:id/phrases/groups/:groupId/revise` (798), `POST /stories/:id/phrases/reviewed/choose` (D-68 — Author-only, 409 on a sampling book / an incomplete selection / any live Writer hold, and it never touches `lockPhase`); group-book refusals at 1106 (`summary/revise`), 1581 (`revisions/:id/select`), 1765 (`revisions/merge`) |
@@ -194,8 +194,9 @@ which book is which; every guard in the loop reads it from there.
     settle that closes `wi_group_check_<hash>_<pass>` calls `phrase/reviewed.ts:stampCleanRevisions`,
     which stamps `clean: true` + `clean_run_ref` on the revision that each group held IN THAT VECTOR —
     and only when the pass closed with no unresolved issue on that group (`openIssueGroupIds`, which
-    reuses `loop/records.ts:openIssueFindings`, so `unconfirmed`/`confirmed`/`approved`/`disputed` all
-    hold a group open, and a finding with no `group_refs` holds all five). Two guards: the vector must
+    reuses `loop/records.ts:openIssueFindings`, so `unconfirmed`/`confirmed`/`approved` hold a group
+    open and `disputed` does not — the holding set is `loop/types.ts:ISSUE_HOLDING_STATES`, 2026-11-25 —
+    while a finding with no `group_refs` holds all five). Two guards: the vector must
     still be the current one (a Writer install mid-pass means the rows it read are gone, so nothing is
     stamped and the new vector simply owes its own pass), and the write is idempotent (a replayed settle
     adds no row and no journal line). The verdict is about the PASS and is never revoked; what a later
@@ -228,11 +229,16 @@ which book is which; every guard in the loop reads it from there.
    partial claim would report a defect as answered while two of the five groups still said the thing the
    Author complained about. A Writer can also install the answer
    BEFORE the approval lands, and then the planner stops dispatching for it, so the SWEEP re-runs the
-   same read every round (`engine.ts:560-595`, the `loop_reconcile_findings` step →
+   same read every round (`engine.ts:604-639`, the `loop_reconcile_findings` step →
    `findings.ts:closeFindingAnsweredByInstalls`, which re-reads the row rather than trusting the
    caller's copy) and closes the fix tasks that named the now-`fixed` finding. That step is scoped to
    `isGroupManagedStory` books, because with no phrase rows `findingResolution` answers
-   `resolved_all: true` VACUOUSLY and acting on that would delete a sampling round's fix work. A
+   `resolved_all: true` VACUOUSLY and acting on that would delete a sampling round's fix work. Its
+   sibling `loop_close_moot_fix_rows` (`engine.ts:641-716`, 2026-11-25) is what closes the rows that
+   step CANNOT reach: a finding already `fixed` on an earlier settle, one the Author `discarded`, and
+   one the Editor `disputed` each left their `fix` rows open on EVERY book mode, and
+   `records.ts:dispatchableTasks` admits any `kind: 'fix'` row, so such an orphan held L-37's drain
+   ("N tasks still queued") with nothing left to run (D2 fix). A
    Reader `raiseFinding` on a group book's Summary that omits `group_refs` is REFUSED
    (`tools/reader.ts`, "R3"), as is a `group_refs` entry naming an unknown group id — and the
    unknown-id refusal no longer offers "omit the list" on a group book, because a grouped Summary has
@@ -535,7 +541,7 @@ Premise still isn't". Independence plus retention is what the loop can act on.
   defects), so there is no round in which the book shows one or two of its groups rewritten. The
   approval can still land AFTER that install — the Writer answered the defect while the row was still
   `confirmed` — and then the install-time close correctly declines (D-34's gate), the planner has nothing
-  left to dispatch, and the sweep's `loop_reconcile_findings` step (`engine.ts:560-595`) closes the finding
+  left to dispatch, and the sweep's `loop_reconcile_findings` step (`engine.ts:604-639`) closes the finding
   and its tasks one round later. Before that step the row sat `approved`, answered, and never closed.
   Pinned by `loop/group-findings-batch-cap.test.ts` and, at the lease boundary, by
   `loop/phase1-groups-restart.test.ts`: a lapse releases exactly its own group, and the finding's set
@@ -1347,7 +1353,10 @@ The home view is two tabs (`components/HomeDesk.tsx`):
 
 The old per-field `Ask assistant` control is gone from `SummaryPane`; the Author's channel is the
 directive bar, addressed to the Editor. The bar is present on every view, including Requests, and
-carries only one input field with a floating label.
+carries one metadata line — what the direction is addressed to — above a single recessed field well
+with the send control docked inside its right edge (the composer shape `packages/loadscript/chat`
+uses). The field is one row and grows with the draft up to six; Enter sends, Shift+Enter writes a
+newline.
 
 ## Phase ① is structure → research → sample → screen → select → deep review → refine (2026-11-23, LEGACY since 2026-11-24)
 
@@ -1696,11 +1705,26 @@ riding the auto-approve dial while the defects were still being argued. §4.10 n
 rules with two different homes: **D-33c** at the FILING call, **D-33d** at every APPROVAL.
 
 **One predicate, read four ways.** `loop/records.ts` holds the whole question so no funnel can answer it
-differently: `isOpenIssueFinding`/`openIssueFindings` (453-495) ask whether a row is an unresolved DEFECT —
-`kind: issue`, an absent kind included, and unresolved unless the state is in `CLOSED_FINDING_STATES`, which
-is exactly `fixed` and `discarded`. **State, not cost, not confirmation** — `unconfirmed`, `confirmed`,
-`approved` and `disputed` all still hold a proposal down, and `approved` is the one that reads as "handled"
-and is not: an approval opens Writer work, it does not land it. `findingsRaisedByRun` (498-520) answers the
+differently: `isOpenIssueFinding`/`openIssueFindings` (457-518) ask whether a row is an unresolved DEFECT —
+`kind: issue`, an absent kind included, and unresolved exactly when its state is in
+`loop/types.ts:ISSUE_HOLDING_STATES`, which is `unconfirmed`, `confirmed` and `approved` (2026-11-25).
+**State, not cost** — `approved` is the one that reads as "handled" and is not: an approval opens Writer
+work, it does not land it. **`disputed` is NOT in the set**: D-33's own principle is that a disputed claim
+is not a defect, and the row already drives nothing everywhere else (no work item — `phrase/exclusion.ts`,
+no seat — `loop/work.ts`'s verify queue is `unconfirmed`-only, no Author queue row —
+`records.ts:findingsAwaitingAuthor` wants `confirmed`, no drain hold — `loop/findings.test.ts`, no chapter
+hold — `engine.ts:898`, and the rail files it under "archived"). Counting it open here was the one outlier,
+and it deadlocked silently: the row held the Critic's filing gate and the Editor's approval gate shut
+forever while nothing in the pipeline could move it and the rail truthfully showed no open findings. So the
+owner decided the dispute releases ("Not blocking — keep flowing"), and the open set is now the SAME three
+states §4.10's own shorthand prints and that both dashboard open lists draw. The phase sign-off reads a
+NARROWER set and never a wider one — `records.ts:summaryBlockingFindings` (337, state gate at 343) keeps
+only `confirmed`/`approved` at a blocking cost — so a sign-off can never block on a row this predicate
+does not call open. The Author's overturn valves are untouched and the flow
+never waits on any of them: `routes.ts`'s unguarded approve and discard, the completion-accept discard
+sweep, and the group lock's voiding — `phrase/locks.ts:VOIDABLE_FINDING_STATES` still voids a `disputed`
+row, because that list is about what a lock may retire, not about what holds work.
+`findingsRaisedByRun` (520-549) answers the
 other question, "what did THIS pass already file?", out of the journal's `findings` create events matched on
 `attribution.run_ref` — §4.10 has no `run_ref` column and `related_refs` names what a finding is ABOUT, not
 who filed it (the same reasoning `revisionReviewFindings` uses), so a test that wants two passes needs two
@@ -1732,8 +1756,9 @@ drain and the leftover counts read.
 
 **The crew is told, in the four engine-owned places and the four Author-editable ones.** Engine-owned and
 unclipped: `run/brief.ts:CRITIC_REVIEW_MODE` (both rules, named as two), the file's `check_unit` critic job
-line (the sequencing beside the Ideas ban), the `verify_findings` job line (the approval gate, with the four
-open states spelled out and the discard exception), and the "Findings in front of you" heading, which gains
+line (the sequencing beside the Ideas ban), the `verify_findings` job line (the approval gate, with the
+three holding states spelled out, the `disputed` release, and the discard exception), and the "Findings in
+front of you" heading, which gains
 `, N unresolved issue — no Proposal is filed or approved until they close (D-33c, D-33d)` INSIDE its
 bracket — only when a Proposal row is actually in front of that job AND the Story has an unresolved issue,
 so every other brief renders byte-identically and `brief_hash` (§4.13) does not move. Author-editable

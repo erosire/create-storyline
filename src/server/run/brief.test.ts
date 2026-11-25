@@ -536,13 +536,15 @@ describe('brief — S-2 assembly', () => {
         // D-33d — the approval half of the same sentence. The paragraph above tells the Editor how to
         // VERDICT a proposal; this is the half that tells it the proposal still cannot be APPROVED while
         // an issue is open, which is the refusal `tools/editor.ts:approveFinding` hands back and the one
-        // the crew otherwise discovers by spending a turn on it. The four open states are named because
-        // `approved` is the state a crew reads as "handled" and it is not a resolution.
+        // the crew otherwise discovers by spending a turn on it. The three HOLDING states are named
+        // because `approved` is the state a crew reads as "handled" and it is not a resolution — and
+        // because `disputed` is NOT in the list (2026-11-25): the Editor's own "not a defect" releases
+        // the approval, so a row that drives no work can never wedge the queue.
         expect(verifyText).toContain(
             'ISSUES COME FIRST, and they gate the approval as well as the verdict (D-33d): while any issue on this Story is unresolved'
         );
         expect(verifyText).toContain(
-            '`fixed` or `discarded` is what closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold it'
+            'only `unconfirmed`, `confirmed` and `approved` hold one open, and one you marked `disputed` releases it'
         );
         expect(verifyText).toContain(
             '`approveFinding` REFUSES a row marked `proposal`, whatever the dial says'
@@ -713,6 +715,30 @@ describe('brief — S-2 assembly', () => {
 
         expect(released).toContain('Findings in front of you (2):');
         expect(released).not.toContain('unresolved issue');
+
+        // (d) THE DISPUTED RELEASE (2026-11-25). The Story's only issue is `disputed` — the Editor's
+        //     "not a defect", which is out of `loop/types.ts:ISSUE_HOLDING_STATES` — so the Proposal
+        //     beside it is filable and approvable, and the heading must not warn about it. This is the
+        //     case that used to read "1 unresolved issue" forever over a row the loop could never move.
+        const disputed = briefFor((store, storyId) => [
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-6',
+                title: 'the survey date is wrong in chapter 3',
+                evidence: 'chapter_3 sec_2: "the 1911 survey"',
+                cost: 'minor',
+                state: 'disputed'
+            }).id,
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-11',
+                title: 'open the book on the lie instead of the truth',
+                evidence: 'chapter_1 sec_1: "he told them the truth"',
+                cost: 'major',
+                kind: 'proposal'
+            }).id
+        ]);
+
+        expect(disputed).toContain('Findings in front of you (2):');
+        expect(disputed).not.toContain('unresolved issue');
     });
 
     it('gives a Summary Writer the licence to invent what the Seed leaves silent, and withholds it from the other units (T3)', () => {

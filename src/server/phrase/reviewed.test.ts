@@ -14,6 +14,9 @@
  *   2. AN OPEN ISSUE BLOCKS THE GROUP, newest stamp or not — the same predicate the crew's own gates use
  *      (`loop/records.ts:openIssueFindings` + `phrase/findings.ts:findingGroupScope`), so the Clean
  *      verdict and the work queue cannot disagree, and revocation needs no machinery and no memory.
+ *      "Open" is D-33c's HOLDING set — `unconfirmed`, `confirmed`, `approved` — so a finding the Editor
+ *      marks `disputed` releases the group again (2026-11-25, "Not blocking — keep flowing"): the stamp is
+ *      never revoked, and the veto is a read, so the group comes back the moment the verdict lands.
  *   3. THE STAMP IS THE DEEP PASS'S PRODUCT (`stampCleanRevisions`): it answers to the deep review's claim
  *      key only, refuses when the vector moved under the pass, skips a group an open issue still names,
  *      and is idempotent.
@@ -49,7 +52,7 @@ import {
     openIssueGroupIds,
     stampCleanRevisions
 } from './reviewed';
-import type { GroupRevision, PhraseGroup, Story } from '../../shared/types';
+import type { FindingState, GroupRevision, PhraseGroup, Story } from '../../shared/types';
 // The journal's attribution record comes from the store module (store.ts:203), not from shared/types.
 import type { Attribution } from '../store';
 
@@ -159,8 +162,19 @@ function workedExample() {
     return book;
 }
 
-/** An open `issue` finding scoped to `groupKeys` (D-33c's open set: `approved` is open and authorised). */
-function openIssue(book: Book, groupKeys: readonly string[], title = 'the ending drops the promise it sold'): string {
+/**
+ * An `issue` finding scoped to `groupKeys`, in any state (default `approved`, i.e. open AND authorised).
+ *
+ * The state is a parameter because the veto is D-33c's HOLDING SET, not "any row on the board": an
+ * `approved` issue vetoes the group and a `disputed` one does not, and the pair of tests below is exactly
+ * that difference with nothing else varied.
+ */
+function openIssue(
+    book: Book,
+    groupKeys: readonly string[],
+    title = 'the ending drops the promise it sold',
+    state: FindingState = 'approved'
+): string {
     const groups = groupKeys.length === 0 ? [] : groupKeys.map((key) => book.group(key).id);
 
     return book.store.findings.create(
@@ -173,8 +187,8 @@ function openIssue(book: Book, groupKeys: readonly string[], title = 'the ending
             cost: 'major',
             kind: 'issue',
             fingerprint: `fp_${title.replace(/\W+/g, '_')}`,
-            state: 'approved',
-            approved_by: 'auto',
+            state,
+            ...(state === 'approved' ? { approved_by: 'auto' } : {}),
             seen_count: 1,
             ...(groups.length === 0 ? {} : { group_refs: groups })
         },
@@ -300,6 +314,85 @@ describe('the reviewed selection is the LATEST clean revision of each group (D-6
         expect(selection.entries.map((entry) => entry.group.key)).toEqual(['premise', 'promise', 'theme', 'tone']);
         expect(selection.gaps).toEqual([
             { group_id: book.group('ending').id, group_key: 'ending', reason: 'no_clean_revision', latest: 5, issues_open: true }
+        ]);
+    });
+
+    it('leaves a stamped group selectable when the issue on it is DISPUTED — the veto is the holding set (D-33c, D-67)', () => {
+        const book = workedExample();
+
+        // THE SAME BOOK, THE SAME FINDING, ONE FIELD DIFFERENT: the Editor says the note does not fit the
+        // text. That is not a defect the group has to answer, so Ending keeps r4 and the selection
+        // completes — the reading every other funnel already has, because all of them call
+        // `loop/records.ts:isOpenIssueFinding` (see `loop/records.test.ts` for the set itself).
+        const findingId = openIssue(book, ['ending'], 'the ending contradicts the premise', 'disputed');
+
+        const selection = cleanSelectionOf(book.store, book.story());
+
+        expect(selection.complete).toBe(true);
+        expect(selection.entries.map((entry) => [entry.group.key, entry.revision.number])).toEqual([
+            ['premise', 3],
+            ['promise', 3],
+            ['theme', 1],
+            ['tone', 1],
+            ['ending', 4]
+        ]);
+        // No gap at all, so nothing downstream (the rail's `blockingIssues`, the score seat's arm
+        // condition, the completion preview) can read a veto that is not there.
+        expect(selection.gaps).toEqual([]);
+        expect(openIssueGroupIds(book.store, book.story())).toEqual(new Set());
+
+        // Release is NOT closure: the row stays on the record, in the Editor's own verdict, with the
+        // Author's overturn valves intact (the unguarded approve/discard routes, the completion-accept
+        // discard, and the D-69 lock void all still answer it).
+        expect(book.store.findings.require(findingId)).toMatchObject({
+            state: 'disputed',
+            kind: 'issue',
+            group_refs: [book.group('ending').id]
+        });
+    });
+
+    it('gives the group back the moment the Editor disputes the defect, and the next deep pass can stamp it (D-33c, D-67)', () => {
+        const book = workedExample();
+
+        // THE UN-WEDGE, end to end, at the Clean layer — the exact deadlock the change removes. A group
+        // mode book with one disputed note on Ending could not select its reviewed Overview, and because
+        // no phase owed a disputed row any work, nothing was ever going to clear it: the score seat never
+        // armed, the phase never advanced, and the Author's only exit was to fabricate a second verdict.
+        const findingId = openIssue(book, ['ending'], 'the ending contradicts the premise');
+
+        expect(cleanSelectionOf(book.store, book.story()).complete).toBe(false);
+
+        // The Editor's verdict, written the way `tools/editor.ts:verifyFinding` writes it: the state, and
+        // nothing else. Same optimistic-rev pattern the routes use.
+        book.store.findings.update(
+            findingId,
+            { state: 'disputed' },
+            { ...ATTR, why: 'seed: the Editor disputes the note — it does not fit the text (D-33)' },
+            [{ id: findingId, rev: 1 }]
+        );
+
+        const released = cleanSelectionOf(book.store, book.story());
+
+        expect(released.complete).toBe(true);
+        expect(released.vector).toEqual({
+            [book.group('premise').id]: 3,
+            [book.group('promise').id]: 3,
+            [book.group('theme').id]: 1,
+            [book.group('tone').id]: 1,
+            [book.group('ending').id]: 4
+        });
+
+        // AND THE LOOP RESUMES, which is the point of releasing rather than blocking: the deep pass can
+        // read the current vector again, and its Clean stamp lands on Ending's current row (r5) — a row
+        // the veto used to keep un-stamped, since `stampCleanRevisions` skips a group an open issue names.
+        stamp(book, 'ending', 'run_check_6');
+
+        expect(cleanSelectionOf(book.store, book.story()).entries.map((entry) => [entry.group.key, entry.revision.number])).toEqual([
+            ['premise', 3],
+            ['promise', 3],
+            ['theme', 1],
+            ['tone', 1],
+            ['ending', 5]
         ]);
     });
 

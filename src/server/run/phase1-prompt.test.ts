@@ -1536,15 +1536,16 @@ describe('phase1-prompt — the section score reads the clean selection (D-65, D
     it('refuses when the selection has gone — a stamped row is not selectable while a defect names its group', () => {
         const { store, story, groups } = seedScoreStore();
 
-        // The Author DISPUTES the fix rather than accepting it. D-33c counts `disputed` as open, so the
-        // stamp on the row survives (D-67 never revokes a verdict) while the SELECTION goes — the
-        // open-issue half is a read, which is why there is no revocation machinery (L-3).
+        // The Author APPROVES the fix, which is as open as `unconfirmed`/`confirmed` under D-33c's holding
+        // set (`ISSUE_HOLDING_STATES`), so the stamp on the row survives (D-67 never revokes a verdict) while
+        // the SELECTION goes — the open-issue half is a read, which is why there is no revocation
+        // machinery (L-3). This is the veto half of the pair; the release half is the next test.
         const finding = store.findings.require('finding_0');
 
         store.findings.update(
             finding.id,
-            { state: 'disputed' },
-            { ...AUTHOR_ATTR, why: 'seed: the Author disputes the fix (D-33c)' },
+            { state: 'approved' },
+            { ...AUTHOR_ATTR, why: 'seed: the Author approves the fix, so it stays open (D-33c)' },
             [{ id: finding.id, rev: finding.rev }]
         );
 
@@ -1558,6 +1559,39 @@ describe('phase1-prompt — the section score reads the clean selection (D-65, D
         ).toThrow(
             `compileSectionScorePrompt: story ${story.id} has no reviewed Summary to score — premise (no_clean_revision) lacks a clean revision (D-67)`
         );
+    });
+
+    it('selects the stamped row again once the defect is DISPUTED — a disputed issue releases the selection (D-33c, D-67)', () => {
+        const { store, story, groups } = seedScoreStore();
+
+        // THE OTHER HALF OF THE DOCTRINE, at the selection layer: `disputed` is not a defect, it is the
+        // Editor saying the note does not fit the text. The stamp is untouched — D-67 never revokes a
+        // verdict — and the group is selectable again, so a disputed row cannot wedge a group-mode book
+        // between passes (the deadlock this change removes). Same seed, same stamps as the veto test,
+        // ONLY the finding's state different: the pair pins the boundary of the holding set, not the rig.
+        const finding = store.findings.require('finding_0');
+
+        store.findings.update(
+            finding.id,
+            { state: 'disputed' },
+            { ...AUTHOR_ATTR, why: 'seed: the Author disputes the fix (D-33c release)' },
+            [{ id: finding.id, rev: finding.rev }]
+        );
+
+        const selection = cleanSelectionOf(store, story);
+
+        // Complete, and the selection is the stamped vector — the numbers the rows were stamped under.
+        expect(selection.complete).toBe(true);
+        expect(selection.gaps).toEqual([]);
+        expect(selection.vector_hash).toBe(selectionHashAt(groups, 1));
+
+        // And the prompt really compiles against it: the refusal the veto test asserted is gone.
+        const compiled = compileSectionScorePrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            vectorHash: selectionHashAt(groups, 1)
+        });
+
+        expect(compiled.user).toContain('## REVIEWED OVERVIEW — every section, scored (name each group_ref exactly once)');
     });
 
     it('refuses a hash whose selection has moved, and compiles the newer selection under its own hash', () => {

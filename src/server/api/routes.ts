@@ -1679,7 +1679,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         // `approved` is NOT `resolved` — an approved issue still has a Writer in front of it — so the
         // issues this same batch approves do not unlock the proposals in it. The proposal stays
         // `confirmed`, still in the Author's queue, and the next click (or the next sweep) takes it
-        // once every issue reaches `fixed` or `discarded`.
+        // once every issue has left the holding set (`records.ts:isOpenIssueFinding` — `fixed`,
+        // `discarded` or `disputed`, the last of them needing no Author tap at all).
         //
         // The route's shape is unchanged: the journal shows one approve per finding approved and none
         // for a skipped row, and the projected Story row still lists the proposal as awaiting

@@ -134,15 +134,21 @@ export interface CrewBehaviour {
      * same list, and `pass` is read off the seat's own key family. Absent means the pass files NOTHING,
      * which is the case the Clean stamp exists for: the review closes with no unresolved defect and
      * `phrase/reviewed.ts:stampCleanRevisions` marks the vector's rows clean.
+     *
+     * `kind` is the claim TYPE the row is filed as, and it is here for D-33c's sake: the rule that
+     * refuses a `proposal` while an issue is open reads the ROW's `kind`, so a regression that pins it
+     * has to file a proposal through the REAL `raiseFinding` tool, not seed one. Absent means the call
+     * carries no `kind`, which is every existing fixture and the legacy `issue` reading
+     * (`tools/reader.ts:kindOf`).
      */
     deepReviewFinds?:
-        | { cost: Cost; criterion?: string; title?: string; groupKeys?: string[] }
+        | { cost: Cost; criterion?: string; title?: string; groupKeys?: string[]; kind?: 'issue' | 'proposal' }
         | ((input: {
               item: WorkItem;
               revisionId: string;
               pass: number;
               groupIds: string[];
-          }) => { cost: Cost; criterion?: string; title?: string; groupKeys?: string[] } | undefined);
+          }) => { cost: Cost; criterion?: string; title?: string; groupKeys?: string[]; kind?: 'issue' | 'proposal' } | undefined);
     /**
      * What a `sample_unit` run answers (§6.4 step 3). The default derives the six prose fields from
      * the Seed Brief the compiled prompt carries, so the installed Summary provably came from the
@@ -946,6 +952,8 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                             detail: `The promise field of ${revisionId} states an obligation the rest of the draft never pays; the ending is where it stops.`,
                             evidence: `the deep-review pass read ${revisionId} against the Seed and found the promise unpaid`,
                             cost: spec.cost,
+                            // D-33c reads the ROW's kind, so a fixture that wants a proposal says so here.
+                            ...(spec.kind === undefined ? {} : { kind: spec.kind }),
                             // T6/R2c: a phase-① Summary defect must name the draft it describes, which is
                             // also exactly the id `findingRevisionScope` uses to keep it out of `superseded`.
                             related_refs: [revisionId],
@@ -997,6 +1005,8 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                             detail: `The Overview as installed states an obligation the rest of the Summary never pays; the section is where it stops (reviewed on ${item.id}).`,
                             evidence: `the deep-review pass read the installed Overview at ${item.id} against the Seed and found the promise unpaid`,
                             cost: spec.cost,
+                            // D-33c reads the ROW's kind, so a fixture that wants a proposal says so here.
+                            ...(spec.kind === undefined ? {} : { kind: spec.kind }),
                             // R3: the group scope, and the ONLY scope a grouped Summary finding may carry.
                             group_refs: groupRefs.length > 0 ? groupRefs : item.groupRefs ?? [],
                             why: 'The Critic angle: what a reader of this Author would object to (D-30, R3).'

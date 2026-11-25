@@ -353,7 +353,10 @@ function defaultTools(): Record<string, MockToolHandler> {
             // an open defect) and report green for a sequence the server refuses. Same predicate, same
             // rule ids, same two directions as `tools/reader.ts:raiseFinding`:
             //   (a) a `proposal` waits while the Story has an unresolved issue — which also covers the
-            //       same-pass case, since an issue filed moments ago is open;
+            //       same-pass case, since an issue filed moments ago is open. "Unresolved" is the ONE
+            //       holding set `loop/types.ts:ISSUE_HOLDING_STATES` (`unconfirmed`, `confirmed`,
+            //       `approved`): a `disputed` row is not a defect and does not hold, exactly as in the
+            //       real tool, so a loop test cannot report green for a refusal the product removed;
             //   (b) an `issue` is refused when THIS run already filed a proposal, read from the journal
             //       by `run_ref` the way the real tool reads it.
             // The refusal shape is this double's own (`{ok:false, refused, message}`), not a thrown
@@ -365,7 +368,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                     return {
                         ok: false,
                         refused: 'D-33c',
-                        message: `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach \`fixed\` or \`discarded\` before a proposal can be filed (D-33c).`,
+                        message: `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is \`unconfirmed\`, \`confirmed\` or \`approved\`; one the Editor marked \`disputed\` is not a defect and releases it, exactly as \`fixed\` or \`discarded\` does (D-33c).`,
                         open_issues: openIssues.length,
                         open_issue_refs: openIssues.map((issue) => issue.id)
                     };
@@ -698,7 +701,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                     return {
                         ok: false,
                         refused: 'D-33d',
-                        message: `proposal ${findingId} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because issues are in focus before anything else can be done (D-33d).`,
+                        message: `proposal ${findingId} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because issues are in focus before anything else can be done (D-33d). Only \`unconfirmed\`, \`confirmed\` and \`approved\` issues are in that set: one you marked \`disputed\` already released this proposal.`,
                         open_issues: openIssues.length,
                         open_issue_refs: openIssues.map((issue) => issue.id)
                     };

@@ -12,6 +12,9 @@
  *      hash, so two things fall out and both are pinned here — an install whose newest revision still
  *      carries an open defect does NOT re-arm the seat, and the seat re-arms the moment the clean
  *      selection ADVANCES (a deep pass clears a group, or a newer clean revision supersedes an older one).
+ *      "Open defect" is D-33c's HOLDING SET — `unconfirmed`, `confirmed`, `approved` — so a finding the
+ *      Editor marks `disputed` never holds the seat shut (2026-11-25: a disputed row drives no work, so a
+ *      book whose only outstanding note was disputed used to drain with an empty rail; pinned below).
  *   2. IT TAKES THE FIRST DISPATCH SLOT (`priority: 2`, `rank: -1`). The rigs cap concurrency at 1
  *      (`loop/mock.ts`), so a seat ranked LAST in the class would only ever score the FINAL revision of a
  *      book. The rank is what makes "one scoring run per reviewed Summary" true under a ceiling of 1, and
@@ -53,7 +56,7 @@ import { storyPhrase } from '../phrase/catalog';
 import { cleanSelectionOf, stampCleanRevisions } from '../phrase/reviewed';
 import { SECTION_SCORE_ATTEMPT_CAP } from '../phrase/section-scores';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
-import { AUTHOR_ATTR } from '../run/mock';
+import { AUTHOR_ATTR, seedFinding } from '../run/mock';
 import { SectionScoresSchema, SECTION_SCORES_SCHEMA_NAME } from '../../shared/schemas';
 import type { PhraseGroup, RunState, SummaryScore } from '../../shared/types';
 
@@ -194,6 +197,93 @@ describe('the scoring seat is gated on the clean selection, not on installed tex
         });
         // The seat's schema is the SAME object the transport ships, not a copy that could drift.
         expect(seats[0]!.item.responseSchema!.schema).toBe(SectionScoresSchema);
+    });
+
+    it('arms through a DISPUTED defect and a repaired one — the release, in the phase that used to wedge (D-33c, D-65, D-67)', async () => {
+        const rig = await rigged();
+
+        install(rig, 'the installed text.');
+
+        // Five texts, no clean verdict on any of them: the seat is shut before the findings enter, so the
+        // arming below cannot be credited to anything but the stamps.
+        expect(scoreSeats(rig)).toEqual([]);
+
+        // THE DESK THE DEADLOCK SHIPPED ON, at the phase level. A group-mode Summary with two findings on
+        // `ending`: one the Writer has repaired (`fixed`) and one the Editor DISPUTED — the note does not
+        // fit the text. Neither row owes anybody a step: the repaired one has no open fix task, and a
+        // disputed claim drives no work (`phrase/exclusion.ts`), earns no verify seat (`loop/work.ts`'s
+        // verify queue is `unconfirmed`-only) and never reaches the Author's desk
+        // (`loop/records.ts:findingsAwaitingAuthor` wants `confirmed`). Under the old four-state reading
+        // the disputed row kept `ending` out of the clean selection forever, so the seat below never
+        // armed, the rail stayed empty, and the phase could only drain past a book nobody was blocking.
+        const ending = groupsOf(rig).find((group) => group.key === 'ending')!;
+        const repaired = seedFinding(rig.store, rig.storyId, {
+            state: 'fixed',
+            criterion_ref: 'C-4',
+            fingerprint: 'C-4|chapter_1',
+            title: 'the ending walks back the promise it sold'
+        });
+        const disputed = seedFinding(rig.store, rig.storyId, {
+            state: 'disputed',
+            criterion_ref: 'C-9',
+            fingerprint: 'C-9|chapter_1',
+            title: 'the ending is too fast — the text does not say so'
+        });
+
+        // The scope is a write of its own: `seedFinding` leaves `group_refs` empty (a tool-filed finding
+        // names its groups at creation; a fixture says so afterwards). Scoped to `ending` only, so the
+        // other four groups were never vetoed and cannot be what arms the seat. The updated rows are kept
+        // because the optimistic-rev check below reads their new revs.
+        const scopedRepaired = rig.store.findings.update(
+            repaired.id,
+            { group_refs: [ending.id] },
+            AUTHOR_ATTR,
+            [{ id: repaired.id, rev: repaired.rev }]
+        );
+        const scopedDisputed = rig.store.findings.update(
+            disputed.id,
+            { group_refs: [ending.id] },
+            AUTHOR_ATTR,
+            [{ id: disputed.id, rev: disputed.rev }]
+        );
+        expect([scopedRepaired.state, scopedDisputed.state]).toEqual(['fixed', 'disputed']);
+
+        // The cross-group pass closes over the whole vector: `stampCleanRevisions` skips a group an OPEN
+        // issue names, and under D-33c's holding set neither of these rows is open — so all five groups
+        // carry the stamp, `ending` included.
+        stampClean(rig);
+
+        expect(
+            rig.store.groupRevisions
+                .list()
+                .filter((row) => row.story_id === rig.storyId && row.clean === true)
+                .map((row) => row.group_key)
+                .sort()
+        ).toEqual(['ending', 'premise', 'promise', 'theme', 'tone']);
+        expect(cleanSelectionOf(rig.store, rig.story())).toMatchObject({ complete: true, gaps: [] });
+
+        // AND THE SEAT ARMS on the clean vector — the phase resumes, which is the whole point of releasing
+        // a disputed claim instead of blocking on it.
+        expect(scoreSeats(rig).map((seat) => seat.key)).toEqual([sectionScoreClaimKey(vectorHashOf(rig))]);
+
+        // THE CONTROL, from the other side of the same set, in the same book: put the note back where it
+        // is still answerable (`confirmed`, the Editor's "yes, but the Writer must check") and the gate
+        // closes again. Release means "not a defect", not "anything goes" — the seat is still gated on
+        // D-33c's holding set, exactly as the first test's open-defect case pins.
+        rig.store.findings.update(scopedDisputed.id, { state: 'confirmed' }, AUTHOR_ATTR, [
+            { id: scopedDisputed.id, rev: scopedDisputed.rev }
+        ]);
+
+        expect(cleanSelectionOf(rig.store, rig.story()).gaps).toEqual([
+            {
+                group_id: ending.id,
+                group_key: 'ending',
+                reason: 'no_clean_revision',
+                latest: 1,
+                issues_open: true
+            }
+        ]);
+        expect(scoreSeats(rig)).toEqual([]);
     });
 
     it('does NOT re-arm for an install nobody reviewed, and re-arms when the clean selection advances', async () => {

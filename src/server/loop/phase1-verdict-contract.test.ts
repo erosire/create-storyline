@@ -180,9 +180,10 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
             'and A PROPOSAL WAITS UNTIL EVERY ISSUE IS RESOLVED — while any issue on this Story is unresolved'
         );
         // The resolution bar is stated in the same breath as the rule, because `approved` is the state a
-        // crew reads as "done" and it is not: only `fixed`/`discarded` close an issue.
+        // crew reads as "done" and it is not, while `disputed` is the state a crew reads as "blocked" and
+        // is not either: the holding set is exactly `unconfirmed`/`confirmed`/`approved`.
         expect(text).toContain(
-            '(`fixed` or `discarded` is what closes one; `unconfirmed`, `confirmed`, `approved` and `disputed` are all still open)'
+            '(only `unconfirmed`, `confirmed` and `approved` hold one open; an issue marked `disputed`, `fixed` or `discarded` releases it)'
         );
         // …and the rule never strands the pass: an empty review is a valid answer, which is the half that
         // stops a Critic filing an absence to avoid standing down.

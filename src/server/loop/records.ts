@@ -14,6 +14,7 @@ import {
     CLOSED_FINDING_STATES,
     CONFIRMED_FINDING_STATES,
     DISPATCHABLE_TASK_KINDS,
+    ISSUE_HOLDING_STATES,
     OPEN_TASK_STATES,
     UNDECIDED_IDEA_STATES,
     type LoopChapter,
@@ -454,27 +455,50 @@ export const summaryBlockingCost = (story: Story, cost: Cost): boolean =>
 // ---------------------------------------------------------------------------
 
 /**
- * THE OPEN-DEFECT TEST FOR ONE ROW (D-33c, D-33d): `kind: 'issue'` — explicit or absent, the legacy
- * reading `tools/reader.ts:kindOf` and `tools/utilities.ts:findingFingerprint` both give it — in a
- * state that has NOT closed.
+ * THE OPEN-DEFECT TEST FOR ONE ROW (D-33c, D-33d, and D-67's Clean read): `kind: 'issue'` — explicit
+ * or absent, the legacy reading `tools/reader.ts:kindOf` and `tools/utilities.ts:findingFingerprint`
+ * both give it — in a state that HOLDS work.
  *
- * WHY STATE, NOT COST, NOT CONFIRMATION. The question D-33c answers is "is there a defect this book
- * still has to answer?", and that is a different question from every one already answered here:
- *   * NOT `isBlockingCost` — a `minor`/`taste` issue is still an issue the crew named as a defect, and
- *     the Author asked that proposals wait behind issues, not behind only the expensive ones;
- *   * NOT `unconfirmedFindings` — a `confirmed` defect is closer to being fixed, not further, and
- *     `disputed` counts as unresolved on purpose: the Editor saying "not a defect" is a DECISION the
- *     Author can still overturn, and until the row is `fixed` or `discarded` the record still calls the
- *     book defective. The Author's own discard route (`routes.ts`'s discard) lands in
- *     `CLOSED_FINDING_STATES`, so the Author does have the release valve — it just has to be taken.
+ * THE HOLDING SET IS `ISSUE_HOLDING_STATES` (`loop/types.ts`): `unconfirmed`, `confirmed`, `approved`.
+ * That is §4.10's own "Open means any of `unconfirmed`, `confirmed`, `approved` that is not yet
+ * `fixed`" (specifications.md §4.10), and the same three the Author's rail lists
+ * (`api/projections.ts`, `dashboard/components/story-contract.ts:OPEN_FINDING_STATES`). The phase-①
+ * sign-off reads a NARROWER set and never a wider one: `summaryBlockingFindings` below keeps only
+ * `confirmed` and `approved`, and only at a blocking cost (`summaryBlockingCost`), so a sign-off can
+ * never block on more rows than this predicate calls open — an `unconfirmed` suspicion holds the FLOW
+ * (D-33c) without holding the phase's lock, and the dial's `minor` rule narrows it once more.
  *
- * So the closed set is EXACTLY `CLOSED_FINDING_STATES` (`fixed`, `discarded`) and `unconfirmed`,
- * `confirmed`, `approved` and `disputed` all count as open. That keeps the release honest: a proposal
- * becomes filable the moment every issue is genuinely resolved, which is also the condition a later
- * "clean revision" feature will want, so nothing here has to be revisited for it.
+ * WHY STATE, NOT COST. The question D-33c answers is "is there a defect this book still has to
+ * answer?", which is a different question from `isBlockingCost` — a `minor`/`taste` issue is still a
+ * defect the crew named, and the Author asked that proposals wait behind issues, not only behind the
+ * expensive ones.
+ *
+ * WHY `disputed` IS NO LONGER OPEN (2026-11-25, the owner's decision — "Not blocking — keep
+ * flowing"). D-33's own principle is that a disputed claim is not a defect, and the repo already
+ * treats it that way everywhere else: it drives no work (`phrase/exclusion.ts:345-354` — "a
+ * `disputed`/`discarded`/`fixed` row drives nothing"), earns no seat (`loop/work.ts`'s verify queue
+ * is `unconfirmed`-only, and `tools/reader.ts:confirmFinding` accepts only `confirmed`/`approved`),
+ * never reaches the Author's desk (`records.ts:findingsAwaitingAuthor` wants `confirmed`), never
+ * holds the drain (`loop/findings.test.ts:355`), never holds a chapter (`loop/engine.ts:898`) or the
+ * sign-off (`records.ts:summaryBlockingFindings`), and the dashboard files it under "archived".
+ * Counting it as open here was the one outlier, and it deadlocked silently: the row held the Critic's
+ * proposal gate and the Editor's approval gate forever, while nothing in the pipeline could ever move
+ * it and the rail truthfully showed "no open findings".
+ *
+ * THE AUTHOR STILL OWNS THE VERDICT. The overturn valves are untouched and the flow never waits on
+ * any of them: the no-guard approve/discard routes (`api/routes.ts`), the completion-accept discard
+ * sweep, and the group lock's voiding (`phrase/locks.ts:VOIDABLE_FINDING_STATES`, which still voids a
+ * `disputed` row). The Editor's "not a defect" is D-34a's final triage FOR THE FLOW; an Author who
+ * disagrees says so on the row, and the loop does not sit down in the meantime.
+ *
+ * The Clean-stamp half of this read (`phrase/reviewed.ts:openIssueGroupIds`) is documented as a
+ * deliberate reader of THIS pair, so the reviewed-Overview veto, the rail's `blockingIssues` list and
+ * the crew's gates all move in the same commit — which is what un-wedges a book stuck on a disputed
+ * claim: its group stops being vetoed, the Clean stamp lands, the selection completes, and the
+ * scoring seat arms.
  */
 export const isOpenIssueFinding = (finding: Finding): boolean =>
-    (finding.kind ?? 'issue') === 'issue' && !CLOSED_FINDING_STATES.includes(finding.state);
+    (finding.kind ?? 'issue') === 'issue' && ISSUE_HOLDING_STATES.includes(finding.state);
 
 /**
  * Every unresolved DEFECT this Story carries, in the store's stable finding order (D-33c, D-33d).

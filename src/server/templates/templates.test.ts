@@ -444,9 +444,11 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // The Editor is the OTHER half: a Critic told not to file is a saved round, an Editor not told is
         // a turn spent calling a tool that refuses. This paragraph is the Author-editable twin of the
         // engine-owned `run/brief.ts:jobStatement('verify_findings')` sentence, and the convention that
-        // rules appearing in both places stay in sync (`knowledge.md`) is what this pin holds.
+        // rules appearing in both places stay in sync (`knowledge.md`) is what this pin holds. The
+        // holding set is stated, not implied: `disputed` RELEASES a proposal (D-33c/D-33d), so an Author
+        // who rewrites this paragraph cannot accidentally re-teach the old four-state doctrine.
         expect(byName('editor-general').roles[0].prompt).toContain(
-            'ISSUES IN FOCUS (D-33d). Issues before anything else: while this Story has an unresolved issue — `fixed` or `discarded` is what closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold it open — `approveFinding` REFUSES a row marked `proposal`, and the auto-approve dial skips it too. Nothing else outranks a defect the crew has already agreed to: verify and decide the issues first, and the proposals queue behind them. A proposal you cannot approve yet stays `confirmed` rather than being forced through, and discarding a proposal is always allowed, because declining a change is not an approval. An ISSUE row is never held by this rule — working the defects is exactly what releases the proposals.'
+            'ISSUES IN FOCUS (D-33d). Issues before anything else: while this Story has an unresolved issue — only `unconfirmed`, `confirmed` and `approved` hold one open, and one the Editor marks `disputed` releases it — `approveFinding` REFUSES a row marked `proposal`, and the auto-approve dial skips it too. Nothing else outranks a defect the crew has already agreed to: verify and decide the issues first, and the proposals queue behind them. A proposal you cannot approve yet stays `confirmed` rather than being forced through, and discarding a proposal is always allowed, because declining a change is not an approval. An ISSUE row is never held by this rule — working the defects is exactly what releases the proposals.'
         );
 
         // D-17c/P12: `selection_rules` is the Author's own rulebook — the one prompt they are invited to

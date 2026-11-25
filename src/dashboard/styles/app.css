@@ -1238,80 +1238,139 @@
 
 /* ------------------------------------------------------------------ directive bar */
 
+/* THE COMPOSER SHAPE, borrowed from the chat workstation (packages/loadscript/chat): ONE quiet
+   metadata line, then the field as a recessed well with the send control docked inside it. The
+   label used to float inside the field's border and the field was painted in the region's own
+   `--surface`, so the two colours cancelled out and only a 1px frame showed — the bar read as a
+   caption on the region instead of somewhere to type. */
 .directive-bar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     padding: 10px 12px;
     border: 1px solid var(--line-strong);
     border-top: 2px solid var(--accent);
     border-radius: var(--radius);
-    background: var(--surface);
+    background: var(--surface-2);
 }
 
 /* The bar is the content column's last child, so the region's own border is the frame: no
-   second inset border, no floating card. It reads as the foot of the content, not a page footer. */
+   second inset border, no floating card. It reads as the foot of the content, not a page footer —
+   and it takes the band tone the region's head already uses, so the column is bracketed by the
+   same two surfaces rather than by content-coloured chrome at the bottom. */
 .region--story > .directive-bar {
     flex: 0 0 auto;
     border: 0;
     border-top: 2px solid var(--accent);
     border-radius: 0;
-    background: var(--surface);
+    background: var(--surface-2);
 }
 
-.directive-bar__field {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    padding: 7px 12px 6px;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-}
-
-.directive-bar__field:focus-within {
-    border-color: var(--accent);
-    outline: 1px solid var(--accent);
-    outline-offset: 0;
-}
-
-.directive-bar__send-glyph {
-    display: none;
-    font-size: 11px;
-    line-height: 1;
-}
-
-.directive-bar__send-label {
-    display: inline;
-}
-
-/* One input box with its label floating inside the border: the label states the action, and
-   nothing else is printed around the field. */
+/* The one metadata line: what the direction is addressed to (U-4 / U-9), stated once ABOVE the
+   well. It keeps the accent hue because it is the Author's direction, not a form caption — but it
+   no longer shares a border with the text, which is what made the old box unreadable. */
 .directive-bar__label {
     display: block;
     max-width: 100%;
     overflow: hidden;
     color: var(--accent);
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     text-overflow: ellipsis;
     text-transform: uppercase;
     white-space: nowrap;
+    cursor: text;
 }
 
+/* Positioning context for the docked arrow, and the row the well fills. */
+.directive-bar__field {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+}
+
+/* THE WELL: `--bg` against the `--surface-2` band, so an empty field is a visible surface the
+   Author can see before the first keystroke (the same recessed reading `.sv-group-note` fields
+   use). The 44px right gutter is what keeps the draft clear of the docked arrow, and the 1px frame
+   plus the vertical padding are what `resizeDirectiveField`'s height math measures — keep them
+   together, or the field comes out 2px short and grows a jittery scrollbar. */
 .directive-bar__input {
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: transparent;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 9px 44px 9px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
     color: var(--text-strong);
-    font-family: inherit;
+    font: inherit;
     font-size: 13.5px;
-    outline: none;
+    line-height: 1.5;
+    resize: none;
+    overflow-y: auto;
+    transition: border-color 120ms linear;
+}
+
+.directive-bar__input::placeholder {
+    color: var(--muted);
+}
+
+.directive-bar__input:hover {
+    border-color: var(--dim);
+}
+
+.directive-bar__input:focus {
+    border-color: var(--accent);
+}
+
+.directive-bar__input:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+/* The one verb, docked INSIDE the well's right edge as a 30px round control (the chat composer's
+   dock). Centred in the BOX at every height — `top: 50%` plus the counter-translate — so a
+   six-row draft does not drag the arrow down its first line. Flat, as everywhere here: a solid
+   fill and a 1px border, and the only motion is the 1px press. */
+.directive-bar__send {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition:
+        border-color 120ms linear,
+        background 120ms linear,
+        color 120ms linear;
+}
+
+.directive-bar__send:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.directive-bar__send:active:not(:disabled) {
+    transform: translateY(calc(-50% + 1px));
+}
+
+/* An empty draft keeps the affordance in place but cannot fire, so the arrow reads as armed or
+   unarmed rather than appearing and disappearing under the Author's cursor. */
+.directive-bar__send:disabled {
+    border-color: var(--line);
+    color: var(--dim);
+    cursor: not-allowed;
 }
 
 /* ------------------------------------------------------------------ buttons */
@@ -2009,8 +2068,11 @@
 
 @media (max-width: 820px) {
     .station {
-        /* The composer is docked to the viewport, so the content clears it at the end of the scroll. */
-        padding: 8px 8px calc(64px + env(safe-area-inset-bottom));
+        /* The composer is docked to the viewport, so the content clears it at the end of the
+           scroll. The clearance is the docked bar's own one-row height — 6px padding, the
+           metadata line, the 4px gap, the one-row well, 6px padding — rounded up, so the last line
+           of a Story is never parked under the Author's channel. */
+        padding: 8px 8px calc(70px + env(safe-area-inset-bottom));
         gap: 8px;
     }
 
@@ -2048,8 +2110,10 @@
         white-space: normal;
     }
 
-    /* The minimal composer: ONE field and a send control (the harness's phone shape). It is
-       fixed at the viewport foot, so a long Story never buries the Author's channel. */
+    /* The minimal composer: the metadata line over the well with the arrow docked inside it (the
+       harness's phone shape). It is fixed at the viewport foot, so a long Story never buries the
+       Author's channel. The column keeps its desktop order below this seam — line, then field —
+       and only pays for the foot with tighter padding and the safe area. */
     .directive-bar,
     .region--story > .directive-bar {
         position: fixed;
@@ -2057,43 +2121,22 @@
         bottom: 0;
         left: 0;
         z-index: 20;
-        display: flex;
-        align-items: center;
-        gap: 6px;
+        gap: 4px;
         padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
         border: 0;
         border-top: 1px solid var(--line-strong);
         border-radius: 0;
-        background: var(--surface);
-    }
-
-    .directive-bar__field {
-        flex: 1;
-        min-width: 0;
-        padding: 5px 10px 4px;
+        background: var(--surface-2);
     }
 
     .directive-bar__label {
-        font-size: 9px;
+        font-size: 9.5px;
     }
 
+    /* The docked arrow keeps its 30px box and the field keeps its 44px gutter (the height math in
+       DirectiveBar.tsx reads only the 1px frame plus the padding), so the only phone change is the
+       tighter vertical padding, which still clears one 13.5px/1.5 line. */
     .directive-bar__input {
-        font-size: 13.5px;
-    }
-
-    .directive-bar .button--send {
-        flex: 0 0 auto;
-        width: 32px;
-        height: 32px;
-        padding: 0;
-        border-radius: 999px;
-    }
-
-    .directive-bar__send-label {
-        display: none;
-    }
-
-    .directive-bar__send-glyph {
-        display: inline;
+        padding-block: 7px;
     }
 }

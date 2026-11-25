@@ -269,6 +269,27 @@ export const OPEN_TASK_STATES: Task['state'][] = ['open', 'claimed'];
 export const OPEN_FINDING_STATES: Finding['state'][] = ['unconfirmed', 'confirmed', 'approved', 'disputed'];
 
 /**
+ * THE HOLDING SET FOR THE ISSUES-FIRST RULES (D-33c, D-33d, and the Clean stamp's read of the same
+ * question in D-67) — and it is named once so no funnel can spell it differently.
+ *
+ * An `issue` holds a proposal (and a group's Clean verdict) while its state is in THIS list, and
+ * nothing else. A `disputed` row is NOT here (2026-11-25, the owner's decision): the Editor's "that
+ * is not a defect" is D-34a's final triage, the row drives no work (`phrase/exclusion.ts`'s writer
+ * batch and `loop/work.ts`'s verify queue both skip it), no seat is ever generated for it, and it
+ * never reaches the Author's queue (`records.ts:findingsAwaitingAuthor` wants `confirmed`) — so a
+ * state that asks nothing of anybody cannot be what stops the flow. Counting it held two gates open
+ * forever over a row the pipeline could no longer act on: the silent deadlock this set removes.
+ *
+ * The Author keeps every overturn valve and the flow never waits on any of them: the no-guard
+ * approve and discard routes (`api/routes.ts`), the completion-accept discard sweep, and the group
+ * lock's voiding (`phrase/locks.ts:VOIDABLE_FINDING_STATES`, which still voids a `disputed` row —
+ * that list is about what a lock may retire, not about what holds work). `disputed` is also still
+ * `OPEN_FINDING_STATES` and still counted by the completion preview's leftovers, which are honest
+ * "still on the record" numbers rather than gates.
+ */
+export const ISSUE_HOLDING_STATES: Finding['state'][] = ['unconfirmed', 'confirmed', 'approved'];
+
+/**
  * L-15a: the finding states that count toward `trend` and the stall — `confirmed` (and anything
  * downstream of confirmation). An `unconfirmed` suspicion re-raised by an amnesiac reviewer is not
  * evidence the Story is stuck, and `disputed` is the Editor's "not a defect" (D-33, D-34a).
@@ -277,6 +298,23 @@ export const CONFIRMED_FINDING_STATES: Finding['state'][] = ['confirmed', 'appro
 
 /** A fingerprint is closed when its finding reached one of these (L-15's `improving`, L-16a). */
 export const CLOSED_FINDING_STATES: Finding['state'][] = ['fixed', 'discarded'];
+
+/**
+ * The finding states after which a `fix` ROW that names the finding is MOOT: the work the row was
+ * opened for can never happen again, so the row is dead weight in the queue rather than a job.
+ *
+ * `fixed` / `discarded` are `CLOSED_FINDING_STATES` — the answer is installed, or the Author retired
+ * the defect. `disputed` joins it here (and nowhere else) because under D-33 a disputed claim is not a
+ * defect: it drives no work (`phrase/exclusion.ts`'s writer batch, `loop/work.ts`'s verify queue),
+ * holds no gate since `ISSUE_HOLDING_STATES` dropped it, and an Author who overturns the dispute
+ * re-arms the work through the findings path (`engine.ts:approveFinding` → `createWorkForFinding`
+ * opens a fresh row exactly because no OPEN row names the finding), not through this one.
+ *
+ * It is NOT `ISSUE_HOLDING_STATES`' complement: `unconfirmed`/`confirmed`/`approved` are the rows that
+ * still owe work, and this set names only the states where the row behind the finding is already
+ * settled. The sweep's orphan-row leg (`engine.ts`, `loop_close_moot_fix_rows`) is its only reader.
+ */
+export const MOOT_FIX_TASK_FINDING_STATES: Finding['state'][] = [...CLOSED_FINDING_STATES, 'disputed'];
 
 /** Idea states that need the Author before the phase can advance (L-7a, D-29). */
 export const UNDECIDED_IDEA_STATES: Idea['state'][] = ['proposed', 'verified', 'refuted', 'unverifiable'];

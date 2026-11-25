@@ -75,8 +75,10 @@ import {
  *
  * ISSUE-ONLY, deliberately: `kind: 'proposal'` is an improvement the Seed never promised (D-33b), and
  * a book is not unchosen because somebody suggested a word change. The state set is D-33c's
- * `isOpenIssueFinding` — only `fixed` and `discarded` close an issue, so `unconfirmed`, `confirmed`,
- * `approved` and `disputed` all still hold the group open — and the scope is R3's
+ * `isOpenIssueFinding` — the holding set `ISSUE_HOLDING_STATES`, so `unconfirmed`, `confirmed` and
+ * `approved` hold the group open while `fixed`, `discarded` and (since 2026-11-25) `disputed` do not:
+ * an Editor's "that is not a defect" cannot veto a Clean verdict over text the pipeline will never
+ * rewrite for it — and the scope is R3's
  * `findingGroupScope`, which means an UNSCOPED finding (no `group_refs`, the legacy whole-Overview
  * reading) scopes to ALL FIVE groups and therefore blocks clean for all five.
  *

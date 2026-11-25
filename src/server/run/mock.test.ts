@@ -88,7 +88,7 @@ describe('the mock crew files under D-33c — issues before proposals, and never
             ok: false,
             refused: 'D-33c',
             message:
-                'a proposal cannot be filed while 1 issue is unresolved — finding_0 — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach `fixed` or `discarded` before a proposal can be filed (D-33c).',
+                'a proposal cannot be filed while 1 issue is unresolved — finding_0 — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is `unconfirmed`, `confirmed` or `approved`; one the Editor marked `disputed` is not a defect and releases it, exactly as `fixed` or `discarded` does (D-33c).',
             open_issues: 1,
             open_issue_refs: ['finding_0']
         });
@@ -163,6 +163,37 @@ describe('the mock crew files under D-33c — issues before proposals, and never
             rev: 1
         });
     });
+
+    it('files the Proposal over an issue the Editor DISPUTED (D-33c)', async () => {
+        const { store, call } = crew();
+
+        await call('run_0', 'raiseFinding', defect('the map contradicts the 1911 survey'));
+
+        // THE BOUNDARY OF THE HOLDING SET. `disputed` is the Editor saying the note does not fit the text:
+        // the row is still on the board and still answerable — neither `fixed` nor `discarded` — but it
+        // claims no defect, so it does not hold a proposal down. This is the state that used to deadlock a
+        // book: no phase owed a disputed row any work, and nothing could be proposed until somebody
+        // fabricated a second verdict on it.
+        store.findings.update(
+            'finding_0',
+            { state: 'disputed' },
+            { run_ref: null, author: true, why: 'seed: the Editor disputes the note (D-33c)' },
+            [{ id: 'finding_0', rev: 1 }]
+        );
+
+        expect(await call('run_1', 'raiseFinding', improvement('open the book on the lie'))).toEqual({
+            ok: true,
+            finding_id: 'finding_1',
+            kind: 'proposal',
+            rev: 1
+        });
+        // Release is not closure: the disputed row survives the call, exactly as the Editor left it, and
+        // the Author can still overturn it (the unguarded approve/discard routes are the valve).
+        expect(store.findings.list().map((row) => [row.id, row.kind ?? 'issue', row.state])).toEqual([
+            ['finding_0', 'issue', 'disputed'],
+            ['finding_1', 'proposal', 'unconfirmed']
+        ]);
+    });
 });
 
 describe('the mock crew approves under D-33d — issues are in focus before a Proposal is approved', () => {
@@ -186,7 +217,7 @@ describe('the mock crew approves under D-33d — issues are in focus before a Pr
             ok: false,
             refused: 'D-33d',
             message:
-                'proposal finding_1 cannot be approved while 1 issue is unresolved — finding_0 — because issues are in focus before anything else can be done (D-33d).',
+                'proposal finding_1 cannot be approved while 1 issue is unresolved — finding_0 — because issues are in focus before anything else can be done (D-33d). Only `unconfirmed`, `confirmed` and `approved` issues are in that set: one you marked `disputed` already released this proposal.',
             open_issues: 1,
             open_issue_refs: ['finding_0']
         });
@@ -252,5 +283,42 @@ describe('the mock crew approves under D-33d — issues are in focus before a Pr
         // The approval is attributed to the RUN, as every other write from a session is (T-3, D-41c keeps
         // the auto and author lanes distinguishable) — the mirror does not invent an author lane.
         expect(store.findings.get('finding_1')).toMatchObject({ state: 'approved', approved_by: 'run_0' });
+    });
+
+    it('approves the Proposal over an issue the Editor DISPUTED (D-33d)', async () => {
+        const { store, call } = crew();
+
+        // Same desk as the refusal test — an open ISSUE and a `confirmed` PROPOSAL — with ONE variable
+        // changed: the issue is `disputed`. The gate reads the shared holding set
+        // (`loop/records.ts:openIssueFindings`), so a row the Editor rejected is not an unresolved defect
+        // and the approval lands. The Author keeps every overturn valve — the unguarded approve/discard
+        // routes and the completion-accept discard still answer a disputed row — but none of them is
+        // AWAITED by a proposal.
+        seedFinding(store, 'story_0', { criterion_ref: 'C-4', title: 'the map contradicts the 1911 survey' });
+        seedFinding(store, 'story_0', {
+            criterion_ref: 'C-11',
+            title: 'open the book on the lie',
+            cost: 'minor',
+            kind: 'proposal',
+            state: 'confirmed'
+        });
+
+        store.findings.update(
+            'finding_0',
+            { state: 'disputed' },
+            { run_ref: null, author: true, why: 'seed: the Editor disputes the note (D-33d)' },
+            [{ id: 'finding_0', rev: 1 }]
+        );
+
+        expect(
+            await call('run_0', 'approveFinding', { finding_id: 'finding_1', decision: 'approve', why: 'worth a pass' })
+        ).toEqual({ ok: true, rev: 2 });
+        expect(store.findings.list().map((row) => [row.id, row.kind ?? 'issue', row.state, row.approved_by])).toEqual([
+            // The disputed row is UNTOUCHED by the approval — `approved_by` stays absent. Releasing a
+            // proposal is not the same write as closing an issue, and the Author still reads the row as
+            // the Editor left it.
+            ['finding_0', 'issue', 'disputed', undefined],
+            ['finding_1', 'proposal', 'approved', 'run_0']
+        ]);
     });
 });

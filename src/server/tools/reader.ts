@@ -450,7 +450,7 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 const raiseFinding: ToolDefinition = {
     name: 'raiseFinding',
     description:
-        "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story's logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST, in both directions (D-33c): while any issue on this Story is unresolved — only `fixed` or `discarded` closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold — a `kind: proposal` call is refused with the count of open issues, and an `issue` is refused if THIS pass already filed a proposal, because an issue and a proposal never share a review pass: end the pass and file the issue in your next review. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
+        "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story's logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST, in both directions (D-33c): while any issue on this Story is unresolved — only `unconfirmed`, `confirmed` and `approved` hold one open, and an issue the Editor marks `disputed` releases it exactly as `fixed` or `discarded` does — a `kind: proposal` call is refused with the count of open issues, and an `issue` is refused if THIS pass already filed a proposal, because an issue and a proposal never share a review pass: end the pass and file the issue in your next review. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
     inputSchema: {
         type: 'object',
         properties: {
@@ -576,13 +576,15 @@ const raiseFinding: ToolDefinition = {
         // Editor's `approveFinding` (D-33d), the dial sweep, `engine.approveFinding` and the approve-all
         // route cannot drift apart about what "an issue is still open" means.
         //
-        // (a) G1 — a PROPOSAL WAITS FOR THE ISSUES. Every issue has to reach `fixed` or `discarded`
-        //     before a proposal can be filed. This covers the SAME-PASS case for free: an issue raised
-        //     moments ago in this run is open, so the proposal that follows it is refused here rather
-        //     than by a second rule. An issue stays open while `unconfirmed`, `confirmed`, `approved` or
-        //     `disputed` — the first three because the repair has not landed, and `disputed` because
-        //     "the Editor thinks that is not a defect" is a decision the Author can still overturn, and
-        //     until the row closes the record still calls the book defective.
+        // (a) G1 — a PROPOSAL WAITS FOR THE ISSUES. Every issue has to leave the holding set
+        //     (`ISSUE_HOLDING_STATES`: `unconfirmed`, `confirmed`, `approved`) before a proposal can be
+        //     filed. This covers the SAME-PASS case for free: an issue raised moments ago in this run is
+        //     open, so the proposal that follows it is refused here rather than by a second rule. A
+        //     `disputed` row is NOT in the holding set (2026-11-25): the Editor's "that is not a defect"
+        //     is D-34a's final triage, the row drives no work and earns no seat, and holding a proposal
+        //     behind a claim nobody can act on is the deadlock the owner decided against — "not blocking,
+        //     keep flowing". The Author still overturns a dispute whenever they like (`routes.ts`'s
+        //     approve and discard, both unguarded); the flow simply never waits for it.
         //
         //     Placed BEFORE the D-16 dedupe on purpose (the same reasoning as the phase-① draft rule
         //     below): a call this rule refuses must not even bump `seen_count` on an older proposal row,
@@ -591,21 +593,23 @@ const raiseFinding: ToolDefinition = {
         //     open — the row the crew wants bumped already exists, so nothing is lost but a count.
         //
         //     Issues themselves are gated by NOTHING here (except (b)): the release valve stays open, and
-        //     a proposal becomes filable the instant every issue closes. That is the property a later
-        //     "clean revision" feature depends on, so it is written down rather than left to inference.
+        //     a proposal becomes filable the instant every issue leaves the holding set. That is the
+        //     property D-67's Clean stamp reads with the same predicate
+        //     (`phrase/reviewed.ts:openIssueGroupIds`), so the reviewed Overview and the crew's gates
+        //     cannot disagree about what still counts as an open defect.
         if (kind === 'proposal') {
             const openIssues = openIssueFindings(ctx.store, ctx.storyId);
 
             if (openIssues.length > 0) {
                 throw new ToolRefusal(
                     'D-33c',
-                    `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${issueRoster(openIssues)} — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach \`fixed\` or \`discarded\` before a proposal can be filed (D-33c).`,
+                    `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${issueRoster(openIssues)} — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is \`unconfirmed\`, \`confirmed\` or \`approved\`; one the Editor marked \`disputed\` is not a defect and releases it, exactly as \`fixed\` or \`discarded\` does (D-33c).`,
                     {
                         field: 'kind',
                         expected: ['issue'],
                         open_issues: openIssues.length,
                         open_issue_refs: openIssues.map((finding) => finding.id),
-                        fix: 'resolve every open issue first (verify, approve, fix or discard it), then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
+                        fix: 'resolve every open issue first — verify it (confirm or dispute), approve it, fix it or discard it — then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
                     }
                 );
             }

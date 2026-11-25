@@ -2543,8 +2543,9 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
 //   1. a PROPOSAL WAITS FOR THE ISSUES (D-33c), counted and named in the refusal;
 //   2. an ISSUE AND A PROPOSAL NEVER SHARE A PASS (D-33c), in the direction the first rule cannot
 //      cover — the proposal that came first;
-//   3. the release is EXACT: `fixed` and `discarded` open the gate, and every other state — including
-//      `disputed`, the Editor's "not a defect" — keeps it shut;
+//   3. the release is EXACT: `fixed` and `discarded` open the gate, and so does `disputed` — the
+//      Editor's "not a defect", which drives no work and holds nothing (2026-11-25). The three states
+//      that DO hold are `unconfirmed`, `confirmed` and `approved` (`loop/types.ts:ISSUE_HOLDING_STATES`);
 //   4. APPROVAL PAYS THE SAME BILL (D-33d): the Editor cannot approve a proposal over an open issue on
 //      any decision that means "do it", while discarding one and approving an issue both stay legal.
 describe('issues come first, at the filing gate and at the approval (D-33c, D-33d)', () => {
@@ -2659,13 +2660,13 @@ describe('issues come first, at the filing gate and at the approval (D-33c, D-33
         expect(result.message).toBe(
             refusal(
                 'D-33c',
-                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach `fixed` or `discarded` before a proposal can be filed (D-33c).'
+                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is `unconfirmed`, `confirmed` or `approved`; one the Editor marked `disputed` is not a defect and releases it, exactly as `fixed` or `discarded` does (D-33c).'
             )
         );
         // The full set rides in the detail, so a refusal over forty issues still names all forty.
         expect(result).toMatchObject({ open_issues: 1, open_issue_refs: ['finding_0'] });
         expect(result.fix).toBe(
-            'resolve every open issue first (verify, approve, fix or discard it), then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
+            'resolve every open issue first — verify it (confirm or dispute), approve it, fix it or discard it — then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
         );
         // Nothing half-filed, and no `seen_count` moved on the proposal row either: the refusal runs
         // BEFORE D-16's dedupe, so an inadmissible proposal cannot advance the loop's no-progress ledger.
@@ -2687,7 +2688,7 @@ describe('issues come first, at the filing gate and at the approval (D-33c, D-33
         expect(result.message).toBe(
             refusal(
                 'D-33c',
-                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach `fixed` or `discarded` before a proposal can be filed (D-33c).'
+                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is `unconfirmed`, `confirmed` or `approved`; one the Editor marked `disputed` is not a defect and releases it, exactly as `fixed` or `discarded` does (D-33c).'
             )
         );
         expect(store.findings.list().map((finding) => finding.id)).toEqual(['finding_0']);
@@ -2780,18 +2781,64 @@ describe('issues come first, at the filing gate and at the approval (D-33c, D-33
     it.each([
         ['unconfirmed', 'finding_0 (major, unconfirmed)'],
         ['confirmed', 'finding_0 (major, confirmed)'],
-        ['approved', 'finding_0 (major, approved)'],
-        ['disputed', 'finding_0 (major, disputed)']
+        ['approved', 'finding_0 (major, approved)']
     ] as const)('an issue in state `%s` still holds every proposal open (D-33c)', async (state, roster) => {
         seedFinding('issue', state);
         const result = await call('critic', proposal());
 
-        // `approved` counts because approval is the START of the repair, not the end of it (D-34: the
-        // approval is what creates the Writer task). `disputed` counts because the Editor's "that is not
-        // a defect" is a decision the Author can still overturn, and until the row closes, the record
-        // calls the book defective. Only `CLOSED_FINDING_STATES` release it.
+        // THE HOLDING SET, exactly (`loop/types.ts:ISSUE_HOLDING_STATES`). `approved` counts because
+        // approval is the START of the repair, not the end of it (D-34: the approval is what creates the
+        // Writer task). Nothing else holds: `fixed` and `discarded` settled the claim, and `disputed` —
+        // pinned as the release right below — is the Editor's verdict that there was never a claim to
+        // answer, a row the pipeline drives no work for and can never move on its own.
         expect(result).toMatchObject({ ok: false, refused: 'D-33c', open_issues: 1, open_issue_refs: ['finding_0'] });
         expect(result.message).toContain(`— ${roster} —`);
+    });
+
+    it('files the proposal over an issue the Editor DISPUTED — a disputed claim is not a defect (D-33c)', async () => {
+        // THE DEADLOCK THIS DOCTRINE REMOVES (2026-11-25, the owner's "not blocking — keep flowing"). A
+        // `disputed` row drives nothing: no fix task (`loop/status.ts`), no verification seat
+        // (`loop/work.ts`'s queue is `unconfirmed`-only), no Author queue row
+        // (`records.ts:findingsAwaitingAuthor` wants `confirmed`), and the rail files it under
+        // "archived" (`projections.ts`'s open filter). While it counted as open the Critic stayed refused
+        // forever over a row nobody could act on, and the UI truthfully showed no open issues.
+        seedFinding('issue', 'disputed');
+
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_1', kind: 'proposal' } });
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}:${finding.state}`)).toEqual([
+            'finding_0:issue:disputed',
+            'finding_1:proposal:unconfirmed'
+        ]);
+        // The release does NOT rewrite the verdict: the row stays `disputed` for the audit, and the
+        // Author's unguarded approve/discard routes (`api/routes.ts`) remain the overturn valves —
+        // decisions the flow takes no part in waiting for.
+        expect(store.findings.require('finding_0').state).toBe('disputed');
+    });
+
+    it('holds a proposal behind a disputed row ONLY while the row is still answerable (D-33c, the three states)', async () => {
+        // THE CONTRAST THAT KEEPS THIS A RULE AND NOT A FREE PASS: the same Story, the same proposal, the
+        // issue moved through the three holding states and back to `disputed`. Each holding state refuses
+        // with that row named; the dispute releases; re-opening the row (the Author approving a disputed
+        // claim back into work) holds it again — so the doctrine is about the STATE, not about the word.
+        seedFinding('issue', 'disputed');
+
+        expect(await call('critic', proposal({ title: 'open on the lie' }))).toMatchObject({ ok: true });
+
+        const reopened = store.findings.update(
+            'finding_0',
+            { state: 'approved', approved_by: 'author' },
+            { why: 'seed: the Author overturns the dispute and puts the defect back in work' },
+            [{ id: 'finding_0', rev: store.findings.require('finding_0').rev }]
+        );
+
+        expect(reopened.state).toBe('approved');
+        expect(await call('reader', proposal({ title: 'let the keeper lie first', criterion_ref: 'C-11' }))).toMatchObject({
+            ok: false,
+            refused: 'D-33c',
+            open_issue_refs: ['finding_0']
+        });
     });
 
     it('refuses a proposal approved over an open issue, on `approve` and on `auto` (D-33d)', async () => {
@@ -2816,17 +2863,52 @@ describe('issues come first, at the filing gate and at the approval (D-33c, D-33
             expect(result.message).toBe(
                 refusal(
                     'D-33d',
-                    'proposal finding_0 cannot be approved while 1 issue is unresolved — finding_1 (major, confirmed) — because issues are in focus before anything else can be done (D-33d).'
+                    'proposal finding_0 cannot be approved while 1 issue is unresolved — finding_1 (major, confirmed) — because issues are in focus before anything else can be done (D-33d). Only `unconfirmed`, `confirmed` and `approved` issues are in that set: one you marked `disputed` already released this proposal.'
                 )
             );
             expect(result.fix).toBe(
-                'work the issues first — verify, approve, fix or discard each one — then approve this proposal; or discard it now, which is allowed at any time'
+                'work the issues first — verify each one (confirm or dispute), approve, fix or discard it — then approve this proposal; or discard it now, which is allowed at any time'
             );
         }
 
         // Nothing moved: the row is still the Author's queue row it was, not approved work.
         expect(store.findings.require('finding_0').state).toBe('confirmed');
         expect(store.tasks.list()).toEqual([]);
+    });
+
+    it('approves a proposal over a DISPUTED issue (D-33d)', async () => {
+        // The approval-side half of the same release. A `disputed` row is not work the loop is waiting
+        // on: the Editor refused to call it a defect, no fix task and no verification seat ever comes
+        // from it, and the Author's unguarded approve/discard routes stay open for overturning it later.
+        seedFinding('proposal', 'confirmed');
+        seedFinding('issue', 'disputed');
+
+        const result = await approve('finding_0', 'approve');
+
+        expect(result).toMatchObject({
+            ok: true,
+            data: { id: 'finding_0', state: 'approved', decision: 'approve' }
+        });
+        // D-34's task still opens on the far side of the gate, and the disputed row is left alone.
+        expect(store.tasks.list().map((task) => `${task.kind}:${task.finding_ref}:${task.state}`)).toEqual([
+            'fix:finding_0:open'
+        ]);
+        expect(store.findings.require('finding_1').state).toBe('disputed');
+    });
+
+    it('lets the dial decide a proposal over a DISPUTED issue on `auto` (D-33d)', async () => {
+        // …and the funnel that deadlocks with nobody clicking it: `auto` is the decision the dial drives,
+        // and the same gate answers it. (`loop/findings.test.ts` pins the sweep's own skip.)
+        store.stories.update(story.id, { auto_approve: ['critical', 'major'] }, { why: 'seed: the dial covers major' });
+        seedFinding('proposal', 'confirmed');
+        seedFinding('issue', 'disputed');
+
+        const result = await approve('finding_0', 'auto');
+
+        expect(result).toMatchObject({
+            ok: true,
+            data: { id: 'finding_0', state: 'approved', approved_by: 'auto', decision: 'auto' }
+        });
     });
 
     it('allows a proposal to be DISCARDED while issues are open (D-33d)', async () => {

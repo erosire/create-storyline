@@ -941,7 +941,7 @@ const verifyIdea: ToolDefinition = {
 const verifyFinding: ToolDefinition = {
     name: 'verifyFinding',
     description:
-        "Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Critic’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass. Two evaluation modes, and the row's `kind` says which applies: an `issue` is judged on admissibility — it must quote a commitment and show the artifact breaking it, and a claim whose whole case is an absence is disputed — while a finding marked `proposal` is a proposal the Seed never promised, judged on whether the change is worth a Writer pass and breaks the installed text, never for being an absence.",
+        "Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Critic’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass, and it is NOT an open issue for anything downstream: it holds no proposal back at `raiseFinding` or `approveFinding` (D-33c, D-33d) and it does not keep a Summary group from being certified clean (D-67) — the flow takes your `not a defect` at face value, and the Author can still overturn it afterwards without the loop waiting. Two evaluation modes, and the row's `kind` says which applies: an `issue` is judged on admissibility — it must quote a commitment and show the artifact breaking it, and a claim whose whole case is an absence is disputed — while a finding marked `proposal` is a proposal the Seed never promised, judged on whether the change is worth a Writer pass and breaks the installed text, never for being an absence.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1031,7 +1031,7 @@ const verifyFinding: ToolDefinition = {
                 next:
                     written.state === 'confirmed'
                         ? `approveFinding ${written.id} to hand the repair to a Writer, or let the Story's switch decide (D-35)`
-                        : 'a disputed finding spawns no task and does not count toward pending (D-33)'
+                        : 'a disputed finding spawns no task and does not count toward pending, and it holds no proposal and no Clean pass open — the flow treats your verdict as final and the Author can still overturn it later (D-33)'
             },
             written.rev,
             `Finding ${written.id} ${written.state} as ${written.cost}`
@@ -1047,7 +1047,7 @@ const verifyFinding: ToolDefinition = {
 const approveFinding: ToolDefinition = {
     name: 'approveFinding',
     description:
-        "Decide a confirmed finding: approve it into a Writer task, discard it with the reason kept, or let the Story's auto-approve switch decide. An unconfirmed finding cannot be approved (D-33). Issues are in focus before anything else: a `proposal` is not approved while any issue is unresolved, because a suggestion does not outrank a defect the crew already agreed to (D-33d) — discarding it is always allowed, and issues are approved whenever else they are ready.",
+        "Decide a confirmed finding: approve it into a Writer task, discard it with the reason kept, or let the Story's auto-approve switch decide. An unconfirmed finding cannot be approved (D-33). Issues are in focus before anything else: a `proposal` is not approved while any issue is unresolved — unresolved means `unconfirmed`, `confirmed` or `approved`, and an issue you marked `disputed` releases it — because a suggestion does not outrank a defect the crew already agreed to (D-33d) — discarding it is always allowed, and issues are approved whenever else they are ready.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1148,20 +1148,24 @@ const approveFinding: ToolDefinition = {
         // `openIssueFindings` is the loop's ONE predicate, shared with the Critic's gate, the dial's
         // sweep, `engine.approveFinding` and the approve-all route, so all five agree about what "an
         // issue is still open" means — a proposal approved on one path and refused on another is the
-        // divergence this whole rule set exists to remove.
+        // divergence this whole rule set exists to remove. And what it means EXCLUDES `disputed`
+        // (2026-11-25, `loop/types.ts:ISSUE_HOLDING_STATES`): the Editor's own "not a defect" is D-34a's
+        // final triage, the row drives no work, and a state the pipeline can never move is exactly what
+        // wedges an approval behind forever. The Author overturns a dispute on the Author's own schedule
+        // (`routes.ts`'s unguarded approve/discard); this gate never waits for that.
         if (decision !== 'discard' && finding.kind === 'proposal') {
             const openIssues = openIssueFindings(store, storyId);
 
             if (openIssues.length > 0) {
                 throw new ToolRefusal(
                     'D-33d',
-                    `proposal ${finding.id} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => `${issue.id} (${issue.cost}, ${issue.state})`).join(', ')}${openIssues.length > 3 ? `, and ${openIssues.length - 3} more` : ''} — because issues are in focus before anything else can be done (D-33d).`,
+                    `proposal ${finding.id} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => `${issue.id} (${issue.cost}, ${issue.state})`).join(', ')}${openIssues.length > 3 ? `, and ${openIssues.length - 3} more` : ''} — because issues are in focus before anything else can be done (D-33d). Only \`unconfirmed\`, \`confirmed\` and \`approved\` issues are in that set: one you marked \`disputed\` already released this proposal.`,
                     {
                         finding_id: finding.id,
                         kind: 'proposal',
                         open_issues: openIssues.length,
                         open_issue_refs: openIssues.map((issue) => issue.id),
-                        fix: 'work the issues first — verify, approve, fix or discard each one — then approve this proposal; or discard it now, which is allowed at any time'
+                        fix: 'work the issues first — verify each one (confirm or dispute), approve, fix or discard it — then approve this proposal; or discard it now, which is allowed at any time'
                     }
                 );
             }

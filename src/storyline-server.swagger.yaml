@@ -2273,8 +2273,10 @@ components:
                 `proposal` never share a review pass, a `proposal` may not be FILED while any issue is
                 unresolved (`tools/reader.ts:raiseFinding`, `D-33c`) nor APPROVED over one
                 (`tools/editor.ts:approveFinding`, the engine's approval, the auto-approve sweep and the
-                chapter approve-all, `D-33d`), and only `fixed` or `discarded` closes an issue —
-                `unconfirmed`, `confirmed`, `approved` and `disputed` are all still open.
+                chapter approve-all, `D-33d`). An issue holds that order only while it is `unconfirmed`,
+                `confirmed` or `approved` (`loop/types.ts:ISSUE_HOLDING_STATES`); a row the Editor marks
+                `disputed` is not a defect and releases the proposal, like `fixed` or `discarded`, and
+                the Author can still overturn that verdict later on the unguarded approve/discard routes.
             fingerprint:
               type: string
             state:
@@ -4228,8 +4230,11 @@ components:
           enum: [unconfirmed, confirmed, approved, disputed]
           description: >-
             The state the row held before the lock moved it to `discarded`. Only these four can appear:
-            `fixed` and `discarded` are terminal and are never rewritten, and `disputed` counts as OPEN,
-            which is a live claim about text that just stopped being writable.
+            `fixed` and `discarded` are terminal and are never rewritten. A `disputed` row IS voidable
+            here, because this is the lock's own retire set (`phrase/locks.ts:VOIDABLE_FINDING_STATES`)
+            and not the issues-first holding set (`loop/types.ts:ISSUE_HOLDING_STATES`, which `disputed`
+            left on 2026-11-25): a lock retires a live claim about text that just stopped being
+            writable, while the flow itself no longer waits on that claim.
         scope:
           type: array
           items:

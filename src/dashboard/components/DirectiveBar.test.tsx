@@ -1,6 +1,6 @@
 // W12 smoke + U-9/D-19: the bar sends one line of intent, and it is not a chat box.
 //
-// U-9 now also means the bar speaks for the pane: the floating label and artifact refs come from
+// U-9 now also means the bar speaks for the pane: the label line and artifact refs come from
 // the rail's selection, so "make it colder" while looking at chapter 4 reaches the Editor as a
 // direction about chapter 4 — not as a free-floating suggestion.
 import { describe, expect, it } from 'vitest';
@@ -39,7 +39,7 @@ describe('DirectiveBar — one line of Author intent (U-9 / D-19)', () => {
 
         expect(client.sendDirective).toHaveBeenCalledTimes(1);
         expect(client.sendDirective).toHaveBeenCalledWith('story_3', 'kill the mentor in ch4', []);
-        // No hint line: the floating label is the whole explanation of what the input does.
+        // No hint line: the label line over the field is the whole explanation of what the input does.
         expect(document.querySelector('.directive-bar__hint')).toBeNull();
         // One line in, one line gone: no transcript is kept (U-9, §13 "not a chat client").
         expect((screen.getByTestId('directive-input') as HTMLInputElement).value).toBe('');
