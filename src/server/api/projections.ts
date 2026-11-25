@@ -41,12 +41,20 @@ import {
 // module that OWNS it, so the projection cannot invent a second version of a loop rule.
 import {
     composeGroupContentFrom,
+    // T-W3 — the compiled Summary: the reviewed composition and the selection it is made of. The Start
+    // verb's `source: 'compiled'` seed and `StoryView.summary_compiled` both read THIS, so the button the
+    // dashboard enables and the text the verb copies cannot disagree about what "Phrase 1 is done" means.
+    composeReviewedContentFrom,
     findingGroupScope,
     findingResolution,
     groupRevisionHistory,
     groupRevisionVector,
     groupVectorHash,
     isGroupManagedStory,
+    // T-W3 — the PER-PHRASE dial (`story.plotlines_mode` / `story.summary_mode`), the scoped entry read,
+    // and the phrase's own copied seed. The per-phrase view needs all three; the Summary's own read keeps
+    // using `isGroupManagedStory`, whose strings are pinned.
+    isPhraseGroupManaged,
     // R1 — the ONE predicate for "is this group's current text locked?". Projected rather than
     // re-derived, so the rail's badge and the loop's refusal read the same flag
     // (`phrase/catalog.ts:isPhraseGroupLocked`).
@@ -55,6 +63,8 @@ import {
     // button and the server's refusal can never disagree about who is writing this group.
     liveGroupRefs,
     phraseGroupsOf,
+    phraseGroupsOfPhrase,
+    phraseSeedOf,
     // D-67/D-68 — the Reviewed Summary's three reads, all from the module that owns the rule: the live
     // clean selection, the Author's recorded choice (re-validated against the rows), and the composed
     // reviewed text. A projection that reimplemented "newest clean revision" would be a fourth opinion
@@ -62,9 +72,17 @@ import {
     cleanSelectionOf,
     chosenSelectionOf,
     composeReviewedOverview,
-    storyPhrase
+    storyPhrase,
+    // T-W3 — a phrase row BY KIND KEY, the read every per-phrase projection and verb addresses on.
+    storyPhraseByKey
 } from '../phrase';
-import { SUMMARY_MIRROR_FIELDS } from '../../shared/phrase';
+import {
+    PHRASE_PLOTLINES_KEY,
+    PHRASE_SUMMARY_KEY,
+    SUMMARY_MIRROR_FIELDS,
+    // Seam S7 — the composition rank INSIDE a phrase, so a chapter set composes in chapter order.
+    phraseGroupRankOf
+} from '../../shared/phrase';
 // §6.4 gate 1's read: "the accepted brief" has exactly one definition in the build — the prompt
 // compiler's deterministic pick (`created_at` then id) — so the Story view reuses it rather than
 // opening a second interpretation of "accepted" that could disagree with what a Writer is told.
@@ -567,13 +585,49 @@ function samplingView(story: Story): SamplingView {
 // ---------------------------------------------------------------------------
 
 /**
+ * `GET /stories/:id` — the pinned `StoryView` plus the three additive fields the phrase rail needs
+ * (T-W3).
+ *
+ * WHY AN INTERSECTION AND NOT NEW FIELDS ON THE CLIENT TYPE: `dashboard/api.ts`'s `StoryView` is the
+ * pinned wire contract and this wave does not own that file, so the server's read type WIDENS it instead
+ * of editing it. Every existing consumer still sees exactly `StoryView` (an intersection is assignable to
+ * it, never the other way round), and the dashboard wave narrows to these three keys when it builds the
+ * phrase rail and its handoff button.
+ */
+export type StorylineStoryView = StoryView & {
+    /**
+     * THE PER-PHRASE ② DIAL, echoed rather than derived (`story.plotlines_mode`, and ABSENT MEANS
+     * `'classic'` — the value every book written before Phrase ② exists reads as, exactly as
+     * `phrase/catalog.ts:isPhraseGroupManaged` reads it). The rail reads it to decide whether a chapter
+     * entry is the writable surface or the classic §4.3 tool path is; the record itself carries the same
+     * value under `story.plotlines_mode`.
+     */
+    plotlines_mode: 'groups' | 'classic';
+    /**
+     * Which phrases have been STARTED on this book — the rail's two rows (T-W3). A phrase row is the
+     * record of a start (`phrase/controllers/plotlines.ts:startPlotlinesPhrase` copies the seed and mints
+     * it), so this is a read of rows, not of a counter: an un-started Phrase ② is exactly the state the
+     * handoff button exists to leave.
+     */
+    phrase_started: { summary: boolean; plotlines: boolean };
+    /**
+     * Can Phrase ② be seeded from Phrase ① right now? THE HANDOFF BUTTON'S ENABLE CONDITION, and the one
+     * read behind it (`summaryIsCompiled`): a complete reviewed Overview, or any non-empty composed
+     * Overview. The Start verb's 409 on an empty compiled Summary is the server's answer to the same
+     * question, so a rail that greyed the button off this field can never offer a press the server
+     * refuses for a different reason.
+     */
+    summary_compiled: boolean;
+};
+
+/**
  * `GET /stories/:id` — every slice THE STORY region renders, in the order the panes read them. The
  * §4 collections are returned as-is (P1: the dashboard reads records, it does not receive copies of
  * them); only the computed slices (`goal`, `cost_distribution`, `completion_preview`) are built here.
  * `revisions` is the one history-aware slice: phase ①'s flat Revision history also reads the Summary
  * samples an older selection hard-deleted (see `viewRevisions`).
  */
-export function storyView(deps: ProjectionDeps, story: Story): StoryView {
+export function storyView(deps: ProjectionDeps, story: Story): StorylineStoryView {
     const { store, criteria, digest } = deps;
     const summary = storySummary(store, story.id) ?? null;
 
@@ -612,7 +666,22 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
         // fields). `seed_brief` is null before gate 1; `sampling` always answers with a round so the
         // pane never has to decide what "no sampling yet" looks like.
         seed_brief: seedBriefView(store, story),
-        sampling: samplingView(story)
+        sampling: samplingView(story),
+        // ---------------------------------------------------------------------
+        // T-W3 — the phrase rail's three additive fields, built LAST so every pinned key keeps the exact
+        // order `routes.test.ts` asserts. Each one is a READ OF ROWS, not a bookkeeping flag: the rail
+        // that draws "Phrase 1 ▸ done — copy this into Phrase 2" and the Start verb that answers that
+        // press ask the same two functions, so the button and the server cannot disagree about whether
+        // there is anything to copy.
+        // ---------------------------------------------------------------------
+        // The dial echoed, with the phrase's own OFF value: an existing row that carries no
+        // `plotlines_mode` is a classic book (`catalog.ts:isPhraseGroupManaged` reads absent as classic).
+        plotlines_mode: story.plotlines_mode ?? 'classic',
+        phrase_started: {
+            summary: storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY) !== undefined,
+            plotlines: storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY) !== undefined
+        },
+        summary_compiled: summaryIsCompiled(store, story)
     };
 }
 
@@ -1324,6 +1393,163 @@ export interface PhraseView {
     reviewed: PhraseReviewedSummary;
 }
 
+// ---------------------------------------------------------------------------
+// T-W3 — the PER-PHRASE read (`GET /stories/:id/phrases/:key`)
+//
+// WHY A SECOND SHAPE RATHER THAN EXTRA FIELDS ON `PhraseView`: `GET /stories/:id/phrases` is the
+// dashboard's pinned Summary rail — its key list is asserted in order by `phrase-routes.test.ts` and
+// consumed field-for-field by `dashboard/api.ts` — so the per-phrase deltas (which phrase this is, its
+// copied seed, its structure brief) ride on a NEW read instead of widening the pinned one. The base is
+// the SAME projection: `phraseDetailView` is `phraseView`'s shape plus four keys in front and a
+// phrase-scoped `review.mirror` omission, built by one shared function, so the two reads can never
+// tell two stories about the same rows.
+//
+// WHAT IS PHRASE-SCOPED IN BOTH: the entry rows, `review.unwritten_groups` / `review.vector`, the
+// findings the phrase's entries own, and the reviewed selection. Wave 1 gave every one of those reads a
+// `phraseId`; before T-W3 the Summary view called them UNSCOPED, which was the same answer only while
+// the book had one phrase.
+// ---------------------------------------------------------------------------
+
+/**
+ * The dial word a phrase view echoes. The two phrases' OFF words are different on purpose
+ * (`phrase/catalog.ts:isPhraseGroupManaged`): the Summary's is `sampling` (the pre-redesign sampler that
+ * actually ran) and the Plotlines' is `classic` (the §4.3 + §8.1 tool path), so a client reading
+ * `mode: 'classic'` knows it is looking at the classic plotline pipeline rather than a Summary mode.
+ */
+export type PhraseMode = 'groups' | 'sampling' | 'classic';
+
+/**
+ * The Plotlines phrase's structure decision, as the rail shows it (T-W3): what the Editor concluded
+ * about the phrase's copied seed, and whether the Author has accepted it.
+ *
+ * THE MINIMAL THREE FIELDS: the count is the number the chapter entries were materialized from (the
+ * accepted brief's, synced onto `summaries.chapter_count` — D-3b), and the status is what tells the rail
+ * whether the entries exist yet. The full brief (per-chapter seeds, research questions, notes) stays off
+ * this read: the rail's job is "has Phrase ② been structured, and into how many chapters".
+ */
+export interface PhraseBriefView {
+    /** `draft` until the Author accepts it; `accepted` is the moment the chapter entries exist. */
+    status: string;
+    /** The Editor's chapter count — the number `chapter_1…chapter_N` were materialized from. */
+    chapter_count: number;
+    /**
+     * The accept's stamp, and PRESENT ONLY ONCE THE BRIEF IS ACCEPTED. `plotline_briefs` carries no
+     * timestamp of its own (§4's row carries the status), so this is the row's `updated_at` — the moment
+     * the accept wrote `status: 'accepted'`, which is the only thing that moves it after creation.
+     */
+    accepted_at?: string;
+}
+
+/** One phrase's whole surface — the pinned view plus that phrase's deltas. */
+export interface PhraseDetailView extends Omit<PhraseView, 'mode' | 'review'> {
+    /** The catalog kind this read is scoped to (`phrases.key`). */
+    key: string;
+    /** THIS phrase's dial — see {@link PhraseMode}; the off word is per-phrase, not one shared word. */
+    mode: PhraseMode;
+    /**
+     * This phrase's pipeline state. `mirror` (R6's legacy `summaries` prose check) is the SUMMARY's
+     * compatibility report, so it is absent on a phrase with no legacy record to agree with — Phrase ②'s
+     * downstream sync is the `plotlines` contract, which the entry rows already show.
+     */
+    review: Omit<PhraseReviewState, 'mode' | 'mirror'> & {
+        mode: PhraseMode;
+        mirror?: PhraseReviewState['mirror'];
+    };
+    /**
+     * A PREFIX of the phrase's copied seed, never the whole text (T-W3): the seed is the Author's input,
+     * it can be a compiled Overview long enough to bloat every rail poll, and the rail only needs to
+     * recognise which text this phrase was written from. The full seed stays on the row.
+     */
+    seed_head: string;
+    /** The seed's true length, so a truncated head still says how much text it stands for. */
+    seed_chars: number;
+    /** The Plotlines structure brief, or `null` for any other phrase and for a phrase nobody structured. */
+    brief: PhraseBriefView | null;
+}
+
+/**
+ * What the shared projection builds, before either public read narrows it: the pinned view's shape with
+ * the two per-phrase fields widened to the per-phrase vocabulary. `phraseView` narrows `mode` back to the
+ * Summary's two words and proves `review.mirror` is present; `phraseDetailView` keeps the wide words and
+ * makes the mirror optional. Neither cast invents a value the phrase in question cannot send.
+ */
+type PhraseProjection = Omit<PhraseView, 'mode' | 'review'> & {
+    mode: PhraseMode;
+    review: Omit<PhraseReviewState, 'mode' | 'mirror'> & {
+        mode: PhraseMode;
+        mirror?: PhraseReviewState['mirror'];
+    };
+};
+
+/** How much of a phrase's seed travels on the wire. A prefix, cut at a whole character, never a summary. */
+const SEED_HEAD_CHARS = 400;
+
+/**
+ * THE compiled Summary — the one text Phrase ② copies when the Author presses the handoff button (T-W3).
+ *
+ * THE PREFERENCE IS THE SAME ONE the reviewed block reports, in the same order the D-68 choose uses:
+ * a COMPLETE clean selection wins (that is the text the crew stands behind, and it is byte-identical to
+ * the reviewed Overview the rail shows), and until then the phrase's composed Overview is what the
+ * Author has. Answering "compiled" from the live groups alone would copy an Overview some section's open
+ * defect is still holding, and answering from the selection alone would say a half-written book has
+ * nothing to hand on.
+ *
+ * `''` is the honest answer for a book with no Summary phrase, and it is the Start verb's 409.
+ */
+export function compiledSummaryOf(store: Store, story: Story): string {
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY);
+
+    if (phrase === undefined) return '';
+
+    const selection = cleanSelectionOf(store, story, phrase.id);
+
+    return selection.complete ? composeReviewedContentFrom(selection.entries) : phrase.content;
+}
+
+/**
+ * May Phrase ② be seeded from Phrase ①? The handoff button's enable condition (T-W3).
+ *
+ * It is deliberately the WEAKER of the two reads: a complete reviewed Overview, or any non-empty composed
+ * Overview. The button asks "is there text to copy", and the 409 on the Start verb is what says when the
+ * answer is no — a rail that re-derived this rule would be a second opinion about what "Phrase 1 is done"
+ * means, and the desk would enable a button the server refuses.
+ */
+export function summaryIsCompiled(store: Store, story: Story): boolean {
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY);
+
+    if (phrase === undefined) return false;
+
+    return cleanSelectionOf(store, story, phrase.id).complete || phrase.content.trim() !== '';
+}
+
+/** The dial word one phrase echoes: `groups`, or that phrase's own off value (see {@link PhraseMode}). */
+function phraseModeOf(story: Story, phraseKey: string): PhraseMode {
+    if (isPhraseGroupManaged(story, phraseKey)) return 'groups';
+
+    return phraseKey === PHRASE_PLOTLINES_KEY ? 'classic' : 'sampling';
+}
+
+/**
+ * The newest structure brief of one phrase, in the same pick order the loop's prompt compiler uses for
+ * the Seed brief (`created_at` then id, newest first). An accepted brief is preferred over a draft only
+ * through that order — an accept moves `updated_at`, not `created_at` — so this stays one rule, and a
+ * re-structured phrase shows the structure the Editor wrote LAST.
+ */
+function plotlineBriefView(store: Store, phraseId: string): PhraseBriefView | null {
+    const brief = store.plotlineBriefs
+        .list()
+        .filter((row) => row.phrase_id === phraseId)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))[0];
+
+    if (brief === undefined) return null;
+
+    return {
+        status: brief.status,
+        chapter_count: brief.chapter_count,
+        ...(brief.status === 'accepted' ? { accepted_at: brief.updated_at } : {})
+    };
+}
+
 /** Closed runs of one claim family — the "has this seat reported yet?" read (L-3: the rows are the state). */
 function closedRunsFor(store: Store, storyId: string, prefix: string): number {
     return store.runs.list().filter(
@@ -1412,11 +1638,17 @@ function reviewedSummaryView(
     phrase: Phrase | undefined,
     groups: readonly PhraseGroup[],
     scoresByGroup: Map<string, PhraseGroupScoreRow[]>,
-    /** The live Writer-held group ids, read ONCE by `phraseView` for the group rows too (F8's read). */
+    /** The live Writer-held group ids, read ONCE by `phraseProjection` for the group rows too (F8's read). */
     held: Set<string>
 ): PhraseReviewedSummary {
-    const selection = cleanSelectionOf(store, story);
-    const chosen = chosenSelectionOf(store, story);
+    // T-W3 — every read here is scoped to THIS phrase. Wave 1 gave `cleanSelectionOf` a `phraseId` for
+    // exactly this: unscoped, a chapter entry of Phrase ② would have to be clean before the reviewed
+    // SUMMARY existed, and the per-phrase read would report the Summary's choice beside the chapter rows.
+    // `''` is the "no such phrase" idiom (`phraseGroupsOf`'s filter then matches nothing), which is the
+    // same empty answer a book with no rows for this phrase gets anyway.
+    const scoped = phrase?.id ?? '';
+    const selection = cleanSelectionOf(store, story, scoped);
+    const chosen = chosenSelectionOf(store, story, scoped);
     const gaps = new Map(selection.gaps.map((gap) => [gap.group_id, gap]));
     const selected = new Map(selection.entries.map((entry) => [entry.group.id, entry]));
     const reviewedScores = scoresForVector(scoresByGroup, selection.vector_hash);
@@ -1485,26 +1717,51 @@ function reviewedSummaryView(
                   },
         stale: chosen !== undefined && selection.complete && !chosenAtChosenHash,
         blocking_issues: blockingIssues,
-        writer_busy: groups.some((group) => liveGroupRefs(store, story.id).has(group.id))
+        // T-W3 — the SAME scoped held-set the group rows read (`phraseProjection` computes it once per
+        // phrase). The old unscoped `liveGroupRefs` read every phrase's entries, so a chapter pass in
+        // flight greyed out the Summary's Choose button on a book whose Summary nobody was writing.
+        writer_busy: groups.some((group) => held.has(group.id))
     };
 }
 
 /**
- * The group view of one Story (R6).
+ * THE phrase-scoped projection — one phrase's whole surface, built once per read (R6, generalized by
+ * T-W3).
  *
- * It answers "what does the Summary say, who wrote each part, what is wrong with it, and what has been
+ * It answers "what does this phrase say, who wrote each entry, what is wrong with it, and what has been
  * reviewed?" without ever writing — a pure read of `phrases`, `phrase_groups`, `group_revisions`,
  * `findings`, `tasks` and the run ledger, so opening the rail cannot move a book (R6's "legacy stories
  * stay readable with no destructive migration" holds in both directions).
+ *
+ * EVERY READ IS SCOPED TO `phraseKey`, and that is the whole of the generalization: the Summary read
+ * (`PHRASE_SUMMARY_KEY`) is byte-identical to the one this file has always produced, because a book with
+ * one phrase gets the same rows from a scoped read and an unscoped one. The moment a second phrase is
+ * started, the unscoped forms start answering for two artifacts at once — `phraseGroupsOf` interleaves
+ * `chapter_1` and `premise` because both are `order: 1`, an unscoped finding's scope is EVERY entry on
+ * the book, and `liveGroupRefs` lets a chapter pass grey out the Summary's buttons — so the scoped forms
+ * are what this projection uses now (wave 1 gave each of those reads its `phraseId` parameter).
  *
  * A LEGACY Story (no `summary_mode`, so no phrase rows) is not an error: the view comes back with
  * `mode: 'sampling'` and empty groups, which is the truth about that book. The rail shows the legacy
  * sampling panel for it, and `POST /stories/:id/phrases/import` is how the Author opts into groups.
  */
-export function phraseView(store: Store, story: Story): PhraseView {
-    const phrase = storyPhrase(store, story.id);
-    const groups = phraseGroupsOf(store, story.id);
-    const findings = storyFindings(store, story.id);
+function phraseProjection(store: Store, story: Story, phraseKey: string): PhraseProjection {
+    const phrase = storyPhraseByKey(store, story.id, phraseKey);
+    // ONE phrase's entries, in that phrase's composition order. An un-started phrase has NONE — `[]` is
+    // the honest answer, where the unscoped read would have handed back another phrase's rows.
+    const groups = phrase === undefined ? [] : phraseGroupsOfPhrase(store, story.id, phrase.id);
+    const groupIds = new Set(groups.map((group) => group.id));
+    // T-W3 — WHICH findings belong to this phrase's read. A finding is here when its RESOLVED R3 scope
+    // names at least one of this phrase's entries, and an UNSCOPED finding (whose scope is every entry on
+    // the book, `findings.ts:findingGroupScope`) is therefore every phrase's debt. The one exception is a
+    // Summary read with NO phrase row — a legacy book, where there is no second phrase that could own a
+    // claim and the pre-Phrase-② read showed the Author everything. `GET /stories/:id/phrases` keeps its
+    // exact findings list on every book that has one phrase.
+    const findings = storyFindings(store, story.id).filter(
+        (finding) =>
+            (phrase === undefined && phraseKey === PHRASE_SUMMARY_KEY) ||
+            findingGroupScope(store, story, finding).refs.some((id) => groupIds.has(id))
+    );
 
     // R3's per-group debt, computed once per finding and then transposed onto the group rows: the rail
     // must be able to say "Premise still owes finding_3 a revision" without a second resolution pass.
@@ -1538,13 +1795,15 @@ export function phraseView(store: Store, story: Story): PhraseView {
         };
     });
 
-    // F8 — read once for the whole view: the groups a live Writer pass holds (R4). A group with no
-    // `group_refs` on its live run counts as held for EVERY group, which is `liveGroupRefs`'s
-    // fail-closed reading — the rail then disables five buttons rather than let an edit race a writer.
-    const held = liveGroupRefs(store, story.id);
+    // F8 — read once for the whole view: the groups a live Writer pass of THIS phrase holds (R4). A group
+    // with no `group_refs` on its live run counts as held for EVERY group of that phrase, which is
+    // `liveGroupRefs`'s fail-closed reading — the rail then disables five buttons rather than let an edit
+    // race a writer — and the scoping is what stops a chapter pass holding the Summary's buttons.
+    const held = liveGroupRefs(store, story.id, phrase?.id ?? '');
     // D-65 — the Reader's scores, likewise read once and transposed onto the group rows. A book with
     // no scoring run yet gets an empty list on every group: the rail shows "not scored", not a zero.
     const scoresByGroup = sectionScoresByGroup(store, story.id);
+
 
     const groupRows: PhraseGroupRow[] = groups.map((group) => {
         const history = groupRevisionHistory(store, group.id);
@@ -1611,7 +1870,7 @@ export function phraseView(store: Store, story: Story): PhraseView {
     );
     const openTasks = store.tasks.list().filter((task) => task.story_id === story.id && task.state !== 'done');
 
-    const vector = groupRevisionVector(store, story.id);
+    const vector = groupRevisionVector(store, story.id, phrase?.id ?? '');
     const vectorHash = groupVectorHash(vector);
     const seats = screeningSizeOf(story);
 
@@ -1619,6 +1878,11 @@ export function phraseView(store: Store, story: Story): PhraseView {
     // they are supposed to mirror. A drift means either a locked Summary (the Author's choice) or a
     // book whose groups were written by something that skipped the mirror — and the rail says so
     // instead of silently showing two different answers to "what is the premise?".
+    //
+    // T-W3 — it is the SUMMARY phrase's report (`SUMMARY_MIRROR_FIELDS` is the five `summaries` prose
+    // fields, and `phrase/revisions.ts:syncSummaryMirror` is the only arm that writes them), so the
+    // per-phrase read drops it for any phrase that has no legacy record to agree with; Phrase ②'s
+    // downstream sync is the `plotlines` contract, and its entries are the rows the same read lists.
     const summary = storySummary(store, story.id);
     const inSync =
         summary === undefined
@@ -1632,10 +1896,16 @@ export function phraseView(store: Store, story: Story): PhraseView {
 
     return {
         story_id: story.id,
-        mode: isGroupManagedStory(story) ? 'groups' : 'sampling',
+        // THE PER-PHRASE DIAL (`isPhraseGroupManaged`), not the book's Summary switch: a grouped Plotlines
+        // phrase on a sampling book is group-managed for Phrase ②, and the read says so for that phrase.
+        // For Phrase ① this is the same predicate `isGroupManagedStory` always used, same words, same value.
+        mode: phraseModeOf(story, phraseKey),
         phrase_id: phrase?.id ?? null,
         revision: phrase?.revision ?? 0,
-        overview: groups.length === 0 ? '' : composeGroupContentFrom(groups),
+        // THE PHRASE'S OWN COMPOSITION ORDER (seam S7): the Summary's five catalog keys, a chapter set's
+        // chapter numbers. The Summary rank is the same function this read always used, so its Overview is
+        // byte-identical; a chapter set composed under the Summary rank would rely on unknown keys tying.
+        overview: groups.length === 0 ? '' : composeGroupContentFrom(groups, (key) => phraseGroupRankOf(phraseKey, key)),
         groups: groupRows,
         findings: findingRows,
         tasks: openTasks.map((task) => ({
@@ -1647,7 +1917,7 @@ export function phraseView(store: Store, story: Story): PhraseView {
             finding_ref: task.finding_ref ?? null
         })),
         review: {
-            mode: isGroupManagedStory(story) ? 'groups' : 'sampling',
+            mode: phraseModeOf(story, phraseKey),
             unwritten_groups: groups.filter((group) => group.revision === 0).map((group) => group.key),
             written_groups: groups.filter((group) => group.revision > 0).length,
             vector,
@@ -1655,6 +1925,8 @@ export function phraseView(store: Store, story: Story): PhraseView {
             review_seats: seats,
             // Keyed by the vector hash the generator uses (`loop/work.ts:phase1GroupCandidates`), so the
             // count answers "has this TEXT been read?" and a new install re-arms the seats by itself.
+            // The hash is built from THIS phrase's ids, so a chapter vector and a Summary vector count
+            // their own passes.
             reviews_on_current_vector: closedRunsFor(store, story.id, `wi_review_groups_${vectorHash}_`),
             deep_reviews_on_current_vector: closedRunsFor(store, story.id, `wi_group_check_${vectorHash}_`),
             open_findings: openFindings.length,
@@ -1663,6 +1935,9 @@ export function phraseView(store: Store, story: Story): PhraseView {
             blocking_findings: openFindings.filter(
                 (finding) => finding.cost === 'critical' || finding.cost === 'major'
             ).length,
+            // T-W3 — `tasks` stays the Story's open queue, in both reads: a `Task` row carries a
+            // `finding_ref` and no entry scope of its own, so there is nothing to scope it BY, and
+            // inventing a join here would be the projection guessing what the loop booked.
             open_tasks: openTasks.length,
             mirror: {
                 summary_id: summary?.id ?? null,
@@ -1675,5 +1950,71 @@ export function phraseView(store: Store, story: Story): PhraseView {
         // group rows and the score transpose already read (no second pass over the collections), and it
         // is always present: a legacy book simply reports `pending` with no groups.
         reviewed: reviewedSummaryView(store, story, phrase, groups, scoresByGroup, held)
+    };
+}
+
+/**
+ * THE pinned Summary rail read — `GET /stories/:id/phrases` (R6).
+ *
+ * T-W3 kept this function's OUTPUT byte-identical and made its BODY the Summary arm of one shared
+ * projection: the dashboard's contract is its exact key list and its exact per-group rows, both pinned
+ * by `phrase-routes.test.ts` and consumed field-for-field by `dashboard/api.ts`, so the phrase
+ * generalization had to arrive underneath it rather than on top of it. The one visible consequence is a
+ * fix, not a change of contract: with a Plotlines phrase started on the book, this read is now scoped to
+ * the Summary's own entries (its `groups`, its vector, its findings, its live Writers) instead of
+ * interleaving the chapter entries by `order`.
+ */
+export function phraseView(store: Store, story: Story): PhraseView {
+    const base = phraseProjection(store, story, PHRASE_SUMMARY_KEY);
+
+    // The Summary phrase always has a legacy prose mirror to report (`review.mirror`), and its dial's
+    // off word is `sampling`, so the two narrowings below are facts about THIS phrase, not casts that
+    // hide a value the Summary can send. Key ORDER is preserved: re-assigning a key that already exists
+    // keeps the position the projection built it in.
+    return {
+        ...base,
+        mode: base.mode as PhraseView['mode'],
+        review: base.review as PhraseView['review']
+    };
+}
+
+/**
+ * `GET /stories/:id/phrases/:key` — one phrase's read, deltas and all (T-W3).
+ *
+ * THE DELTAS, and why each one is a delta rather than a change to the pinned view:
+ *   - `key` says which phrase this is, so a client that asked for `plotlines` can tell the read from a
+ *     mis-routed Summary read instead of inferring it from the entry keys;
+ *   - `seed_head`/`seed_chars` are the phrase's copied SEED, previewed rather than sent: the seed is the
+ *     text this phrase is written from, and it is exactly the fact the rail has to show next to a
+ *     handoff button so the Author can see WHICH text got copied (and see that it did not change when
+ *     Phrase ① was edited later). The full text stays on the row;
+ *   - `brief` is the Plotlines structure decision — the Editor's chapter count and whether the Author has
+ *     accepted it, which is what tells the rail the chapter entries exist yet. Every other phrase answers
+ *     `null`, so the key is always there and no client has to feature-detect it;
+ *   - `review.mirror` is dropped for a phrase with no legacy prose record to agree with (R6's mirror is
+ *     the `summaries` fields, and Phrase ②'s downstream sync is the `plotlines` contract, visible as the
+ *     entries' own text).
+ *
+ * Works for `summary` too — the deltas are the same four keys over the same projection the pinned read
+ * returns, so a client that wants one shape for both phrases can call this route and ignore the extras.
+ */
+export function phraseDetailView(store: Store, story: Story, phraseKey: string): PhraseDetailView {
+    const base = phraseProjection(store, story, phraseKey);
+    const phrase = storyPhraseByKey(store, story.id, phraseKey);
+    // THE COPIED SEED, through the one read that interprets `Phrase.seed` (`phrase/catalog.ts:phraseSeedOf`):
+    // a row created before the field exists falls back to the Story's Seed, which is the only text that
+    // phrase could have been written from. Never the whole text on the wire — see the field note.
+    const seed = phraseSeedOf(phrase, story);
+    const { mirror, ...reviewRest } = base.review;
+
+    return {
+        key: phraseKey,
+        ...base,
+        // DESTRUCTURED, not `mirror: undefined`, so the key is genuinely absent from the payload for a
+        // phrase that has no mirror to report rather than riding along with a null-ish value.
+        ...(mirror === undefined || phraseKey === PHRASE_SUMMARY_KEY ? { review: base.review } : { review: reviewRest }),
+        seed_head: seed.slice(0, SEED_HEAD_CHARS),
+        seed_chars: seed.length,
+        brief: phrase === undefined || phraseKey !== PHRASE_PLOTLINES_KEY ? null : plotlineBriefView(store, phrase.id)
     };
 }

@@ -356,6 +356,27 @@ export interface Story extends StoredRecord {
      */
     summary_mode?: 'groups' | 'sampling';
     /**
+     * PHRASE ② PLOTLINES (additive) — which Plotlines authoring model this Story uses.
+     *
+     * THE `summary_mode` PRECEDENT EXACTLY (`Story.summary_mode` above, and
+     * `server/phrase/catalog.ts:isGroupManagedStory`): ABSENT means `'classic'`, which is what every
+     * book written before Phrase ② exists reads as, so no migration is needed and a pure read never
+     * writes the field.
+     *
+     * - `'classic'` — today's Phase ②: the `plotlines` rows are the chapter contracts and the Writer
+     *   builds them with the §8.1 `createPlotline`/`editPlotline` tools.
+     * - `'groups'` — the Plotlines Phrase (`shared/phrase.ts:PHRASE_PLOTLINES_KEY`). Its entries are
+     *   CHAPTER GROUPS (`phrase_groups` rows keyed `chapter_<n>` on the plotlines `phrases` row), each
+     *   holding that chapter's precise plotpoints, and the `plotlines` rows become the GENERATED
+     *   mirror written in the same commit as the chapter group's latest revision — the plotlines
+     *   phrase's equivalent of the summary's legacy mirror.
+     *
+     * The loop wave sets this on new Stories; nothing else writes it. It is a Story SETTING rather
+     * than a derived fact for the same reason `summary_mode` is: rows can exist while a start step is
+     * still settling, and an Author who moves a book back must stop being phrase-managed at once.
+     */
+    plotlines_mode?: 'groups' | 'classic';
+    /**
      * PHRASE GROUP LOCK (additive) — may the EDITOR put a Summary phrase group into the locked state?
      *
      * The Editor's judgment is a recommendation about a group the pipeline keeps wanting to rewrite:
@@ -1251,6 +1272,80 @@ export interface SeedBrief extends StoredRecord {
     notes?: string;
 }
 
+// ---------------------------------------------------------------------------
+// PHRASE ② — `plotline_briefs`: the Editor's structure pass over a phrase's copied seed
+//
+// WHY A SECOND BRIEF COLLECTION RATHER THAN REUSING `seed_briefs`: a `SeedBrief` is the structure of
+// `stories.idea` (its `seed_hash` is the hash of THAT text), and a Phrase ② brief is the structure of
+// the PHRASE's own copied seed — the compiled Summary the Author pushed in, or the Author's own text.
+// The two describe different inputs of the same Story, they are gated on different hashes, and one
+// accepted `SeedBrief` per Story is a rule the Phase ① pipeline already depends on. Putting both in
+// one collection would make that rule a lie; keeping them apart keeps Phrase ① deletable without
+// touching Phrase ② (the user's "phrases are discrete and independent").
+//
+// WHY A `chapters` ARRAY ON THE BRIEF RATHER THAN A COUNT ALONE: "all chapters are generated from the
+// Seeds in one go (number of chapters set by Editor)" — the structure pass decides the chapter COUNT
+// and the one-line seed of each chapter at the same moment, so the set is materialized whole when the
+// brief is accepted. The per-chapter `seed` lines are what the Writer is handed as the entry's brief;
+// they are not the chapter's prose and never become a `chapters` row.
+// ---------------------------------------------------------------------------
+
+/**
+ * `plotline_briefs.status` — the same two-position lifecycle as {@link SeedBriefState}: `draft` while
+ * the Editor is still structuring, `accepted` once the brief describes the phrase's CURRENT seed. The
+ * acceptance is the moment the chapter entry set is materialized, so a `draft` brief has created no
+ * `phrase_groups` rows yet.
+ */
+export const PLOTLINE_BRIEF_STATES = ['draft', 'accepted'] as const;
+export type PlotlineBriefState = (typeof PLOTLINE_BRIEF_STATES)[number];
+
+/** One chapter's line in a {@link PlotlineBrief}: the order it will hold and the seed it grows from. */
+export interface PlotlineBriefChapter {
+    /** 1-based. It becomes the chapter group's `order` and its key's number (`chapter_<order>`). */
+    order: number;
+    /** The one-or-two-sentence seed for this chapter, as the Editor wrote it. */
+    seed: string;
+}
+
+/**
+ * `plotline_briefs` — §3.3's shape applied to a Phrase ② seed: the Editor's structured projection of
+ * one phrase's copied seed, carrying the chapter count and the per-chapter seeds.
+ *
+ * ONE BRIEF PER (PHRASE, SEED): `seed_hash` is the hash of the PHRASE's `seed`, not of `stories.idea`
+ * (see `src/shared/seed-hash.ts` and `Phrase.seed`), so editing Phrase ① re-hashes nothing here, and
+ * re-starting Phrase ② on new text writes a new row instead of silently reusing a stale structure.
+ *
+ * `chapter_count` is mirrored onto `summaries.chapter_count` when the brief is accepted — the ONE
+ * place the phrase pipeline writes that Author-truth number (D-3b says the WRITER may not choose it;
+ * the Editor's structure pass, accepted by the Author, is what declares it here).
+ */
+export interface PlotlineBrief extends StoredRecord {
+    story_id: string;
+    /** The phrase this brief structures (`Phrase.id`) — a Phrase ② row, keyed `'plotlines'`. */
+    phrase_id: string;
+    /** Hash of `Phrase.seed` this brief was derived from, so a stale structure can never pass the gate. */
+    seed_hash: string;
+    /** The Editor's decision: how many chapters this phrase's seed resolves into. 1-based and exact. */
+    chapter_count: number;
+    /** The per-chapter seeds, in chapter order. Absent means "the count only" — materialize still runs. */
+    chapters?: PlotlineBriefChapter[];
+    status: PlotlineBriefState;
+    /**
+     * Descriptive notes about what a chapter contract could not settle from the seed — STORED, not a gate.
+     *
+     * This is NOT `SeedBrief.research_questions`' D-51 decision, despite the shared field name. There the
+     * list decides whether the Research job exists at all (`loop/work.ts`'s research gate); here nothing in
+     * the loop reads it — Phrase ② has no research leg of its own, because the Seed's pass already ran
+     * (`tools/plotlines.ts:notesListArg`'s header states the same rule). `structurePlotlines` cleans it
+     * (trim, drop blanks, first-seen dedup), omits the field when the list is empty — so an ABSENT field
+     * means "none noted", never "waived" — and the only reader is that tool's own result payload, which
+     * echoes it back. It reaches no prompt and no gate; `chapters` is the field the Writer's law block
+     * actually quotes (`run/phase1-prompt.ts`'s ACCEPTED PLOTLINE BRIEF section).
+     */
+    research_questions?: string[];
+    notes?: string;
+}
+
 /**
  * §3.4 — one screening Critic's `critical`/`high` complaint about ONE sample.
  *
@@ -1412,12 +1507,14 @@ export type GroupRevisionState = (typeof GROUP_REVISION_STATES)[number];
 /**
  * `phrases` — one Story's phrase: the thing the Author reads as a whole, composed from its groups.
  *
- * Only ONE phrase kind exists today — the Summary Phrase — and {@link PHRASE_CATALOG}
- * (`shared/phrase.ts`) is the data that says so: a catalog entry carries `enabled`, and only
- * Summary is enabled (R1), so the loop creates exactly one of these rows per Story and never
- * invents a kind. The row carries the catalog's `title`/`description` AS WRITTEN AT CREATION TIME:
- * the catalog is the source, but a Story's rows are the record of what that Story's phrase was
- * called, so a later catalog edit cannot rewrite history (D-12a) and an import can be audited.
+ * Which phrase KINDS exist is catalog data ({@link PHRASE_CATALOG} in `shared/phrase.ts`), not code
+ * shape: an entry carries `enabled` (is the kind known at all) and `starts_on_demand` (is its row
+ * created with the Story, or by an explicit start step). Today that means the Summary Phrase row is
+ * created at story creation and the Plotlines Phrase row is created only when the Author starts
+ * Phrase ②, so a Story has one or two of these rows and neither is invented by code (R1). The row
+ * carries the catalog's `title`/`description` AS WRITTEN AT CREATION TIME: the catalog is the source,
+ * but a Story's rows are the record of what that Story's phrase was called, so a later catalog edit
+ * cannot rewrite history (D-12a) and an import can be audited.
  *
  * `content` is the GENERATED composition of the latest revision of each group, in catalog order —
  * the Overview the deep review reads and the Author's dashboard renders. It is derived, never
@@ -1425,7 +1522,11 @@ export type GroupRevisionState = (typeof GROUP_REVISION_STATES)[number];
  */
 export interface Phrase extends StoredRecord {
     story_id: string;
-    /** The catalog kind — `'summary'` for every row this build creates ({@link PHRASE_SUMMARY_KEY}). */
+    /**
+     * The catalog kind — `'summary'` ({@link PHRASE_SUMMARY_KEY}) or `'plotlines'`
+     * ({@link PHRASE_PLOTLINES_KEY}). An unknown key means a row whose kind has been retired from the
+     * catalog: its history still renders, and nothing may delete it to match the code (D-12a).
+     */
     key: string;
     title: string;
     description: string;
@@ -1442,6 +1543,25 @@ export interface Phrase extends StoredRecord {
     revision: number;
     /** The group ids in catalog order — the ordered key list the projection and the review brief read. */
     group_refs: string[];
+    /**
+     * PHRASE ② (additive) — the SEED THIS PHRASE was written from, copied in at its start.
+     *
+     * WHY A PHRASE CARRIES ITS OWN SEED (the user's "phrases are discrete and independent"): Phrase ①
+     * and Phrase ② are separate pipelines over SEPARATE copies of the input. When the Summary is
+     * compiled and pushed into the Plotlines phrase, that compiled text BECOMES the plotlines phrase's
+     * seed; a later edit or deletion of Phrase ① must not reach into Phrase ②'s history, and it cannot,
+     * because Phrase ② never reads `stories.idea` or Phrase ①'s rows — it reads this field. A phrase
+     * whose every gate hashes this text instead of the Story's Seed therefore stays stable across
+     * changes to everything above it.
+     *
+     * THE SUMMARY PHRASE's copy is `stories.idea` AT CREATION TIME, so for Phrase ① the content is
+     * identical to what every existing gate already hashes and behavior is unchanged.
+     *
+     * ABSENT means "this row predates the field" and reads as `stories.idea` —
+     * `server/phrase/catalog.ts:phraseSeedOf` is the ONE read that interprets it, so no gate has to
+     * decide the fallback for itself.
+     */
+    seed?: string;
     /**
      * D-68 (additive) — the Reviewed Summary the AUTHOR chose, as the group revision vector it was
      * made of (`{groupId: revisionNumber}`).
@@ -1490,11 +1610,19 @@ export interface PhraseGroup extends StoredRecord {
     story_id: string;
     /** The phrase this group belongs to (its `Phrase.id`). */
     phrase_id: string;
-    /** Catalog key: `premise` | `promise` | `theme` | `tone` | `ending`. */
+    /**
+     * The group's key WITHIN ITS PHRASE — the key namespace is PER-PHRASE (seam S1):
+     * `premise` … `ending` on the Summary Phrase ({@link PHRASE_GROUP_KEYS}, which are also the legacy
+     * `summaries` fields this group mirrors — the identity is deliberate, see
+     * {@link SUMMARY_MIRROR_FIELDS}), and `chapter_1` … `chapter_N` on the Plotlines Phrase
+     * ({@link PHRASE_CHAPTER_KEY_PREFIX}, one entry per chapter, N decided by the Plotline Brief).
+     * `server/phrase/catalog.ts` and `shared/phrase.ts` therefore never ask "is this a valid key?" in
+     * the abstract; they ask it of a phrase key ({@link isPhraseGroupKeyOf}).
+     */
     key: string;
     title: string;
     description: string;
-    /** Catalog order (1-based, the order the Overview composes in). */
+    /** Composition order WITHIN THE PHRASE (1-based): the Summary's definition order, or the chapter number. */
     order: number;
     /** The LATEST revision's text. `''` means the group has never been written. */
     content: string;
@@ -1665,7 +1793,7 @@ export interface SummaryScore extends StoredRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * The 20 §4 collection names plus the four this session's designs append, in §4 order.
+ * The 20 §4 collection names plus the five this redesign appends, in §4 order.
  * Exported as data so the store, the persistence
  * layer and the dashboard can enumerate the model without hardcoding the list in three
  * places (P15: adding a collection must touch one file).
@@ -1704,7 +1832,11 @@ export const COLLECTION_NAMES = [
     'group_revisions',
     // READER SCORING (D-65): one Reader run per group vector writes five of these, and they
     // accumulate across revisions. Appended last, per the additive-only rule.
-    'summary_scores'
+    'summary_scores',
+    // PHRASE ② PLOTLINES: the Editor's structure pass over a phrase's COPIED seed (its chapter count
+    // and per-chapter seeds). Appended last, per the additive-only rule, so an old `store.json` loads
+    // with this collection empty.
+    'plotline_briefs'
 ] as const;
 
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
@@ -1739,6 +1871,8 @@ export interface CollectionRecords {
     group_revisions: GroupRevision;
     // READER SCORING (D-65) — see `SummaryScore`.
     summary_scores: SummaryScore;
+    // PHRASE ② PLOTLINES — see `PlotlineBrief`.
+    plotline_briefs: PlotlineBrief;
 }
 
 /** Any §4 record — the type the journal, the audit trail and generic tool plumbing need. */
@@ -1784,7 +1918,13 @@ export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
     // already mints `summary_0`, so a `summary_score_0` row would read as a `summary_…` family on a
     // persisted id alone. `section_score_` is unambiguous against every other singular, and the row is
     // addressed as (vector_hash, group_id) anyway — the id is just a ledger label.
-    summary_scores: 'section_score'
+    summary_scores: 'section_score',
+    // PHRASE ② PLOTLINES. `plotline_brief` NESTS inside `plotlines`' `plotline_` family, and that is
+    // safe for the reason `phrases`/`phrase_groups` already documents below: `_resolveId` keeps the
+    // LAST prefix match it walked, and `plotline_briefs` is the last entry of `COLLECTION_NAMES`, so a
+    // `plotline_brief_0` id resolves to the brief family and not to a plotline. The nesting is pinned
+    // in `shared/types.test.ts` so a third `plotline_…` collection cannot join it unnoticed.
+    plotline_briefs: 'plotline_brief'
 };
 
 /**

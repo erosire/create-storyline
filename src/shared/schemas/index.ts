@@ -16,3 +16,7 @@ export * from './section-scores';
 // Same no-tool contract shape again, and the only structured answer whose product is a flag on an
 // existing row (the `phrase_groups` lock) rather than a row of its own.
 export * from './group-lock';
+// PHRASE ② PLOTLINES: the chapter-entry Writer's answer. Same no-tool contract shape as the four
+// above, and the one contract whose answer fields map field-for-field onto an existing §4 record
+// (`plotlines`), which is what makes the chapter install a mirror write rather than a translation.
+export * from './chapter-draft';

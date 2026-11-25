@@ -37,6 +37,15 @@ import {
     findingGroupScope,
     isPhraseGroupLocked,
     phraseGroupsOf,
+    // PHRASE ② (T-W2): the PROMPT LANE. A group job's phrase comes from the group ROWS it names
+    // (`phrase_id`), and the phrase's CONTROLLER is what says which answer contract, which engine-owned
+    // instruction block, and which "law" text the prompt shows. `server/phrase` imports nothing from the
+    // run layer, so this adds no cycle.
+    phraseControllerOf,
+    phraseGroupById,
+    phraseSeedOf,
+    storyPhraseByKey,
+    type PhraseController,
     type ReviewedCompositionEntry
 } from '../phrase';
 // PHRASE GROUP LOCK: the ONE read that decides what the Editor's lock seat may weigh
@@ -49,7 +58,10 @@ import {
     editorLockEvidenceOf,
     type EditorLockEvidence
 } from '../loop/editor-lock';
-import { phraseGroupDefinition } from '../../shared/phrase';
+// PHRASE ② (T-W2): `PHRASE_PLOTLINES_KEY` is the lane test (`controller.key === PHRASE_PLOTLINES_KEY`),
+// so the wording switch below names a phrase KIND rather than repeating a string that could drift from
+// the catalog's.
+import { PHRASE_PLOTLINES_KEY, phraseGroupDefinition } from '../../shared/phrase';
 import type { PhraseGroup } from '../../shared/types';
 // G-2: the criterion's `fix_hint` is the definition of done a fix task must carry, and the built-in
 // roster is the only place it exists. Plain data, no library, so the server-only compiler can read it.
@@ -62,7 +74,9 @@ import type { Store } from '../store';
 // H2/R2 adds the OTHER half of that sharing: `acceptedSummaryRevision` is the row the selection gate
 // scores a refinement against, and `compileScreenPrompt` must show the Critic that same text.
 // Server-only module, and `loop/records` has no run-layer imports — this adds no cycle.
-import { acceptedSummaryRevision, isWriterActionableFix } from '../loop/records';
+// PHRASE ② (T-W2): `currentPlotlineBrief` joins it for the chapter lane's law block (the accepted
+// brief the entries were materialized from), read with the SAME staleness rule the queue gates on.
+import { acceptedSummaryRevision, currentPlotlineBrief, isWriterActionableFix } from '../loop/records';
 
 /** One compiled prompt: the two turns a no-tool run is given, and the hash that names them. */
 export interface CompiledPrompt {
@@ -397,6 +411,114 @@ export function renderGroupBlock(
         .filter((group) => wanted.size === 0 || wanted.has(group.id))
         .map((group) => renderGroupEntry(store, group, options, options.reviewed?.get(group.id)))
         .join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
+// PHRASE ② (T-W2) — WHICH PHRASE a group prompt is written for
+// ---------------------------------------------------------------------------
+
+/** What the four group compilers need to know about the phrase their groups belong to. */
+interface PromptLane {
+    /** The `phrases` ROW the job's groups belong to; `undefined` when the book names no live row. */
+    phraseId: string | undefined;
+    /** That phrase's controller — the answer contract and the engine-owned instruction slots. */
+    controller: PhraseController | undefined;
+    /** Phrase ②? Every wording, contract and law-text choice below reads this ONE flag. */
+    plotlines: boolean;
+}
+
+/**
+ * The lane, resolved from the GROUP ROWS the job names — not from a Work Item field and not from a
+ * `story.phase` check.
+ *
+ * WHY FROM THE ROWS: a `phrase_groups` row carries `phrase_id` (R1's catalog), the job's `groupRefs` are
+ * those rows, and the prompt must describe the artifact the batch was handed even after the book moved
+ * (the same L-3 argument the settle's routing makes, and the reason `renderGroupBlock` filters by ref
+ * rather than by phase). The first resolvable ref wins, which is `phrase/revisions.ts:installGroupRevisions`'s
+ * convention, so the prompt and the install cannot land on different phrases.
+ *
+ * WHY THE SUMMARY LANE IS BYTE-IDENTICAL: with one phrase in the book, every resolved id IS that phrase,
+ * `controller.instructions.*` for the Summary equals the constants this file already used (the check
+ * below keeps the compiler's OWN constants for the Summary, so no W1 copy can change a byte), and the
+ * seed section keeps reading `seedSection`. The lane only changes bytes on a Story that has started
+ * Phrase ② and is running its chapter pipeline.
+ */
+function promptLaneOf(store: Store, storyId: string, refs: readonly string[] | undefined): PromptLane {
+    let phraseId: string | undefined;
+
+    for (const ref of refs ?? []) {
+        const group = phraseGroupById(store, storyId, ref);
+
+        if (group !== undefined) {
+            phraseId = group.phrase_id;
+            break;
+        }
+    }
+
+    const controller = phraseId === undefined ? undefined : phraseControllerOf(store, storyId, phraseId);
+
+    return { phraseId, controller, plotlines: controller?.key === PHRASE_PLOTLINES_KEY };
+}
+
+/**
+ * The role-prompt SLUG this pass is briefed with: the job's own crew for Phrase ②, the canonical slug for
+ * the Summary lane — even when the item names a different template.
+ *
+ * WHY THE SUMMARY LANE IGNORES `item.templateRef`: a phase-① group job's `templateRef` is a TEMPLATE POOL
+ * pick (which Writer runs the batch is a scheduling fact, and D-17d's divergence settings live on that
+ * row), while the prompt's role copy is the sampler's, fixed by §8. Making the prompt follow the pool pick
+ * would rewrite every phase-① prompt hash to buy nothing. Phrase ② is the opposite case: its seats bind
+ * themselves to a crew on purpose (`writer-plotlines-sampler`, the rotating Critic angles, `editor-general`
+ * for the lock seat), because the built-in pool's rows are the Summary's voices and the chapter lane has
+ * no copy to borrow. `fallbackRolePrompt` still covers the case an Author can create — deleting the row.
+ */
+const slugFor = (lane: PromptLane, slug: string | undefined, canonical: string): string =>
+    lane.plotlines ? slug ?? canonical : canonical;
+
+/**
+ * The chapter lane's LAW block: the phrase's own copied seed (the compiled Summary the Author pushed in,
+ * `phrase/catalog.ts:phraseSeedOf` — never `stories.idea`), and the accepted Plotline Brief the entries
+ * were materialized from.
+ *
+ * WHY THE SEED AND NOT THE SUMMARY ROW: Phrase ② reads its OWN seed (seam S2), so the text the crew is
+ * told is law is the text every Phrase ② gate hashes. Showing `summaries.content` instead would show a
+ * row the phrase has already moved on from, and an Author edit to Phrase ① would silently change what a
+ * settled chapter's prompt claims.
+ *
+ * WHY `SEED_CONTRACT_NOTE` RIDES IT: the note's rule — the source is GENERAL, not an outline with
+ * unfilled boxes — is exactly the mistake a chapter crew makes against a one-paragraph Summary, and the
+ * same engine-owned sentence the phase-① Writer is briefed with, so there is one wording for one rule.
+ */
+function phraseSeedSection(store: Store, storyId: string, phraseId: string | undefined): { heading: string; body: string } {
+    const phrase = phraseId === undefined ? undefined : store.phrases.get(phraseId);
+    const story = storyOf(store, storyId);
+
+    if (phrase === undefined || story === undefined) {
+        return {
+            heading: '## PHRASE SEED',
+            body: `(no Plotlines Phrase row — Phrase ② has nothing to resolve into chapters)\n${SEED_CONTRACT_NOTE}`
+        };
+    }
+
+    const brief = currentPlotlineBrief(store, story, phrase);
+
+    if (brief === undefined) {
+        return {
+            heading: '## PHRASE SEED — the text Phrase ② resolves into chapters (it is LAW, and it is general: P5 one phrase down)',
+            body: `${phraseSeedOf(phrase, story)}\n(no accepted Plotline Brief yet — the chapter count is the Editor's call, and until it exists no contract is written)\n${SEED_CONTRACT_NOTE}`
+        };
+    }
+
+    const chapters = (brief.chapters ?? [])
+        .map((chapter) => `- chapter ${chapter.order}: ${chapter.seed}`)
+        .join('\n');
+
+    return {
+        heading: '## PHRASE SEED — the text Phrase ② resolves into chapters (it is LAW, and it is general: P5 one phrase down)',
+        body: `${phraseSeedOf(phrase, story)}\n\nACCEPTED PLOTLINE BRIEF (chapter_count ${brief.chapter_count}${
+            chapters === '' ? ', no per-chapter seeds — the count is the whole decision' : ''
+        }):\n${chapters === '' ? '(the Editor declared the count only)' : chapters}\n${SEED_CONTRACT_NOTE}`
+    };
 }
 
 /** The template slug whose `writer` role prompt is the sampler's system turn (§8). */
@@ -977,11 +1099,24 @@ export function compileScreenPrompt(
 export function compileGroupDraftPrompt(
     store: Store,
     storyId: string,
-    opts: { groupRefs: string[]; fixRefs?: string[] }
+    opts: { groupRefs: string[]; fixRefs?: string[]; templateSlug?: string; roleName?: string }
 ): CompiledPrompt {
-    const system = `${rolePromptOf(store, SAMPLE_TEMPLATE_SLUG, 'writer')}\n\n${outputContract(GROUP_DRAFT_SCHEMA_NAME)}`;
+    // PHRASE ② (T-W2): the lane, from the batch's own group rows (see `promptLaneOf`). Three things come
+    // from it — the ANSWER CONTRACT (`GroupDraft` prose vs `ChapterDraft` plotpoints), the engine-owned
+    // instruction block under the groups, and which text is the LAW block at the top. The crew slug is
+    // the EXECUTOR's pass-through (`item.templateRef`/`item.roleName`) with today's sampler as the
+    // default, so a summary batch's system turn is unchanged byte-for-byte while the chapter batch
+    // resolves its own crew (`writer-plotlines-sampler`) instead of borrowing the Summary sampler's copy.
+    const lane = promptLaneOf(store, storyId, opts.groupRefs);
+    const system = `${rolePromptOf(
+        store,
+        slugFor(lane, opts.templateSlug, SAMPLE_TEMPLATE_SLUG),
+        opts.roleName ?? 'writer'
+    )}\n\n${outputContract(lane.controller?.answer.name ?? GROUP_DRAFT_SCHEMA_NAME)}`;
 
-    const sections: Array<{ heading: string; body: string }> = [seedSection(store, storyId)];
+    const sections: Array<{ heading: string; body: string }> = [
+        lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)
+    ];
 
     const knowledge = knowledgeSection(store, storyId);
 
@@ -998,7 +1133,14 @@ export function compileGroupDraftPrompt(
 
     sections.push({
         heading: '## GROUPS (the only groups this job may write — answer for every one of them)',
-        body: `${renderGroupBlock(store, storyId, opts.groupRefs, { current: true })}\n\n${GROUP_DRAFT_INSTRUCTION}`
+        // The instruction block is PHRASE-OWNED text, and the Summary's copy stays THIS file's constant:
+        // `GROUP_DRAFT_INSTRUCTION` is the string every phase-① prompt hash was computed against, and
+        // `controllers/summary.ts` keeps its own parallel copy for registry readers. Phrase ② answers
+        // with plotpoints, so its block comes from its controller (`instructions.draft`, seam S12) —
+        // the same object the engine validates the answer with, which is the point of the slot.
+        body: `${renderGroupBlock(store, storyId, opts.groupRefs, { current: true })}\n\n${
+            lane.plotlines ? (lane.controller?.instructions.draft ?? GROUP_DRAFT_INSTRUCTION) : GROUP_DRAFT_INSTRUCTION
+        }`
     });
 
     // PHRASE GROUP LOCK (R-lock) — the fixed point, SHOWN rather than assumed. A locked group is never in
@@ -1016,7 +1158,7 @@ export function compileGroupDraftPrompt(
     // to its Work Item by that token (`loop/mock.ts:groupJobOf`), and a locked peer printed above the batch
     // would name a group the batch does not carry. The Editor's own lock seat puts its candidate first for
     // the same reason.
-    const lockedPeers = renderLockedPeerBlock(store, storyId);
+    const lockedPeers = renderLockedPeerBlock(store, storyId, lane.phraseId);
 
     if (lockedPeers !== '') {
         sections.push({
@@ -1048,11 +1190,19 @@ export function compileGroupDraftPrompt(
 export function compileGroupReviewPrompt(
     store: Store,
     storyId: string,
-    opts: { groupRefs: string[]; fixRefs?: string[] }
+    opts: { groupRefs: string[]; fixRefs?: string[]; templateSlug?: string; roleName?: string }
 ): CompiledPrompt {
-    const system = `${rolePromptOf(store, SCREEN_TEMPLATE_SLUG, 'critic')}\n\n${outputContract(GROUP_REVIEW_SCHEMA_NAME)}`;
+    // PHRASE ② (T-W2): the same lane read as the Writer's pass (see `promptLaneOf`). The ANSWER CONTRACT
+    // stays `GroupReview` for both phrases — a chapter Critic attributes issues to group ids exactly as a
+    // Summary Critic does — so only the LAW block, the wording of the two headings, and the engine-owned
+    // review block come from the phrase. With the slug and role defaulting to the screening Critic, a
+    // summary seat's bytes are exactly what they were.
+    const lane = promptLaneOf(store, storyId, opts.groupRefs);
+    const system = `${rolePromptOf(store, slugFor(lane, opts.templateSlug, SCREEN_TEMPLATE_SLUG), opts.roleName ?? 'critic')}\n\n${outputContract(GROUP_REVIEW_SCHEMA_NAME)}`;
 
-    const sections: Array<{ heading: string; body: string }> = [seedSection(store, storyId)];
+    const sections: Array<{ heading: string; body: string }> = [
+        lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)
+    ];
 
     const knowledge = knowledgeSection(store, storyId);
 
@@ -1062,7 +1212,9 @@ export function compileGroupReviewPrompt(
 
     if (fixes !== '') {
         sections.push({
-            heading: '## FIX TASKS (verify every one against the Overview below, by its id)',
+            heading: lane.plotlines
+                ? '## FIX TASKS (verify every one against the chapter contracts below, by its id)'
+                : '## FIX TASKS (verify every one against the Overview below, by its id)',
             body: fixes
         });
     }
@@ -1073,10 +1225,16 @@ export function compileGroupReviewPrompt(
     const overview = renderGroupBlock(store, storyId, opts.groupRefs, { current: true });
 
     sections.push({
-        heading: '## OVERVIEW — the five groups as they stand (every issue names the groups it is about)',
-        body: `${overview === '' ? '(this Story has no phrase groups yet — there is nothing installed to judge)' : overview}\n\n${SCREEN_INSTRUCTION}\n\n${GROUP_REVIEW_INSTRUCTION}${
-            fixes === '' ? '' : `\n\n${FIX_VERIFICATION_INSTRUCTION}`
-        }`
+        heading: lane.plotlines
+             ? '## CHAPTER CONTRACTS — every entry as it stands (every issue names the groups it is about)'
+             : '## OVERVIEW — the five groups as they stand (every issue names the groups it is about)',
+        body: `${overview === '' ? '(this Story has no phrase groups yet — there is nothing installed to judge)' : overview}\n\n${SCREEN_INSTRUCTION}\n\n${
+            // Phrase ②'s review block says what a CONTRACT review owes — the chain of setups and payoffs
+            // across chapters, and the rule that a sparse contract is not a defect — because the text in
+            // front of this Critic is a set of contracts, not prose. It is the controller's own slot, the
+            // same text the answer is graded against; the Summary's copy stays this file's constant.
+            lane.plotlines ? (lane.controller?.instructions.review ?? GROUP_REVIEW_INSTRUCTION) : GROUP_REVIEW_INSTRUCTION
+        }${fixes === '' ? '' : `\n\n${FIX_VERIFICATION_INSTRUCTION}`}`
     });
 
     const user = joinSections(sections);
@@ -1112,17 +1270,26 @@ export function compileGroupReviewPrompt(
 export function compileSectionScorePrompt(
     store: Store,
     storyId: string,
-    opts: { groupRefs: string[]; vectorHash: string }
+    opts: { groupRefs: string[]; vectorHash: string; templateSlug?: string; roleName?: string }
 ): CompiledPrompt {
     const story = storyOf(store, storyId);
 
     if (story === undefined) throw new Error(`compileSectionScorePrompt: story ${storyId} does not exist`);
 
-    const selection = cleanSelectionOf(store, story);
+    // PHRASE ② (T-W2): the CLEAN SELECTION IS THE PHRASE'S. `cleanSelectionOf` unscoped answers the
+    // Story's PRIMARY phrase, so an unscoped read here would show a chapter Reader the five SUMMARY
+    // sections — under a vector hash built from chapter groups, which is the mismatch the hash check
+    // below exists to catch, in the loudest way available. `lane.phraseId` is undefined only when the
+    // job names no live group, and then the read is the primary phrase, i.e. today's bytes.
+    const lane = promptLaneOf(store, storyId, opts.groupRefs);
+    const selection = cleanSelectionOf(store, story, lane.phraseId);
+    // The noun the two throws and the one heading use, so a chapter seat never tells the Reader it is
+    // grading a "reviewed Summary" when it is grading chapter contracts.
+    const subject = lane.plotlines ? 'chapter set' : 'Summary';
 
     if (!selection.complete) {
         throw new Error(
-            `compileSectionScorePrompt: story ${storyId} has no reviewed Summary to score — ${selection.gaps
+            `compileSectionScorePrompt: story ${storyId} has no reviewed ${subject} to score — ${selection.gaps
                 .map((gap) => `${gap.group_key} (${gap.reason})`)
                 .join(', ')} lacks a clean revision (D-67)`
         );
@@ -1130,14 +1297,20 @@ export function compileSectionScorePrompt(
 
     if (selection.vector_hash !== opts.vectorHash) {
         throw new Error(
-            `compileSectionScorePrompt: story ${storyId}'s reviewed Summary moved from ${opts.vectorHash} to ` +
+            `compileSectionScorePrompt: story ${storyId}'s reviewed ${subject} moved from ${opts.vectorHash} to ` +
                 `${selection.vector_hash} between the seat's claim and its dispatch (D-67)`
         );
     }
 
-    const system = `${rolePromptOf(store, SCORE_TEMPLATE_SLUG, 'reader')}\n\n${outputContract(SECTION_SCORES_SCHEMA_NAME)}`;
+    const system = `${rolePromptOf(
+        store,
+        slugFor(lane, opts.templateSlug, SCORE_TEMPLATE_SLUG),
+        opts.roleName ?? 'reader'
+    )}\n\n${outputContract(SECTION_SCORES_SCHEMA_NAME)}`;
 
-    const sections: Array<{ heading: string; body: string }> = [seedSection(store, storyId)];
+    const sections: Array<{ heading: string; body: string }> = [
+        lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)
+    ];
 
     const knowledge = knowledgeSection(store, storyId);
 
@@ -1154,7 +1327,9 @@ export function compileSectionScorePrompt(
     const overview = renderGroupBlock(store, storyId, opts.groupRefs, { current: true, reviewed });
 
     sections.push({
-        heading: '## REVIEWED OVERVIEW — every section, scored (name each group_ref exactly once)',
+        heading: lane.plotlines
+            ? '## REVIEWED CHAPTER CONTRACTS — every entry, scored (name each group_ref exactly once)'
+            : '## REVIEWED OVERVIEW — every section, scored (name each group_ref exactly once)',
         // THE BLOCK IS THE PROMPT. `SECTION_SCORE_INSTRUCTION` below sends the Reader to "each group
         // printed above", to copy each `group_ref` "from the heading above", and to quote ONE `evidence`
         // line "verbatim from that section" — so the reviewed Overview has to be interpolated here, not
@@ -1166,7 +1341,7 @@ export function compileSectionScorePrompt(
             overview === ''
                 ? '(this Story has no phrase groups yet — there is nothing reviewed to score)'
                 : `These are the sections the crew stands behind: the newest CLEAN revision of each group. A section may not be the newest text its group has written — it is the newest one a cross-group review passed, and it is the only text you are being asked to grade.\n\n${overview}`
-        }\n\n${SECTION_SCORE_INSTRUCTION}`
+        }\n\n${lane.plotlines ? (lane.controller?.instructions.score ?? SECTION_SCORE_INSTRUCTION) : SECTION_SCORE_INSTRUCTION}`
     });
 
     const user = joinSections(sections);
@@ -1234,8 +1409,13 @@ const GROUP_LOCK_INSTRUCTION =
  * heading carries, so a Writer, a reviewer and the Reader all see the identical sentence about what the
  * flag means — one branch in one renderer, three prompts.
  */
-export function renderLockedPeerBlock(store: Store, storyId: string): string {
-    const locked = phraseGroupsOf(store, storyId).filter(isPhraseGroupLocked);
+export function renderLockedPeerBlock(store: Store, storyId: string, phraseId?: string): string {
+    // PHRASE ② (T-W2): the peers are the ENTRY ROWS OF ONE PHRASE. "The sections that are signed off and
+    // hold still" is a claim about composition, and a locked chapter entry is not a peer of a Summary
+    // prose group (they never compose together), so an unscoped read would print a stranger in the
+    // Writer's fixed point. Unscoped (`phraseId` absent) keeps the whole book, which is what a book with
+    // one phrase always rendered.
+    const locked = phraseGroupsOf(store, storyId, phraseId).filter(isPhraseGroupLocked);
 
     if (locked.length === 0) return '';
 
@@ -1322,20 +1502,34 @@ function renderLockClaimBlock(
 export function compileGroupLockPrompt(
     store: Store,
     storyId: string,
-    opts: { groupRef: string; vectorHash: string }
+    opts: { groupRef: string; vectorHash: string; templateSlug?: string; roleName?: string }
 ): CompiledPrompt {
     const story = storyOf(store, storyId);
 
     if (story === undefined) throw new Error(`compileGroupLockPrompt: story ${storyId} does not exist`);
 
-    const selection = cleanSelectionOf(store, story);
+    // PHRASE ② (T-W2): the seat judges ONE entry, so the lane comes from that row, and the CLEAN
+    // SELECTION it must be part of is that phrase's. Unscoped, `cleanSelectionOf` answers the Story's
+    // PRIMARY phrase — a chapter seat would be armed against the chapter vector and then refused for a
+    // Summary selection it was never shown, which is the mismatch the hash check below reports.
+    const lane = promptLaneOf(store, storyId, [opts.groupRef]);
+    const selection = cleanSelectionOf(store, story, lane.phraseId);
+    const subject = lane.plotlines ? 'chapter set' : 'Summary';
+    // Two labels, because the two audiences differ. `subject` names the ARTIFACT for the refusal
+    // messages above and below, which are engine diagnostics read by a developer. `artifact` is the
+    // word the CREW reads inside the prompt body, and on the summary lane it is 'Overview' — the
+    // phase-① book's own name in the crew copy (`## LOCKED PEERS` talks about "the rest of the
+    // Overview"), which is the byte every R-lock pin quotes (T6b). A lane refactor that collapsed the
+    // two would quietly rewrite the summary seat's heading, and the wave's rule is that Phrase ② adds a
+    // lane without touching phase ①'s bytes.
+    const artifact = lane.plotlines ? 'chapter set' : 'Overview';
     const evidence = editorLockEvidenceOf(store, story, opts.groupRef, selection);
 
     if (evidence === undefined) {
         const gap = selection.gaps.map((entry) => `${entry.group_key} (${entry.reason})`).join(', ');
 
         throw new Error(
-            `compileGroupLockPrompt: ${opts.groupRef} is not lockable by the Editor right now — story ${storyId} needs \`editor_group_locking\` on, a COMPLETE reviewed Summary whose entry for this group is its current text${
+            `compileGroupLockPrompt: ${opts.groupRef} is not lockable by the Editor right now — story ${storyId} needs \`editor_group_locking\` on, a COMPLETE reviewed ${subject} whose entry for this group is its current text${
                 gap === '' ? '' : ` (gaps: ${gap})`
             }, a Reader score for this group at that exact vector, and no live Writer over it (R-lock)`
         );
@@ -1343,13 +1537,21 @@ export function compileGroupLockPrompt(
 
     if (evidence.vector_hash !== opts.vectorHash) {
         throw new Error(
-            `compileGroupLockPrompt: story ${storyId}'s reviewed Summary moved from ${opts.vectorHash} to ${evidence.vector_hash} between the seat's claim and its dispatch (R-lock)`
+            `compileGroupLockPrompt: story ${storyId}'s reviewed ${subject} moved from ${opts.vectorHash} to ${evidence.vector_hash} between the seat's claim and its dispatch (R-lock)`
         );
     }
 
-    const system = `${rolePromptOf(store, GROUP_LOCK_TEMPLATE_SLUG, 'editor')}\n\n${outputContract(GROUP_LOCK_SCHEMA_NAME)}`;
+    // The crew slug is the executor's pass-through; `editor-group-lock` serves phase ①, and the chapter
+    // seat's item carries the general Editor crew instead (T-W2).
+    const system = `${rolePromptOf(
+        store,
+        slugFor(lane, opts.templateSlug, GROUP_LOCK_TEMPLATE_SLUG),
+        opts.roleName ?? 'editor'
+    )}\n\n${outputContract(GROUP_LOCK_SCHEMA_NAME)}`;
 
-    const sections: Array<{ heading: string; body: string }> = [seedSection(store, storyId)];
+    const sections: Array<{ heading: string; body: string }> = [
+        lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)
+    ];
 
     const knowledge = knowledgeSection(store, storyId);
 
@@ -1364,7 +1566,7 @@ export function compileGroupLockPrompt(
     const candidate = renderGroupBlock(store, storyId, [evidence.group.id], { current: true, reviewed });
 
     sections.push({
-        heading: `## CANDIDATE SECTION \u2014 the one section this pass may lock (clean revision ${evidence.revision.number} of the reviewed Overview, vector ${evidence.vector_hash})`,
+        heading: `## CANDIDATE SECTION \u2014 the one section this pass may lock (clean revision ${evidence.revision.number} of the reviewed ${artifact}, vector ${evidence.vector_hash})`,
         body: `This is the exact text the Reader scored: the newest CLEAN revision of this group, the one a cross-group review passed. It is also the revision a lock would fix, so judge THESE words and no others.\n\n${candidate}`
     });
 
@@ -1406,9 +1608,13 @@ This is one Reader's reading of one section, not a rule and not a verdict. What 
         // The block is rendered by the same helper the Writer's prompt uses, so the marker sentence is the
         // same sentence in every prompt (one branch, one meaning). With no locked peer the seat is the
         // first lock the book would take, which is worth saying: this section then becomes the baseline.
-        body: `${renderLockedPeerBlock(store, storyId) === ''
-            ? '(no other section is locked yet \u2014 locking this one would make it the first fixed point the rest of the Overview is revised against)'
-            : renderLockedPeerBlock(store, storyId)}
+        // PHRASE ② (T-W2): the peers are scoped to this seat's PHRASE (the same scoping the Writer's
+        // prompt gets) — a locked Summary section is not the fixed point a chapter contract is finished
+        // relative to, and printing one would tell the Editor to freeze a contract against prose it never
+        // composes with.
+        body: `${renderLockedPeerBlock(store, storyId, lane.phraseId) === ''
+            ? `(no other section is locked yet \u2014 locking this one would make it the first fixed point the rest of the ${artifact} is revised against)`
+            : renderLockedPeerBlock(store, storyId, lane.phraseId)}
 the sections still unlocked, which keep being rewritten whichever way you answer: ${
             evidence.unlocked_peers.length === 0
                 ? '(none \u2014 every other section is already locked or is this one)'
@@ -1416,7 +1622,16 @@ the sections still unlocked, which keep being rewritten whichever way you answer
         }`
     });
 
-    sections.push({ heading: '## LOCK DECISION (the only answer this pass may give)', body: GROUP_LOCK_INSTRUCTION });
+    sections.push({
+        heading: '## LOCK DECISION (the only answer this pass may give)',
+        // PHRASE ② (T-W2): the contract sentence "may this entry be frozen?" is phrase-owned — a chapter
+        // lock freezes a CONTRACT (setups, payoffs, the chain), not a passage of prose, and the phrase's
+        // controller states that contract (`instructions.lock`, the slot the settle's guard reads from the
+        // same object). The Summary's copy stays this file's constant, byte for byte.
+        body: lane.plotlines
+            ? (lane.controller?.instructions.lock ?? GROUP_LOCK_INSTRUCTION)
+            : GROUP_LOCK_INSTRUCTION
+    });
 
     const user = joinSections(sections);
 

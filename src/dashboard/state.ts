@@ -43,6 +43,10 @@ import {
     type PhraseGroupReviseResult,
     type PhraseGroupLockResult,
     groupLockKey,
+    PHRASE_PLOTLINES_KEY,
+    type PhraseDetailView,
+    type PhraseEntryReviseInput,
+    type PhraseStartInput,
     type PhraseView,
     type StoryKnowledgeTree
 } from './api';
@@ -93,6 +97,23 @@ export interface DashboardSnapshot {
      * Tone must not follow the Author into Premise's pane.
      */
     groupLockErrors: Record<string, string>;
+    /**
+     * T-W4 — `story_id -> the last PHRASE ② read` (`GET /stories/:id/phrases/plotlines`): the chapter entries, the
+     * copied Seed's head, the structure brief and that phrase's own review counts.
+     *
+     * A SECOND CACHE, keyed like `phrases`, because it is a second route and a second phrase. One slot would force
+     * the two surfaces to overwrite each other: the rail can be standing on Phrase ② while the Summary's handoff
+     * line still reads the Summary's compiled state, and both frames are true at once. Absent means "not loaded"
+     * (or it failed — see `phraseDetailErrors`), which is what the Plotlines pane renders as its loading line
+     * rather than "this Story has no chapter entries".
+     */
+    phraseDetails: Record<string, PhraseDetailView>;
+    /**
+     * T-W4 — `story_id -> the last refusal of THAT phrase's read`, the server's own sentence (L-13). It is kept
+     * apart from `phraseErrors` because the two failures are about different surfaces: the Plotlines pane may not
+     * print the Summary read's 503 over its chapter entries, and a Phrase ② failure leaves the Summary current.
+     */
+    phraseDetailErrors: Record<string, string>;
     /** `story_id -> the durable knowledge directory`, one article per section. */
     knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
@@ -137,6 +158,8 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     phraseErrors: {},
     reviewedErrors: {},
     groupLockErrors: {},
+    phraseDetails: {},
+    phraseDetailErrors: {},
     knowledge: {},
     queue: [],
     runs: [],
@@ -293,6 +316,49 @@ export function createDashboardStore(client: ApiClient = api) {
         });
 
     /**
+     * T-W4 — the PHRASE ② read, on the same coalesced path as every other resource (`refreshPhrase`'s shape, for
+     * the same reasons): the chapter entries must move with the stream and with each mutation, and a refusal must
+     * not blank the desk.
+     *
+     * WHY IT IS LOADED ON DEMAND RATHER THAN WITH THE STORY. `mutate` and `selectStory` refresh this read only when
+     * the surface is ALREADY open (`phraseDetails[storyId]` is cached, or a Phrase ② verb just ran), because the
+     * desk's default frame is the Summary and a Story whose Plotlines are classic can never show the entries. A
+     * poll that fetched the Phrase ② rows for every Story on the desk would be paying for a surface nobody is
+     * looking at — and `story.plotlines_mode` already answers the mode question without the rows.
+     *
+     * The failure is cached per Story in its own slot (`phraseDetailErrors`), never in `phraseErrors`: the two
+     * routes fail about different surfaces, and the Plotlines pane may not print the Summary read's sentence.
+     */
+    const refreshPhraseDetail = (storyId: string): Promise<void> =>
+        refresh(`phrase-detail:${storyId}`, async () => {
+            try {
+                const phrase = await client.getPhraseDetail(storyId, PHRASE_PLOTLINES_KEY);
+
+                return {
+                    phraseDetails: { ...snapshot.phraseDetails, [storyId]: phrase },
+                    phraseDetailErrors: withoutKey(snapshot.phraseDetailErrors, storyId)
+                };
+            } catch (error) {
+                return {
+                    phraseDetails: withoutKey(snapshot.phraseDetails, storyId),
+                    phraseDetailErrors: { ...snapshot.phraseDetailErrors, [storyId]: failureText(error) },
+                    error: failureText(error)
+                };
+            }
+        });
+
+    /**
+     * T-W4 — does this Story's Phrase ② read belong in the frame at all?
+     *
+     * TWO HONEST REASONS, and nothing else: the dial says the entries are the surface (`story.plotlines_mode`), or
+     * the surface is already open in this session and has to keep up with the stream. A classic book therefore pays
+     * for no Phrase ② reads — its Plotlines pane renders the §4.3 records off the Story payload it already has —
+     * and a Story whose dial the Author just turned on starts fetching them with that write (see `setPlotlinesMode`).
+     */
+    const phraseDetailWanted = (storyId: string): boolean =>
+        snapshot.phraseDetails[storyId] !== undefined || snapshot.storyViews[storyId]?.plotlines_mode === 'groups';
+
+    /**
      * Every mutation follows the same choreography: send, then re-read what the server may
      * have changed. The re-read is not caution, it is the design — a `lock` also empties the
      * Ideas tray (D-36), a `select` hands the Idea to the next Writer's brief (D-29), a
@@ -309,6 +375,16 @@ export function createDashboardStore(client: ApiClient = api) {
                 // `writer_busy` — all of it rows the phrase read projects, so the Author sees the group
                 // rail answer in the same frame they clicked in.
                 refetch.push(refreshStory(touchedStoryId), refreshKnowledge(touchedStoryId), refreshPhrase(touchedStoryId));
+
+                // T-W4 — Phrase ② is part of "what the server may have changed" WHILE ITS SURFACE IS OPEN. The
+                // entries move under the same writes the groups do (a Writer install, a finding's scope, a lock), and
+                // an Author standing on a chapter entry has to see it move in the frame they clicked in. The cache
+                // check is what keeps the desk from fetching a surface nobody opened: `phraseDetails[storyId]` is
+                // present from the moment the rail selects Phrase ② or a Phrase ② verb runs, and absent for every
+                // classic book, whose Plotlines pane needs no rows.
+                if (phraseDetailWanted(touchedStoryId)) {
+                    refetch.push(refreshPhraseDetail(touchedStoryId));
+                }
             }
             if (snapshot.selectedAgent) {
                 refetch.push(refreshAgentThreads(snapshot.selectedAgent));
@@ -348,6 +424,19 @@ export function createDashboardStore(client: ApiClient = api) {
     };
 
     /**
+     * T-W4 — WHICH PHRASE a group row belongs to, read off the caches rather than guessed from the verb.
+     *
+     * The lock and unlock routes address a group ROW by its UUID, and every phrase's rows carry their own UUIDs, so
+     * the row itself decides which surface a write lands on — and the route answers with THAT phrase's read
+     * (`routes.ts:phraseVerbView`: the Summary's `PhraseView`, Phrase ②'s `PhraseDetailView`). Committing a chapter
+     * entry's refreshed read into `phrases[]` would put chapter rows in the Summary's slot, so the store asks its
+     * own caches which one holds the id. `'summary'` is the fallback, and it is the honest one: when neither cache
+     * has the row (a first lock straight after a start), `mutate`'s own re-read is what puts the new state on screen.
+     */
+    const groupSurfaceOf = (storyId: string, groupId: string): 'summary' | 'plotlines' =>
+        snapshot.phraseDetails[storyId]?.groups.some((row) => row.id === groupId) === true ? 'plotlines' : 'summary';
+
+    /**
      * R1 — one group lock/unlock write, in `chooseReviewedSummary`'s exact choreography (see the two verbs
      * below for what each route is for). `verb` is the cache's own name for the failure line, never a claim
      * about what the route did.
@@ -360,13 +449,20 @@ export function createDashboardStore(client: ApiClient = api) {
     ): Promise<PhraseGroupLockResult | null> =>
         mutate(async () => {
             const key = groupLockKey(storyId, groupId);
+            const surface = groupSurfaceOf(storyId, groupId);
 
             try {
                 const result = await run();
                 const view = lockViewOf(result);
 
                 commit({
-                    ...(view === undefined ? {} : { phrases: { ...snapshot.phrases, [storyId]: view } }),
+                    ...(view === undefined
+                        ? {}
+                        : surface === 'plotlines'
+                          ? // The refreshed read a Phrase ② route answers with is a `PhraseDetailView`; the lock
+                            // routes may also send the plain rows, and `lockViewOf` already proved rows are present.
+                            { phraseDetails: { ...snapshot.phraseDetails, [storyId]: view as PhraseDetailView } }
+                          : { phrases: { ...snapshot.phrases, [storyId]: view } }),
                     // Cleared on the way through, so a stale refusal from an earlier click on THIS group cannot
                     // outlive the write that answered it.
                     groupLockErrors: withoutKey(snapshot.groupLockErrors, key)
@@ -412,6 +508,15 @@ export function createDashboardStore(client: ApiClient = api) {
             return snapshot.activeStoryId ? (snapshot.phrases[snapshot.activeStoryId] ?? null) : null;
         },
 
+        /**
+         * The selected Story's PHRASE ② read (T-W4), or `null` on the home view and `null` while that read is in
+         * flight or has failed. Its cache is per-Story like every other one here, and the Plotlines pane renders the
+         * two nulls apart through `phraseDetailError` — a read still on its way is not "this Story has no entries".
+         */
+        selectedPhraseDetail(): PhraseDetailView | null {
+            return snapshot.activeStoryId ? (snapshot.phraseDetails[snapshot.activeStoryId] ?? null) : null;
+        },
+
         /** Reads STORIES rows for the queue jump without re-reading the server. */
         storyRow(storyId: string): StoryRow | undefined {
             return snapshot.stories.find((row) => row.id === storyId);
@@ -451,6 +556,9 @@ export function createDashboardStore(client: ApiClient = api) {
                         // scope change or a dispatched group pass all land on this Story's phrase rows, so
                         // the stream re-reads them on the same event rather than on a timer.
                         void refreshPhrase(storyId);
+                        // T-W4 — and the same for the chapter entries, while that surface is the Story's
+                        // (`phraseDetailWanted`), so an install on a chapter entry moves the pane the Author is on.
+                        if (phraseDetailWanted(storyId)) void refreshPhraseDetail(storyId);
                     }
                     void refreshStories();
                     void refreshQueue();
@@ -478,6 +586,12 @@ export function createDashboardStore(client: ApiClient = api) {
                     refreshRuns(),
                     refreshStories()
                 ]);
+                // T-W4 — the Phrase ② rows arrive with the Story only when the dial says they are the surface
+                // (`phraseDetailWanted`), so opening a classic Story stays one fewer flight and a grouped Story
+                // never renders a Phrase ② pane that says "the read has not landed" when it never started.
+                if (phraseDetailWanted(storyId)) {
+                    await refreshPhraseDetail(storyId);
+                }
                 return snapshot.stories.find((row) => row.id === storyId) ?? null;
             });
         },
@@ -552,6 +666,10 @@ export function createDashboardStore(client: ApiClient = api) {
                     // a Story id can be re-opened, and a stale error would outlive the delete.
                     phrases: withoutKey(snapshot.phrases, storyId),
                     phraseErrors: withoutKey(snapshot.phraseErrors, storyId),
+                    // T-W4 — the Phrase ② read and its failure go with the Story: a deleted Story has no phrase to
+                    // read, and a cached refusal would outlive the thing it refused.
+                    phraseDetails: withoutKey(snapshot.phraseDetails, storyId),
+                    phraseDetailErrors: withoutKey(snapshot.phraseDetailErrors, storyId),
                     // D-68: a Story id can be re-opened, and a choose refusal from the deleted book would
                     // otherwise sit on the Summary tab of whatever took its id.
                     reviewedErrors: withoutKey(snapshot.reviewedErrors, storyId),
@@ -622,6 +740,66 @@ export function createDashboardStore(client: ApiClient = api) {
          */
         setEditorGroupLocking: (storyId: string, enabled: boolean) =>
             mutate(() => client.patchStory(storyId, { editor_group_locking: enabled }), storyId),
+        /**
+         * T-W4 — the Story's Phrase ② dial, one `PATCH /stories/:id` key (`setEditorGroupLocking`'s shape, and the
+         * reason for the explicit value is the same: absent means the default, so turning a dial OFF has to be a body
+         * the server can tell apart from a body that never mentioned it).
+         *
+         * THE READ FOLLOWS THE DIAL, not the other way round. Turning the dial ON is the moment the chapter entries
+         * become this Story's surface, and `mutate`'s refetch ran against the payload BEFORE the write — so this verb
+         * loads the Phrase ② rows itself afterwards. Without that line the Author turns the dial on and the Plotlines
+         * pane says the read never started.
+         */
+        setPlotlinesMode: async (storyId: string, mode: 'groups' | 'classic') => {
+            const result = await mutate(() => client.patchStory(storyId, { plotlines_mode: mode }), storyId);
+
+            if (mode === 'groups') {
+                await refreshPhraseDetail(storyId);
+            }
+
+            return result;
+        },
+        /**
+         * T-W4 — the Author STARTS an on-demand phrase (`POST /stories/:id/phrases/:key/start`, R5 / D-76).
+         *
+         * THE ROUTE ANSWERS THE PHRASE'S OWN READ, so the store commits it straight away: the rail's tick, the copied
+         * Seed's head and the entry rows come from the server's receipt rather than from a later poll, and `mutate`
+         * then re-reads the Story (whose `phrase_started` flag is what disables the handoff) and the desk (P1 — the
+         * durable store is the only memory).
+         *
+         * THE REFUSAL IS THE SHELL'S LINE, NOT A PHRASE CACHE ENTRY. The three start refusals (already started, no
+         * compiled Summary, empty custom text) are about the handoff control, and the Plotlines pane's own error slot
+         * (`phraseDetailErrors`) means "the READ failed" — writing a 409 there would render a failed read over rows
+         * that arrived fine. So the server's sentence goes up verbatim through `mutate`'s `error` (L-13) and a
+         * success clears the slot.
+         */
+        startPhrase: (storyId: string, phraseKey: string, input?: PhraseStartInput) =>
+            mutate(async () => {
+                const result = await client.startPhrase(storyId, phraseKey, input);
+
+                commit({
+                    phraseDetails: { ...snapshot.phraseDetails, [storyId]: result.view },
+                    phraseDetailErrors: withoutKey(snapshot.phraseDetailErrors, storyId)
+                });
+
+                return result;
+            }, storyId),
+        /**
+         * T-W4 — the Author rewrites ONE CHAPTER ENTRY (`POST …/phrases/groups/:id/revise`, the entry leg).
+         *
+         * Same route as the Summary group's revise, and the same choreography, but the response's `view` is the
+         * PHRASE ② read (`routes.ts:phraseVerbView` picks it from the group row's phrase), so it is committed into
+         * `phraseDetails` rather than the Summary's slot — the one place a wrong cache would put chapter rows under
+         * the Summary's five groups.
+         */
+        revisePhraseEntry: (storyId: string, entryId: string, input: PhraseEntryReviseInput) =>
+            mutate(async () => {
+                const result = await client.revisePhraseEntry(storyId, entryId, input);
+
+                commit({ phraseDetails: { ...snapshot.phraseDetails, [storyId]: result.view } });
+
+                return result;
+            }, storyId),
         /**
          * D-68 — the Author takes the Reviewed Summary (`POST /stories/:id/phrases/reviewed/choose`).
          *

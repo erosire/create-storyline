@@ -18,6 +18,11 @@
 // here is a spec violation rather than a style problem.
 import {
     currentSeedBrief,
+    // PHRASE ② (T-W2): the chapter lane's brief read, used by the drain clauses below. "Accepted, for
+    // the phrase's CURRENT seed hash" is the same staleness rule `currentSeedBrief` implements one
+    // phrase up (`records.ts:currentPlotlineBrief`), and it is what `work.ts` gates its jobs on, so the
+    // probe and the queue read one definition of "the Editor has not structured this yet".
+    currentPlotlineBrief,
     deepReviewPassesOwed,
     dialCovers,
     dialKey,
@@ -69,7 +74,21 @@ import {
 // phrase surface (`phrase/exclusion.ts:groupPipelineOwed`) — the SAME rules `work.ts` builds its
 // candidates from — because a grouped book has no sampling rows for §6.4's clauses to describe, and
 // the rail (`api/projections.ts`) already answers "what still owes a review?" with these reads.
-import { groupPipelineOwed, isGroupManagedStory, isGroupPipelineRun, SECTION_SCORE_ITEM_PREFIX } from '../phrase';
+import {
+    groupPipelineOwed,
+    isGroupManagedStory,
+    isGroupPipelineRun,
+    SECTION_SCORE_ITEM_PREFIX,
+    // PHRASE ② (T-W2): the PHRASE-level dial (`story.plotlines_mode`) and the phrase ROW lookup, which
+    // together scope the chapter lane's owed reads. Every group predicate above stays exactly as phase ①
+    // used it — unscoped, it answers the PRIMARY phrase, which is the Summary — and the chapter lane
+    // passes the Plotlines phrase id explicitly, because `phraseGroupsOf` without a phrase interleaves
+    // BOTH phrases' rows by `order` (chapter_1 and premise are both order 1).
+    isPhraseGroupManaged,
+    storyPhraseByKey
+} from '../phrase';
+// The phrase KEY, so the lane's gate names the phrase rather than repeating a string (`shared/phrase.ts`).
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
 import type { CompletionProposal, LoopStory, ProbeState } from './types';
@@ -166,6 +185,12 @@ export function drainPreconditions(store: Store, story: Story): { met: boolean; 
     // owed. Each line is one of the gates the sweep actually enforces, in the same plain sentence
     // shape as the conditions above, so the Author's drain row says WHICH stage is unfinished.
     if (story.phase === 'summary') unmet.push(...phase1Unmet(store, story));
+
+    // PHRASE ② (T-W2): the chapter lane's own clauses, and only for a book that opted into the chapter
+    // group pipeline. Without this line a group-managed phase ② reports "nothing left" while its draft
+    // batch and review seats are still owed, and L-37's condition 1 ("out of authorised work") is then
+    // answered by a probe that never looked at the work.
+    if (story.phase === 'plotlines') unmet.push(...phase2Unmet(store, story));
 
     return { met: unmet.length === 0, unmet };
 }
@@ -367,7 +392,102 @@ function phase1Unmet(store: Store, story: Story): string[] {
     return unmet;
 }
 
-/** The dial as prose, for the drained reason (§15 step 11's "no critical or major left"). */
+/**
+ * Phrase ②'s drain clauses (PHRASE ②, T-W2) — the same four stages `phase1Unmet` counts for the
+ * Summary, run against the PLOTLINES phrase and its chapter entries.
+ *
+ * WHY A SIBLING FUNCTION RATHER THAN A BRANCH INSIDE `phase1Unmet`: the two lanes read the same
+ * predicates (`phrase/exclusion.ts:groupPipelineOwed`, scoped to a phrase), but the SENTENCES differ —
+ * one describes an Overview the rail shows as prose, the other a set of chapter contracts — and phase
+ * ①'s strings are pinned by tests that predate Phrase ②. Sharing the branch would mean rewriting those
+ * bytes for a lane that has no pins yet; sharing the READS is what keeps the two probes honest.
+ *
+ * WHAT HOLDS PHASE ②'S DRAIN:
+ *   1. no ACCEPTED Plotline Brief — without the chapter count there is no entry set, so nothing below
+ *      is answerable and the Editor's `structurePlotlines` job is the only work there is (P5, D-3b);
+ *   2. a live chapter-pipeline run (draft batch, review seat, score seat, deep pass) —
+ *      `phrase/exclusion.ts:isGroupPipelineRun` covers this lane because the claim-key families are
+ *      shared and only the embedded ref differs (the phrase row id instead of the `summaries` row id);
+ *   3-5. the owed counts from `groupPipelineOwed(store, story, <plotlines phrase id>)`, which is built
+ *      from `work.ts:phase2GroupCandidates`' own gates exactly as phase ①'s comes from
+ *      `phase1GroupCandidates` — the probe and the queue cannot tell two stories (L-37).
+ *
+ * WHAT DOES NOT HOLD IT: the Reader's SCORE (D-65, display-only — `groupPipelineOwed` never counts a
+ * score seat), the Editor's lock seat (an offer, not a debt), and the phrase's research leg, which
+ * Phrase ② does not have: the Seed's pass settled the world facts, so `pushResearchPrerequisites` is
+ * not called here and a phase-② `fix` task is grounded by the phase that created it.
+ *
+ * A CLASSIC phase ② (`plotlines_mode` absent or `'classic'`) reports NOTHING here — the classic §4.3
+ * tool path is what those books always ran, and its drain clauses are the shared ones above.
+ */
+function phase2Unmet(store: Store, story: Story): string[] {
+    const unmet: string[] = [];
+
+    if (!isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY)) return unmet;
+
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY);
+
+    // An unstarted Phrase ② is the AUTHOR's step, not the crew's: the loop cannot invent the seed the
+    // chapters will be read from (`phrase/controllers/plotlines.ts:startPlotlinesPhrase`'s refusals say
+    // the same thing as an error). Reporting "the crew is waiting on you" with this reason attached is
+    // the honest version of a book that has the phase but not the phrase.
+    if (phrase === undefined) {
+        unmet.push(
+            'Phrase ② has not been started — the compiled Summary (or the Author’s own text) has to be pushed into the Plotlines Phrase before any chapter contract is drafted (R1, one phrase down)'
+        );
+
+        return unmet;
+    }
+
+    const brief = currentPlotlineBrief(store, story, phrase);
+
+    if (brief === undefined) {
+        unmet.push(
+            'no accepted Plotline Brief declares the chapter count — the Editor has not structured the Phrase ② seed yet (P5, D-3b)'
+        );
+
+        return unmet;
+    }
+
+    const groupLive = liveRuns(store, story.id).filter((run) => isGroupPipelineRun(run));
+
+    if (groupLive.length > 0) {
+        const scoring = groupLive.filter((run) =>
+            (run.work_item_ref ?? '').startsWith(`${SECTION_SCORE_ITEM_PREFIX}_`)
+        ).length;
+
+        unmet.push(
+            `${groupLive.length} chapter-pipeline run${groupLive.length === 1 ? '' : 's'} still in flight${
+                scoring > 0 ? ` (${scoring} scoring the installed chapter set)` : ''
+            } (R5, §6.4 steps 3-6)`
+        );
+    }
+
+    const owed = groupPipelineOwed(store, story, phrase.id);
+
+    if (owed.drafts > 0)
+        unmet.push(
+            `${owed.drafts} chapter contract${owed.drafts === 1 ? '' : 's'} still owe the chapter set a draft or a fix pass (R2, §6.4 step 3)`
+        );
+
+    if (owed.structuredReviews > 0)
+        unmet.push(
+            `${owed.structuredReviews} Critic pass${owed.structuredReviews === 1 ? '' : 'es'} still owed on the installed chapter set (R3, R5, §6.4 step 4)`
+        );
+
+    if (owed.deepReviews > 0)
+        unmet.push(
+            `${owed.deepReviews} deep-review pass${owed.deepReviews === 1 ? '' : 'es'} still owed for the installed chapter set (§6.4 step 6, R5)`
+        );
+
+    // THE ONE GAP, named rather than hidden: a phase-② `fix` task with NO finding behind it (a
+    // hand-armed row, or one the Editor queued by hand) drives no group work — `groupWorkTargets`' two
+    // reasons are "never written" and "an open finding owes it". The classic path would have handed it
+    // to a `write_unit` Writer. In group mode the row simply holds the drain through the shared
+    // open-task clause, which is the fail-closed answer: the Author sees a queue row nothing is
+    // consuming instead of a silent re-draft.
+    return unmet;
+}
 export function dialPhrase(story: Story): string {
     const order: Cost[] = ['critical', 'major', 'minor', 'taste'];
     const covered = order.filter((cost) => dialCovers(story, cost));
@@ -658,14 +778,29 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // (`api/projections.ts:phraseView`'s `reviews_on_current_vector` / `deep_reviews_on_current_vector`
     // and `loop/work.ts`'s seat gates). The gate gets tighter to match the rail; it is never loosened
     // to let a lock through over an unread Overview.
+    // PHRASE ② (T-W2): the chapter lane gets the SAME treatment with its OWN phrase. A group-managed
+    // phase ② has no selected Summary revision either, and its evidence is the CURRENT CHAPTER VECTOR's
+    // review seats — structured passes and deep cross-chapter passes alike. Without this the Goal's two
+    // criteria would buy a `phase_signoff` on a chapter set nobody reviewed, which is the parity defect
+    // the phase-① branch above was hardened for.
+    const plotlinesPhraseId =
+        story.phase === 'plotlines' && isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY)
+            ? storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY)?.id
+            : undefined;
     const groupOwedForSignoff =
-        story.phase === 'summary' && isGroupManagedStory(story) ? groupPipelineOwed(store, story) : undefined;
+        story.phase === 'summary' && isGroupManagedStory(story)
+            ? groupPipelineOwed(store, story)
+            : plotlinesPhraseId === undefined
+              ? undefined
+              : groupPipelineOwed(store, story, plotlinesPhraseId);
     const reviewOwed =
         story.phase === 'summary'
             ? groupOwedForSignoff !== undefined
                 ? groupOwedForSignoff.structuredReviews + groupOwedForSignoff.deepReviews > 0
                 : deepReviewPassesOwed(store, story, selectedSummaryRevision(store, story.id)) > 0
-            : false;
+            : // The chapter lane reads the same owed object; a `score_sections` seat is NOT in it (D-65:
+              // a score never holds a gate), so a pending score cannot stop the lock either.
+              groupOwedForSignoff !== undefined && groupOwedForSignoff.structuredReviews + groupOwedForSignoff.deepReviews > 0;
     const summaryRoundQueued =
         story.phase === 'summary'
             ? queued.filter((task) => task.kind === 'fix' || task.kind === 'rewrite' || task.kind === 'merge')

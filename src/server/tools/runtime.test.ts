@@ -481,7 +481,7 @@ describe('the W2 call pipeline', () => {
         // §8.1 (8) + §8.2 (10) + §8.3 (6) + §8.4 (17) + §8.5 (4) + the Phase-1 research surface
         // (4). Every session holds all of them whatever its kind (T-6a), so the count is itself a
         // conformance number.
-        expect(result.catalogue_size).toBe(52);
+        expect(result.catalogue_size).toBe(53);
     });
 
     it('refuses an unknown role kind naming T-0 rather than defaulting it (T-0)', async () => {

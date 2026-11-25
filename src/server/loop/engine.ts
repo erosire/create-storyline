@@ -154,8 +154,19 @@ import {
     // catching it here means "the state moved while the Editor deliberated: nothing happened".
     lockPhraseGroup,
     isPhraseLockRefusal,
+    // PHRASE ② (T-W2) — the three reads the settle needs to route a group pass to the PHRASE that owns
+    // it: the group row's own `phrase_id` (`phraseGroupById`, the same scoped lookup the tools use), the
+    // controller registry lookup that turns a phrase row into an answer contract and a validator
+    // (`controller.ts:phraseControllerOf`, seam S12), and the per-phrase dial for the Clean-stamp gate
+    // (`catalog.ts:isPhraseGroupManaged` — `isGroupManagedStory` above stays the Summary's predicate).
+    phraseGroupById,
+    phraseControllerOf,
+    isPhraseGroupManaged,
     storyPhrase
 } from '../phrase';
+// PHRASE ② (T-W2): the phrase KEY for the Clean-stamp gate (`shared/phrase.ts`), so the gate names the
+// phrase whose dial it reads instead of repeating a string.
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 // R3/T6b — the Editor's lock seat: the answer validator (contract-only, result union like the group
 // passes) and the settle guard (the domain state re-read inside the commit). Both live in one module so
 // the generator, the prompt compiler and the settle cannot disagree about what is lockable.
@@ -1383,13 +1394,50 @@ export class LoopEngine implements EngineApi {
         // restart settles the answer against the job that asked for it, not against whatever the book
         // looks like now (L-3).
         const isGroupPass = item.kind === 'draft_groups' || item.kind === 'review_groups';
+        // ---------------------------------------------------------------------
+        // PHRASE ② (T-W2) — WHICH PHRASE this job belongs to, resolved BEFORE the commit.
+        //
+        // WHY FROM THE ROWS AND NOT FROM A NEW WORK-ITEM FIELD: `item.groupRefs` are `phrase_groups`
+        // rows, and a group row already names its phrase (`phrase_id`, R1's catalog). A second field
+        // saying what the rows say is a second source of truth that can disagree with the first, and the
+        // settle's whole rule is that it answers against the rows the JOB named (L-3). The FIRST
+        // resolvable ref wins — the same convention `phrase/revisions.ts:installGroupRevisions` uses
+        // (`entries[0].group.phrase_id`), so the parse and the install cannot land on different phrases.
+        //
+        // WHAT IT PICKS: the phrase CONTROLLER (`phrase/controller.ts:phraseControllerOf`), i.e. the
+        // answer contract and its validator. `parseGroupDraftAnswer` is the SUMMARY's validator — prose
+        // entries, and an entry with no `content` is refused — while a chapter batch answers with
+        // `ChapterDraft` plotpoints, which that validator refuses as an empty entry. Both lanes use the
+        // SAME Work Item kinds, so this is the one line that says which contract the answer is read under.
+        //
+        // THE CLASSIC CASE IS UNTOUCHED: with no resolvable group ref (a `review_groups` seat on a Story
+        // whose catalog was never ensured, or a pre-Phrase-② row), `groupPhraseId` is `undefined` and the
+        // Summary validator below runs exactly as it did — the Summary controller's `parseDraft` is that
+        // same function with the primary phrase id passed in (`controllers/summary.ts:120-132`), so even
+        // the routed call is byte-for-byte the old behaviour.
+        const groupPhraseId = groupPhraseIdOf(store, item.storyId, item.groupRefs);
+        const groupController =
+            groupPhraseId === undefined ? undefined : phraseControllerOf(store, item.storyId, groupPhraseId);
         const groupDraft =
             item.kind === 'draft_groups' && closed && result.structured !== undefined
-                ? parseGroupDraftAnswer(store, item.storyId, item.groupRefs ?? [], result.structured)
+                ? groupController === undefined
+                  ? parseGroupDraftAnswer(store, item.storyId, item.groupRefs ?? [], result.structured)
+                  : groupController.parseDraft(
+                        store,
+                        requireStory(store, item.storyId),
+                        item.groupRefs ?? [],
+                        result.structured,
+                        groupPhraseId
+                    )
                 : undefined;
         const groupReview =
             item.kind === 'review_groups' && closed && result.structured !== undefined
-                ? parseGroupReviewAnswer(store, item.storyId, result.structured)
+                ? // PHRASE-SCOPED (T-W2): the validator checks every issue's `group_refs` against the
+                  // phrase's entry rows, and an UNSCOPED read answers with the Story's PRIMARY phrase —
+                  // so a chapter Critic naming four chapter groups would be refused for naming groups
+                  // "outside this Story". `groupPhraseId` is the phrase those groups belong to; absent it,
+                  // the validator's own fallback is the primary phrase, i.e. today's behaviour.
+                  parseGroupReviewAnswer(store, item.storyId, result.structured, groupPhraseId)
                 : undefined;
         // ---------------------------------------------------------------------
         // READER SCORING (D-65) — the section-score answer, parsed BEFORE the commit for the same
@@ -1402,7 +1450,15 @@ export class LoopEngine implements EngineApi {
         // criteria engine, the drain probe, the hill-climb or the sign-off gate.
         const sectionScores =
             item.kind === 'score_sections' && closed && result.structured !== undefined
-                ? parseSectionScoreAnswer(store, item.storyId, result.structured)
+                ? // PHRASE-SCOPED (T-W2): the answer must name every section of the phrase the job was
+                  // dispatched over, exactly once, and the validator reads that set from the phrase's own
+                  // rows. Unscoped it falls back to the Story's PRIMARY phrase — so a chapter Reader
+                  // scoring `chapter_1..N` would be refused for naming groups "outside this Story", the
+                  // vector would stay unscored, and the Editor's lock seat (which requires a Reader score
+                  // for that group at that vector — `loop/editor-lock.ts:editorLockEvidenceOf`) would
+                  // never arm for a chapter. `groupPhraseId` is the phrase the job's group refs belong to;
+                  // absent it the validator's own fallback is the primary phrase, i.e. today's behaviour.
+                  parseSectionScoreAnswer(store, item.storyId, result.structured, groupPhraseId)
                 : undefined;
         // ---------------------------------------------------------------------
         // GROUP LOCK (R3/T6b) — the Editor's judgement, parsed BEFORE the commit for the same reason the
@@ -1702,7 +1758,12 @@ export class LoopEngine implements EngineApi {
                 store.sampleReviews.create(
                     {
                         story_id: item.storyId,
-                        revision_ref: phrase?.id ?? (item.groupRefs ?? [])[0] ?? item.storyId,
+                        // PHRASE-SCOPED (T-W2): the review is OF one phrase's composed text, so the row
+                        // names THAT phrase. `groupPhraseId` comes from the groups the seat was claimed
+                        // against, and the fallback chain is the pre-② one — the Story's primary phrase,
+                        // then the first group ref, then the Story — so a Summary seat's row is unchanged
+                        // (`group.phrase_id` IS the primary phrase there).
+                        revision_ref: groupPhraseId ?? phrase?.id ?? (item.groupRefs ?? [])[0] ?? item.storyId,
                         critic: item.roleName,
                         issues: groupReview.review.issues ?? [],
                         valid: true,
@@ -1741,11 +1802,17 @@ export class LoopEngine implements EngineApi {
             if (item.kind === 'check_unit' && closed && groupCheckVectorHashOf(item.id) !== '') {
                 const stampedFor = requireStory(store, item.storyId);
 
-                if (isGroupManagedStory(stampedFor)) {
+                // PHRASE ② (T-W2): the gate is the DIAL, not the Summary's dial alone. A Story may run
+                // Phrase ② in the group model with `summary_mode: 'classic'`, and then this is still a
+                // group-model cross-entry review whose clean read deserves a stamp; `isGroupManagedStory`
+                // alone would refuse it and the chapter vector would never be stampable. And the stamp is
+                // PHRASE-SCOPED by the groups this seat read — a Summary verdict may not certify a chapter
+                // contract, and the vector the seat's claim key hashes is one phrase's (`reviewed.ts`).
+                if (isGroupManagedStory(stampedFor) || isPhraseGroupManaged(stampedFor, PHRASE_PLOTLINES_KEY)) {
                     stampCleanRevisions(
                         store,
                         stampedFor,
-                        { seatKey: item.id, runRef: result.runId },
+                        { seatKey: item.id, runRef: result.runId, phraseId: groupPhraseId },
                         loopAttr(
                             `run ${result.runId} closed the cross-group review claimed on ${item.id}; every group of that vector whose read came back with no unresolved defect is stamped Clean (D-67)`
                         )
@@ -1773,7 +1840,13 @@ export class LoopEngine implements EngineApi {
                     store.summaryScores.create(
                         {
                             story_id: item.storyId,
-                            phrase_id: phrase?.id ?? scored.group.phrase_id,
+                            // PHRASE ② (T-W2): the row is labelled with the phrase the SCORED GROUP belongs
+                            // to, which is the phrase the job was dispatched over (`groupPhraseId`, read off
+                            // the same group rows the answer names). `storyPhrase` is the Story's PRIMARY
+                            // phrase — the Summary — and labelling a chapter score with it would make
+                            // `api/projections.ts` draw a chapter number on the Summary rail. The fallback
+                            // chain keeps the old behaviour for any row whose group read is missing.
+                            phrase_id: groupPhraseId ?? scored.group.phrase_id ?? phrase?.id,
                             vector_hash: vectorHash,
                             group_id: scored.group.id,
                             group_key: scored.group.key,
@@ -2803,7 +2876,15 @@ export class LoopEngine implements EngineApi {
                     // existing Story opts in by the Author's explicit import (`POST /stories/:id/phrases/import`),
                     // and a row with no `summary_mode` reads as `'sampling'` (R6: old books are readable,
                     // not migrated).
-                    summary_mode: input.summary_mode ?? 'groups'
+                    summary_mode: input.summary_mode ?? 'groups',
+                    // PHRASE ② (T-W2): the chapter lane's own dial, defaulted the same way and for the
+                    // same reason — a NEW book runs the chapter group pipeline unless the caller asks for
+                    // the classic §4.3 tool path, and an EXISTING row with no `plotlines_mode` reads as
+                    // `'classic'` (`phrase/catalog.ts:isPhraseGroupManaged`), so old books are readable
+                    // rather than migrated. It is written here even though phase ② is two locks away:
+                    // the lane is decided at creation, and a Story whose phase moves later must not have
+                    // its model chosen by whatever the default was that day.
+                    plotlines_mode: input.plotlines_mode ?? 'groups'
                 },
                 authorAttr(`the Author opened a Story from a Seed (D-2a: it starts ready)`)
             );
@@ -2905,7 +2986,8 @@ export class LoopEngine implements EngineApi {
      * §10 / P1 — delete a Story and everything it owns. The Author's cord first (a phrase must not
      * outlive the book it was writing), then ONE commit removes every story-scoped §4 row, the three
      * phase-① research collections (`seed_briefs`, `knowledge`, `sample_reviews` — T12/A), the three
-     * Summary Phrase collections (`phrases`, `phrase_groups`, `group_revisions` — P1 hardening) and
+     * Summary Phrase collections (`phrases`, `phrase_groups`, `group_revisions` — P1 hardening),
+     * Phrase ②'s structure pass (`plotline_briefs` — T-W6, the same leak one phrase down) and
      * the Story itself; finally the Story's harness is disposed, which tears down its sessions and
      * threads. The knowledge FILES are a projection outside §4, so the route deletes that directory
      * alongside this call; the `knowledge` COLLECTION is a store row and goes in this commit.
@@ -2961,6 +3043,12 @@ export class LoopEngine implements EngineApi {
             this.store.phrases.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.phraseGroups.deleteWhere((row) => row.story_id === story.id, attribution);
             this.store.groupRevisions.deleteWhere((row) => row.story_id === story.id, attribution);
+            // PHRASE ② (T-W6): `plotline_briefs` is story-scoped exactly like the three collections above
+            // (its `story_id` and its `phrase_id` both name rows this commit deletes), and T4's probe shape
+            // repeats one phrase over: an accepted structure pass over a started Plotlines Phrase leaves a
+            // brief whose `story_id` names a Story the store no longer holds. The `phrases` delete above
+            // takes the row its `phrase_id` points at; nothing took the brief itself.
+            this.store.plotlineBriefs.deleteWhere((row) => row.story_id === story.id, attribution);
 
             this.store.stories.delete(story.id, attribution);
         });
@@ -3143,6 +3231,13 @@ export class LoopEngine implements EngineApi {
      * whose `group_revisions` backing this scrap deleted does NOT: `scrapPhasesAfter` clears those four
      * fields, because a flag naming a dead row blocks the reviewed rebuild and every install that names
      * the group (D-69, T8 finding 1) — see that function's block for the full reasoning.
+     *
+     * PHRASE ② FOLLOWS THE SAME LINE (T-W6, D-77): `backtrack('summary')` reaches ABOVE phase ②, so the
+     * Plotlines Phrase goes whole — row, chapter entries, entry history and `plotline_briefs` — exactly as
+     * the §4.3 plotline rows go; `backtrack('plotlines')` lands ON phase ②, so the phrase, its entries and
+     * its brief SURVIVE as the text the reopened phase revises, and only a lock whose `locked_revision`
+     * this scrap deleted comes off (D-69). `changeChapterCount`'s forced reopen of a locked phase ② is the
+     * second caller of the `'plotlines'` leg, and it keeps the phrase for the same reason.
      */
     async backtrack(storyId: string, phase: StoryPhase): Promise<void> {
         await this.store.commit('backtrack_to_phase', () => {
@@ -3402,6 +3497,24 @@ export class LoopEngine implements EngineApi {
             // row keeps its claim on the attempt baseline (`writeBaselineOf`) or the vector hash,
             // and R3's closure cannot fire off a scrapped Seed's install. The mirror stays cleared:
             // it re-derives from the new texts inside the next install (R6).
+            //
+            // PLOTLINE PHRASE ② IS NOT RESET — IT IS DELETED (T-W6, D-77). `scrapPhasesAfter(…,
+            // 'summary')` ran above in this same commit and took Phrase ② whole: its `phrases` row, its
+            // `chapter_<n>` entries, their `group_revisions` history and its `plotline_briefs`. The
+            // asymmetry with the Summary is deliberate and it is the Start verb: a Summary's rows are the
+            // book's own catalog, re-minted with the Story and re-grown from the new Seed by the next
+            // sweep, whereas Phrase ② exists only because the Author handed it a seed — and
+            // `startPlotlinesPhrase` REFUSES a second start while the row is there (D-72), so a reset
+            // that kept the row would leave an Author with an empty phase ② and no verb that re-seeds it.
+            // Deleting the row is what makes the rail's Start card work again on the new Seed.
+            //
+            // THE READ BELOW NEEDS NO PHRASE SCOPE ANY MORE: `phraseGroupsOf` is unscoped on purpose, and
+            // after the scrap it can only see Summary rows, so a `'sampling'`/`'groups'` mixed-dial book
+            // (Summary sampling, chapter entries grouped) no longer ends a Seed edit with entries at
+            // `revision: N` over an empty history table — the phrase that owned them is gone. The gate
+            // stays the SUMMARY dial because that is the dial whose groups this loop resets, and on a
+            // sampling book there is no Summary phrase at all (`createStory` only ensures the catalog when
+            // `isGroupManagedStory`, engine.ts:2911).
             if (isGroupManagedStory(fresh)) {
                 for (const group of phraseGroupsOf(store, storyId)) {
                     store.phraseGroups.update(
@@ -4222,6 +4335,32 @@ function isClaimedHere(store: Store, key: string, storyId?: string): boolean {
     return store.runs.list().some(
         (run) => isLiveRun(run) && run.work_item_ref === key && (storyId === undefined || run.story_id === storyId)
     );
+}
+
+/**
+ * The PHRASE a job was written against, from the group rows it carries (PHRASE ②, T-W2).
+ *
+ * WHY THE ROWS ARE THE SOURCE: `WorkItem.groupRefs` is the list the generator built from
+ * `phraseGroupsOf(store, storyId, phraseId)` and the executor copied onto the Run row, and a
+ * `phrase_groups` row carries `phrase_id` (R1's catalog). Deriving the phrase from the rows means a
+ * restart settles the answer against the book the job was dispatched for (L-3) and there is no second
+ * field to keep in sync. The FIRST resolvable ref wins, matching `installGroupRevisions`'s
+ * `entries[0].group.phrase_id`; every group a single job names belongs to one phrase by construction
+ * (`loop/work.ts`'s two group generators each scope their reads to one phrase), so "first" and "all"
+ * answer the same question.
+ *
+ * `undefined` means the job names no group row the book still holds — a seat on a Story whose catalog
+ * was never ensured, or a row from before the catalog existed — which every caller reads as "the
+ * Summary phrase", the pre-Phrase-② answer.
+ */
+function groupPhraseIdOf(store: Store, storyId: string, refs: readonly string[] | undefined): string | undefined {
+    for (const ref of refs ?? []) {
+        const group = phraseGroupById(store, storyId, ref);
+
+        if (group !== undefined) return group.phrase_id;
+    }
+
+    return undefined;
 }
 
 /**

@@ -25,7 +25,7 @@
  * The rows are seeded through the store rather than through the loop, so this file pins the READ; the
  * write side and the five-row commit are `loop/section-scores.test.ts`.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { phraseView } from './projections';
 import { Store } from '../store/store';
 import { AUTHOR_ATTR, seedStory } from '../run/mock';
@@ -177,22 +177,38 @@ describe('the score rail on a group row (D-65)', () => {
         // The other four sections were never judged, and say so.
         expect(phraseView(store, story).groups.slice(1).map((group) => group.scores)).toEqual([[], [], [], []]);
 
-        // THE TIE-BREAK: two rows for ONE section inside one commit share a `created_at`, so time alone
-        // cannot order them — the id is the tie-break, and the higher id (the later write) is first. That
-        // is what makes `scores[0]` the same row after a restart, not merely the same value.
+        // THE TIE-BREAK: two rows for ONE section that carry the SAME `created_at` cannot be ordered by
+        // time, so the id is the tie-break, and the higher id (the later write) is first. That is what
+        // makes `scores[0]` the same row after a restart, not merely the same value.
+        //
+        // THE CLOCK IS PINNED, and it has to be. `store.ts:397` stamps `created_at` from `new Date()` on
+        // EVERY create, so two writes in one commit are only equal while the wall clock does not tick
+        // between them — the assertion below is a 1-in-many-thousands flake under load (and was one in the
+        // baseline run) until the test owns the clock. A pinned `Date` makes the tie a FACT of the row
+        // pair rather than a coin flip, which is the only way this row can pin the tie-break at all: the
+        // projection's `created_at` DESC + id tie-break (specifications.md §17.15 "The read",
+        // knowledge.md:430) is otherwise never exercised, because unequal stamps order themselves.
         const tied = { value: 63, run: 'run_3' };
         const second = { value: 79, run: 'run_4' };
 
         let tiedRows: SummaryScore[] = [];
 
-        await store.commit('test: two judgements of one section in one commit', () => {
-            tiedRows = [tied, second].map((entry, index) =>
-                store.summaryScores.create(
-                    scoreRow(story, premise, phraseId, '3333333333333333', entry.value, entry.run, `wi_summary_score_3333333333333333-${index}`),
-                    { run_ref: entry.run, author: true, why: `seed: the ${entry.value} judgement` }
-                )
-            );
-        });
+        // One hour ahead of the two commits above, so the tied pair stays the NEWEST pair (`after` below
+        // still reads them first) while both writes read the identical instant.
+        vi.useFakeTimers({ now: Date.now() + 60 * 60 * 1000, toFake: ['Date'] });
+
+        try {
+            await store.commit('test: two judgements of one section in one commit', () => {
+                tiedRows = [tied, second].map((entry, index) =>
+                    store.summaryScores.create(
+                        scoreRow(story, premise, phraseId, '3333333333333333', entry.value, entry.run, `wi_summary_score_3333333333333333-${index}`),
+                        { run_ref: entry.run, author: true, why: `seed: the ${entry.value} judgement` }
+                    )
+                );
+            });
+        } finally {
+            vi.useRealTimers();
+        }
 
         expect(tiedRows[0].created_at).toBe(tiedRows[1].created_at);
         expect(tiedRows[0].id < tiedRows[1].id).toBe(true);

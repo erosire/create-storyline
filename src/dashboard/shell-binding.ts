@@ -42,11 +42,17 @@ import type {
     CreateTemplateInput,
     GoalCriterionOp,
     GoalPatch,
+    PhraseDetailView,
+    PhraseEntryReviseInput,
     PhraseGroupReviseInput,
+    PhraseStartInput,
     PhraseView,
     StoryView as ApiStoryView,
     UndoTarget
 } from './api';
+// T-W4 — the Phrase ② catalog key, imported as a VALUE so the shell's tolerant `startPhrase` binding and
+// `state.ts:refreshPhraseDetail` address the same phrase without either spelling the word twice.
+import { PHRASE_PLOTLINES_KEY } from './api';
 import type { DashboardStore } from './state';
 import type { StoryViewData } from './components/story-contract';
 
@@ -103,7 +109,9 @@ export function storyViewData(
     phrase?: PhraseView | null,
     phraseError?: string | null,
     reviewedError?: string | null,
-    groupLockErrors?: Record<string, string>
+    groupLockErrors?: Record<string, string>,
+    phraseDetail?: PhraseDetailView | null,
+    phraseDetailError?: string | null
 ): ShellStoryView {
     return {
         ...view,
@@ -111,6 +119,12 @@ export function storyViewData(
         ...(phraseError === undefined ? {} : { phraseError }),
         ...(reviewedError === undefined ? {} : { reviewedError }),
         ...(groupLockErrors === undefined ? {} : { groupLockErrors }),
+        // T-W4 — Phrase ② rides the frame exactly as the Summary read does, for the same three reasons: it is a
+        // second route with its own in-flight state, its own failure sentence, and rows the pane may not invent.
+        // Absent on the frame means the caller never asked for that surface, which is what keeps every existing
+        // `StoryViewData` fixture compiling unchanged.
+        ...(phraseDetail ? { phraseDetail } : {}),
+        ...(phraseDetailError === undefined ? {} : { phraseDetailError }),
         templates: assignedTemplates(view, catalogue)
     };
 }
@@ -231,6 +245,31 @@ export interface ShellActions {
      * shape every other dial here accepts (D-29's rule — the Story is the shell's scope).
      */
     setEditorGroupLocking?(storyIdOrEnabled?: string | boolean, enabled?: boolean): Promise<unknown>;
+    /**
+     * T-W4 — the Story's Phrase ② dial (`PATCH /stories/:id` with `plotlines_mode`). Pinned `(storyId, mode)`; the
+     * local `(mode)` is the shape every dial on the Settings pane calls with (D-29's rule — the Story is the shell's
+     * scope). Unlike the boolean dials, an unaddressed mode is a NAMED REFUSAL rather than a default: guessing
+     * `'groups'` would hand a classic Story's Plotlines pane an entry list it never had.
+     */
+    setPlotlinesMode?(storyIdOrMode?: string, mode?: 'groups' | 'classic'): Promise<unknown>;
+    /**
+     * T-W4 — the Author STARTS an on-demand phrase (`POST …/phrases/:key/start`), the Summary→Plotlines handoff.
+     * Pinned `(storyId, key, {source, text})`; the local shape drops the Story, and a call naming no phrase means
+     * Phrase ② — the only on-demand phrase this desk can start, since Phrase ①'s entry set comes from the catalog
+     * and the loop writes it (R1: `starts_on_demand` is catalog data).
+     */
+    startPhrase?(storyIdOrKey?: string, keyOrInput?: string | PhraseStartInput, input?: PhraseStartInput): Promise<unknown>;
+    /**
+     * T-W4 — the Author's hand edit of ONE CHAPTER ENTRY. Two call shapes like `revisePhraseGroup` above: the pinned
+     * `(storyId, entryId, {plotpoints, note})` and the local `(entryId, {plotpoints, note})`. The ENTRY is the
+     * addressed thing in both — its UUID comes from the rail's selection ref — and a call that names none is a named
+     * refusal, not a POST to `/phrases/groups/undefined/revise`.
+     */
+    revisePhraseEntry?(
+        storyIdOrEntryId?: string,
+        entryIdOrInput?: string | PhraseEntryReviseInput,
+        input?: PhraseEntryReviseInput
+    ): Promise<unknown>;
 }
 
 /**
@@ -527,6 +566,75 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
         setEditorGroupLocking: (first, second) =>
             typeof first === 'boolean'
                 ? store.setEditorGroupLocking(storyId, first)
-                : store.setEditorGroupLocking(scopeOf(first), second ?? true)
+                : store.setEditorGroupLocking(scopeOf(first), second ?? true),
+        // T-W4 — the Phrase ② dial, `setEditorGroupLocking`'s sibling with one difference that matters: the value is
+        // a WORD, and there is no safe default for it. A boolean dial can read a missing argument as "on" and stay
+        // honest, because the Author just clicked it; a pipeline dial that guessed `'groups'` would restyle a whole
+        // Story from a call that never named a mode. So an unaddressed mode is L-13's named refusal.
+        setPlotlinesMode: (first, second) => {
+            const mode =
+                second === 'groups' || second === 'classic'
+                    ? second
+                    : first === 'groups' || first === 'classic'
+                      ? first
+                      : undefined;
+
+            if (mode === undefined) {
+                return unaddressed('setPlotlinesMode');
+            }
+
+            return store.setPlotlinesMode(mode === first ? storyId : scopeOf(first), mode);
+        },
+        // T-W4 — the handoff. Pinned `(storyId, key, {source, text})`; the local shape drops the Story, and the
+        // phrase is Phrase ② either way — the only on-demand phrase this desk offers, since a phrase the loop writes
+        // refuses the verb outright (R1: `starts_on_demand` is catalog data). The body is whatever argument actually
+        // carries an object, so `{source:'custom', text}` survives both shapes and a bare call means `'compiled'`.
+        startPhrase: (first, second, input) => {
+            const bodyOf = (value: unknown): PhraseStartInput | undefined =>
+                value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
+                    ? (value as PhraseStartInput)
+                    : undefined;
+
+            const key =
+                typeof second === 'string'
+                    ? second
+                    : typeof first === 'string' && first !== storyId && first !== store.getSnapshot().activeStoryId
+                      ? first
+                      : PHRASE_PLOTLINES_KEY;
+
+            return store.startPhrase(scopeOf(first), key, bodyOf(input) ?? bodyOf(second));
+        },
+        // T-W4 — ONE CHAPTER ENTRY's hand edit, in `revisePhraseGroup`'s two-shape pattern. The body must carry
+        // `plotpoints`: that IS the entry's text (the route composes the prose from the contract fields and refuses
+        // an entry without them, P4), so a call whose body names only `content` is unaddressed here rather than a
+        // Summary revise wearing the wrong verb.
+        revisePhraseEntry: (first, second, input) => {
+            /** The body of a chapter-entry revise: `plotpoints` is the text, so an object without them is no body. */
+            const bodyOf = (value: unknown): PhraseEntryReviseInput | undefined => {
+                if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+                    return undefined;
+                }
+
+                const body = value as PhraseEntryReviseInput;
+
+                if (body.plotpoints === undefined || typeof body.plotpoints !== 'object') return undefined;
+
+                return { plotpoints: body.plotpoints, ...(body.note ? { note: body.note } : {}) };
+            };
+
+            const pinned = bodyOf(input);
+
+            if (pinned !== undefined && typeof second === 'string') {
+                return store.revisePhraseEntry(scopeOf(first), second, pinned);
+            }
+
+            const local = bodyOf(second);
+
+            if (local === undefined || typeof first !== 'string') {
+                return unaddressed('revisePhraseEntry');
+            }
+
+            return store.revisePhraseEntry(storyId, first, local);
+        }
     };
 }

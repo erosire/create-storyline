@@ -1,11 +1,11 @@
 // U-8 — the content area an employee tile opens: bars of threads grouped Story -> phrase (P1, P3, P4),
 // oldest first, each bar expanding to its request and answer only.
 //
-// R7/R8/R9 — the list opens on RUNNING threads only; Archived is an explicit, per-Story opt-in that
+// U-7/U-22/U-22 — the list opens on RUNNING threads only; Archived is an explicit, per-Story opt-in that
 // no data or refresh can select for the Author, and that survives a same-Story refetch.
-// R9 also makes the tab a FILTER: the Archived reading holds only the terminal threads
+// U-22 also makes the tab a FILTER: the Archived reading holds only the terminal threads
 // (torn_down / failed / abandoned), and a live bar never appears in it.
-// R7 — the bar's role chip is dropped where it only repeats the employee the region is about.
+// U-7 — the bar's role chip is dropped where it only repeats the employee the region is about.
 // R4/R5/R6 — the kill cord exists only inside a RUNNING thread's expanded detail, fires once on the
 // first click with that thread's run id, and stays disabled (not hidden) when no cord is injected.
 import { describe, expect, it, vi } from 'vitest';
@@ -37,7 +37,7 @@ function thread(overrides: Partial<AgentThreadRecord>): AgentThreadRecord {
 }
 
 /**
- * R7 — archived threads are OPT-IN now: opening an employee lists what is running. Every test that
+ * U-7 — archived threads are OPT-IN now: opening an employee lists what is running. Every test that
  * reads a CLOSED thread (its bar, its request, its answer) has to pull the history in exactly the
  * way the Author does, so one helper keeps that click deliberate instead of repeating it inline.
  */
@@ -61,7 +61,7 @@ function threadStates(): string[] {
     );
 }
 
-/** The role chips the bars print, in order — R7 keeps only the ones that carry information. */
+/** The role chips the bars print, in order — U-7 keeps only the ones that carry information. */
 function roleChips(): string[] {
     return Array.from(screen.getByTestId('agent-threads').querySelectorAll<HTMLElement>('.sv-thread__role')).map(
         (chip) => chip.textContent ?? ''
@@ -127,7 +127,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
     it('labels the bar with the phase code, duration, tokens and retained state (U-8)', () => {
         render(<AgentThreadsView kind="writer" threads={[thread({})]} now={NOW} />);
-        // R7 — the fixture is a completed thread, so it sits behind the Archived tab.
+        // U-7 — the fixture is a completed thread, so it sits behind the Archived tab.
         showArchivedHistory();
 
         const bar = screen.getByRole('button', { name: /write_unit summary summary_1/ });
@@ -204,7 +204,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.getByText('Answer')).toBeTruthy();
         expect(screen.queryByRole('button', { name: 'kill run' })).toBeNull();
 
-        // R9 — the tab is a filter, so the RUNNING thread below belongs to the LIVE reading: the
+        // U-22 — the tab is a filter, so the RUNNING thread below belongs to the LIVE reading: the
         // Author clicks Archived back off (the same click that made the closed bar appear, undone)
         // and the cord is tested where a live thread actually renders. The bar's own expanded state
         // is view state keyed by thread id, so it survives both the toggle and the refetch.
@@ -232,7 +232,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
     it('collapses the request by default and shows Request + Answer for a closed thread (U-8)', () => {
         render(<AgentThreadsView kind="writer" threads={[thread({})]} now={NOW} />);
-        // R7 — a closed thread is history: the Author opts into it before opening the bar.
+        // U-7 — a closed thread is history: the Author opts into it before opening the bar.
         showArchivedHistory();
 
         const bar = screen.getByRole('button', { name: /write_unit summary summary_1/ });
@@ -272,7 +272,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
             />
         );
 
-        // R9 — a RUNNING thread is the live reading: it needs no Archived click, and none is made.
+        // U-22 — a RUNNING thread is the live reading: it needs no Archived click, and none is made.
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('false');
         expect(threadStates()).toEqual(['running']);
 
@@ -286,13 +286,13 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.queryByText('Write the Summary from the Seed.')).toBeNull();
         expect(screen.queryByText('Answer')).toBeNull();
 
-        // R7 — the thread closes in the rerender below, so it leaves the live list at once; the
-        // Archived choice then has to be made once, by click, and it survives that refetch (R9).
+        // U-7 — the thread closes in the rerender below, so it leaves the live list at once; the
+        // Archived choice then has to be made once, by click, and it survives that refetch (U-22).
         rerender(<AgentThreadsView kind="writer" threads={[thread({})]} now={NOW} />);
 
         expect(threadStates()).toEqual([]);
         expect(screen.queryByText('Happening now')).toBeNull();
-        // R9 — the live branch is the only one allowed to say what is not running.
+        // U-22 — the live branch is the only one allowed to say what is not running.
         expect(screen.getByText(/no thread is running now — 1 archived thread is hidden\./)).toBeTruthy();
 
         fireEvent.click(screen.getByRole('button', { name: /Archived/ }));
@@ -318,7 +318,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
             />
         );
 
-        // R7 — both blocks belong to a closed thread, so history is opted into first.
+        // U-7 — both blocks belong to a closed thread, so history is opted into first.
         showArchivedHistory();
 
         fireEvent.click(screen.getByRole('button', { name: /write_unit summary summary_1/ }));
@@ -341,7 +341,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.getByTestId('agent-threads').querySelector('pre.sv-thread__text')).toBeNull();
     });
 
-    it('lists running threads first and reveals the archived ones only when the tab is clicked (R7, R9)', () => {
+    it('lists running threads first and reveals the archived ones only when the tab is clicked (U-7, U-22)', () => {
         render(
             <AgentThreadsView
                 kind="critic"
@@ -375,7 +375,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
         const tab = screen.getByRole('button', { name: /Archived/ });
 
-        // R7 — nothing auto-selects Archived: opening an employee answers "what is working now",
+        // U-7 — nothing auto-selects Archived: opening an employee answers "what is working now",
         // so the live pass is the only bar and the tab sits unpressed beside the title.
         expect(tab.getAttribute('aria-pressed')).toBe('false');
         expect(tab.getAttribute('data-active')).toBe('false');
@@ -389,7 +389,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
         fireEvent.click(tab);
 
-        // R9 — the click FILTERS rather than adds: the Archived reading is every thread that is not
+        // U-22 — the click FILTERS rather than adds: the Archived reading is every thread that is not
         // running (completed, failed, abandoned) and nothing else. The live pass leaves the DOM
         // entirely; it is not merely styled away.
         expect(tab.getAttribute('aria-pressed')).toBe('true');
@@ -407,7 +407,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(threadStates()).toEqual(['running']);
     });
 
-    it('shows running threads only per Story by default, and opens each Story’s history on its own tab (R7, R9)', () => {
+    it('shows running threads only per Story by default, and opens each Story’s history on its own tab (U-7, U-22)', () => {
         const threads = [
             thread({ thread_id: 't-a', story_id: 'story_1', title: 'story one pass' }),
             thread({
@@ -424,7 +424,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         render(<AgentThreadsView kind="critic" threads={threads} now={NOW} />);
 
         const tabs = screen.getAllByRole('button', { name: /Archived/ });
-        // R7 — neither Story is auto-selected; R9 — both tabs stay available as manual access.
+        // U-7 — neither Story is auto-selected; U-22 — both tabs stay available as manual access.
         expect(tabs).toHaveLength(2);
         expect(tabs.map((tab) => tab.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
 
@@ -438,11 +438,11 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
         fireEvent.click(tabs[0]!);
 
-        // R9 — one Story's tab opens only that Story: the empty state is gone, the closed pass is
+        // U-22 — one Story's tab opens only that Story: the empty state is gone, the closed pass is
         // here, and story_2 keeps the running-only reading the Author never asked to change.
         expect(within(view).getByText('story one pass')).toBeTruthy();
         expect(within(view).queryByText(/no thread is running now/)).toBeNull();
-        // R9 — story_1's Archived list is its closed thread ONLY: no running row appears inside the
+        // U-22 — story_1's Archived list is its closed thread ONLY: no running row appears inside the
         // Story the tab was pressed on, while story_2 (unpressed) still shows its live pass.
         const storyOne = view.querySelector<HTMLElement>('[data-story="story_1"]')!;
         const storyTwo = view.querySelector<HTMLElement>('[data-story="story_2"]')!;
@@ -459,7 +459,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(within(view).getByText('story two pass')).toBeTruthy();
     });
 
-    it('leaves the Archived reading blank when only a running thread exists, and says nothing false (R9)', () => {
+    it('leaves the Archived reading blank when only a running thread exists, and says nothing false (U-22)', () => {
         render(
             <AgentThreadsView
                 kind="writer"
@@ -479,18 +479,18 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         const tab = screen.getByRole('button', { name: /Archived/ });
 
         expect(threadStates()).toEqual(['running']);
-        // The tab already says there is nothing to reach, and it is still unpressed (R7/R8).
+        // The tab already says there is nothing to reach, and it is still unpressed (U-7/U-22).
         expect(tab.querySelector<HTMLElement>('.sv-threads__archive-count')?.textContent).toBe('0');
         expect(tab.getAttribute('aria-pressed')).toBe('false');
 
         fireEvent.click(tab);
 
-        // R9 — clicking Archived asks for the closed threads, and this Story has none: the live pass
+        // U-22 — clicking Archived asks for the closed threads, and this Story has none: the live pass
         // leaves the DOM rather than staying behind as an archived row.
         expect(threadTitles()).toEqual([]);
         expect(threadStates()).toEqual([]);
 
-        // R9 — and the blank Archived screen stays blank. "no thread is running now — 0 archived
+        // U-22 — and the blank Archived screen stays blank. "no thread is running now — 0 archived
         // threads are hidden." would be a false statement on the reading the Author just chose, and
         // a pointless one about a Story whose whole point is the thread still running.
         expect(screen.queryByText(/no thread is running now/)).toBeNull();
@@ -503,7 +503,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(threadStates()).toEqual(['running']);
     });
 
-    it('prints the role chip only where it says more than the selected employee (R7)', () => {
+    it('prints the role chip only where it says more than the selected employee (U-7)', () => {
         // Every bar here is RUNNING, so the live reading shows all of them without an Archived click.
         const live = (overrides: Partial<AgentThreadRecord>): AgentThreadRecord =>
             thread({ state: 'running', ended_at: undefined, answer: '', ...overrides });
@@ -537,7 +537,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
         const view = screen.getByTestId('agent-threads');
 
-        // R7 — the region keeps its accessible name (that is the sentence that says WHOSE threads
+        // U-7 — the region keeps its accessible name (that is the sentence that says WHOSE threads
         // these are), and the heading above it repeats it in print; the bars no longer do.
         expect(view.getAttribute('aria-label')).toBe('writer threads');
         expect(threadTitles()).toEqual([
@@ -556,26 +556,26 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(within(view).getByText('writer')).toBeTruthy();
     });
 
-    it('never selects Archived on a rerender, and keeps the click across a same-Story refetch (R8, R9)', () => {
+    it('never selects Archived on a rerender, and keeps the click across a same-Story refetch (U-22, U-22)', () => {
         const closed = [thread({ thread_id: 't-done', title: 'completed pass' })];
         const { rerender } = render(<AgentThreadsView kind="critic" threads={closed} now={NOW} />);
 
-        // R7 — an archived-only Story still opens running-only; it does not fall back to Archived.
+        // U-7 — an archived-only Story still opens running-only; it does not fall back to Archived.
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('false');
         expect(threadTitles()).toEqual([]);
-        // R9 — with nothing running, the LIVE branch is the one allowed to name what is folded away.
+        // U-22 — with nothing running, the LIVE branch is the one allowed to name what is folded away.
         expect(screen.getByText(/no thread is running now — 1 archived thread is hidden\./)).toBeTruthy();
 
-        // R8 — a plain refetch (new array, same content) changes nothing on the Author's behalf.
+        // U-22 — a plain refetch (new array, same content) changes nothing on the Author's behalf.
         rerender(<AgentThreadsView kind="critic" threads={[...closed]} now={NOW} />);
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('false');
         expect(threadTitles()).toEqual([]);
 
-        // R9 — the click is the only writer, and it survives the next refetch of the same employee.
+        // U-22 — the click is the only writer, and it survives the next refetch of the same employee.
         fireEvent.click(screen.getByRole('button', { name: /Archived/ }));
         expect(threadTitles()).toEqual(['completed pass']);
         expect(threadStates()).toEqual(['torn_down']);
-        // R9 — the Archived reading shows the closed pass, so the live sentence is gone with it.
+        // U-22 — the Archived reading shows the closed pass, so the live sentence is gone with it.
         expect(screen.queryByText(/no thread is running now/)).toBeNull();
 
         const later = thread({
@@ -614,7 +614,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
             />
         );
 
-        // R7 — the legacy pass is a FAILED thread, i.e. archived: the tab is how it comes back.
+        // U-7 — the legacy pass is a FAILED thread, i.e. archived: the tab is how it comes back.
         fireEvent.click(screen.getByRole('button', { name: /Archived/ }));
 
         fireEvent.click(screen.getByRole('button', { name: /wi_check_chapters_1/ }));

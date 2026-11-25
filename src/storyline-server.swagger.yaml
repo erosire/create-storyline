@@ -229,6 +229,10 @@ paths:
         lives on the group row, and only this contract's unlock verb, called by the Author, clears it.
         The refreshed row this PATCH answers is the row-shaped read, which does not carry the Setting;
         read it back from `GET /stories/{id}`'s `story` record.
+        `plotlines_mode` is Phrase ②'s dial (R11) and the one field here with a start-time gate: it moves
+        only while no Plotlines Phrase row exists, and its 409 says which row stands in the way. The two
+        dials are independent — a Story may run the Summary as groups and Phrase ② classic, or the other way
+        round, and this route never edits one as a side effect of the other.
       requestBody:
         required: true
         content:
@@ -355,6 +359,94 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/{key}:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/PhraseKey'
+    get:
+      tags: [Stories]
+      operationId: getStoryPhrase
+      summary: Read one Phrase's rail state — ① Summary or ② Plotlines
+      description: >-
+        The one read a phrase rail needs, and the shape Phrase ③'s rail will reuse: everything
+        `GET …/phrases` sends, scoped to THIS phrase's catalog rows rather than to the Summary, plus the
+        three fields a phrase with its own start verb cannot do without — `key`, the SEED PREVIEW
+        (`seed_chars`, the exact length of the Seed stored on the Phrase row, and `seed_head`, a leading
+        window of it), and the `brief` block (§4.11: every phrase's rail carries its own brief — today
+        that is Phrase ②'s chapter plan, and the same slot carries Phrase ③'s when that wave lands). The
+        group rows are this phrase's only, so a Plotlines rail never shows the Summary's five sections;
+        `findings` and `review` are scoped to the groups this phrase owns, and `tasks` stay Story-scoped
+        because a §4.10 task carries no phrase column — the rail shows the queue the loop is working
+        through, not a slice of it. An unwritten phrase answers the EMPTY shape with `mode` naming its
+        dial rather than 404, exactly the rule R6 sets for the Summary. ONE scope rule is phrase-specific
+        and this is the whole of it: `review.mirror` is the legacy `summaries` prose, so it is carried on
+        the Summary's read only — on Phrase ② there is no second store to keep in step, and the key is
+        absent rather than null.
+      responses:
+        '200':
+          description: The phrase read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseDetailView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/storyline/stories/{id}/phrases/{key}/start:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/PhraseKey'
+    post:
+      tags: [Stories]
+      operationId: startStoryPhrase
+      summary: Start an on-demand Phrase — Phrase ② begins from a Seed the Author chooses
+      description: >-
+        R5 / D-72: the loop does not walk into Phrase ② by itself, and the Seed it starts from is the
+        Author's decision, not an agent's. The body picks the Seed: `source: compiled` (the default, and
+        what an empty body means) copies THIS Story's compiled Summary text — the same bytes the loop's
+        phase-② prompt compiles, read off the `summaries` row rather than off an agent's answer — and
+        `source: custom` copies the Author's own `text`. Either way the Seed is COPIED onto the Phrase row
+        and is NOT live after that: editing `stories.idea` or the Summary later does not move the phrase,
+        because the chapter plan is judged against the text that was actually handed over (D-72). The verb
+        is deliberately phase-AGNOSTIC — starting ② is the Author's move and the loop never requires it —
+        and the chapter catalog is seeded inside the SAME commit, so the rail's first read after a start
+        already has group rows to show.
+        REFUSALS: 400 when `source: custom` arrives without a non-blank `text` (a blank Seed would start
+        the crew on nothing, and this verb does not author prose on the Author's behalf); 409 when `source:
+        compiled` finds no compiled Summary to copy — a Story whose Summary is still flat text is named,
+        with the import verb that changes it; 409 when the phrase has ALREADY been started, naming its
+        row, because starting again would throw away the chapter plan the crew is working from (re-seeding
+        is a backtrack, not this verb). A `key` outside the §4.11 catalog is 404; a catalog phrase that is
+        NOT `starts_on_demand` — Phrase ①, which the loop writes — is 409 rather than 404, because the
+        phrase exists and starting it by hand is the impossible part.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartPhraseRequest'
+            examples:
+              compiled:
+                summary: Start from this Story's compiled Summary (the default)
+                value:
+                  source: compiled
+              custom:
+                summary: Start from the Author's own Seed
+                value:
+                  source: custom
+                  text: Three years after the tide charts were withdrawn, the salt roads reopen.
+      responses:
+        '200':
+          description: The start report (the Seed's exact length and its leading window) plus the fresh phrase read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartPhraseResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/storyline/stories/{id}/phrases/groups/{groupId}/revise:
     parameters:
       - $ref: '#/components/parameters/StoryId'
@@ -384,6 +476,12 @@ paths:
         write, because settled text is the fixed point the other groups are revised against (R-lock) — the
         Author's unlock is the move that makes a hand edit possible, and this route never overrules a lock
         the Author made by hand or the crew made from a judgement seat.
+        WHICH PHRASE a group belongs to is read from the GROUP ROW, never assumed: the five Summary
+        sections answer with the `PhraseView` shape under the `summary_mode` gate above, and a CHAPTER group
+        (`key: chapter_<n>`, Phrase ②) answers with the `PhraseDetailView` shape under Phrase ②'s own
+        switch — `plotlines_mode: groups` plus a started phrase, or the P4 409 naming both verbs. On that
+        leg the body's text is `plotpoints` (the chapter's four contract fields), not `content`; see
+        `PhraseGroupReviseRequest`.
       requestBody:
         required: true
         content:
@@ -414,6 +512,13 @@ paths:
         description: >-
           The `phrase_groups.id` (a UUID the `GET …/phrases` view reports), exactly as on the revise
           route. An id this Story does not own is 404 before any verb runs.
+          THE GATE IS THE GROUP'S OWN PHRASE's switch, read off the group row rather than assumed: a
+          Summary section answers under `summary_mode` with the `…/phrases/import` sentence below, and a
+          Phrase ② CHAPTER group answers under `plotlines_mode`, its 409 naming `PATCH …/stories/{id}` and
+          `POST …/phrases/plotlines/start` (P4). A locked chapter group holds its text against the chapter
+          crew exactly as a locked section holds it against the Summary crew — the flag, the four fields
+          and the finding-voiding rule are ONE rule for both phrases, and the `view` this verb answers
+          matches the phrase the group belongs to.
     post:
       tags: [Stories]
       operationId: lockPhraseGroup
@@ -462,6 +567,9 @@ paths:
         description: >-
           The `phrase_groups.id` of a LOCKED group. The verb is the Author's alone whoever set the lock,
           so a lock the Editor committed on a Story that enables it is lifted here, by the Author.
+          THE GATE IS THE GROUP'S OWN PHRASE's switch, exactly as on the lock verb: a Summary section is
+          gated by `summary_mode`, a Phrase ② chapter group by `plotlines_mode`, and the fresh phrase read
+          this verb answers matches the phrase the group belongs to.
     post:
       tags: [Stories]
       operationId: unlockPhraseGroup
@@ -499,7 +607,7 @@ paths:
     post:
       tags: [Stories]
       operationId: chooseReviewedSummary
-      summary: The Author chooses the Reviewed Summary (D-68)
+      summary: The Author chooses the Reviewed Summary — the Summary phrase's own verb (D-68)
       description: >-
         The decision the phase exists for: the reviewed Overview — the newest CLEAN revision of every
         group, the text a cross-group Critic pass read with no unresolved defect on it — becomes the
@@ -1616,6 +1724,18 @@ components:
       description: Story row id (`story_N`, minted by the store), unique within the book.
       schema:
         type: string
+    PhraseKey:
+      name: key
+      in: path
+      required: true
+      description: >-
+        A Phrase key from the §4.11 catalog: `summary` (①) or `plotlines` (②). The catalog is the Server's,
+        so a path never invents a phrase — a word outside it is 404, and `chapters` (③, the catalog's
+        `starts_on_demand: false` phrase the loop writes) is the 409 that says the phrase exists but this
+        verb cannot start it.
+      schema:
+        type: string
+        enum: [summary, plotlines]
     FindingId:
       name: findingId
       in: path
@@ -2919,6 +3039,9 @@ components:
         - cost_distribution
         - completion_preview
         - digest
+        - plotlines_mode
+        - phrase_started
+        - summary_compiled
       additionalProperties: false
       properties:
         story:
@@ -2997,6 +3120,49 @@ components:
             gate 1 (no accepted brief yet). Additive: a client that predates it simply ignores it.
         sampling:
           $ref: '#/components/schemas/SamplingView'
+        plotlines_mode:
+          type: string
+          enum: [groups, classic]
+          description: >-
+            T-W3, ADDITIVE — Phrase ②'s dial, ECHOED from the row rather than derived, and with the phrase's
+            own off-word: a book whose row carries no `plotlines_mode` is a classic book (R6 applied to this dial — an absent
+            Setting is the pipeline it has always run, never a silently-open phrase). The chapter rail reads
+            this to decide whether a chapter entry is the writable surface or the classic §4.3 tool path is,
+            and P4 requires the rail's disabled button and the verb's 409 to agree on exactly this value.
+            The raw record carries the same value under `story.plotlines_mode`.
+        phrase_started:
+          type: object
+          additionalProperties: false
+          required: [summary, plotlines]
+          description: >-
+            T-W3, ADDITIVE — which phrases have been STARTED on this book, as the rail's two rows. A Phrase
+            row IS the record of a start (`phrase/controllers/plotlines.ts` copies the seed as it mints the
+            row), so this is a read of rows and not of a counter: `plotlines: false` is precisely the state
+            the handoff button exists to leave, and it is the state in which `plotlines_mode` may still move.
+            A phrase added to the catalog later is one more key here; nothing renumbers the two.
+          properties:
+            summary:
+              type: boolean
+              description: >-
+                Phrase ① — true on essentially every Story, because story creation mints the Summary row with
+                the catalog (R1). A false here is a book older than the catalog, which is what the import
+                verb is for.
+            plotlines:
+              type: boolean
+              description: >-
+                Phrase ② — true once the Author has started it from a Seed, whether or not the chapter
+                entries exist yet (a started phrase with no entries is a phrase whose brief has not been
+                accepted, and the rail shows that as the `brief` block rather than as `false` here).
+        summary_compiled:
+          type: boolean
+          description: >-
+            T-W3, ADDITIVE — THE HANDOFF BUTTON'S ENABLE CONDITION: is there a Summary text to copy into
+            Phrase ② right now? True on a complete reviewed Overview (the text the crew stands behind) or on
+            any non-empty composed Overview, in that preference and by the same read the reviewed block
+            reports (`api/projections.ts:summaryIsCompiled`). This is deliberately the WEAKER question —
+            "is there text", not "is Phrase ① finished" — because the Start verb's 409 on an empty compiled
+            Summary is the server's answer to the same question, and a rail that greyed the button off a
+            second, stricter rule would contradict the desk's own copy of `phrase_started`.
     SeedBriefView:
       type: object
       description: >-
@@ -3553,6 +3719,17 @@ components:
             behaviour — an existing book with no `summary_mode` on its row is legacy by definition and
             needs no migration (R6). A value outside the two words is 400, because a typo would
             otherwise book the Author into a pipeline they did not ask for.
+        plotlines_mode:
+          type: string
+          enum: [groups, classic]
+          description: >-
+            R11 — how phase ② writes the chapter set, the same KIND of switch as `summary_mode` and an
+            independent one. `groups` (the default for a NEW Story) makes the chapter catalog — one
+            `phrase_groups` row per chapter the accepted brief declares — the unit of work, and the
+            Author's verbs on those rows are the surface (P3). `classic` keeps the pre-redesign plotline
+            tools as the writers of `plotlines` contract rows; omitting the key on a PATCH means leave it
+            alone, while an existing book with no `plotlines_mode` on its row is classic by definition (R6 applied to this dial
+            — no migration writes a field that is absent). A value outside the two words is 400.
     PhraseView:
       type: object
       additionalProperties: false
@@ -3596,6 +3773,137 @@ components:
           $ref: '#/components/schemas/PhraseReviewState'
         reviewed:
           $ref: '#/components/schemas/PhraseReviewedSummary'
+    PhraseDetailView:
+      type: object
+      description: >-
+        ONE phrase's rail read — the `PhraseView` shape widened with what a phrase OTHER than the Summary
+        needs (R11 / D-76), and a superset BY CONSTRUCTION: `GET …/phrases` and the Summary leg of this
+        read come from one projection (`api/projections.ts`), so the two cannot drift and the three fields
+        below are the whole delta. Every number here belongs to THIS phrase: `groups` is its catalog rows
+        (the five Summary sections, or the chapter rows Phrase ②'s brief declares), `findings` are the
+        claims naming those rows, and `review` counts the seats that have reported on that text. `tasks`
+        are the Story's open queue — a §4.10 task carries no phrase column, so the rail shows the queue the
+        loop is working rather than a slice invented by the projection.
+      additionalProperties: false
+      required:
+        [
+          story_id,
+          phrase_id,
+          key,
+          mode,
+          revision,
+          overview,
+          groups,
+          findings,
+          tasks,
+          review,
+          reviewed,
+          seed_chars,
+          brief
+        ]
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+          nullable: true
+          description: >-
+            THIS phrase's `phrases.id` (① or ②), or null on a book that has no row for it yet — an
+            unwritten phrase still answers the empty shape (R6's rule, generalised to every phrase).
+        key:
+          type: string
+          enum: [summary, plotlines]
+          description: >-
+            The §4.11 catalog key this read belongs to, echoed so a rail can assert it is holding the right
+            phrase rather than trusting the URL it typed.
+        mode:
+          type: string
+          enum: [groups, sampling, classic]
+          description: >-
+            THE SWITCH THAT OPENED THIS PHRASE's verbs, read off the Story row (P4 — what a rail's disabled
+            button and this field must agree on). `groups` for either phrase whose switch is on; `sampling`
+            is the Summary's legacy word and `classic` is Phrase ②'s, so the SAME value means the two
+            phases' off-states differently and the wording of a refusal differs by exactly this field. On a
+            book that never got either field, the Summary reads `sampling` and Phrase ② reads `classic` —
+            an absent switch is the old pipeline, never a silently-open phrase (R6 applied to this dial).
+        revision:
+          type: integer
+          minimum: 0
+          description: This phrase's Overview revision number — its Phrase row's, incremented by each install.
+        overview:
+          type: string
+          description: >-
+            The composed Overview of THIS phrase's rows (R2): `## <title>` per non-empty group in catalog
+            order, one blank line between them. A read, never a stored second source.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseGroupRow'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseFindingRow'
+        tasks:
+          type: array
+          description: >-
+            The Story's tasks that are not `done`. Story-scoped rather than phrase-scoped on purpose: a
+            §4.10 `Task` row has no phrase column, so a rail cannot claim a subset the store does not hold.
+          items:
+            $ref: '#/components/schemas/PhraseTaskRow'
+        review:
+          $ref: '#/components/schemas/PhraseReviewState'
+        reviewed:
+          $ref: '#/components/schemas/PhraseReviewedSummary'
+        seed_chars:
+          type: integer
+          minimum: 0
+          description: >-
+            The EXACT length of the Seed this phrase is written from — its Phrase row's copied `seed`
+            (D-72), or the Story's own Seed on a phrase that has no row yet, which is the text it would
+            copy if it were started now. 0 when neither has text. The full Seed is deliberately not on the
+            wire: it is the prompt input, and the rail shows its size and a window of it.
+        seed_head:
+          type: string
+          description: >-
+            The leading window of that Seed — at most 400 characters, whole, so `seed_chars` stays the full
+            length even when this string is shorter. It is the same read every phrase-level gate uses
+            (`phrase/catalog.ts:phraseSeedOf`), which is what lets the rail show the Author WHICH text the
+            crew was started on and prove it did not move when Phrase ① was edited afterwards.
+        brief:
+          nullable: true
+          description: >-
+            This phrase's own brief (§4.11's rail rule, R11): today Phrase ②'s chapter plan, and the same
+            slot carries Phrase ③'s when that wave starts it. Null for a phrase that has no brief row — the
+            Summary's read always answers null.
+          allOf:
+            - $ref: '#/components/schemas/PhraseBriefView'
+    PhraseBriefView:
+      type: object
+      description: >-
+        A phrase's brief in the shape §4.11 says every phrase's rail carries (R11). Today there is one:
+        Phrase ②'s chapter plan — the newest `plotline_briefs` row THIS phrase owns (newest by `created_at`,
+        the phrase id as tie-break, which is the same pick order the loop's prompt compiler uses), the state
+        of the plan (a `draft` the Editor answered or an `accepted` one the Author signed), how many chapters
+        it declares, and when it was accepted. The projection is phrase-keyed, so Phrase ③'s chapter brief
+        lands in the same slot under `key: chapters` when that wave starts it.
+      additionalProperties: false
+      required: [status, chapter_count]
+      properties:
+        status:
+          type: string
+          enum: [draft, accepted]
+        chapter_count:
+          type: integer
+          minimum: 0
+          description: The chapters the plan declares — Author truth, and the count the catalog is seeded to (D-3b).
+        accepted_at:
+          type: string
+          format: date-time
+          description: >-
+            Present ONLY on an accepted plan, and it is the brief row's own `updated_at` — the moment the
+            accept wrote `status: 'accepted'`, which is the only thing that moves that row after it was
+            created. §4's brief row carries no timestamp of its own, so this is the honest read of WHEN the
+            plan became truth rather than a second stamp the store does not hold.
     PhraseReviewedSummary:
       type: object
       additionalProperties: false
@@ -4037,18 +4345,24 @@ components:
           deep_reviews_on_current_vector,
           open_findings,
           blocking_findings,
-          open_tasks,
-          mirror
+          open_tasks
         ]
       properties:
         mode:
           type: string
-          enum: [groups, sampling]
+          enum: [groups, sampling, classic]
+          description: >-
+            The SAME switch value the enclosing view reports — `groups` when this phrase's verbs are open,
+            and each phrase's own off-word (`sampling` for the Summary, `classic` for Phrase ②) when they
+            are not. It is echoed inside `review` because the rail reads the review block to decide what
+            work exists.
         unwritten_groups:
           type: array
           items:
             type: string
-          description: Catalog keys with no revision yet; empty means the Overview is fully written.
+          description: >-
+            Catalog keys of THIS phrase's groups with no revision yet; empty means the Overview is fully
+            written. A phrase with no rows has nothing to list and answers `[]`.
         written_groups:
           type: integer
         vector:
@@ -4081,7 +4395,10 @@ components:
           description: >-
             R6's compatibility mirror, READ rather than trusted: whether the legacy `summaries` prose
             still says what the groups say. `in_sync: false` with `locked: true` is the Author's own
-            doing (signed prose is not rewritten under them).
+            doing (signed prose is not rewritten under them). THE SUMMARY ONLY: the mirror is the ONE
+            legacy store the Summary's groups are copied into, so on Phrase ② (or any later phrase) there
+            is nothing to keep in step and this key is ABSENT — not null, not an empty object. Read it
+            from `GET …/phrases` or from this contract's Summary leg.
           properties:
             summary_id:
               type: string
@@ -4129,15 +4446,111 @@ components:
     PhraseGroupReviseRequest:
       type: object
       additionalProperties: false
-      required: [content]
+      description: >-
+        ONE of `content` or `plotpoints` is the text of this revision — which one depends on the PHRASE the
+        group belongs to, read off the group row, not from the body. A Summary section takes `content`
+        (its prose, stored verbatim); a Phrase ② CHAPTER entry takes `plotpoints` (its contract), and its
+        stored text is DERIVED from those fields by the same function the loop's install uses
+        (`phrase/plotpoints.ts:chapterEntryContent`), so an Author's hand edit and a Writer's answer leave
+        one text and one contract. A `content` beside `plotpoints` is therefore not read on the chapter leg,
+        and a chapter body with NEITHER is 400: the install refuses a plotlines entry with no contract,
+        because the `plotlines` row it mirrors would otherwise keep the PREVIOUS pass's plotpoints under text
+        that has moved on (P4).
       properties:
         content:
           type: string
           minLength: 1
-          description: The group's new text, verbatim. An empty text is a refusal, not a revision (R2).
+          description: >-
+            The group's new text, verbatim. Required for a Summary section; an empty text is a refusal, not
+            a revision (R2). Ignored on a chapter entry, whose text is derived from `plotpoints`.
+        plotpoints:
+          type: object
+          additionalProperties: false
+          required: [must_happen, must_change]
+          description: >-
+            The chapter's contract — the same six fields the `plotlines` row holds (see `Plotline`), and the
+            row this install rewrites from them. Required on a chapter entry, absent on a Summary section.
+          properties:
+            must_happen:
+              type: string
+              minLength: 1
+              description: What this chapter must put on the page. A blank one is a 400.
+            must_change:
+              type: string
+              minLength: 1
+              description: What leaves this chapter different. A blank one is a 400.
+            heading:
+              type: string
+              description: The chapter's working title. Omitted or blank, the entry keeps the group's title.
+            pov:
+              type: string
+            setups:
+              type: string
+            payoffs:
+              type: string
         note:
           type: string
           description: Why the Author changed it — it rides onto the journal line the install writes (P11).
+    StartPhraseRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        WHERE the phrase's Seed comes from. An EMPTY body, or no body at all, is `source: compiled`. The
+        chosen text is COPIED onto the Phrase row and read from there ever after (D-72): editing the Seed,
+        the Summary, or this contract later does not move the phrase, and the chapter plan is judged against
+        what was handed over at that moment.
+      properties:
+        source:
+          type: string
+          enum: [compiled, custom]
+          default: compiled
+          description: >-
+            `compiled` copies THIS Story's compiled Summary — a complete reviewed Overview when the crew has
+            produced one, else the Overview as it stands, which is the same preference the rail's reviewed
+            block reports. `custom` copies the Author's `text` instead, which is how a book starts Phrase ②
+            without running Phrase ①'s pipeline.
+        text:
+          type: string
+          description: >-
+            The Author's own Seed, read ONLY when `source: custom`. It is trimmed and stored verbatim — this
+            verb does not author prose on the Author's behalf — so a missing or blank `text` on that arm is
+            400 rather than a phrase started on nothing. A `text` beside `source: compiled` is ignored, not
+            half-applied.
+    StartPhraseResult:
+      type: object
+      additionalProperties: false
+      required: [story_id, phrase_id, key, source, seed_chars, seed_head, started, view]
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+          description: The Phrase row this call created.
+        key:
+          type: string
+          enum: [summary, plotlines]
+          description: The phrase that was started, echoed so a rail cannot mistake the receipt for another phrase's.
+        source:
+          type: string
+          enum: [compiled, custom]
+          description: The arm the Seed actually came from, after the default was resolved.
+        seed_chars:
+          type: integer
+          minimum: 1
+          description: >-
+            The exact length of the copied Seed. It is never 0: an empty Seed is the 409, because a phrase
+            over a blank seed gets its blank text hashed by every gate as though the Author had written
+            something.
+        seed_head:
+          type: string
+          description: The leading window (at most 400 characters) of the text that was copied.
+        started:
+          type: boolean
+          description: >-
+            Always true on this response: the row exists and this call stamped it. Re-pressing the button is
+            the 409 that names the phrase row, not a receipt that says `started: false`.
+        view:
+          $ref: '#/components/schemas/PhraseDetailView'
     PhraseGroupReviseResult:
       type: object
       additionalProperties: false
@@ -4196,12 +4609,21 @@ components:
               type: boolean
             reason:
               type: string
-              enum: [locked, no_summary]
+              enum: [locked, no_summary, not_summary_phrase]
               description: >-
                 Why the mirror was skipped, when it was — L-7a: a locked Summary is not rewritten under
-                the Author's hands.
+                the Author's hands. `not_summary_phrase` is the OTHER leg: an install on a chapter entry has
+                no legacy `summaries` prose to mirror at all, so `written: false` there is not a refusal.
         view:
-          $ref: '#/components/schemas/PhraseView'
+          oneOf:
+            - $ref: '#/components/schemas/PhraseDetailView'
+            - $ref: '#/components/schemas/PhraseView'
+          description: >-
+            THE PHRASE THE GROUP BELONGS TO, read fresh after the write: a Summary section's verb answers the
+            `PhraseView` shape, and a Phrase ② chapter entry's answers the `PhraseDetailView` shape (that
+            shape plus `key`, `seed_head`, `seed_chars`, `brief`). `key` is what tells them apart, and both
+            are listed because the Summary's read always carries `review.mirror`, which the wider shape
+            makes optional.
     PhraseGroupLockActor:
       type: string
       enum: [author, editor]
@@ -4299,10 +4721,13 @@ components:
             because the lock just shortened the Author's queue, and silence there reads as a bug rather
             than as a decision.
         view:
-          $ref: '#/components/schemas/PhraseView'
+          oneOf:
+            - $ref: '#/components/schemas/PhraseDetailView'
+            - $ref: '#/components/schemas/PhraseView'
           description: >-
             The fresh phrase read, so the rail's lock badge moves with the write rather than with a later
-            poll (the revise route's envelope, R2/D-68).
+            poll (the revise route's envelope, R2/D-68) — and it is the read of the phrase the GROUP belongs
+            to: `PhraseView` for a Summary section, `PhraseDetailView` for a Phrase ② chapter entry.
     PhraseGroupUnlockResult:
       type: object
       additionalProperties: false
@@ -4343,8 +4768,12 @@ components:
             Always null: an unlock mints no timestamp of its own. The journal line the write makes is the
             record of when the flag came off.
         view:
-          $ref: '#/components/schemas/PhraseView'
-          description: The fresh phrase read, with the group's lock keys gone.
+          oneOf:
+            - $ref: '#/components/schemas/PhraseDetailView'
+            - $ref: '#/components/schemas/PhraseView'
+          description: >-
+            The fresh phrase read, with the group's lock keys gone — the read of the phrase the GROUP
+            belongs to (`PhraseView` for a Summary section, `PhraseDetailView` for a chapter entry).
     PhraseReviewedChooseRequest:
       type: object
       additionalProperties: false
@@ -4489,6 +4918,18 @@ components:
             reads as ON — the route refuses them with that sentence). Turning it off never lifts a lock
             that already stands: locks are lifted by `POST …/phrases/groups/{groupId}/unlock`, by the
             Author alone.
+        plotlines_mode:
+          type: string
+          enum: [groups, classic]
+          description: >-
+            R11 / P4 — move Phrase ② between the chapter-entry pipeline (`groups`) and the classic plotline
+            tools (`classic`). THE DIAL IS MOVABLE ONLY WHILE THE PHRASE IS UNSTARTED: starting it is the
+            moment its copied seed, its entries and its claim keys come into being, and switching lanes
+            afterwards would leave a started phrase whose entries are written by a pipeline nobody chose, so
+            the 409 names the Phrase row that made the dial unmovable. An OMITTED key changes nothing — and
+            remember that a book written before Phrase ② carries no `plotlines_mode` at all, which reads as
+            `classic` (R6 applied to this dial: an absent field is the old pipeline, never a silently-open phrase). `summary_mode`
+            is a separate Setting on a separate phase, and this PATCH never touches it.
     BacktrackRequest:
       type: object
       required: [phase]

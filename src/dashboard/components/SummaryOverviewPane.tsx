@@ -43,18 +43,21 @@
 // what will be dropped — the groups whose newest text is not the reviewed one — BEFORE it sends, and the
 // Author confirms. That is the same honesty the phase gate's backtrack note uses: a verb that deletes says so first.
 import { useState } from 'react';
-import type { PhraseChosenSummary, PhraseGroupRow } from '../api';
+import type { PhraseChosenSummary } from '../api';
 import type { StorySelection } from './story-nav';
-import { summaryGroupRef } from './story-nav';
+// T-W4 — the phrase-generic pieces. `groupStateLabel` and the group rows are this pane's, but they are ALSO
+// Phrase ②'s row vocabulary, so they live in `PhraseEntries.tsx` and are re-exported here for the readers that
+// already address them by this module (the rail's group rows).
+import {
+    entryStateLabel,
+    PhraseEntryRows,
+    PhraseReadState,
+    SUMMARY_SURFACE
+} from './PhraseEntries';
 import {
     chosenGroupRevision,
     chosenGroupScores,
-    groupArchivedRevisions,
-    groupBlockingFindings,
-    groupOpenFindings,
     isGroupSummary,
-    isGroupWriterBusy,
-    isGroupWritten,
     phraseGroups,
     phraseReadError,
     phraseReviewed,
@@ -73,125 +76,8 @@ import {
 } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 
-/**
- * The group's one state word, shared by the rail's row and this pane's row so the two can never disagree.
- *
- * WHY THERE IS NO `review_state` ON A GROUP. The phrase read carries no per-group verdict: what a group owes is
- * the findings aimed at it (R3) and whether the Writer is replacing its text right now. So the word comes from
- * those two things and from the Summary's own cost bar (`summaryBlockingCost`, the dial-aware one), in that
- * priority — a group the Writer is holding is not also "blocking", it is moving.
- */
-export function groupStateLabel(
-    view: StoryViewData,
-    group: PhraseGroupRow
-): { label: string; tone: 'blocking' | 'open' | 'done' | 'todo' | 'writer' } {
-    if (isGroupWriterBusy(group)) {
-        return { label: 'writer', tone: 'writer' };
-    }
-
-    if (!isGroupWritten(group)) {
-        return { label: 'to write', tone: 'todo' };
-    }
-
-    // The gate's own bar: a critical/major finding open on this group holds the sign-off, so the row says
-    // `blocking`. A minor or taste note is a note, and the row says `open`.
-    if (groupBlockingFindings(view, group.id).length > 0) {
-        return { label: 'blocking', tone: 'blocking' };
-    }
-
-    if (groupOpenFindings(view, group.id).length > 0) {
-        return { label: 'open', tone: 'open' };
-    }
-
-    return { label: 'clean', tone: 'done' };
-}
-
-/**
- * One group's row: the state word, the findings aimed at it, and the count of revisions the loop has superseded.
- *
- * No archived prose (U3): `PhraseRevisionRow` carries `chars`, not text, so this row prints the COUNT and offers
- * nothing to open. The row is one button because the row IS the pane — clicking it navigates, and the group's own
- * verbs live in that pane. The Writer holding the job does not disable it: reading a group whose text is already
- * on the wire is never blocked, only editing it is (U5).
- */
-function GroupRow({
-    view,
-    group,
-    selected,
-    onSelect
-}: {
-    view: StoryViewData;
-    group: PhraseGroupRow;
-    selected: boolean;
-    onSelect?: (selection: StorySelection) => void;
-}) {
-    const state = groupStateLabel(view, group);
-    const open = groupOpenFindings(view, group.id);
-    const blocking = groupBlockingFindings(view, group.id);
-    const archived = groupArchivedRevisions(group).length;
-    const written = isGroupWritten(group);
-
-    return (
-        <li
-            className={[
-                'sv-group-row',
-                state.tone === 'blocking' ? 'sv-group-row--blocking' : '',
-                state.tone === 'todo' ? 'sv-group-row--todo' : '',
-                state.tone === 'writer' ? 'sv-group-row--writer' : ''
-            ]
-                .filter(Boolean)
-                .join(' ')}
-            data-tone={state.tone}
-            data-selected={selected ? 'true' : undefined}
-            data-testid={`summary-group-${group.key}`}
-        >
-            {/* R-T2/F4 — the row IS the pane, so the selected one says so in the accessibility tree as well as
-                in ink: `aria-current="true"` is the selected semantics for a control that navigates. The rail's
-                own rows keep their handling untouched (F4 asks for no rail change). */}
-            <button
-                type="button"
-                className="sv-group-row-open"
-                onClick={() => onSelect?.({ panel: 'summary', ref: summaryGroupRef(group.id) })}
-                aria-current={selected ? 'true' : undefined}
-            >
-                <span className="sv-group-row-name">{group.title}</span>
-                {/* U7 — the same word boundary the rail's group rows got: an accessible name is built from
-                    TEXT, and flex `gap` is not text, so without these separators the row announces
-                    "Promiseblocking3 open findings". A whitespace-only text node is not a flex item, so the
-                    layout is untouched. The busy span is last, so its separator is guarded; the state span
-                    and the findings/quiet span always render. */}
-                {' '}
-                <span className="sv-group-row-state" data-tone={state.tone}>
-                    {state.label}
-                </span>
-                {' '}
-                {open.length > 0 ? (
-                    <span className="sv-group-row-findings" data-testid={`summary-group-${group.key}-findings`}>
-                        {`${open.length} open finding${open.length === 1 ? '' : 's'}` +
-                            (blocking.length > 0 ? ' · holds the sign-off' : '')}
-                    </span>
-                ) : (
-                    <span className="sv-group-row-quiet">
-                        {/* U3: the archived COUNT, never the archived text. R-T2/F5: the count only when it is
-                            worth reading — a group at its first revision has `0 archived`, which states a
-                            nothing beside a row already labelled `clean`. */}
-                        {!written
-                            ? 'nothing written yet'
-                            : archived > 0
-                              ? `${archived} archived`
-                              : 'nothing superseded'}
-                    </span>
-                )}
-                {isGroupWriterBusy(group) ? (
-                    <>
-                        {' '}
-                        <span className="sr-only">the Writer is rewriting this group now</span>
-                    </>
-                ) : null}
-            </button>
-        </li>
-    );
-}
+/** Re-exported under the name the rail and the acceptance tests already use (the rule itself is phrase-generic). */
+export const groupStateLabel = entryStateLabel;
 
 /**
  * One entry of the reviewed strip: what the crew stands behind for THIS section, the Reader's number that
@@ -288,12 +174,14 @@ export function SummaryOverviewPane({
     // would be a claim about the book that the wire never made.
     if (!isGroupSummary(view)) {
         return (
-            <div className="sv-pane" data-testid="summary-overview-legacy">
-                <p className="pane-state">
-                    This Story&apos;s Summary is still compiled from sampling rounds, so it has no groups. The
-                    round is above.
-                </p>
-            </div>
+            <PhraseReadState
+                state="legacy"
+                surface={SUMMARY_SURFACE}
+                testId="summary-overview-legacy"
+                overrideLine={
+                    "This Story's Summary is still compiled from sampling rounds, so it has no groups. The round is above."
+                }
+            />
         );
     }
 
@@ -309,30 +197,38 @@ export function SummaryOverviewPane({
         // desk promising state that will not arrive until the Story is reloaded. The Story payload is
         // unaffected — its own failure stays the top bar's sentence (L-13) — and the group rows are not
         // "unwritten", they are unread: this pane may not draw five unwritten rows over a read that failed.
+        //
+        // T-W4 — THE THREE STATES ARE THE SHARED `PhraseReadState`, with this pane's own pinned ids and copy
+        // passed in (`summary-overview-*`, `summary-read-error`, and the Overview-specific lines). The Overview
+        // names the reviewed Summary in its waiting line, which is why `overrideLine`/`overrideNotice` stay
+        // this pane's rather than the surface's generic entry-pane wording: the ids and sentences the tests pin
+        // are byte-for-byte what they were before the panes were generalised.
         const failure = phraseReadError(view);
 
         if (failure !== undefined) {
             return (
-                <div className="sv-pane" data-testid="summary-overview-error">
-                    <p className="pane-state" data-testid="summary-read-error">
-                        {`The Summary group rows could not be read: ${failure}`}
-                    </p>
-                    <p className="sv-group-notice sv-group-notice--warn">
-                        The Story is still written as five groups, so the groups exist — the read that lists their
-                        state failed. Nothing here is a verdict about the Overview; reload the Story to read the
-                        groups again.
-                    </p>
-                </div>
+                <PhraseReadState
+                    state="failed"
+                    surface={SUMMARY_SURFACE}
+                    testId="summary-overview-error"
+                    readErrorId="summary-read-error"
+                    failure={failure}
+                    overrideNotice={
+                        'The Story is still written as five groups, so the groups exist — the read that lists their state failed. Nothing here is a verdict about the Overview; reload the Story to read the groups again.'
+                    }
+                />
             );
         }
 
         return (
-            <div className="sv-pane" data-testid="summary-overview-pending">
-                <p className="pane-state">
-                    This Summary is written as five groups. The reviewed Summary and the group rows arrive with
-                    the phrase read.
-                </p>
-            </div>
+            <PhraseReadState
+                state="pending"
+                surface={SUMMARY_SURFACE}
+                testId="summary-overview-pending"
+                overrideLine={
+                    'This Summary is written as five groups. The reviewed Summary and the group rows arrive with the phrase read.'
+                }
+            />
         );
     }
 
@@ -590,22 +486,18 @@ export function SummaryOverviewPane({
             {/* One row per group, in the contract's composition order, always all five (U1). R-T2/F4: the list
                 is a named region, so its rows are announced as a list of five groups rather than five loose
                 buttons, and the selected row carries `aria-current` (below). These are the LIVE groups — the
-                panes they open are where a group's own text, findings and revise verb live. */}
-            <ul
-                className="sv-group-rows"
-                aria-label="Summary groups"
-                data-testid="summary-group-rows"
-            >
-                {groups.map((group) => (
-                    <GroupRow
-                        key={group.id}
-                        view={view}
-                        group={group}
-                        selected={selection?.ref === summaryGroupRef(group.id)}
-                        onSelect={onSelect}
-                    />
-                ))}
-            </ul>
+                panes they open are where a group's own text, findings and revise verb live.
+                T-W4: the rows are the shared `PhraseEntryRows` under `SUMMARY_SURFACE`, which reproduces this
+                list's `sv-group-rows` class, its `summary-group-rows` test id, its row ids and its state words
+                exactly — Phrase ② renders the same component with its own surface. */}
+            <PhraseEntryRows
+                view={view}
+                entries={groups}
+                surface={SUMMARY_SURFACE}
+                selection={selection}
+                onSelect={onSelect}
+                label="Summary groups"
+            />
 
             {unwritten.length > 0 ? (
                 <p className="sv-summary-flag" data-testid="summary-unwritten">

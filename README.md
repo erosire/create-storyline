@@ -65,7 +65,7 @@ that drives it, from one origin.
   phrase rail, the tabbed home desk (Requests / Create New Story), the pane-aware directive bar, the
   crew rail, the Ideas tray, the Goal panel and the prose editor. It dials the same origin at
   `/v1/storyline` and holds no authoritative state; `src/dashboard/api.ts` is its only transport.
-- **The Summary workspace** — the rail's one phrase is Summary, and under it the rail lists the
+- **The Summary workspace** — the rail's default phrase is Summary, and under it the rail lists the
   Summary's five **groups** (Premise, Promise, Theme, Tone, Ending), each badged with what it owes:
   `to write` while it has no revision, a Writer mark while a live pass is replacing its text, and the
   count of open blocking findings. The Summary pane is the composed **Overview** plus one pane per
@@ -73,12 +73,31 @@ that drives it, from one origin.
   **Revise** control that rewrites that group alone. Superseded revisions are counted, not listed —
   the history stays in the book. A Story whose Summary is still written as one text (the legacy
   `summary_mode: 'sampling'` shape) keeps the older sampling-round pane instead, including its two
-  counts and its revision list; nothing has to be migrated for that book to read correctly.
+  counts and its revision list; nothing has to be migrated for that book to read correctly. Since
+  2026-11-26 the server enables a second phrase kind, **Plotlines** (`plotlines_mode`), whose entries are
+  one per chapter rather than five fixed groups, and the rail numbers the pipeline Summary ① → Plotlines ②
+  → Chapters ③ with Characters listed outside the numbering. Under its rail row a grouped book now gets that
+  phrase's own surface — the chapter entries with their revisions, findings, locks and per-entry scores, the
+  Editor's brief card, and a **Handoff** card that starts the phrase — by default from the compiled Summary, or
+  from the Author's own words — while a classic
+  book keeps the §4.3 records view. What that leg still lacks is proof: no dashboard test exercises the Start verb
+  or the phrase's panes (specifications.md §18.8, §10.2's U-20).
 - **The HTTP contract** is `src/storyline-server.swagger.yaml` (OpenAPI 3.0.3), the same pattern as
   the harness server's contract: every route, body, projection, status code, and the SSE feed at
   `/v1/storyline/stream` in one document. The UI renders server projections and mutates only through
   these operations; it never imports a server module, calls the model provider, or executes a harness
-  tool directly. The Summary's own verbs are `GET /v1/storyline/stories/{id}/phrases` (the
+  tool directly. **Phrase ②'s two verbs** are `GET /v1/storyline/stories/{id}/phrases/{key}` (ONE
+  phrase's rail — its entries, its brief, its per-entry scores, and a preview of the seed it was started
+  from; an unknown key is `404`, and a phrase nobody has started answers an EMPTY view rather than `404`,
+  because the Start panel has to be able to say why it is offering nothing) and `POST
+  .../phrases/{key}/start` (`{source: 'compiled' | 'custom', text?}` — the default copies the compiled
+  Summary, the very text the rail previews, into the phrase as its own seed; `400` for `custom` with no
+  text, `409` for an empty compiled Summary, an already-started phrase, or a phrase the loop starts by
+  itself). `plotlines_mode` (`'groups'` | `'classic'`, ABSENT means `'classic'`) is accepted by
+  `POST /stories` and by `PATCH /stories/{id}`, and once the phrase has been started its dial no longer moves
+  — a PATCH that would change it is a `409` (one that changes nothing stays legal), rather than a silent
+  re-pointing of the entries that hold the work.
+  The Summary's own verbs are `GET /v1/storyline/stories/{id}/phrases` (the
   grouped view; a legacy book answers `mode: 'sampling'`), `POST .../phrases/import` (the Author's
   explicit, idempotent move of a legacy Summary onto groups), `POST
   .../phrases/groups/{groupId}/revise` (rewriting ONE group — `409` while a Writer pass holds it,
@@ -206,6 +225,23 @@ asked again. Locks do not outlive the rows they anchor: a rewritten Seed takes e
 record about, so the flag would name a row that no longer exists and block every install that named the
 group. What keeps a lock is a backtrack that deletes no revision history at all (backing up to the chapters
 phase): there the flag still names live text.
+
+**What Phrase ② asks of you, if you start it.** Phase ② now authors the chapter contracts two ways, and
+the flag that says which is `plotlines_mode`. `'classic'` — ABSENT, which is what every book written
+before 2026-11-26 is — keeps the pipeline it always was: a Writer expansion per chapter set, readers, the
+Editor's `selection_rules` choice, and the crew's `createPlotline` / `editPlotline`. `'groups'`, which a
+new Story is born with, puts the chapters on the same engine the Summary groups run on — but the lane
+opens only when YOU start the phrase: the loop cannot invent the seed the chapters grow from, and the
+drain says so until you do. Starting hands the phrase its OWN copy of the text — the compiled Summary, or
+your own words — and from then on that copy is what Phrase ② is planned and judged against. The Editor
+then makes the one irrevocable call: a structuring pass decides how many chapters the seed resolves into,
+and that single write sets the Story's chapter count and creates one entry per chapter in the same commit.
+After that a chapter contract behaves like a Summary group: one entry, its own revision line, an accepted
+answer installing immediately, a finding naming every chapter it crosses, a lock that says this contract is
+finished — while the `plotlines` row you and the chapters phase read stays the mirror of the entry's text,
+written in the same commit. The crew is refused when it reaches for the old door on a chapter an entry
+covers, and the refusal names the entry's own revise verb; a chapter order no entry covers — after you
+shrink the count — stays writable the classic way.
 
 ### Employees, agents, harnesses, sessions and threads
 

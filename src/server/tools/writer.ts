@@ -41,7 +41,13 @@ import { SUMMARY_PROSE_FIELDS } from '../../shared/summary';
 // HARDENING (R6): on a group-managed book the five prose fields are the MIRROR that
 // `installGroupRevisions` writes — `editSummary` must refuse there so the mirror is never a
 // second write path (see the guard in `editSummary.execute`).
-import { isGroupManagedStory } from '../phrase';
+// T-W2b applies the SAME rule to §4.3's contract rows. The two reads below are the DOMAIN's, not local
+// copies: the lane predicate (`plotlineLaneIsLive` — the per-phrase dial PLUS a materialized chapter set,
+// never `story.phase`) and the order → chapter-entry map (`plotlineChapterGroupOf`, the inverse of the
+// install's mirror in `phrase/plotpoints.ts:syncPlotlineContract`). Two copies of that mapping is how a
+// guard and a mirror drift; two copies of the dial is how a guard and the loop's schedule drift, because
+// `loop/work.ts` gates its three suppressions on the very same function.
+import { isGroupManagedStory, plotlineChapterGroupOf, plotlineLaneIsLive } from '../phrase';
 import { guardAuthorSpans, guardPlotlineWritable, guardSummaryWritable } from './permissions';
 import { arr, bool, enumOf, EXPECTS_ARG, num, obj, str, whyArg, type PropertySchema } from './schema';
 import {
@@ -265,6 +271,65 @@ const editSummary: ToolDefinition = {
 // ── plotlines (P4/L-7) ──────────────────────────────────────────────────────
 
 /**
+ * T-W2b — ON A GROUP-MANAGED BOOK THE CHAPTER ENTRY IS THE CONTRACT (R2: one writing surface).
+ *
+ * THE RULE, stated exactly: when the Story's PLOTLINE PHRASE runs group mode, `createPlotline` and
+ * `editPlotline` do not write a contract the lane owns — they refuse and name the chapter entry's
+ * revise route. The precedent is `editSummary`'s R6 refusal above: §4.3's `plotlines` row is a MIRROR
+ * (`phrase/plotpoints.ts:syncPlotlineContract` writes it in the install's commit), and a tool write
+ * lands on it OUT OF BAND, so `phrase_groups.content`/`group_revisions` and the row drift apart and
+ * the next install silently overwrites whatever the Writer thought it had written.
+ *
+ * WHY IT IS NOT MERELY A LOOP SCHEDULE QUESTION: `loop/work.ts` suppresses the classic `write_unit`
+ * candidates on such a book, but the capability is still granted (the phase-② matrix gives the Writer
+ * `editPlotline` WRITE), and an Author or any other caller reaches the same tools. R2 is an invariant
+ * about the WRITER, not about one scheduler, so the tool is where it has to hold.
+ *
+ * THE SCOPE IS "PHRASE-OWNED", and it is what keeps every other book working:
+ *   * the dial is `isPhraseGroupManaged(story, 'plotlines')` PLUS a materialized chapter set — the one
+ *     predicate `phrase/plotpoints.ts:plotlineLaneIsLive` — never `story.phase` (the spec's :1554 rule: a
+ *     grouped book is grouped in phase ② and in phase ③);
+ *   * an UNSTARTED phrase has no entries and wrote no rows, so nothing is phrase-owned yet: refusing
+ *     there would take §8.1's tools away from a book that has no lane at all — and that is the DEFAULT
+ *     state, since `loop/engine.ts:2887` spawns every session with `plotlines_mode: 'groups'`;
+ *   * the ORDER must map to a chapter entry (`chapter_<order>`, the same mapping
+ *     `phrase/plotpoints.ts:syncPlotlineContract` mirrors by — §4.3's row carries no source column, so
+ *     the entry set IS the ownership record). A contract at an order the entry set does not cover —
+ *     the stray 7th thread on a five-chapter brief — is not the lane's artifact and keeps its §8.1
+ *     tool; that is the lane's one-gap case, not a write into the mirror.
+ *
+ * Returns the refusal to throw, or `undefined` when the write is the caller's to make.
+ */
+function guardPlotlinePhraseOwnership(ctx: ToolExecutionContext, tool: string, order: number): ToolRefusal | undefined {
+    // THE LANE, not the bare dial. `loop/engine.ts:2887` spawns every session with
+    // `plotlines_mode: 'groups'`, so the dial alone would refuse §8.1's contract tools on a book that has
+    // no Phrase ② at all (measured: 9 `loop/findings.test.ts` failures + 3 `integration/slice-phases`
+    // failures on the dial-only reading; the same file is 14/14 with the clause inert —
+    // `Temp/w2b/probe-findings-off.txt`). The chapter entries are the ownership record.
+    if (!plotlineLaneIsLive(ctx.store, ctx.story)) return undefined;
+
+    const entry = plotlineChapterGroupOf(ctx.store, ctx.storyId, order);
+
+    if (entry === undefined) return undefined;
+
+    // The route is the per-entry door (`src/server/api/routes.ts`), the same door `editSummary`'s R6
+    // refusal names, with this chapter's id filled in.
+    const route = `POST /stories/${ctx.storyId}/phrases/groups/${entry.id}/revise`;
+
+    return new ToolRefusal(
+        'R6',
+        `this Story writes its Plotlines phrase group by group, so chapter ${order}'s contract is the \`${entry.key}\` entry (${entry.id}) and the \`plotlines\` row is its MIRROR — \`${tool}\` would write the mirror out of band, and the next install overwrites it, so the entry and the row diverge (R2, R6). Draft the entries with the \`draft_groups\` job, or revise one entry: ${route}.`,
+        {
+            plotlines_mode: 'groups',
+            order,
+            group_ref: entry.id,
+            group_key: entry.key,
+            fix: `revise the chapter entry at ${route}, or run the grouped draft_groups job — the install writes the \`plotlines\` row from the entry`
+        }
+    );
+}
+
+/**
  * §8.1 `createPlotline`: the chapter's contract — what must happen and what must be different
  * afterwards (C-7/C-8). Once `plotlines_locked` is true the write is filed as a proposal (L-7).
  */
@@ -297,6 +362,13 @@ const createPlotline: ToolDefinition = {
         const fields = pickFields(ctx.args, PLOTLINE_FIELDS);
         const order = Math.max(1, Math.trunc(Number(ctx.args.order ?? 0)));
         const why = whyOf(ctx);
+
+        // R2 / T-W2b, before the L-7 proposal path: on a group-managed book this chapter's contract is
+        // the lane's ENTRY, so there is no row here to create and no proposal worth filing — the entry's
+        // revise route is the door. Arg-independent like `editSummary`'s R6 guard: the refusal is about
+        // the BOOK, not about what was sent.
+        const owned = guardPlotlinePhraseOwnership(ctx, 'createPlotline', order);
+        if (owned !== undefined) throw owned;
 
         // L-7: after the phase-2 lock the contract is law, so a Writer's change is a proposal.
         const locked = guardPlotlineWritable(ctx, false);
@@ -418,6 +490,16 @@ const editPlotline: ToolDefinition = {
             });
 
         const why = whyOf(ctx);
+
+        // T-W2b / R2 — the row is the lane's MIRROR on a group-managed book, so this write is out of
+        // band: it lands on the `plotlines` row while `phrase_groups.content` and `group_revisions` keep
+        // the text the next install mirrors back over it. Refused before the L-7 proposal path for the
+        // same reason as `createPlotline` above: a proposal whose application would write the mirror is
+        // not a graceful degradation, it is the same divergence one commit later. The row's CURRENT
+        // order is what decides ownership — that is the entry it belongs to.
+        const owned = guardPlotlinePhraseOwnership(ctx, 'editPlotline', plotline.order);
+        if (owned !== undefined) throw owned;
+
         const locked = guardPlotlineWritable(ctx, plotline.contract_locked);
         if (locked === 'propose') {
             const proposal = await fileProposal(

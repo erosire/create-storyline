@@ -162,9 +162,16 @@ const CLOSED_CLAIM_STATES: Finding['state'][] = ['fixed', 'discarded'];
  */
 export const GROUP_LOCK_CLAIM_RENDER_CAP = 12;
 
-/** Every group of this Story that is already locked, in catalog order. */
-const lockedGroupsOf = (store: Store, storyId: string): PhraseGroup[] =>
-    phraseGroupsOf(store, storyId).filter(isPhraseGroupLocked);
+/**
+ * Every group of this Story that is already locked, in catalog order.
+ *
+ * T-W2 PHRASE SCOPING: `phraseId` is optional and defaults to the whole book exactly as before. A
+ * scoped call is the Phrase ② case — a locked SUMMARY section is not a peer of a chapter contract, and
+ * showing one in a chapter's lock brief would tell the Editor to freeze a chapter "against" a prose
+ * section it has no relationship to. The rows are the same rows; only the namespace narrows.
+ */
+const lockedGroupsOf = (store: Store, storyId: string, phraseId?: string): PhraseGroup[] =>
+    phraseGroupsOf(store, storyId, phraseId).filter(isPhraseGroupLocked);
 
 /**
  * Whether a finding's effective scope names `groupId`.
@@ -237,7 +244,7 @@ export function editorLockEvidenceOf(
     //     live holding run that names no groups still counts as holding this one).
     if (liveGroupWriters(store, story.id, groupId).length > 0) return undefined;
 
-    const locked = lockedGroupsOf(store, story.id);
+    const locked = lockedGroupsOf(store, story.id, group.phrase_id);
     const lockedIds = new Set(locked.map((row) => row.id));
 
     const openClaims = store.findings
@@ -269,7 +276,11 @@ export function editorLockEvidenceOf(
         open_claims: openClaims,
         closed_claims: closedClaims,
         locked_peers: selection.entries.filter((candidate) => lockedIds.has(candidate.group.id)),
-        unlocked_peers: phraseGroupsOf(store, story.id).filter(
+        // T-W2: the peers are the ENTRIES OF THIS PHRASE. `unlocked_peers` renders as "the sections that
+        // may still move", and with Phrase ② started an unscoped read would list the Summary's five prose
+        // groups beside a chapter contract (and the other way round) — a claim about composition the
+        // catalog does not make. The group row names its own phrase, so no caller has to pass it.
+        unlocked_peers: phraseGroupsOf(store, story.id, group.phrase_id).filter(
             (candidate) => candidate.id !== groupId && !lockedIds.has(candidate.id)
         )
     };
@@ -282,14 +293,18 @@ export function editorLockEvidenceOf(
  * five groups per sweep and the selection read is the expensive half (it walks every group's revision
  * history).
  */
-export function editorLockSeatTargets(store: Store, story: Story): EditorLockEvidence[] {
+export function editorLockSeatTargets(store: Store, story: Story, phraseId?: string): EditorLockEvidence[] {
     if (!editorGroupLockingEnabled(story)) return [];
 
-    const selection = cleanSelectionOf(store, story);
+    // T-W2: the seats are armed per PHRASE. With `phraseId` the selection and the group list are both
+    // that phrase's — a chapter seat is armed on the chapter vector, not on the Summary's — and without
+    // it `cleanSelectionOf` answers the Story's PRIMARY phrase, which is what every pre-Phrase-② caller
+    // (and every existing pin) has always got.
+    const selection = cleanSelectionOf(store, story, phraseId);
 
     if (!selection.complete) return [];
 
-    return phraseGroupsOf(store, story.id)
+    return phraseGroupsOf(store, story.id, phraseId)
         .map((group) => editorLockEvidenceOf(store, story, group.id, selection))
         .filter((evidence): evidence is EditorLockEvidence => evidence !== undefined);
 }
@@ -454,7 +469,12 @@ export function editorLockGuardReason(
     // THE VECTOR, re-read now: the seat judged the selection its key hashes, and the flag is about to name
     // `group.revision`. Both halves have to agree — the selection's hash AND the clean row being the
     // current text — or the lock fixes a revision nobody reviewed.
-    const selection = cleanSelectionOf(store, story);
+    //
+    // T-W2: the selection is the GROUP'S PHRASE. A chapter seat judges the chapter vector, and reading
+    // the Story's primary (Summary) selection here would refuse every Phrase ② lock with "the reviewed
+    // Summary moved". For a Summary group `group.phrase_id` IS the primary phrase, so every existing
+    // summary seat answers exactly as it did before this line changed.
+    const selection = cleanSelectionOf(store, story, group.phrase_id);
 
     if (!selection.complete) {
         return `story ${story.id} has no complete reviewed Summary any more, so the clean vector ${seat.vector_hash} this seat judged is gone`;
@@ -525,8 +545,10 @@ export interface LockedPeerLine {
  * other group is revised against. The prompt renders these as the LAW; the loop already enforces them in
  * `phrase/exclusion.ts:groupWorkTargets` and `revisions.ts:installGroupRevisions`.
  */
-export function lockedPeerLines(store: Store, story: Story): LockedPeerLine[] {
-    return lockedGroupsOf(store, story.id).map((group) => ({
+export function lockedPeerLines(store: Store, story: Story, phraseId?: string): LockedPeerLine[] {
+    // T-W2: `phraseId` narrows the LAW block to one phrase's sections (see `lockedGroupsOf`). Unscoped it
+    // stays the whole book, which is what a Story with one phrase has always rendered.
+    return lockedGroupsOf(store, story.id, phraseId).map((group) => ({
         group,
         revision: group.locked_revision ?? group.revision,
         locked_by: group.locked_by ?? 'author'

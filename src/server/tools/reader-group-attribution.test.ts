@@ -39,11 +39,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { ensurePhraseCatalog } from '../phrase/catalog';
+// T-W2b: the Phrase ② lifecycle, so the finding-route fixture is the PRODUCT's state (started phrase,
+// accepted brief, materialized chapter entries) rather than hand-minted group rows.
+import { acceptPlotlineBrief, createPlotlineBrief, startPlotlinesPhrase } from '../phrase/controllers/plotlines';
 import { AUTHOR_ATTR, seedStory } from '../run/mock';
 import { Store } from '../store';
 import { recordUidAt } from '../store/persist';
 import { createToolRuntime } from './index';
-import type { Chapter, PhraseGroup, Story } from '../../shared/types';
+import type { Chapter, PhraseGroup, Plotline, Story } from '../../shared/types';
 import type { RunSession, RunToolContext, ToolRuntime } from './index';
 
 interface Book {
@@ -395,5 +398,163 @@ describe('a legacy sampling book keeps its own attribution rule (R6, D-33)', () 
             refusal('R3', `${recordUidAt(1)} is not a group of this Story. A defect cannot be closed against a group that does not exist (R3).`)
         );
         expect(book.store.findings.list()).toEqual([]);
+    });
+});
+
+// ── T-W2b — A FINDING ON A CONTRACT IS A FINDING ON A CHAPTER ENTRY ───────────────────────────
+//
+// WHY THIS RULE EXISTS: phase ② on a group-managed book is a HYBRID — the reader legs stay and file
+// their defects against the §4.3 `plotlines` row, while the WRITING surface is the lane's chapter ENTRY.
+// Every downstream rule joins a finding on `group_refs`: `phrase/findings.ts:findingResolution` decides
+// closure over the groups it names, and `phrase/exclusion.ts:groupWorkTargets` arms a group's redraft
+// from `findingGroupsStillOwed`. An unscoped contract defect therefore stays open through the install
+// that answers it, and it arms a classic `wi_fix_plotline_*` pass whose only tool (`editPlotline`) is
+// the surface this book no longer has. So the tool ROUTES the row the reporter named to the entry that
+// owns it — the same `order` mapping the install mirrors by (`phrase/plotpoints.ts:syncPlotlineContract`)
+// — and REFUSES the case it cannot map, because on a grouped book "no groups" means "every entry".
+//
+// The namespace question is the other half of the same rule: before T-W2b the reporter's list of
+// nameable groups was `summary_mode === 'groups' ? every group : []`. Once chapter entries are a
+// writing surface they have to be nameable EVEN ON A BOOK WHOSE SUMMARY RUNS CLASSIC
+// (`phrase/findings.ts:findingGroupNamespace`), which is what the last pin below holds.
+describe('a phase-② finding on a contract is scoped to the chapter entry that owns it (R3, T-W2b)', () => {
+    const PLOTLINES_SEED =
+        'Premise: a cartographer returns. Promise: the map reconciles. Ending: she floods the valley.';
+
+    interface ContractBook {
+        store: Store;
+        story: Story;
+        chapters: PhraseGroup[];
+        contract: Plotline;
+        runtime: ToolRuntime;
+        critic: RunToolContext;
+    }
+
+    /**
+     * A phase-② book whose Plotlines phrase is started and ACCEPTED (three chapter entries), with one
+     * contract row at the order the test names. `summaryMode` lets a pin hold the Summary's OWN mode
+     * classic, which is the case the namespace widening is about.
+     */
+    function seedContractBook(options: {
+        plotlinesMode: 'groups' | 'classic';
+        summaryMode?: 'groups' | 'sampling';
+        contractOrder?: number;
+        chapterCount?: number;
+    }): ContractBook {
+        const store = Store.empty();
+        const seeded = seedStory(store, { phase: 'plotlines' });
+        const story = store.stories.update(
+            seeded.id,
+            { summary_mode: options.summaryMode ?? 'sampling', plotlines_mode: options.plotlinesMode },
+            AUTHOR_ATTR,
+            [{ id: seeded.id, rev: seeded.rev }]
+        );
+
+        let next = 0;
+        const newId = () => recordUidAt(next++);
+
+        ensurePhraseCatalog(store, story, AUTHOR_ATTR, { newId });
+
+        next = 20;
+        const started = startPlotlinesPhrase(store, story, PLOTLINES_SEED, AUTHOR_ATTR, { newId });
+        const brief = createPlotlineBrief(
+            store,
+            story,
+            started.phrase,
+            { chapter_count: options.chapterCount ?? 3 },
+            AUTHOR_ATTR
+        );
+        const chapters = acceptPlotlineBrief(store, story, brief, AUTHOR_ATTR, { newId }).groups;
+
+        const contract = store.plotlines.create(
+            {
+                story_id: story.id,
+                order: options.contractOrder ?? 1,
+                heading: 'The return',
+                must_happen: 'Mara walks the drowned road.',
+                must_change: 'She knows the valley is flooded on purpose.',
+                pov: 'Mara',
+                setups: 'The drowned road',
+                payoffs: '',
+                contract_locked: false,
+                aligned: false,
+                needs_recheck: false
+            },
+            AUTHOR_ATTR
+        );
+
+        const runtime = createToolRuntime(store);
+
+        return { store, story, chapters, contract, runtime, critic: runtime.createContext(sessionFor(story.id)) };
+    }
+
+    /** The contract defect the phase-② reader files: a plotline target, the C-7 criterion, no group refs. */
+    const contractFiling = (contractId: string, extra: Record<string, unknown> = {}) => ({
+        target_ref: contractId,
+        criterion_ref: 'C-7',
+        title: 'chapter 1 never delivers the dam',
+        detail: 'plotline_1 must_happen never reaches the dam gate the Ending depends on',
+        evidence: 'plotline_1 must_happen: "Mara walks the drowned road."',
+        cost: 'critical',
+        ...extra
+    });
+
+    it('routes an unscoped contract defect onto the chapter entry that carries that order', async () => {
+        const book = seedContractBook({ plotlinesMode: 'groups' });
+        const entry = book.chapters.find((group) => group.order === 1)!;
+        const result = await book.runtime.execute(book.critic, 'raiseFinding', contractFiling(book.contract.id));
+
+        expect(result.ok).toBe(true);
+        // EXACTLY the one entry that owns order 1 — not all three, which is what an unscoped row would
+        // mean on a grouped book (three contract rewrites for one sentence).
+        expect(book.store.findings.require('finding_0').group_refs).toEqual([entry.id]);
+    });
+
+    it('keeps the refs the reporter named, and lets a chapter id be named on a classic-Summary book', async () => {
+        // `summary_mode: 'sampling'` is the point: the chapter entries are nameable because the PLOTLINE
+        // phrase is group-managed, not because the Summary is.
+        const book = seedContractBook({ plotlinesMode: 'groups', summaryMode: 'sampling' });
+        const named = book.chapters.find((group) => group.order === 2)!;
+        const result = await book.runtime.execute(book.critic, 'raiseFinding', contractFiling(book.contract.id, {
+            group_refs: [named.id]
+        }));
+
+        expect(result.ok).toBe(true);
+        // The reporter's attribution is never overridden — routing is the fallback for an unscoped row.
+        expect(book.store.findings.require('finding_0').group_refs).toEqual([named.id]);
+    });
+
+    it('refuses a contract the entry set does not cover rather than filing it against every entry', async () => {
+        const book = seedContractBook({ plotlinesMode: 'groups', contractOrder: 5 });
+        const result = await book.runtime.execute(book.critic, 'raiseFinding', contractFiling(book.contract.id));
+
+        expect(result.ok).toBe(false);
+        expect(result.refused).toBe('R3');
+        expect(result.message).toBe(
+            refusal(
+                'R3',
+                `this Story's Plotlines phrase is group-managed, so a defect on chapter 5's contract has to name the chapter entry it is about, and no entry covers that order — this Story's entries are ${book.chapters
+                    .map((group) => `${group.key}=${group.id}`)
+                    .join(', ')}. A grouped book's finding is scoped to an entry (R3).`
+            )
+        );
+        expect((result as { expected?: string[] }).expected).toEqual(book.chapters.map((group) => group.id));
+        expect((result as { fix?: string }).fix).toBe(
+            `call raiseFinding again with group_refs naming the chapter entry this defect is about (this Story's entries: ${book.chapters
+                .map((group) => `${group.key}=${group.id}`)
+                .join(', ')})`
+        );
+        // Nothing filed: a phantom "every entry" defect would arm three redrafts the Author never asked for.
+        expect(book.store.findings.list()).toEqual([]);
+    });
+
+    it('leaves the classic dial unscoped, as its own reading of a contract defect always was', async () => {
+        // The phrase's entries EXIST here (started, accepted); the DIAL says they are not the writing
+        // surface, so the reporter's unscoped row keeps its old meaning and no ref is invented for it.
+        const book = seedContractBook({ plotlinesMode: 'classic' });
+        const result = await book.runtime.execute(book.critic, 'raiseFinding', contractFiling(book.contract.id));
+
+        expect(result.ok).toBe(true);
+        expect(book.store.findings.require('finding_0').group_refs).toBeUndefined();
     });
 });

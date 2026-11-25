@@ -474,6 +474,19 @@ export interface CreateStoryInput {
      * set here at creation, or by the Author's explicit `POST /stories/:id/phrases/import`.
      */
     summary_mode?: 'groups' | 'sampling';
+    /**
+     * PHRASE ② (T-W2) — how phase ② writes the chapter contracts. Same shape as `summary_mode`, one
+     * phrase down: `'groups'` (the default for NEW Stories) runs the chapter group pipeline over the
+     * Plotlines Phrase's `chapter_N` entries — structure the phrase seed into a brief, one Writer batch
+     * per finding set, Critic seats on the chapter vector, the Reader's score, the Editor's lock seat —
+     * while `'classic'` keeps the §4.3 + §8.1 tool path (`write_unit` per plotline, the Editor's `select`)
+     * that every book written before Phrase ② existed runs, because their rows carry no `plotlines_mode`
+     * at all and `phrase/catalog.ts:isPhraseGroupManaged` reads an absent value as `'classic'`.
+     *
+     * The two dials are INDEPENDENT by design: a Story may group-manage one phrase and not the other,
+     * which is why neither lane reads the other's setting and why an old book needs no migration.
+     */
+    plotlines_mode?: 'groups' | 'classic';
 }
 
 /** What `changeChapterCount` returns, because D-3c's removal needs an explicit confirmation first. */

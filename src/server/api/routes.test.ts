@@ -313,7 +313,16 @@ describe('§10.2 U-1 — the Stories panel', () => {
             'level_history',
             // §10: the research pipeline's two additive slices, built after the loop's history.
             'seed_brief',
-            'sampling'
+            'sampling',
+            // T-W3 — the phrase rail's three additive fields, and THE ONLY DELIBERATE EDIT to this pinned
+            // list in this wave. They are appended LAST for the same reason `level_history` and the two
+            // research slices are: every key above keeps its exact position, so a client that reads the
+            // view by index or ignores unknown keys is unaffected. `plotlines_mode` echoes Phrase ②'s dial
+            // (an absent setting reads `classic`), `phrase_started` is the rail's two rows, and
+            // `summary_compiled` is the handoff button's enable condition.
+            'plotlines_mode',
+            'phrase_started',
+            'summary_compiled'
         ]);
         expect(Object.keys(view.summary as object).sort()).toEqual([
             'chapter_count',

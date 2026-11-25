@@ -68,13 +68,20 @@ export function PlotlinesPane({ view, selectedRef }: PlotlinesPaneProps) {
     return (
         <section className="sv-pane sv-plotlines" aria-label="Plotlines">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Plotlines — Phrase 3</h3>
-                <span className="sv-pane-badge">one contract per chapter, measured against the Summary</span>
+                <h3 className="sv-pane-title">Plotlines</h3>
+                <span className="sv-pane-badge">
+                    the §4.3 contracts the plotline tools write, one per chapter, measured against the Summary
+                </span>
             </header>
 
             {shown.length === 0 ? (
+                // T-W4: this pane is the CLASSIC surface (a book on the chapter-entry pipeline opens
+                // `PlotlinesPhrasePane` instead), so the sentence names the tools that produce these rows rather
+                // than a phrase number that moved. It still says what has to happen first — the Summary signs off
+                // before the plotline tools write a contract.
                 <p className="sv-chapters-none">
-                    No plotlines yet — Phrase 3 locks one contract per chapter once the Summary is signed.
+                    No plotlines yet — the plotline tools lock one contract per chapter once the Summary is signed.
+                    Turn on the chapter-entry Setting (Settings, Phrase 2) to write chapter entries instead.
                 </p>
             ) : (
                 <div className="plot-list">

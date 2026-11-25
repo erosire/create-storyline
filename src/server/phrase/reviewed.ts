@@ -52,6 +52,7 @@ import {
     isPhraseGroupLocked,
     lockedPhraseGroupIds,
     phraseGroupsOf,
+    primaryPhraseOf,
     storyPhrase,
     type ReviewedCompositionEntry
 } from './catalog';
@@ -169,8 +170,12 @@ export interface ReviewedSelection {
  * `vector_hash` of a PARTIAL selection is still a hash, but it is not a scoring key: only a
  * `complete` selection names an Overview, and the scoring seat checks `complete` first.
  */
-export function cleanSelectionOf(store: Store, story: Story): ReviewedSelection {
-    const groups = phraseGroupsOf(store, story.id);
+export function cleanSelectionOf(store: Store, story: Story, phraseId?: string): ReviewedSelection {
+    // Scoped to ONE phrase, defaulting to the Story's PRIMARY one (the Summary), which is what this read
+    // has always answered. The scoping matters the moment a second phrase is started on the book: with
+    // Phrase ②'s chapter rows mixed in, `complete` would demand a clean chapter selection too and the
+    // reviewed Summary would never exist on a book that simply also has chapters.
+    const groups = phraseGroupsOf(store, story.id, phraseId ?? primaryPhraseOf(store, story.id)?.id);
     const blocked = openIssueGroupIds(store, story);
     const entries: ReviewedCompositionEntry[] = [];
     const gaps: ReviewedGap[] = [];
@@ -235,14 +240,20 @@ export function cleanSelectionOf(store: Store, story: Story): ReviewedSelection 
  * The rows it names are `discarded` (the choose discarded them), which is why this read does not go
  * through `cleanSelectionOf`: the selection read answers "what would I review NOW", this one answers
  * "what did the Author pick THEN".
+ *
+ * T-W3 (additive) — `phraseId` is the SAME optional scoping seam `cleanSelectionOf` already carries:
+ * a caller that means one phrase passes its row id, and an omitted one keeps answering for the
+ * Summary (`storyPhrase`), which is what every existing call site means. The Choose verb (D-68) is the
+ * Summary's own decision record, so a phrase-generic reader (the per-phrase view) has to ask THIS
+ * phrase's row or it would report the Summary's pick beside another phrase's entries.
  */
-export function chosenSelectionOf(store: Store, story: Story): ReviewedSelection | undefined {
-    const phrase = storyPhrase(store, story.id);
+export function chosenSelectionOf(store: Store, story: Story, phraseId?: string): ReviewedSelection | undefined {
+    const phrase = phraseId === undefined ? storyPhrase(store, story.id) : store.phrases.get(phraseId);
     const vector = phrase?.reviewed_vector;
 
     if (phrase === undefined || vector === undefined || Object.keys(vector).length === 0) return undefined;
 
-    const groups = phraseGroupsOf(store, story.id);
+    const groups = phraseGroupsOf(store, story.id, phrase.id);
     const entries: ReviewedCompositionEntry[] = [];
 
     for (const group of groups) {
@@ -343,7 +354,7 @@ export interface CleanStampResult {
 export function stampCleanRevisions(
     store: Store,
     story: Story,
-    options: { seatKey: string; runRef: string },
+    options: { seatKey: string; runRef: string; phraseId?: string },
     attribution: Attribution
 ): CleanStampResult {
     const vectorHash = groupCheckVectorHashOf(options.seatKey);
@@ -352,7 +363,12 @@ export function stampCleanRevisions(
         return { stamped: [], skipped: [{ group_id: '', group_key: '', reason: 'seat-not-group-family' }], vector_hash: '' };
     }
 
-    const vector = groupRevisionVector(store, story.id);
+    // T-W2: the vector belongs to ONE phrase, and the settle now names which one (`options.phraseId`,
+    // read off the groups the seat carried). Omitted, `groupRevisionVector` answers the Story's PRIMARY
+    // phrase — the Summary — exactly as it did before Phrase ② existed, so a summary seat's bytes and
+    // verdicts are untouched. Passing the Plotlines phrase id makes the same guard read the CHAPTER
+    // vector, which is the combination the chapter Critic was actually shown.
+    const vector = groupRevisionVector(store, story.id, options.phraseId);
 
     if (groupVectorHash(vector) !== vectorHash) {
         return {
@@ -366,7 +382,9 @@ export function stampCleanRevisions(
     const stamped: GroupRevision[] = [];
     const skipped: CleanStampResult['skipped'] = [];
 
-    for (const group of phraseGroupsOf(store, story.id)) {
+    // PHRASE-SCOPED, primary by default: the vector this pass was claimed against names ONE phrase's
+    // groups, and stamping a chapter group from a Summary verdict would certify text the Critic never read.
+    for (const group of phraseGroupsOf(store, story.id, options.phraseId ?? primaryPhraseOf(store, story.id)?.id)) {
         const number = vector[group.id] ?? 0;
 
         if (number === 0) {
@@ -538,6 +556,10 @@ export function chooseReviewedSummary(
                   archived: [],
                   groups: phraseGroupsOf(store, story.id, phraseBefore.id).filter(isPhraseGroupLocked),
                   phrase: phraseBefore,
+                  // Phrase ①'s downstream sync is the mirror alone, so a choose that installed nothing
+                  // synced no contract row either. The field is present because it is part of
+                  // `GroupInstallResult` for EVERY phrase, and this branch synthesizes one.
+                  contracts: { created: [], updated: [] },
                   mirror: {
                       summary_id: summary?.id ?? null,
                       fields: [],
@@ -567,9 +589,22 @@ export function chooseReviewedSummary(
     ]);
 
     // 2. Discard everything the choice passed over — retained, terminal, hidden from current reads.
+    //
+    // SCOPED TO THE PHRASE THIS CHOOSE CHOSE. The filter used to be "every revision of this Story", which
+    // was the same thing while the Summary was the only phrase in the book; with Phrase ② installed, a
+    // Summary choose would otherwise discard the chapter revisions that are the live Plotline rows' own
+    // history — rows this decision never considered. On a Summary-only book the group-id set is every
+    // group the Story has, so the sweep is byte-identical to what it always was.
+    const phraseGroupIds = new Set(phraseGroupsOf(store, story.id, phraseBefore.id).map((group) => group.id));
     const discarded = store.groupRevisions
         .list()
-        .filter((revision) => revision.story_id === story.id && !chosenIds.has(revision.id) && revision.state !== 'discarded')
+        .filter(
+            (revision) =>
+                revision.story_id === story.id &&
+                phraseGroupIds.has(revision.group_id) &&
+                !chosenIds.has(revision.id) &&
+                revision.state !== 'discarded'
+        )
         .sort((left, right) => left.group_id.localeCompare(right.group_id) || left.number - right.number)
         .map((revision) =>
             store.groupRevisions.update(

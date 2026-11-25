@@ -59,6 +59,10 @@ function Shell() {
         storyViews,
         phrases,
         phraseErrors,
+        // T-W4 — Phrase ②'s read and its failure, destructured beside the Summary's because they are the same kind
+        // of thing on the frame: a second route with its own in-flight state, feeding the Plotlines pane.
+        phraseDetails,
+        phraseDetailErrors,
         reviewedErrors,
         groupLockErrors,
         templates,
@@ -110,7 +114,12 @@ function Shell() {
               phrase,
               phraseError,
               reviewedError,
-              groupLockErrors
+              groupLockErrors,
+              // T-W4 — Phrase ②'s read and its own failure, per Story for the same reason the Summary's are: the
+              // Plotlines pane has to say which of the three states it is in (in flight, failed, read) and must
+              // never borrow the Summary read's sentence to do it.
+              activeStoryId ? phraseDetails[activeStoryId] : undefined,
+              activeStoryId ? phraseDetailErrors[activeStoryId] : undefined
           ) as unknown as StoryViewData)
         : undefined;
     const now = new Date().toISOString();

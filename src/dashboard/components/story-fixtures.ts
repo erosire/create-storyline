@@ -1379,7 +1379,13 @@ export function fixtureActions() {
         // `(storyId, enabled)` is what the Settings switch has to send.
         lockPhraseGroup: record('lockPhraseGroup'),
         unlockPhraseGroup: record('unlockPhraseGroup'),
-        setEditorGroupLocking: record('setEditorGroupLocking')
+        setEditorGroupLocking: record('setEditorGroupLocking'),
+        // T-W4 — Phrase ②'s three verbs, recorded for the same reason: a test asserts the exact arguments the
+        // control produced (`setPlotlinesMode: [['s1','groups']]`, `startPhrase: [['s1','plotlines',{source:'compiled'}]]`,
+        // `revisePhraseEntry: [['s1','grp-chapter-1',{plotpoints:{…}}]]`) rather than a "was called" boolean.
+        setPlotlinesMode: record('setPlotlinesMode'),
+        startPhrase: record('startPhrase'),
+        revisePhraseEntry: record('revisePhraseEntry')
     };
 
     return { actions, calls };

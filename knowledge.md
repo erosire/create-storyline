@@ -3,7 +3,11 @@
 The loop the Author drives: a Story is a Goal plus a crew that keeps working on it until it runs
 out of work, and an Author who owns every decision the loop stops for.
 
-> **Last verified:** 2026-11-25, against the tree as it stands AFTER the Summary Phrase redesign, the
+> **Last verified:** 2026-11-26 for the **second phrase** (`plotlines`) and the Phrase Controller that
+> carries it — that layer is its own dated section, "The Plotlines Phrase — Phrase ② on the controller
+> (2026-11-26)", near the end of this file, and it AMENDS the phrase-① statements below rather than
+> replacing them (the places it amends carry a marker). 2026-11-25 for everything else below, against
+> the tree as it stands AFTER the Summary Phrase redesign, the
 > same-day hardening pass on its server edges, and the three follow-ups that sit on top of it (D-65 the
 > Reader's section scores, D-67 the Clean stamp and the reviewed Overview, D-68 the Author's choose):
 > phase ① is a hill-climb over **five independent
@@ -49,12 +53,12 @@ Goal/criteria, `E-` engine, `P-` principle, `V-` vocabulary (Actor, employee, ag
 
 | Layer     | Path                      | What it owns                                                                                                                                                                                                                                                                                                   |
 | --------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl` — ONE BOOK PER STORY: `StoryStores.open(root)` loads `<root>/stories/<uuid>/` and mints a uuid book for a new Story, and `<root>/server/` is the app book (`Store.load`), which holds no Story rows at all. A root still carrying a flat `store.json` is refused with `StoryLayoutError` (no migration). `Store.empty()` / `Store.load(root)` / `Store.loadStory(id, dir)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`. Child ids (`run_0`, `finding_3`) are unique per book, never across the workspace; the `story_id` fence (T-3) refuses a foreign row. A group-managed book additionally holds the three Summary Phrase collections — `phrases`, `phrase_groups`, `group_revisions` (`store.ts:682-687`; the first two carry counter ids, a revision is addressed by `(group id, number)` so `group_revisions` does not). A legacy book holds none of them, and THAT is the R6 contract: no migration, `summary_mode` absent means `'sampling'`, and nothing may infer group management from the presence of rows. |
+| The book  | `src/server/store/`       | The §4 collections, the event journal, `store.json` + `journal.jsonl` — ONE BOOK PER STORY: `StoryStores.open(root)` loads `<root>/stories/<uuid>/` and mints a uuid book for a new Story, and `<root>/server/` is the app book (`Store.load`), which holds no Story rows at all. A root still carrying a flat `store.json` is refused with `StoryLayoutError` (no migration). `Store.empty()` / `Store.load(root)` / `Store.loadStory(id, dir)`; the constructor is private. Commits are applied immediately, persisted on a 25ms debounce, flushed by `persist()`/`close()`. Child ids (`run_0`, `finding_3`) are unique per book, never across the workspace; the `story_id` fence (T-3) refuses a foreign row. A group-managed book additionally holds the three Summary Phrase collections — `phrases`, `phrase_groups`, `group_revisions` (`store.ts:781-783`; the first two carry counter ids, a revision is addressed by `(group id, number)` so `group_revisions` does not). A legacy book holds none of them, and THAT is the R6 contract: no migration, `summary_mode` absent means `'sampling'`, and nothing may infer group management from the presence of rows. **Phrase ② (2026-11-26)** appends a 25th collection, `plotline_briefs` — id prefix `plotline_brief`, LAST in `shared/types.ts:COLLECTION_NAMES` and in `RecordIdSchemes`, because the prefix walk takes the last match it saw — with `SNAPSHOT_VERSION` still 4, and a second dial with the same no-migration meaning: `plotlines_mode` ABSENT means `'classic'`, and a `phrases` row for Phrase ② exists only after the Author starts it. |
 | Criteria  | `src/server/criteria/`    | Resolves a Story's Goal, aggregates verdicts into `n/m` per level, and decides which criteria a phase can still move on.                                                                                                                                                                                       |
-| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Reader/Critic/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`, `reportNoResearch`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules, and the group-book refusals (`tools/writer.ts:editSummary` → `R6`, `tools/editor.ts:selectRevision` on the Summary unit → `R5`, `tools/reader.ts:raiseFinding` on a grouped Summary → `R3`), the issues-first gates (`tools/reader.ts:raiseFinding` → `D-33c` in both directions, `tools/editor.ts:approveFinding` → `D-33d`, all four approval funnels reading the one predicate in `loop/records.ts`), each refusal carrying a `fix` — the group refusals point at GROUPED work rather than at the retired selection, and the `D-33c`/`D-33d` refusals name the open rows they are waiting on. A refusal names its rule id and the row it refused on. |
+| Tools     | `src/server/tools/`       | The §8 catalogue (Writer/Editor/Reader/Critic/Researcher/assistant) plus the phase-① knowledge group (`tools/knowledge.ts`: `structureSeed`, `writeKnowledge`, `readKnowledge`, `retireKnowledge`, `reportNoResearch`), every guard: CAS on the row a write rides (T-4), the phase/lock gates (T-8, T-11), the `why` requirement (T-5), a verdict's target kinds, the tray rules, and the group-book refusals (`tools/writer.ts:editSummary` → `R6`, `tools/editor.ts:selectRevision` on the Summary unit → `R5`, `tools/reader.ts:raiseFinding` on a grouped Summary → `R3`), the issues-first gates (`tools/reader.ts:raiseFinding` → `D-33c` in both directions, `tools/editor.ts:approveFinding` → `D-33d`, all four approval funnels reading the one predicate in `loop/records.ts`), each refusal carrying a `fix` — the group refusals point at GROUPED work rather than at the retired selection, and the `D-33c`/`D-33d` refusals name the open rows they are waiting on. A refusal names its rule id and the row it refused on. **Phrase ② (2026-11-26)** adds the 53rd catalogue entry as its OWN group (`tools/registry.ts`'s `plotlines: ['structurePlotlines']` — its own group because §8.2 is a transcription of the spec's Editor table, the same reason the `knowledge` group exists) and two refusals on a LIVE lane: `tools/writer.ts:guardPlotlinePhraseOwnership` answers `R6` for a `createPlotline`/`editPlotline` whose `order` a chapter entry covers (naming that entry's id, key and revise route), and `tools/reader.ts:raiseFinding` ROUTES a `plotlines` finding to the entry that covers its order (`R3`) rather than accepting an unscoped claim about "the plotlines". |
 | Brief     | `src/server/run/brief.ts` | The artefact a tool-carrying crew sees: `# ROLE — <role> (<kind>) of <template>`, the phase, the unit under review, the criteria briefed, the etiquette, and the Author's directives. Hashed onto the Run row (S-2). A `toolMode: 'none'` run is given the compiled phase-① prompt instead (`run/phase1-prompt.ts`), and its hash is what the row carries. |
 | Runs      | `src/server/run/`         | Spawn → lease → tool calls → report → teardown (S-1, S-3, S-4). A Run row exists before the first token (D-18). The model/tool loop itself runs on the `@underload/harness` engine, in the Story's own harness thread (`run/story-engine.ts`) — EXCEPT a `toolMode: 'none'` run (phase ①'s group drafts and group reviews, and, on a legacy book, its samples and screens), which calls `chat.complete` directly from `run/executor.ts`, gets no tool context and therefore opens no engine thread. The Run row is where a group batch lives: `run/executor.ts` copies the Work Item's `group_refs` onto it, and `phrase/exclusion.ts` reads THAT as the live hold.                                                                 |
-| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ① is `phase1GroupCandidates` now, `phase1PipelineCandidates` on a legacy book), the group install in the settle path (`engine.ts:1445-1528` → `phrase/revisions.ts:installGroupRevisions`), the sweep's group-finding reconciliation (`engine.ts:604-639`, group books only), phase ①'s LEGACY deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`, and `status.ts:decideStory` which reads `phrase/exclusion.ts:groupPipelineOwed` on a group book), drain and completion (L-35b, L-37, L-25 — `status.ts:phase1Unmet` has a group branch and a sampling branch, never both), directives, backtrack, kill. |
+| Loop      | `src/server/loop/`        | The sweep (L-1), dispatch and its caps (§6.7), work-item production (`work.ts`/`listJobs` — phase ① is `phase1GroupCandidates` now, `phase1PipelineCandidates` on a legacy book), the group install in the settle path (`engine.ts:1665-1700` → `phrase/revisions.ts:installGroupRevisions`), the sweep's group-finding reconciliation (`engine.ts:604-660`, group books only), phase ①'s LEGACY deterministic sample selection (`engine.trySelectSample` + `sample-select.ts`), sign-off and lock (`engine.lockPhase`, and `status.ts:decideStory` which reads `phrase/exclusion.ts:groupPipelineOwed` on a group book), drain and completion (L-35b, L-37, L-25 — `status.ts:phase1Unmet` has a group branch and a sampling branch, never both), directives, backtrack, kill. **Phrase ② (2026-11-26)** runs phase ② on the same machinery: `work.ts:phase2GroupCandidates` (structure → the Writer batch → the reading seats → the score seat → the lock seat → the deep review, every read scoped to the PHRASE), the classic-leg suppressions behind `laneWritesContracts`, the drain's five lane sentences in `status.ts:phase2Unmet`, and `work.ts:contractInstalledByPhrase`, which lets the reading pass count an installed contract as the write its run ledger cannot see. |
 | Runtime   | `src/server/runtime/`     | S-RUNTIME: one ISOLATED runtime per Story book — its own `LoopEngine`, `RunExecutor`, tool catalogue, knowledge projection and thread log — behind `StoryRuntimes`, which is the loop the HTTP layer talks to (`EngineApi` + routing by the Story id the path names, `ownerOf` for child ids). It owns the ONE sweep timer (contexts are built `autoSweep: false` and sweep sequentially, because the shared ceiling is a view over the books), the one S-5 ceiling (`runtime/ceiling.ts`), the commit fan-in for `/stream`, and shutdown (settle → dispose → close every book). `runtime/server-config.ts` is the app book's side: the crew catalogue and the host settings, copied non-journaled into each Story's book (`_state()`/`_restore()`) and re-mirrored when the Author edits a crew, a roster choice or the ceiling. |
 | API       | `src/server/api/`         | `routes.ts` is the Author's verbs — a Story-scoped handler shadows `store` with the book its `:id` names, so a sibling's rows cannot be touched, and a Story id no book holds is a 404, not a wrong row; `projections.ts` is what the panel and the desk read (an aggregate is the union of each book's correct answer, never a merge of same-named child ids); `server.ts` binds the process (port, provider triple, SSE at `/v1/storyline/stream`) and composes both shapes — `openStorylineRuntime` for a workspace, sync `buildStorylineRuntime` for one book. `src/storyline-server.swagger.yaml` is the OpenAPI contract for every route; `src/dashboard/api.ts` is the UI's only transport. |
 | Dashboard | `src/dashboard/`          | The workstation: `state.ts` (one store over an `ApiClient`, with `phrases` + `phraseErrors` beside the §4 rows), the panels in `components/` (`SummaryOverviewPane` + `SummaryGroupPane` for a grouped Summary, `SummaryPane` for a legacy one), the rail rules in `components/story-nav.ts`, the sign-off derivations in `components/story-contract.ts`, the shell in `StorylineApp.tsx`.                                                                                                                                                                          |
@@ -96,7 +100,11 @@ which book is which; every guard in the loop reads it from there.
   `## <title>` heading per group that has non-empty text, entries separated by a single blank line,
   in `order` rank order, NO trailing newline. A group with no text is SKIPPED, not rendered as an
   empty heading, and a key the catalog does not know sorts LAST instead of disappearing
-  (`phraseGroupRank`) so a retired group's text stays readable.
+  (`phraseGroupRank`) so a retired group's text stays readable. *(Amended 2026-11-26: the catalog now
+  has a SECOND enabled kind, and composition takes the PHRASE's own rank map — `phraseGroupRankOf` /
+  `composePhraseContent(entries, rankOf)` — so a chapter phrase composes in chapter order while every
+  Summary call site composes byte-identically; and this kind's row exists only after the Author starts
+  it. See "The Plotlines Phrase — Phrase ② on the controller (2026-11-26)".)*
 - **The legacy record stays in sync (R6).** `shared/phrase.ts:SUMMARY_MIRROR_FIELDS` is an IDENTITY
   map (`premise→premise`, …), written from the same texts in the SAME commit as the install, so the
   Digest, phases ②/③, `readSummary` and every pre-redesign reader keep reading `summaries` and can
@@ -106,8 +114,8 @@ which book is which; every guard in the loop reads it from there.
 
 | Concern | Path |
 | --- | --- |
-| The catalog as data; mirror map; composition format | `src/shared/phrase.ts` (`PHRASE_CATALOG`, `PHRASE_GROUP_KEYS`, `SUMMARY_MIRROR_FIELDS`, `composePhraseContent`, `phraseGroupRank`) |
-| Catalog ensure + legacy import | `src/server/phrase/catalog.ts` — `ensurePhraseCatalog` (idempotent; creates the `phrases` row and the five `phrase_groups` rows), `importLegacySummary` (idempotent; lifts a flat Summary's five fields into first revisions), `isGroupManagedStory` |
+| The catalog as data; mirror map; composition format | `src/shared/phrase.ts` (`PHRASE_CATALOG`, `PHRASE_GROUP_KEYS`, `SUMMARY_MIRROR_FIELDS`, `composePhraseContent`, `phraseGroupRank`) — **since 2026-11-26 `PHRASE_CATALOG` has TWO enabled definitions** (`summary`, `plotlines`) and the entry policy/key namespace are per-definition (`entry_policy: 'static_groups'` vs `'chapter_entries'`, `phraseChapterDefinitions`, `phraseChapterNumber`); composition takes the phrase's rank map through `phraseGroupRankOf` / `composePhraseContent(entries, rankOf)` |
+| Catalog ensure + legacy import | `src/server/phrase/catalog.ts` — `ensurePhraseCatalog` (idempotent; creates the `phrases` row and the five `phrase_groups` rows), `importLegacySummary` (idempotent; lifts a flat Summary's five fields into first revisions), `isGroupManagedStory` — **and since 2026-11-26 the per-phrase half**: `ensurePhraseCatalog` (359) walks `autoCreatedPhraseDefinitions()` (379), "enabled AND not `starts_on_demand`", so story creation still mints exactly the one `phrases` row and five groups it always did; `isPhraseGroupManaged(story, phraseKey)` (104) answers the dial for ANY phrase; `phraseSeedOf` (245) is the only read of `phrases.seed`, falling back to `stories.idea` for a row written before the field |
 | The install | `src/server/phrase/revisions.ts:installGroupRevisions` — one caller commit: new `latest` per written group → archive the rows it replaces → recompose `phrases.content` → rewrite the mirror. It NEVER writes `chapter_count` and NEVER writes `world_rules`, and it skips the mirror when the Summary row is locked or absent |
 | The Writer exclusion (live holds) and the atomic batch cut | `src/server/phrase/exclusion.ts` — `GROUP_HOLDING_KINDS = ['draft_groups']`, `liveGroupRefs`, `liveGroupSets`, `liveGroupWriters`, `partitionGroupRefs`; and D-66's cut, `findingGroupSets` (union-find over shared finding ids) + `planGroupDraftBatch` (the three rules IN ORDER: hold defers the set whole → the set must be the finding's whole still-owed set → the dial caps only the sets after the first) |
 | The write allowance and what the pipeline still OWES | `src/server/phrase/exclusion.ts` — `GROUP_WRITE_ATTEMPT_CAP` (215), `groupWriteAttempts` (288), the journal baseline `writeBaselineOf` (264), the seat keys `groupReviewSeatKey`/`groupCheckSeatKey` (366/370), `isGroupPipelineRun` (384) and `groupPipelineOwed` (415) — the one read the queue, the drain and the sign-off share |
@@ -115,9 +123,9 @@ which book is which; every guard in the loop reads it from there.
 | The crew's group-book refusals | `src/server/tools/writer.ts:editSummary` → `R6`, `tools/editor.ts:selectRevision` → `R5` and `requestMerge`'s branching `fix`, `tools/reader.ts:raiseFinding` → `R3` twice (unknown id 547-566, missing groups 568-586) and `D-33b` twice (`proposal`+`critical` 515-525, `issue`+`taste` 527-537) |
 | The issues-first gates (D-33c, D-33d) | ONE predicate pair in `src/server/loop/records.ts` — `isOpenIssueFinding`/`openIssueFindings` (457-518: `kind: issue` including an absent kind, unresolved exactly when the state is in `ISSUE_HOLDING_STATES` — `unconfirmed`, `confirmed`, `approved` — so a `disputed` row releases it like `fixed`/`discarded`, 2026-11-25) and `findingsRaisedByRun` (520-549: the run's own rows, read out of the journal because §4.10 has no `run_ref`) — read by `tools/reader.ts:raiseFinding` (`D-33c` twice: proposal-over-issues 600-616, issue-after-proposal 618-648), `tools/editor.ts:approveFinding` (`D-33d` 1148-1172), `loop/engine.ts`'s `loop_auto_approve` sweep (523-546, SKIPS the proposal), `loop/engine.ts:approveFinding` (the Author's API, 3469, with the same sentence at 46-49) and `api/routes.ts`'s approve-all (the proposal is filtered out of the batch, 1688, which is computed BEFORE any approval runs). The sign-off is NARROWER than this set and never wider: `summaryBlockingFindings` (337, its state gate at 343) keeps only `confirmed`/`approved` at a blocking cost |
 | Finding scope and closure | `src/server/phrase/findings.ts` — `findingGroupScope`, `findingGroupsStillOwed`, `closeFindingWhenGroupsResolved`, `closeFindingAnsweredByInstalls` (re-run by the sweep at `loop/engine.ts:604-639`, group books only). The rows follow the findings: the same sweep closes an open task whose `finding_ref` names a finding in `MOOT_FIX_TASK_FINDING_STATES` (`loop/types.ts` — `fixed`, `discarded`, `disputed`) in the `loop_close_moot_fix_rows` leg (`loop/engine.ts:641-716`, every story mode), because an open `fix` row over a settled defect holds L-37's drain with nothing left to run |
-| Purge and reset of the group book | `src/server/loop/engine.ts` — `deleteStory`'s three Phrase deletes (2673-2675), `editSeed`'s in-place row reset (3111-3135); `src/server/loop/invalidation.ts:scrapPhasesAfter`'s `groupRevisions` count (313/319/344-359) |
+| Purge and reset of the group book | `src/server/loop/engine.ts` — `deleteStory`'s three Phrase deletes (3042-3044, re-verified 2026-11-26), `editSeed`'s in-place row reset (the method at 3410, the reset at 3486-3534); `src/server/loop/invalidation.ts:scrapPhasesAfter` (317) and its group branch (405-427 — the `group_revisions` wipe is gated on EITHER phrase's dial, and the lock-clear loop reads `phraseGroupsOf` unscoped across both). **Phrase ② (2026-11-26, re-verified after T-W6) is now covered by the same spine (D-77):** `editSeed` and `backtrack('summary')` run `scrapPhasesAfter(…, 'summary')`, and at `rank < phaseRank('plotlines')` (564) that calls `invalidation.ts:scrapPlotlinesPhrase` (325) — it deletes the brief, the chapter entries, their history and the phrase row, in that order, each scoped by `phrase_id`, gated on the ROW (`storyPhraseByKey`) and never on either dial; `backtrack('plotlines')` KEEPS the row, the entries and the accepted brief and clears only the locks whose `locked_revision` the wipe deleted. `deleteStory` purges FOUR stores in one commit — `phrases`, `phrase_groups`, `group_revisions` (3043-3045) and `plotlineBriefs` (3051). The earlier "only half-covered by both" note (the unscoped `editSeed` reset leaving ②'s row and brief standing, and brief rows outliving their Story) is WITHDRAWN; both legs are pinned by `loop/phase2-blast-radius.test.ts` and `api/story-delete.test.ts`. **The cut is ONE helper plus one purge, and the decision it implements is D-77 — `documents/specifications.md` §18.10:** `loop/invalidation.ts:scrapPlotlinesPhrase` (325) is the whole Seed-edit/backtrack-to-① delete (the brief, the entries, their history, the phrase row — 334-337), and the Story-delete leg is the single `plotlineBriefs` purge inside `deleteStory` (`engine.ts:3051`); nothing outside those two places deletes a Phrase ② row |
 | The grouped loop | `src/server/loop/work.ts:phase1GroupCandidates` (batch, review seats, deep review) and `groupWorkTargets`/`groupWriteAttempts`/`GROUP_WRITE_ATTEMPT_CAP`; the install fires in the settle path at `src/server/loop/engine.ts:1445-1528`; what the pipeline still OWES is read from `src/server/phrase/exclusion.ts:groupPipelineOwed`, which `loop/status.ts` uses for both the drain and the sign-off |
-| The Author's phrase verbs | `src/server/api/routes.ts` — `GET /stories/:id/phrases` (720), `POST /stories/:id/phrases/import` (740), `POST /stories/:id/phrases/groups/:groupId/revise` (798), `POST /stories/:id/phrases/reviewed/choose` (D-68 — Author-only, 409 on a sampling book / an incomplete selection / any live Writer hold, and it never touches `lockPhase`); group-book refusals at 1106 (`summary/revise`), 1581 (`revisions/:id/select`), 1765 (`revisions/merge`) |
+| The Author's phrase verbs | `src/server/api/routes.ts` — `GET /stories/:id/phrases` (953), `POST /stories/:id/phrases/import` (973), `POST /stories/:id/phrases/groups/:groupId/revise` (1223), `POST /stories/:id/phrases/reviewed/choose` (1593 — D-68: Author-only, 409 on a sampling book / an incomplete selection / any live Writer hold, and it never touches `lockPhase`); **Phrase ② (2026-11-26): `GET /stories/:id/phrases/:key` (1034) and `POST /stories/:id/phrases/:key/start` (1080)**, and the revise route (1223) is phrase-aware — a chapter entry takes `plotpoints`, never raw `content`, because its prose is generated from the fields. The group-book refusals live inside `POST /stories/:id/summary/revise` (1985), `revisions/:revisionId/select` (2476) and `revisions/merge` (2634); the Phrase ② group verbs answer 409 on a `'classic'` book naming BOTH doors — PATCH the dial, POST the start |
 | The projection | `src/server/api/projections.ts` — the `PhraseView` the desk reads: the phrase row, the five groups with `revision`, `writer_busy` and open finding/task counts, the group-scoped findings, each group's `scores` rail (D-65, newest first), and the `reviewed` block (D-67/D-68: `state` `pending`/`ready`/`chosen`, `complete`, `vector`, `vector_hash`, `overview`, `stale`, `blocking_issues`, `writer_busy`, five `groups[]` rows carrying `selected_revision`/`selected_id`/`clean_run_ref`/`latest_revision`/`superseded`/`issues_open`/`gap` and their own `scores` join, and `chosen` with `vector`/`at`/`overview`/`scores`) |
 | The Reviewed Summary (D-67, D-68) | `src/server/phrase/reviewed.ts` — `openIssueGroupIds` (the ONE open-defect read, over `loop/records.ts:openIssueFindings` + `findings.ts:findingGroupScope`, so an unscoped finding blocks all five groups), `cleanSelectionOf` (per group: the newest CLEAN row, ordered by NUMBER, of a group carrying no open issue; `complete` only with all five), `composeReviewedOverview` (via `phrase/catalog.ts:composeReviewedContentFrom` — the same `shared/phrase.ts` composition as the live Overview, and it joins ONLY the rows it is handed), `chosenSelectionOf` (re-validates the Phrase row's persisted vector: each named row must still exist AND still be clean), `stampCleanRevisions` (idempotent; refuses to stamp when the vector moved mid-pass), `chooseReviewedSummary` (D-68's install: `installGroupRevisions` + every row the choice passed over → `'discarded'` + the Phrase-row choice record). The stamp hook is the deep-review settle in `src/server/loop/engine.ts:settleJob` (the `wi_group_check_<hash>_<pass>` family, `phrase/exclusion.ts:groupCheckSeatKey`); the Author's verb is `POST /stories/:id/phrases/reviewed/choose` (`api/routes.ts`, commit label `phrase_reviewed_choose`); the persisted state is snapshot **v4** (`store/persist.ts`: `group_revisions[].clean`/`.clean_run_ref`, `phrases[].reviewed_vector`/`.reviewed_vector_hash`/`.reviewed_at`, and the new `state: 'discarded'`) |
 | The group lock (R-lock / D-69) — the domain and the wires | the domain is ONE file: `src/server/phrase/locks.ts` — `PhraseLockRefusalCode` (55-66: `group_not_found`, `group_unwritten`, `already_locked`, `not_locked`, `editor_locking_disabled`, `editor_unlock`), `VOIDABLE_FINDING_STATES` (143 — the four OPEN rungs, `disputed` included, `fixed`/`discarded` left alone), `lockPhraseGroup` (the four fields on the group row under a CAS, THEN the claims whose whole `findingGroupScope` is now locked → `discarded`; no `content`, no `revision`, no `group_revisions` row, no composition, no mirror), `unlockPhraseGroup` (Author-only; the three metadata fields go to `null` because a store patch cannot delete a key; resurrects NOTHING). The contract the crew and the transport share: `src/shared/schemas/group-lock.ts` (`GroupLockDecision` = `{group_ref, lock, rationale}` — **no score and no threshold field anywhere in it**). The verbs: `api/routes.ts:956` (lock) and `1060` (unlock) — both address `phrase_groups.id`, 404 before any verb, 409 on a `'sampling'` book naming `/phrases/import`, 409 naming the live-Writer run ids, and both answer with the fresh `view` (D-68's envelope); `editor_group_locking` is validated as a strict BOOLEAN at 1355 and journals its own permission line. The read: `api/projections.ts` emits `locked`/`locked_revision`/`locked_by`/`locked_at` ONLY while a live lock stands (the type at 1119-1134, the spread at 1596-1605) — absent IS unlocked. What the flag stops: `phrase/revisions.ts:installGroupRevisions` refuses a batch naming a locked group whole and before the first write (361-375), `phrase/exclusion.ts:groupWorkTargets` filters locked groups out of every batch (407-408, 522-524), `phrase/findings.ts:findingActionableScope` (116-123) subtracts the frozen part of every claim while `findingGroupScope` keeps the ATTRIBUTION, `tools/reader.ts:raiseFinding` refuses a wholly-locked scope and narrows a mixed one (749-800), and the hand-edit route 409s through the install's own refusal. What clears it: the Author's unlock, `loop/engine.ts:editSeed`'s row reset (3325-3358, because a lock over a `''`/`0` group is a dangling lock), and `loop/invalidation.ts:scrapPhasesAfter`'s D-69 clear of any lock whose `group_revisions` rows the scrap deleted (394-413, inside the same branch as the delete, under a CAS on the group row) — a lock is a fact about a REVISION row, and `reviewed.ts:cleanSelectionOf` resolves a locked group's Overview entry through its `latest` row, so a stale flag strands the reviewed Overview while `revisions.ts:installGroupRevisions`' whole-batch refusal strands the other four groups. A scrap that deletes no revision backing (a backtrack to `chapters`) clears NOTHING, and the group's TEXT survives every clear. Snapshot v4 is UNCHANGED: four additive fields, absent means unlocked |
@@ -773,6 +781,19 @@ dispatched, deferred}]}`; `engine.settle()` drains the in-flight runs. Tests dri
   rejected revision had closed. The one read that still walks them is `previous_content`'s fallback (the
   pane's diff needs a "before" side after a choose); the one thing the choose must not do is touch
   `lockPhase`.
+- **There are TWO phrases on one engine since 2026-11-26, and the dial and the lane are different facts.**
+  `stories.plotlines_mode` (ABSENT = `'classic'`) is the setting; the lane is that setting PLUS a started
+  `phrases` row — `phrase/plotpoints.ts:plotlineLaneIsLive`. Every new Story is born `'groups'`, so a guard
+  written against the dial alone refuses the classic plotline tools on books that never started the phrase
+  (the failing test counts are recorded in `tools/writer.ts` and `loop/work.ts`). And because
+  `status.ts:phase2Unmet` reads the DIAL, a `'groups'` Story whose phrase sits unstarted keeps reporting
+  "Phrase ② has not been started…" and cannot sign phase ② off — while its classic legs go on running.
+- **`draft_groups` is ONE job kind with TWO answer contracts** (R11/D-73). `GroupDraft` on the Summary lane,
+  `ChapterDraft` plotpoints on the chapter lane; the discriminator is the Work Item's `responseSchema.name`
+  and the phrase its `groupRefs` belong to, and `loop/engine.ts:settleJob` resolves the owning phrase from
+  those refs — never from `stories.phase`. The arity check is phrase-scoped the same way: five groups there,
+  N chapter entries here, neither number hard-coded. The full map is the 2026-11-26 section at the end of
+  this file.
 
 ## The Author's verbs (routes.ts)
 
@@ -980,6 +1001,21 @@ the number U-14's prompt states, counted from the same `DISCARDABLE_IDEA_STATES`
   the work item, not a verb.
 - **The prose pane's undo stack is per-chapter and only as deep as the Author's edits**
   (`nothing to undo on chapter_1 — the chapter has no undo stack (L-17a)`).
+- **Phrase ② (2026-11-26, updated after T-W6)**, recorded in full in the dated section at the end
+  of this file and summarised here so this list stays THE list. Two of the three holes that section opened
+  are CLOSED: `deleteStory` now purges `plotline_briefs` with the three Summary collections (the one commit
+  at `engine.ts:3043-3051` names all four stores, and `api/story-delete.test.ts` enumerates them and counts a
+  neighbouring Story's rows), and a Story-Seed edit (and `backtrack('summary')`) now removes Phrase ② WHOLLY
+  — `loop/invalidation.ts:scrapPlotlinesPhrase` drops the brief, the chapter entries, their history and the
+  phrase row, gated on the ROW rather than on either dial (`D-77`), while `backtrack('plotlines')` keeps the
+  row, the entries and the accepted brief and clears only the locks that named a scrapped revision
+  (`loop/phase2-blast-radius.test.ts`). Still open: the Summary controller's four instruction slots still
+  DUPLICATE `run/phase1-prompt.ts`'s constants instead of being the single owner R7 asks for. The desk half of
+  that wave is now pinned — `api.plotlines.test.ts`, `state.plotlines.test.ts`, `StorylineApp.plotlines.test.tsx`,
+  `StoryView.plotlines.test.tsx`, `PlotlinesPhrasePane.test.tsx`, `PlotlinesHandoff.test.tsx` and the added
+  `StoryOutline.test.tsx` cases cover the transport, the lazy phrase read, the numbering, the Start card and the
+  refusal sentences — with one honesty: `components/PhraseEntries.tsx` has NO test file of its own and is pinned
+  only through the two panes that render it. What no vitest run can substitute for stays the LIVE-browser probe.
 
 ## Fixes this pass made
 
@@ -1040,6 +1076,17 @@ Eight spec gaps the review found, each pinned by a test that names the spec id:
    §17.12. Nothing in `src/` cites them, so no test comment is pointing at a retired id.)*
 
 ## Where to start reading
+
+**Here for Phrase ② (2026-11-26)?** Read the dated section at the end of this file,
+"The Plotlines Phrase — Phrase ② on the controller (2026-11-26)", and in this order in the code:
+`src/shared/phrase.ts` (the two catalog kinds and their entry policies) →
+`src/server/phrase/controller.ts` (the seam, and the rule its header states) →
+`src/server/phrase/controllers/plotlines.ts` (start → brief → accept) →
+`src/server/phrase/plotpoints.ts` (the entry text, the answer parse, the contract mirror, the lane read) →
+`src/server/loop/work.ts:phase2GroupCandidates` and `loop/status.ts:phase2Unmet` →
+`src/server/run/phase1-prompt.ts:promptLaneOf` → `src/server/api/routes.ts` (1034 / 1080) →
+`src/server/tools/plotlines.ts`. The contract is `documents/specifications.md` §18 (with §4.20, §8.8, §4.1's
+`plotlines_mode` row and §10.2's U-20).
 
 Start with the group path: `src/shared/phrase.ts` (the catalog, the mirror map, the composition
 format), `src/server/phrase/` (`catalog.ts`, `revisions.ts`, `exclusion.ts`, `findings.ts` — the four
@@ -2033,3 +2080,158 @@ LEGACY sampling suite**; the group path's tests — `src/server/phrase/*`,
 `*.groups.*` / `*.phrases.*` files — are listed under "The Summary Phrase system" near the top of this
 file, and `src/server/loop/phase1-plateau.test.ts` is the legacy plateau WITHOUT the deleted Author
 question.
+## The Plotlines Phrase — Phrase ② on the controller (2026-11-26)
+
+**What happened.** The phrase layer stopped naming phrases. `shared/phrase.ts:PHRASE_CATALOG` gained a second
+ENABLED definition (`plotlines`), `src/server/phrase/controller.ts` made "what does this phrase kind mean"
+one object per kind, and phase ②'s chapter contracts moved onto the machinery §17 built for the Summary's
+five groups: an entry per chapter (`chapter_1…chapter_N`) with its own revision line, an accepted answer that
+installs immediately, findings that name the chapters they cross, a score seat and a lock seat that are
+offers rather than debts. The normative text is `documents/specifications.md` §18 (R11, D-70…D-76, U-20),
+with the record itself in §4.20, the tool in §8.8 and the dial in §4.1. This section is the map, and it
+amends — it does not delete — the phrase-① statements above.
+
+### The five facts that explain the rest
+
+- **The dial and the lane are two facts, and reading one as the other is the bug of this wave.**
+  `stories.plotlines_mode` (ABSENT = `'classic'`) is the dial — `phrase/catalog.ts:isPhraseGroupManaged(story,
+  'plotlines')` (104) is the one read — and `loop/engine.ts:2887` births every new Story with `'groups'` unless
+  the caller asks for `'classic'`. The lane is the dial **AND** a started `phrases` row:
+  `phrase/plotpoints.ts:plotlineLaneIsLive(store, story)` (356). Because the dial defaults on, a guard that
+  checks only the dial refuses §8.1's plotline tools on books that have no Phrase ② at all — measured, not
+  theorised (`tools/writer.ts:303-309` and `loop/work.ts:2162-2171` both record the failing counts). The honest
+  states are three:
+  `'classic'`, `'groups'`-but-unstarted, and live.
+- **The phrase's seed is a COPY, and that is what makes the two phrases independent.** `Phrase.seed` is
+  additive; `startPlotlinesPhrase` writes the text the Author handed the start verb, through
+  `phraseSeedInitOf` reading the definition's `seed_source` (`'supplied'`). Every later phrase read — the
+  brief's `seed_hash`, the structuring claim key, the law text in the prompt, the rail's `seed_head` — goes
+  through `phrase/catalog.ts:phraseSeedOf` (245), which falls back to `stories.idea` only for a row written
+  before the field existed. Editing the Story's Seed moves Phrase ①'s hashes and leaves Phrase ②'s alone.
+- **The chapter set is DECLARED once, by a structuring pass, in one commit.**
+  `tools/plotlines.ts:structurePlotlines` (the 53rd tool, its own catalogue group) creates the brief AND
+  accepts it: `phrase/controllers/plotlines.ts:acceptPlotlineBrief` writes the `chapter_1…chapter_N` entries
+  (from the COUNT — the `chapters` list is a note), `summaries.chapter_count` (the primitive only), then the
+  brief's `status`, LAST; it refuses a brief whose `seed_hash` moved before any of the three, and it is
+  idempotent by skipping. D-3b is unbent: the authority is the structuring step, never the drafting step.
+- **A chapter's answer is plotpoints, not prose.** `shared/schemas/chapter-draft.ts` (`ChapterDraft`) is the
+  same `draft_groups` job kind with a different contract; the schema's `minItems`/`minLength` are
+  provider-side hints, so the real rules are `phrase/plotpoints.ts:parseChapterDraftAnswer` (116), which
+  refuses WHOLE for: no entries, an entry naming no group, a ref outside this phrase, a ref this job did not
+  ask for, a duplicate entry, a key that is not a chapter key, a blank `must_happen`/`must_change`, and any
+  requested chapter left uncontracted. **The arity rule is phrase-scoped** — five Summary groups on one
+  lane, N chapter contracts on the other, neither number hard-coded.
+- **§4.3's `plotlines` row is a mirror on a live lane, and phase ③ cannot tell.**
+  `phrase/revisions.ts:installGroupRevisions` requires the entry's `plotpoints` and writes the contract
+  through `phrase/plotpoints.ts:syncPlotlineContract` (241) — create-or-update **by chapter order**, every
+  field written (blank included), the three engine flags (`contract_locked`, `aligned: false`,
+  `needs_recheck: false`) set only on CREATE and left alone on UPDATE. The crew is refused off the lane
+  (`tools/writer.ts:guardPlotlinePhraseOwnership` → `R6`, naming the entry's own revise route), and a
+  `plotlines` finding is ROUTED to the entry that covers its order (`phrase/findings.ts:findingGroupNamespace`
+  329, `R3`) instead of meaning "all the plotlines".
+
+### Where the code lives
+
+| Concern | Path |
+| --- | --- |
+| The controller seam | `src/server/phrase/controller.ts` — the interface (a plain object per ENABLED kind, no class hierarchy), `PHRASE_CONTROLLERS` (195), `phraseController` / `phraseControllerOf` (221) / `startedPhraseControllers` (234). An unmapped phrase kind is a THROW, never a Summary-shaped guess. The checkable rule, stated in the file header: a third phrase must not need a new `if (phrase === 'summary')` — `grep -rn "if (phrase === 'summary')" src/server/loop src/server/run` is empty, and the only surviving kind-naming branch is `revisions.ts`'s downstream sync, whose job IS to refuse an unmapped mapping (`mirror.reason: 'not_summary_phrase'`) |
+| The two controllers | `src/server/phrase/controllers/summary.ts` (phase ①, answers with the Summary's answers — and note: its four instruction slots DUPLICATE `run/phase1-prompt.ts`'s `GROUP_*_INSTRUCTION` constants rather than reading them) and `src/server/phrase/controllers/plotlines.ts` (`startPlotlinesPhrase`, `createPlotlineBrief`, `acceptPlotlineBrief`, `ensureChapterGroups` 330, the claim ref being the PHRASE ROW id so the two phrases' families never collide) |
+| The chapter-entry mechanics | `src/server/phrase/plotpoints.ts` — `chapterEntryContent` (70, the labelled plotpoint text an entry holds), `parseChapterDraftAnswer` (116), `syncPlotlineContract` (241), `plotlineChapterGroupOf` (318), `plotlineLaneIsLive` (356) |
+| The brief record | `shared/types.ts` — `PlotlineBrief` (1322: `phrase_id`, `seed_hash`, `chapter_count`, `chapters?: {order, seed}[]`, `status: 'draft' \| 'accepted'`, `research_questions?`, `notes?`), `COLLECTION_NAMES`' 25th and LAST name (1828), `RecordIdSchemes.plotline_briefs: 'plotline_brief'` (1916 — LAST, because the id walk takes the last prefix match); `store.plotlineBriefs`; `SNAPSHOT_VERSION` still 4; deliberately NOT in `tools/artifacts.ts:RESOLVABLE` |
+| The lane's work | `src/server/loop/work.ts:phase2GroupCandidates` (1494) — structure_seed (priority 0, `loop/records.ts:plotlinesStructureKeyOf` 1430, family `wi_structure_plotlines_<phrase seed hash>`, template `editor-plotlines-structure`, refuses everything below it) → `draft_groups` (`writer-plotlines-sampler`, `toolMode: 'none'`, `ChapterDraft`, unit `undefined` = the whole-Story artifact) → `review_groups` (seats per CHAPTER vector, rotating `DEEP_REVIEW_TEMPLATES` because `critic-screening` serves phase ①) → `score_sections` (`reader-consistency`, `rank: -1`, armed on `cleanSelectionOf(store, story, phrase.id)`) → `group_lock` (`editor-general` — `editor-group-lock` serves phase ① — `rank: 1`, phrase-scoped or it arms against the Summary's selection) → `check_unit` (tools ON, once every seat reported). The suppressions are `laneWritesContracts` (2171) at 2400 / 2435 and the reader fix at 2313-2316 via `contractInstalledByPhrase` (503) |
+| The drain | `src/server/loop/status.ts:phase2Unmet` (423), gated on the DIAL: five sentences — phrase not started, no accepted brief, runs in flight (naming the scoring ones), owed drafts, owed seats, owed deep passes — and the code NAMED gap: a `fix` task with no finding behind it drives no group work and just holds the drain through the shared open-task clause |
+| The prompts | `src/server/run/phase1-prompt.ts:promptLaneOf` (446) picks the lane from the JOB's group rows, never from `stories.phase`; all four group compilers then render the controller's law text. `src/server/run/phase1-prompt-plotlines.test.ts` pins both halves: the chapter crew briefed about a CHAPTER, and the Summary lane's bytes UNCHANGED (including the lock seat's `## CANDIDATE SECTION` / `## LOCKED PEERS` wording) |
+| The crew's structuring call | `src/server/tools/plotlines.ts` — refusals in this order: no phrase to structure (`T-11`, naming the Author as the starter), `plotlines_locked` (`L-7`), a `seed_hash` that does not match (`P5`, printing received/expected), then the count and the seeds disagreeing (`T-11`); every value validated BEFORE the idempotence read, then prior accepted briefs for the phrase demoted to `draft` and the new one created + accepted in one commit |
+| The templates | `src/server/templates/templates.ts` — `writer-plotlines-sampler` (798) and `editor-plotlines-structure` (841), `serves_phase: ['plotlines']`, assigned LAST in `DEFAULT_ASSIGNMENT` (947-948) so no unbound Editor/Writer job binds a phrase prompt |
+| The wires | `src/server/api/routes.ts` — `GET /stories/:id/phrases/:key` (1034, 404 only for a key the catalog does not enable; an unstarted phrase is an EMPTY view), `POST /stories/:id/phrases/:key/start` (1080, `{source: 'compiled' \| 'custom', text?}`, 409 read off `definition.starts_on_demand` rather than a name, 409 for an already-started phrase, 400 for `custom` without text, 409 for an empty compiled Summary), revise (1223) taking `plotpoints` for a chapter entry, and `plotlines_mode` checked by the same two-words rule on both Story routes (POST 799/864-871, PATCH 1721/1814-1822) with the dial frozen by a 409 (1834-1844) once the phrase row exists. `src/server/api/projections.ts` — `compiledSummaryOf` (1499: the complete CLEAN selection, else the composed content) and `summaryIsCompiled`, `SEED_HEAD_CHARS = 400` (1485), the Story view's `phrase_started: {summary, plotlines}` (612/680) and `summary_compiled` (620/684) |
+| The desk (written, unpinned) | `src/dashboard/api.ts` — `getPhraseDetail`, `startPhrase`, `revisePhraseEntry`, and the widened Story view (`plotlines_mode`, `phrase_started: {summary, plotlines}`, `summary_compiled`). `src/dashboard/state.ts` — `refreshPhraseDetail` fetches Phrase ②'s read LAZILY (`phraseDetailWanted`: the dial says the entries are the surface, or that surface is already open) into its own slot AND its own error slot, so the Plotlines pane can never print the Summary read's sentence. `components/story-contract.ts` — `plotlinesEntries`, `plotlinesBrief`, `plotlinesStarted`, `plotlinesHandoffRefusal`, `plotlinesSurfaceView`, `isPlotlinesGroups`; `shell-binding.ts` binds the verbs (the dial, `startPhrase`, `revisePhraseEntry`) with the usual "no id, no POST" guard. The shared pair `components/PhraseEntries.tsx` (`PhraseEntryRow` / `PhraseEntryRows` / `PhraseReadState` / `PhraseEntryDetail`, one `PhraseSurface` per phrase: `SUMMARY_SURFACE`, `PLOTLINE_SURFACE`), Phrase ②'s surface `components/PlotlinesPhrasePane.tsx` (the brief card, the chapter entries, the contract editor) and its Start card `components/PlotlinesHandoff.tsx` (enabled by `summary_compiled` — the same projection the start verb copies its seed from), reached through `StoryView`'s `isPlotlinesGroups` route so a classic book keeps `PlotlinesPane`'s §4.3 records untouched. The rail: `story-nav.ts` numbers Summary ① → Plotlines ② → Chapters ③ and lists Characters as a supplement. **No dashboard test touches any of it** — so this row cites the desk by file, not by line number |
+
+### Things that are easy to get wrong here
+
+- **A fresh Story cannot lock phase ② until the Author starts the phrase.** `status.ts:phase2Unmet` (423) runs
+  only for a Story sitting in `phase: 'plotlines'` (the call at 193) and returns nothing unless the dial is
+  `'groups'` (426) — so a lane Story whose phrase is unstarted reports "Phrase ② has not been started…" for as
+  long as it holds the phase, and cannot sign off. The classic legs still RUN (the suppressions need the lane)
+  — the sign-off simply waits, and the sentence says who has to move.
+- **`plotlines_locked` still gates the lane's structuring tool** (`L-7`), and the phase lock is a different
+  record from a group lock (R-lock's two-locks rule applies unchanged on phrase ②'s entries).
+- **A `chapters` note in a brief is not the chapter set.** `createPlotlineBrief` stores the list exactly as
+  written (short, ragged, or out of order — it is an Editor's note), and `ensureChapterGroups` materializes
+  from the COUNT, never from the list; the tool refuses only a seed whose `order` is ABOVE the count (T-11).
+  Materializing from the list would be the same mistake as trusting an answer's `order`.
+- **`research_questions` on a `plotline_brief` means "none noted", never D-51's "waived".** Phrase ② has no
+  research leg (the Seed's pass ran before the phrase was started). `shared/types.ts`'s comment still claims
+  the Seed Brief's semantics for the field; `tools/plotlines.ts` and the spec are the authority.
+- **The desk's phrase words are PANEL keys, and only two of them are catalog kinds.**
+  `src/dashboard/components/story-nav.ts:57` (`'summary' | 'characters' | 'plotlines' | 'chapters'`) predates
+  the backend catalog, and since T-W4 the RAIL numbers Summary ① → Plotlines ② → Chapters ③ (`STORY_PHRASES`
+  96, `ALL_STORY_PHRASES` 111) with Characters moved OUT of the numbering into `STORY_SUPPLEMENTS` (134) — a
+  sheet the crew builds from the Summary, not a phase the loop signs off. Chapters have no phrase kind either:
+  the pane reads the phase-③ records. And `phraseStarted(view, phrase)` (755) means "the artifact behind the
+  panel exists", which is NOT the API's `phrase_started` — that means "this book has a `phrases` row".
+- **Two answer contracts, one job kind.** `draft_groups` means `GroupDraft` on the Summary lane and
+  `ChapterDraft` on the chapter lane; the discriminator is the JOB's `responseSchema.name` and the phrase the
+  job's `groupRefs` belong to — at settle time `loop/engine.ts` resolves the owning phrase from those refs
+  and picks the validator and the instructions from it, never from `stories.phase`.
+
+### How to verify
+
+```bash
+# from the OUTER repo root — vitest only, never raw node
+yarn vitest run packages/erosire/create-storyline/src/shared/phrase.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/phrase/plotlines.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/loop/phase2-groups.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/run/phase1-prompt-plotlines.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/api/phrase-start-routes.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/integration/plotlines-groups.test.ts
+yarn vitest run packages/erosire/create-storyline/src/server/tools/group-mode-writes.test.ts        # both phrases' tool refusals, with the exact `fix` copy
+yarn vitest run packages/erosire/create-storyline/src/server/tools/reader-group-attribution.test.ts # R3 on the Summary's groups AND the chapter routing
+yarn vitest run packages/erosire/create-storyline/src/server/tools/catalogue.test.ts                # 53 tools; `plotlines: ['structurePlotlines']`
+yarn vitest run packages/erosire/create-storyline/src/server/templates/templates.test.ts            # the two Phrase ② rows and their LAST-in-assignment position
+# probes a reviewer should grep rather than test
+grep -rn "plotlineBriefs" packages/erosire/create-storyline/src/server/loop/engine.ts               # empty → the delete purge that is missing
+grep -rn "if (phrase === 'summary')" packages/erosire/create-storyline/src/server/loop \
+     packages/erosire/create-storyline/src/server/run                                              # empty → the R11 rule holds
+grep -rln "plotlines_mode\|startPhrase\|PlotlinesPhrasePane\|PlotlinesHandoff" packages/erosire/create-storyline/src/dashboard --include='*.test.*'   # empty → the Phrase ② desk is written and untested (the open half)
+```
+
+The rig answers a chapter batch with `loop/mock.ts`'s `chapterDraft` knob (the same `draft_groups` kind,
+`ChapterDraft` schema, defaulting to exactly the refs the Work Item carried); `integration/harness.ts`
+carries the matching seam and notes it must keep handing the lane its triple even when a `chat` client is
+injected (T-W4).
+
+### Holes this wave left open
+
+- **CLOSED (T-W6): `plotline_briefs` no longer survives `deleteStory`.** The purge is now FOUR deletes in
+  one commit — `engine.ts:3043-3045` for `phrases`/`phrase_groups`/`group_revisions` and `3051` for
+  `plotlineBriefs` — and `api/story-delete.test.ts` names every collection and counts the neighbouring Story's
+  rows, so the leak cannot reopen quietly. `scrapPhasesAfter` reaches the briefs too, through
+  `invalidation.ts:scrapPlotlinesPhrase` (325).
+- **CLOSED (T-W6): a Story-Seed edit removes Phrase ② outright (D-77).** `editSeed` (3424) and
+  `backtrack('summary')` both run `scrapPhasesAfter(…, 'summary')`, and at rank < `plotlines` that calls
+  `scrapPlotlinesPhrase`, which deletes the brief, the chapter entries, their history and the phrase row —
+  gated on the PHRASE ROW, not on the Summary dial, so the mixed-dial case that left a whole ② standing is
+  gone. A reset would have dead-ended the book: `startPlotlinesPhrase` refuses a second start (D-71), so a
+  surviving row over a scrapped round has no verb that can re-seed it. `backtrack('plotlines')` is the narrow
+  cut — the row, its entries and the accepted brief (`loop/records.ts:currentPlotlineBrief` 1405 still matches
+  the hash) stay, and only the locks naming a scrapped revision come off. Pinned by
+  `loop/phase2-blast-radius.test.ts` (both dial combinations, a sibling Story, and the Summary's own reset
+  unchanged). The old defence — "the phrase's own seed governs it, so the brief stays current" — is withdrawn,
+  because a Start is one-way and the Author's Start card only works on a book with no row.
+- **The Summary controller's instruction slots duplicate the compiler's constants**, so the "one owner for
+  the binding sentences" rule (R7) is closed for Phrase ② and not yet for Phrase ①. The controller is where
+  they are supposed to live.
+- **CLOSED (T-W6): the ids this wave cited are now ids the spec owns.** The loose `R8`/`R9`/`R15`, the
+  borrowed `P9` and the mis-used `D-30` were re-cited to `D-71`/`D-72`/`D-76`/`D-77`, `V-2`/`D-38a`, `D-49`
+  and the new `U-21`/`U-22` — the map is §18.10. One residue the pass missed: `dashboard/state.ts:763` still
+  cites the Start verb as `R5 / D-30`, where `routes.ts:1048` answers the same route as `R5 / D-76`.
+- **The desk leg is pinned (T-W6), with one honest exception.** `dashboard/api.plotlines.test.ts`,
+  `state.plotlines.test.ts`, `StorylineApp.plotlines.test.tsx`, `StoryView.plotlines.test.tsx`,
+  `PlotlinesPhrasePane.test.tsx`, `PlotlinesHandoff.test.tsx`, `story-folders.plotlines.test.tsx` and the added
+  `StoryOutline.test.tsx` cases exercise the transport, the lazy phrase read, the rail numbering, the Start card
+  and the refusal sentences. `components/PhraseEntries.tsx` — the shared row/detail pair both surfaces run on —
+  still has NO test file of its own: it is pinned only through `SummaryGroupPane.test.tsx` /
+  `SummaryGroupPane.locks.test.tsx` (Phrase ①) and `PlotlinesPhrasePane.test.tsx` (Phrase ②), so a change that
+  breaks a state neither surface renders goes uncaught. And no vitest run stands in for the LIVE browser: the
+  rail's behaviour there is still unproven. This wave is still moving while the map is written — re-run §18.8's
+  greps and `yarn typecheck` before quoting a desk line number.

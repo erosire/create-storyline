@@ -67,7 +67,7 @@ export const resizeDirectiveField = (element: HTMLTextAreaElement): void => {
 
 export function DirectiveBar({ selection = DEFAULT_STORY_SELECTION, homeTab = 'requests' }: DirectiveBarProps) {
     const store = useDashboardStore();
-    const { activeStoryId, storyViews, phrases } = useDashboard();
+    const { activeStoryId, storyViews, phrases, phraseDetails } = useDashboard();
     const [text, setText] = useState('');
     const [busy, setBusy] = useState(false);
     const view = activeStoryId ? storyViews[activeStoryId] : undefined;
@@ -76,6 +76,10 @@ export function DirectiveBar({ selection = DEFAULT_STORY_SELECTION, homeTab = 'r
     // Story, and `directiveFocus` resolves the rail's `summary-group:<uuid>` ref into the group's title, sentence
     // and id. Without the phrase the label still describes the pane; only the group ref is missing.
     const phrase = activeStoryId ? phrases[activeStoryId] : undefined;
+    // T-W4 — the same argument, one phrase over: a Phrase ② selection carries a CHAPTER ENTRY uuid, and only the
+    // `GET /stories/:id/phrases/plotlines` rows name it. Without this slice a directive written with an entry open
+    // addresses "the plotline set" (the classic fallback) and sends refs the plotpoints route cannot follow.
+    const phraseDetail = activeStoryId ? phraseDetails[activeStoryId] : undefined;
     // Built field by field (not spread) so the bar depends on the five slices the focus actually reads, and a
     // payload change in any other slice cannot silently change what a directive is addressed to.
     const focusView: DirectiveFocusView | undefined = view
@@ -85,7 +89,8 @@ export function DirectiveBar({ selection = DEFAULT_STORY_SELECTION, homeTab = 'r
               cast: view.cast,
               plotlines: view.plotlines,
               chapters: view.chapters,
-              ...(phrase === undefined ? {} : { phrase })
+              ...(phrase === undefined ? {} : { phrase }),
+              ...(phraseDetail === undefined ? {} : { phraseDetail })
           }
         : undefined;
     const focus = focusView ? directiveFocus(focusView, selection) : undefined;

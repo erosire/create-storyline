@@ -63,6 +63,12 @@ const SPEC_PERMISSION_MATRIX: Array<
     ['summaries.chapter_count', 'summaries', 'read', 'read', 'read', 'read', 'read'],
     ['ideas', 'ideas', 'read', 'verify', 'write', 'write', 'read'],
     ['plotlines', 'plotlines', 'write', 'read', 'read', 'read', 'read'],
+    // T-W2 — the Phrase ② structure. §7 predates this collection, so the row is transcribed in
+    // `seed_briefs`' exact shape rather than from new prose: the Editor writes the DERIVED projection
+    // it produced (`structurePlotlines` mirrors `structureSeed`), every other kind reads, and the
+    // chapter CONTRACTS stay governed by the `plotlines` row above. A Writer that could edit the
+    // chapter count would be choosing a hard fact the Seed already commits to (D-3b).
+    ['plotline_briefs (the Phrase ② structure)', 'plotline_briefs', 'read', 'write', 'read', 'read', 'read'],
     ['chapters.content (agent-written)', 'chapters', 'write', 'read', 'read', 'read', 'read'],
     ['chapters.content (Author-written span)', 'chapters', 'propose', 'read', 'read', 'read', 'read'],
     ['chapters.title/summary', 'chapters', 'write', 'read', 'read', 'read', 'read'],

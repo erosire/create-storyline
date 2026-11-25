@@ -13,10 +13,12 @@
 //   3. A spent cap escalates to the Author, and clearing the escalation re-arms a fresh WAVE instead
 //      of installing the draft that failed. Nothing closes until a draft certifies it (R4).
 //   4. THE STREAK, not only the cap, ends a wave (the Author's chosen policy): a refinement round that
-//      proves nothing better than the accepted draft `SAMPLING_NO_PROGRESS_STREAK` attempts in a row
-//      stops there, REGRESSIONS included, and its escalation says so. A round that keeps climbing buys
-//      past the static cap (each improvement extends it), and a round the provider never answered keeps
-//      its own bound — the static cap, because an unread draft proves nothing either way.
+//      proves nothing better than the accepted draft `SAMPLING_NO_PROGRESS_STREAK` attempts in a row is
+//      REGRESSION-included and marked spent, so the drain and the escalation both close the wave. The
+//      sample queue itself is gated only by the attempt cap (`work.ts:1537`), which is why a wave whose
+//      drafts are all regressions still spends the cap's attempts before it stops. A round that keeps
+//      climbing buys past the static cap (each improvement extends it), and a round the provider never
+//      answered keeps its own bound — the static cap, because an unread draft proves nothing either way.
 import { describe, expect, it } from 'vitest';
 
 import { createRig, seedFinding, seedTask } from './mock';
@@ -35,6 +37,7 @@ import {
     sampleFixDemand,
     samplingArmed,
     samplingCapOf,
+    samplingProgressOf,
     // H2/R2 — the streak that stops a wave early. The escalation text quotes the number, so the test
     // that pins that text reads it from the same constant rather than hard-coding a third copy.
     SAMPLING_NO_PROGRESS_STREAK,
@@ -605,6 +608,16 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
 
         // The ledger first, so the text cannot drift from the data: every draft cleared the fix it was
         // handed, and every draft carried exactly one blocking high.
+        //
+        // FOUR attempts — the static cap's whole allowance (`samplingCapOf` = size 1 + SAMPLING_RETRY_
+        // ALLOWANCE 3), not three. A candidate that introduces a blocking issue is a REGRESSION, so it
+        // never measures the hill and every attempt is a no-progress one (`records.ts:samplingProgressOf`
+        // walks exactly that: `blockingIntroduced > 0` → `noImprovement += 1`). What stops the wave is
+        // read from that ledger, and the queue is NOT one of its readers: `work.ts:1537` arms the next
+        // sample on `attempts < samplingCapOf(story)` only, so the last sample of the allowance is already
+        // bought before the streak can close the round. The streak's real teeth are elsewhere —
+        // `status.ts:336` refuses to call the round buyable while `stalledForProgress` holds, which is
+        // what makes the drain, and the escalation below, the two ways this wave ends.
         expect(
             roundSampleScores(rig.store, rig.storyId, 2).map((scored) => ({
                 id: scored.revision.id,
@@ -616,45 +629,58 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
                 legacyScreening: scored.legacyScreening,
                 eligible: scored.eligible
             }))
-        // THREE attempts, not the cap's four: a candidate that introduces a blocking issue is a
-        // REGRESSION, and a regression never measures the hill — it is a no-progress attempt
-        // (`samplingProgressOf`). Three of those in a row stop the wave (`SAMPLING_NO_PROGRESS_STREAK`),
-        // which is the user-chosen policy: retry while the hill climbs, stop when it does not.
-        ).toEqual([
-            'revision_1',
-            'revision_2',
-            'revision_3'
-        ].map((id) => ({
-            id,
-            fixRefs: [task.id],
-            fixesCleared: [task.id],
-            fixesUnresolved: [],
-            critical: 0,
-            high: 1,
-            legacyScreening: false,
-            eligible: false
-        })));
+        ).toEqual(
+            ['revision_1', 'revision_2', 'revision_3', 'revision_4'].map((id) => ({
+                id,
+                fixRefs: [task.id],
+                fixesCleared: [task.id],
+                fixesUnresolved: [],
+                critical: 0,
+                high: 1,
+                legacyScreening: false,
+                eligible: false
+            }))
+        );
+
+        // THE HILL, in the numbers the escalation renders: four attempts, none of which ever MEASURED the
+        // hill (a regression sets no baseline), so the streak ran past `SAMPLING_NO_PROGRESS_STREAK`
+        // and the round is spent on both counts. This row is why the escalation copy no longer has to
+        // recite the numbers — it renders them, and the ledger is the thing under test (H2/R2).
+        expect(samplingProgressOf(rig.store, storyOf(rig), 2)).toMatchObject({
+            round: 2,
+            wave: 0,
+            refinement: true,
+            attempts: 4,
+            invalidAttempts: 0,
+            bestUnresolved: undefined,
+            improvements: 0,
+            noImprovement: SAMPLING_NO_PROGRESS_STREAK + 1,
+            ceiling: 4,
+            stalledForProgress: true,
+            spent: true
+        });
 
         const escalation = rig.store.tasks.list().find((row) => row.kind === 'escalation');
 
         // The title says which axis failed, and it still opens with the reuse key the re-arm matches on
         // (both `openEscalationTask` and `engine.ts:rearmSamplingWave` read only the prefix and `wave:`).
+        // The `${cap} attempts` number is `samplingCapOf`, the bound the generator actually ran.
         expect(escalation?.title.startsWith(SAMPLING_FAILURE_PREFIX)).toBe(true);
         expect(escalation?.title).toBe(
-            `${SAMPLING_FAILURE_PREFIX} 3 attempts — no draft was both fixed and free of critical/high screening issues`
+            `${SAMPLING_FAILURE_PREFIX} 4 attempts — no draft was both fixed and free of critical/high screening issues`
         );
         expect(escalation?.detail).toContain('wave: 0');
-        // The hill, in the numbers the ledger proved: no candidate ever measured it (every one of them
-        // introduced a blocking high), three attempts in a row bought nothing, and the static cap of 4
-        // is still shown so the Author can see the wave stopped EARLY.
+        // H1-C2/N-1's MIXED shape, spelled from each candidate's score (`documents/phase-1-research-
+        // pipeline.md` §H1-C2/N-1): at least one candidate cleared every fix it was handed, so the row
+        // names those candidates and the screening counts that refused them, instead of claiming nothing
+        // was certified. Every number here is the ledger's own, rendered: 4 drafts, and 0 critical / 1
+        // high on each of them (`roundSampleScores` above).
         expect(escalation?.detail).toContain(
-            'Hill progress in wave 0: 3 of 4 attempts, best unresolved blocking fix not yet proved, 3 consecutive attempts without improvement.'
-        );
-        expect(escalation?.detail).toContain(
-            `The round stopped because ${SAMPLING_NO_PROGRESS_STREAK} attempts in a row proved nothing better than the accepted draft`
-        );
-        expect(escalation?.detail).toContain(
-            'cleared every fix it was handed, with evidence, and was rejected for its screening issues'
+            [
+                'round 2 drafted 4 Summary drafts and none was selectable (wave: 0):',
+                'revision_1, revision_2, revision_3, revision_4 cleared every fix it was handed,',
+                'with evidence, and was rejected for its screening issues.'
+            ].join(' ')
         );
         expect(escalation?.detail).toContain(
             'Every fix this round was armed with was certified with evidence — nothing is outstanding.'
@@ -663,7 +689,8 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
             [
                 'Rejected on screening issues: revision_1 (0 critical, 1 high);',
                 'revision_2 (0 critical, 1 high);',
-                'revision_3 (0 critical, 1 high).'
+                'revision_3 (0 critical, 1 high);',
+                'revision_4 (0 critical, 1 high).'
             ].join(' ')
         );
         // The lever names the drafts, not the work list — and it does NOT invite the Author to discard a
@@ -676,12 +703,15 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         expect(escalation?.title).not.toContain('no draft answered the fixes');
 
         // The behaviour the text describes is unchanged in kind — bounded attempts, nothing installed,
-        // nothing closed, and the fix task still open (which is what keeps the next round armed) — but the
-        // bound that bit here is the no-progress streak, not the cap: three refused drafts and no fourth.
+        // nothing closed, and the fix task still open (which is what keeps the next round armed). The bound
+        // that bit is the attempt cap (`work.ts:1537` gates the next sample on `attempts < samplingCapOf`),
+        // and the no-progress streak is what keeps the closed wave from looking buyable afterwards —
+        // `status.ts:336`, and the `offers` row below.
         expect(runs(rig, 'wi_sample_summary_0_2_')).toEqual([
             'wi_sample_summary_0_2_1:torn_down',
             'wi_sample_summary_0_2_2:torn_down',
-            'wi_sample_summary_0_2_3:torn_down'
+            'wi_sample_summary_0_2_3:torn_down',
+            'wi_sample_summary_0_2_4:torn_down'
         ]);
         expect(offers(rig, 'wi_sample_')).toEqual([]);
         expect(storyOf(rig).sampling_round).toBe(1);
@@ -692,7 +722,8 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
             'revision_0:r1:sampled:selected',
             'revision_1:r2:refined:drafted',
             'revision_2:r2:refined:drafted',
-            'revision_3:r2:refined:drafted'
+            'revision_3:r2:refined:drafted',
+            'revision_4:r2:refined:drafted'
         ]);
         // The history of the refusal names what each draft left outstanding — nothing — on every line,
         // because the rejection is the screening counts and those are recorded per candidate on the
@@ -719,9 +750,9 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
 
         expect(samplingWaveOf(storyOf(rig))).toBe(1);
         expect(runs(rig, 'wi_sample_summary_0_2_w1_')).toEqual(['wi_sample_summary_0_2_w1_1:torn_down']);
-        // `revision_4`: the ids count creates, not survivors, so the wave-1 draft follows the THREE
-        // refused drafts of wave 0 (test 1's winner is `revision_5` because that wave spent four).
-        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_4:r2:refined:selected']);
+        // `revision_5`: the ids count creates, not survivors, so the wave-1 draft follows the FOUR refused
+        // drafts of wave 0 (the cap's whole allowance, not the streak's three).
+        expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_5:r2:refined:selected']);
         expect(rig.store.tasks.require(task.id).state).toBe('done');
         expect(rig.store.findings.require(finding.id).state).toBe('fixed');
         expect(
@@ -731,15 +762,15 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
         ).toEqual([
             ['revision_0:clear'],
             // Every candidate that competed in round 2 keeps its line, refused or not — and every one of
-            // them cleared the fix, so the audit says `clear` on all four while the escalation row above
-            // records the screening counts that actually refused them.
-            ['revision_1:clear', 'revision_2:clear', 'revision_3:clear', 'revision_4:clear']
+            // them cleared the fix, so the audit says `clear` on all five while the escalation row above
+            // records the screening counts that actually refused the four wave-0 drafts.
+            ['revision_1:clear', 'revision_2:clear', 'revision_3:clear', 'revision_4:clear', 'revision_5:clear']
         ]);
 
         // H2 — the same line carries WHY each candidate is on it. The selection commit deletes the refused
         // drafts AND their `sample_reviews` rows (P13/§6.6), so `outcome` + `reject_reason` are the only
         // surviving answer, and they are the selector's own words (`sample-select.ts:scoreSample`), not a
-        // paraphrase: these three refused the round for introducing a major the accepted draft did not
+        // paraphrase: these four refused the round for introducing a major the accepted draft did not
         // carry, and the winner is the installed draft, which owed no explanation. The line is stamped
         // with wave 1 — the wave that installed it, after the Author's clear re-armed the hill.
         const hillLine = (storyOf(rig).sampling_history ?? [])[1];
@@ -753,7 +784,8 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
             'revision_1:rejected:introduced 0 critical / 1 major the accepted draft did not have',
             'revision_2:rejected:introduced 0 critical / 1 major the accepted draft did not have',
             'revision_3:rejected:introduced 0 critical / 1 major the accepted draft did not have',
-            'revision_4:accepted:no reason asked'
+            'revision_4:rejected:introduced 0 critical / 1 major the accepted draft did not have',
+            'revision_5:accepted:no reason asked'
         ]);
         // And the hill's own numbers on the entry: one attempt bought the install, and the bar the install
         // leaves behind (`0` — the certified fix was the round's only blocking row). `improvements` is 0

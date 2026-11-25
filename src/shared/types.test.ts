@@ -130,12 +130,12 @@ describe('§4 enums', () => {
 });
 
 describe('§4 collection registry', () => {
-    it('lists the 24 collections in registry order', () => {
-        // F2 — 20 §4 names, 3 the phase-① pipeline appended, the 3 SUMMARY PHRASE records R1 adds, and
-        // the Reader's score rows D-65 appends last.
+    it('lists the 25 collections in registry order', () => {
+        // F2 — 20 §4 names, 3 the phase-① pipeline appended, the 3 SUMMARY PHRASE records R1 adds, the
+        // Reader's score rows D-65 appends, and Phrase ②'s structure pass appends last.
         // Appending (never inserting) is the load-bearing half: every snapshot reader walks THIS list,
         // so an old `store.json` still loads and simply has no rows in the new collections.
-        expect(COLLECTION_NAMES).toHaveLength(24);
+        expect(COLLECTION_NAMES).toHaveLength(25);
         expect(COLLECTION_NAMES).toEqual([
             'stories',
             'summaries',
@@ -167,7 +167,12 @@ describe('§4 collection registry', () => {
             'group_revisions',
             // READER SCORING (D-65), appended last for the same reason: a score row is a read surface,
             // and no existing collection may shift position in the registry.
-            'summary_scores'
+            'summary_scores',
+            // PHRASE ② PLOTLINES — the Editor's structure pass over the phrase's COPIED seed. Appended
+            // last again, and it sits AFTER `plotlines` on purpose: its singular (`plotline_brief`) nests
+            // inside the `plotline` id family, and the store resolves a nested family by the LAST prefix
+            // match it walks (the pair, and the ordering rule, are pinned below).
+            'plotline_briefs'
         ]);
     });
 
@@ -186,21 +191,36 @@ describe('§4 collection registry', () => {
         // `phrase_groups`, whose rows carry a UUID minted by `persist.ts:newRecordUid` and preserved by
         // `store.ts:createWithId` (R1: a group id is an ADDRESS a route, a finding and a Run row all
         // quote). Neither ever mints `phrase_3`, so the two families cannot claim one id shape.
+        //
+        // NESTED PAIRS ARE DECLARED, not inferred, because two rules below read the SAME list: the
+        // counter-family rule (a nested pair is allowed only when it is declared) and the registry-order
+        // rule (the store resolves a prefix by the LAST match it walks, so a nested family must be
+        // registered after the family it nests in). Two pairs today: the phrase pair R1 added, and Phrase
+        // ②'s `plotline_brief` inside the `plotline` family — which is why `plotline_briefs` is appended
+        // after `plotlines` in `COLLECTION_NAMES`, not inserted beside it.
+        const nested: Array<[CollectionName, CollectionName]> = [
+            ['phrases', 'phrase_groups'],
+            ['plotlines', 'plotline_briefs']
+        ];
+        const isDeclaredNested = (left: CollectionName, right: CollectionName) =>
+            nested.some(([pairLeft, pairRight]) => pairLeft === left && pairRight === right);
         const uidAddressed = UID_ADDRESSED_COLLECTIONS as readonly string[];
         const counterMinted = names.filter((name) => !uidAddressed.includes(name));
 
         for (const left of counterMinted) {
             for (const right of counterMinted) {
                 if (left === right) continue;
+                if (isDeclaredNested(left, right)) continue;
 
                 expect(`${COLLECTION_SINGULARS[right]}_1`.startsWith(`${COLLECTION_SINGULARS[left]}_`)).toBe(false);
             }
         }
 
-        // The exemption is STATED rather than assumed: the only nested pair in the registry is the
-        // phrase pair R1 added, so a third collection whose singular starts with `phrase_` cannot join
-        // it without this assertion growing — and the ordering rule below then has to cover it too.
-        const nested: Array<[CollectionName, CollectionName]> = names.flatMap((left) =>
+        // The declaration above is STATED rather than assumed: this recomputes the nesting from the
+        // registry and requires it to be exactly the declared pairs, so a third collection whose singular
+        // starts with `phrase_` or `plotline_` cannot join without growing the declaration — and the
+        // ordering rule below then has to cover it too.
+        const computedNested: Array<[CollectionName, CollectionName]> = names.flatMap((left) =>
             names
                 .filter(
                     (right) =>
@@ -210,7 +230,7 @@ describe('§4 collection registry', () => {
                 .map((right) => [left, right] as [CollectionName, CollectionName])
         );
 
-        expect(nested).toEqual([['phrases', 'phrase_groups']]);
+        expect(computedNested).toEqual(nested);
 
         // And when a family IS nested, `_resolveId`'s answer stays correct by construction: with no
         // record under either family it reports the LAST prefix match it walked — the most specific

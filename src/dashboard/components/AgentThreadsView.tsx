@@ -47,15 +47,15 @@ const STATE_LABEL: Record<AgentThreadRecord['state'], string> = {
  * A thread that is not running now is ARCHIVED: completed (`torn_down`), failed, or abandoned.
  * The list is RUNNING-ONLY until the Author opts into that set with the tab beside the Story
  * title: clicking an employee answers "what is working now", and the closed threads the Story was
- * built out of stay one deliberate click away (R7). The tab is never pressed on the Author's
- * behalf — nothing derives it from the data (R8).
+ * built out of stay one deliberate click away (U-7). The tab is never pressed on the Author's
+ * behalf — nothing derives it from the data (U-22).
  */
 function isArchived(thread: AgentThreadRecord): boolean {
     return thread.state !== 'running';
 }
 
 /**
- * R7 — does this bar need a role chip? The surface is ALREADY the one employee the Author clicked
+ * U-7 — does this bar need a role chip? The surface is ALREADY the one employee the Author clicked
  * (the region is named "Writer threads", the tile is highlighted), so a bar that says `writer`
  * again is the same word three times on one screen. A chip that carries information the region
  * name does not — a panel sibling (`writer#agent_2`) or a delegated role (`researcher`) — stays.
@@ -138,11 +138,11 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
     const [requests, setRequests] = useState<Set<string>>(() => new Set());
     /**
      * The Story ids whose archived threads the Author has OPTED INTO. Nothing is opted in at mount,
-     * so the list reads as "what is working now" (R7); the tab beside the title pulls the closed
+     * so the list reads as "what is working now" (U-7); the tab beside the title pulls the closed
      * threads in. This is view-local state that only the click below writes, so a refresh or a new
-     * `threads` prop can never select Archived on the Author's behalf (R8) — while an explicit
-     * choice survives a same-Story refetch (R9). Switching employees remounts the view (the shell
-     * keys it by kind), which is what resets the choice per employee (R7).
+     * `threads` prop can never select Archived on the Author's behalf (U-22) — while an explicit
+     * choice survives a same-Story refetch (U-22). Switching employees remounts the view (the shell
+     * keys it by kind), which is what resets the choice per employee (U-7).
      */
     const [archivedShown, setArchivedShown] = useState<Set<string>>(() => new Set());
 
@@ -186,8 +186,8 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                     (count, group) => count + group.threads.filter(isArchived).length,
                     0
                 );
-                // R7 — positive opt-in: `archivedShown` holds the Stories the Author has opened.
-                // R9 — the tab is a FILTER, not an addition: it answers one question at a time.
+                // U-7 — positive opt-in: `archivedShown` holds the Stories the Author has opened.
+                // U-22 — the tab is a FILTER, not an addition: it answers one question at a time.
                 // Unpressed the Story lists what is running now; pressed it lists only the closed
                 // threads (torn_down / failed / abandoned). `isArchived` is the single predicate for
                 // both branches, so a live bar can never sit in the Archived list and a closed one
@@ -223,7 +223,7 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                             </button>
                         </div>
 
-                        {/* R9 — this sentence is an answer about the LIVE list, so it belongs to the
+                        {/* U-22 — this sentence is an answer about the LIVE list, so it belongs to the
                             live branch only. An Archived reading with nothing to show (a Story whose
                             only thread is still running) is simply blank: "no thread is running now"
                             would be false on the screen that is showing a running employee. */}
@@ -253,7 +253,7 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                         const expanded = open.has(thread.thread_id);
                                         const requestVisible = requests.has(thread.thread_id);
                                         const code = PHASE_CODE[thread.phase];
-                                        // R7 — the chip repeats the employee only when it repeats it
+                                        // U-7 — the chip repeats the employee only when it repeats it
                                         // exactly; see `isRedundantRole`.
                                         const roleVisible = !isRedundantRole(thread.role_name, kind);
                                         const duration = formatElapsed(thread.started_at, thread.ended_at, now);
@@ -283,7 +283,7 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                                                     <span className="sv-thread__title">
                                                         {thread.title.length > 0 ? thread.title : thread.role_name}
                                                     </span>
-                                                    {/* R7 — the region is already "Writer threads" and the
+                                                    {/* U-7 — the region is already "Writer threads" and the
                                                         tile is lit, so a bar reading `writer` again is the
                                                         same word three times. The chip is dropped ONLY for
                                                         that repeat (and for a blank role); a panel sibling

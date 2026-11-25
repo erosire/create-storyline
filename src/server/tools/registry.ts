@@ -23,6 +23,10 @@ import { editorTools } from './editor';
 // conformance test still diff those five tables against the spec while T-6a registers this group
 // on every session too.
 import { knowledgeTools } from './knowledge';
+// PHRASE ② (T-W2): `structurePlotlines`, the Plotlines structuring pass. Its own group for the same
+// reason `knowledge` has one — it belongs to no §8 section, and filing it under `editor` would make
+// the conformance test say §8.2 registers a tool the spec does not list.
+import { plotlinesTools } from './plotlines';
 import { plumbingTools } from './plumbing';
 import { researchTools } from './research';
 import { writerTools } from './writer';
@@ -39,7 +43,7 @@ import type { ToolDefinition } from './types';
  * it. The group is registered like every other (T-6a: the whole catalogue on every session).
  */
 export const TOOL_GROUPS: Record<
-    'writer' | 'editor' | 'reader' | 'plumbing' | 'research' | 'knowledge',
+    'writer' | 'editor' | 'reader' | 'plumbing' | 'research' | 'knowledge' | 'plotlines',
     ToolDefinition[]
 > = {
     writer: writerTools,
@@ -47,7 +51,8 @@ export const TOOL_GROUPS: Record<
     reader: readerTools,
     plumbing: plumbingTools,
     research: researchTools,
-    knowledge: knowledgeTools
+    knowledge: knowledgeTools,
+    plotlines: plotlinesTools
 };
 
 /** Which group a tool came from, for `describeTool` and for the §8 conformance test. */
@@ -160,5 +165,8 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     'retireKnowledge',
     // D-51: the Researcher's zero-write closing report — a dispatched pass that finds nothing to
     // record must still be able to REPORT, or S-4 counts the run as a no-op turn.
-    'reportNoResearch'
+    'reportNoResearch',
+    // PHRASE ② structuring (T-W2) — the `plotlines` group. No §8 section either: it post-dates the
+    // pinned tables exactly as the Phase-1 surface does, and it is the Editor's, not the §8.2 list's.
+    'structurePlotlines'
 ];

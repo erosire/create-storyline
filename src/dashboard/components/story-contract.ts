@@ -23,14 +23,18 @@ import type {
     CompletionPreview,
     CostDistribution,
     FailingCriterion,
+    PhraseBriefView,
     PhraseChosenSummary,
+    PhraseDetailView,
     PhraseFindingRow,
     PhraseGroupRow,
     PhraseGroupScore,
+    PhrasePlotpointsInput,
     PhraseReviewedGroup,
     PhraseReviewedSummary,
     PhraseRevisionRow,
     PhraseReviewState,
+    PhraseStartInput,
     PhraseTaskRow,
     PhraseView,
     StoryView,
@@ -71,13 +75,17 @@ export type { CompletionPreview, CostDistribution, FailingCriterion };
 // D-67/D-68 widen the same alias with the reviewed block: the Summary tab renders it, and a pane that
 // imported `../api` for one row and this module for the other would be two contracts in one component.
 export type {
+    PhraseBriefView,
     PhraseChosenSummary,
+    PhraseDetailView,
     PhraseFindingRow,
     PhraseGroupRow,
     PhraseGroupScore,
+    PhrasePlotpointsInput,
     PhraseReviewedGroup,
     PhraseReviewedSummary,
     PhraseReviewState,
+    PhraseStartInput,
     PhraseView
 };
 // R1 — the one VALUE this module takes from the wire layer: the key the store files a group's lock refusal
@@ -131,6 +139,23 @@ export type StoryViewData = Omit<StoryView, 'templates'> & {
      * NOT the same claim as success: the pane's locked badge comes from the phrase read, never from this cache.
      */
     groupLockErrors?: Record<string, string>;
+    /**
+     * T-W4 — the PHRASE ② read (`GET /stories/:id/phrases/plotlines`), the chapter entries, the copied Seed's head
+     * and the structure brief.
+     *
+     * WHY IT IS ITS OWN FIELD AND NOT `phrase`: `phrase` is the SUMMARY's read, and both surfaces can be lit in one
+     * frame — the rail is on Phrase ② while the handoff line still reads the Summary's compiled state. Merging them
+     * would make one read overwrite the other's rows. It is optional for the same reason `phrase` is: absent means
+     * the caller has no Phrase ② surface (the read has not landed, or this frame never asked for it), which the
+     * pane renders as its loading line rather than "no chapter entries".
+     */
+    phraseDetail?: PhraseDetailView | null;
+    /**
+     * T-W4 — the cached failure of THAT read, the server's own sentence (`state.ts:phraseDetailErrors`). It is kept
+     * apart from `phraseError` because they are two routes: the Plotlines pane may not print the Summary read's 503
+     * over the chapter entries, and a Phrase ② failure leaves the Summary surface current.
+     */
+    phraseDetailError?: string | null;
 };
 
 /**
@@ -288,6 +313,46 @@ export interface StoryActions {
      * Reader's score and rationale beside them — and only the Author unlocks.
      */
     setEditorGroupLocking?: (storyId: string, enabled: boolean) => Promise<unknown> | unknown;
+    /**
+     * T-W4 — the Story's Phrase ② dial (`PATCH /stories/:id` with `plotlines_mode`). `'classic'` is the default and
+     * the legacy state: the §4.3 plotline tools own the contracts and the Plotlines pane shows their records. On
+     * `'groups'`, the phrase materializes one chapter entry per chapter its brief declares and those entries become
+     * the writable surface.
+     *
+     * THE DIAL CLOSES WHEN THE PHRASE STARTS. The Settings pane disables the control from `phrase_started.plotlines`
+     * — the same projected flag the route's 409 is written from — and states the reason rather than letting the
+     * Author click into a refusal (U-16).
+     */
+    setPlotlinesMode?: (storyId: string, mode: 'groups' | 'classic') => Promise<unknown> | unknown;
+    /**
+     * T-W4 — the Author STARTS Phrase ② (`POST /stories/:id/phrases/plotlines/start`), the handoff the Summary's
+     * compiled Overview exists to make.
+     *
+     * `input` names the arm: `{source:'compiled'}` copies this Story's compiled Summary — the SAME text
+     * `StoryView.summary_compiled` is computed from, so the enabled button and the route cannot disagree — and
+     * `{source:'custom', text}` starts from the Author's own brief instead. The verb is not repeatable (D-72): the
+     * copied Seed is what every entry, revision and claim key is written against, so a second start is 409 and the
+     * pane shows the started state rather than a dead button.
+     */
+    startPhrase?: (
+        storyId: string,
+        phraseKey: string,
+        input?: { source?: 'compiled' | 'custom'; text?: string }
+    ) => Promise<unknown> | unknown;
+    /**
+     * T-W4 — the Author rewrites ONE CHAPTER ENTRY by hand. The route is the Summary group's revise; the BODY is
+     * different, because a chapter entry's text is composed from its contract fields
+     * (`PhrasePlotpointsInput`): `must_happen` and `must_change` are the entry, and the route 400s without them.
+     * The entry is addressed by its UUID, exactly as a Summary group is (U2).
+     *
+     * `revisePhraseGroup` above stays the Summary's verb and keeps its `{content, note}` body — the two writes are
+     * two shapes on the wire, and one union-typed action would let a Summary pane send plotpoints by accident.
+     */
+    revisePhraseEntry?: (
+        storyId: string,
+        entryId: string,
+        input: { plotpoints: PhrasePlotpointsInput; note?: string }
+    ) => Promise<unknown> | unknown;
     /**
      * D-68 — the Author takes the REVIEWED Summary: the clean selection becomes the book in one commit
      * (five installs, every revision it passed over `discarded`, the choice recorded on the Phrase row).
@@ -1068,6 +1133,205 @@ export function isGroupSummary(view: Pick<StoryViewData, 'story'> & Partial<Pick
 
     return view.story.summary_mode === 'groups';
 }
+
+// ---------------------------------------------------------------------------
+// PHRASE ② — the Plotlines surface's reads (T-W4)
+//
+// THE SAME THREE RULES AS THE SUMMARY'S GROUP SECTION ABOVE, applied to the other phrase: identity is the group
+// row's UUID, a phrase's mode is the Setting the server echoes (never derived from whether rows happen to exist),
+// and a read that has not landed is a DIFFERENT sentence from a phrase with no rows. The reads below sit next to
+// the Summary's because the panes are one shared pair (`PhraseEntries.tsx`), and a second copy of a rule for the
+// second phrase is how two phrases start disagreeing about what `open` or `written` means.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this Story's Phrase ② is the CHAPTER-ENTRY model (`plotlines_mode:'groups'`), as the wire says.
+ *
+ * It mirrors `isGroupSummary` exactly, including the order of the two sources: the phrase detail's own `mode`
+ * answers in the frame after the read lands, and `story.plotlines_mode` answers in the frame before it. Neither
+ * may make a classic book look grouped — an absent `plotlines_mode` means `'classic'` (the projection echoes it
+ * that way, and `phrase/catalog.ts:isPhraseGroupManaged` reads absent as classic), so a book whose Plotlines the
+ * group loop never wrote keeps the §4.3 records view it has always had.
+ */
+export function isPlotlinesGroups(
+    view: Pick<StoryViewData, 'story'> & Partial<Pick<StoryViewData, 'phraseDetail'>>
+): boolean {
+    const mode = view.phraseDetail?.mode;
+
+    if (mode !== undefined) return mode === 'groups';
+
+    return view.story.plotlines_mode === 'groups';
+}
+
+/** Whether the Phrase ② read has LANDED — the only thing that separates a load in flight from a phrase with no rows. */
+export const phraseDetailReadLanded = (view: Pick<StoryViewData, 'phraseDetail'>): boolean =>
+    view.phraseDetail !== undefined && view.phraseDetail !== null;
+
+/** The cached failure sentence for the Phrase ② read; `undefined` when that read has not failed. */
+export const phraseDetailReadError = (view: Pick<StoryViewData, 'phraseDetailError'>): string | undefined =>
+    view.phraseDetailError ?? undefined;
+
+/**
+ * The chapter entries in composition order — the same sort `phraseGroups` applies, so the Plotlines rail, the
+ * phrase overview and the phase gate cannot order the chapters three ways. `[]` for a classic book and for a read
+ * that has not landed; only `phraseDetailReadLanded` may tell those two states apart.
+ */
+export function plotlinesEntries(view: Pick<StoryViewData, 'phraseDetail' | 'story'>): PhraseGroupRow[] {
+    if (!isPlotlinesGroups(view)) return [];
+
+    return [...(view.phraseDetail?.groups ?? [])].sort(
+        (left, right) => left.order - right.order || left.key.localeCompare(right.key) || left.id.localeCompare(right.id)
+    );
+}
+
+/** One chapter entry by its UUID — the address the rail's selection ref carries (U2, same rule as a Summary group). */
+export function plotlinesEntryById(
+    view: Pick<StoryViewData, 'phraseDetail' | 'story'>,
+    entryId: string | undefined
+): PhraseGroupRow | undefined {
+    if (entryId === undefined) return undefined;
+
+    return plotlinesEntries(view).find((entry) => entry.id === entryId);
+}
+
+/** The Phrase ② structure brief, or null for a phrase nobody structured (the wire's own null, never a placeholder). */
+export const plotlinesBrief = (view: Pick<StoryViewData, 'phraseDetail'>): PhraseBriefView | null =>
+    view.phraseDetail?.brief ?? null;
+
+/**
+ * The Phrase ② entries with NO contract installed yet — the same derivation `unwrittenGroups` applies to the
+ * Summary's five groups (`revision: 0` is the loop's own "never written" line, R1), so both phrases answer
+ * "which rows are still empty" from one rule.
+ *
+ * It is the honest sentence for a phrase whose brief was accepted but whose entries are still blank: the rows
+ * EXIST, and saying "0 of 3 chapter entries written" without naming them would read like an empty phrase rather
+ * than a queue the loop has not started work on.
+ */
+export function unwrittenPlotlinesEntries(
+    view: Pick<StoryViewData, 'phraseDetail' | 'story'>
+): PhraseGroupRow[] {
+    return plotlinesEntries(view).filter((entry) => !isGroupWritten(entry));
+}
+
+/** Has Phrase ② been started? `story.phrase_started.plotlines`, the projection's read of the phrase row. */
+export const plotlinesStarted = (view: Pick<StoryViewData, 'phrase_started'>): boolean =>
+    view.phrase_started?.plotlines === true;
+
+/** Has Phrase ① been started? Always true for a book the loop wrote — Phrase ① is not an on-demand phrase. */
+export const summaryPhraseStarted = (view: Pick<StoryViewData, 'phrase_started'>): boolean =>
+    view.phrase_started?.summary === true;
+
+/**
+ * Does this Story have a compiled Summary to hand to Phrase ②?
+ *
+ * THE BUTTON AND THE ROUTE ARE ONE FACT. `story.summary_compiled` is computed server-side from
+ * `projections.ts:compiledSummaryOf` — the same read the start route copies its Seed from — so a disabled handoff
+ * control and a 409 saying "no compiled Summary" can never disagree, and this file does not re-derive the answer
+ * from the group rows (L-14: the dashboard recomputes nothing the engine already answered).
+ */
+export const summaryIsCompiled = (view: Pick<StoryViewData, 'summary_compiled'>): boolean =>
+    view.summary_compiled === true;
+
+/**
+ * Why the "start Phrase ② from the compiled Summary" control is shut, `''` when it is not.
+ *
+ * THREE STATES, IN THE ORDER THE AUTHOR MEETS THEM, and every one is a projected fact rather than a guess:
+ *   1. the phrase already started — the copied Seed is what every entry and claim key was written against, so the
+ *      verb is not repeatable (D-72). The pane shows the started state rather than a dead button;
+ *   2. there is no compiled Summary yet — the route would 409, and the sentence says what to do instead;
+ *   3. the shell has no verb bound — a pane rendered without a store.
+ * The empty string means enabled, which is the same convention `reviewedChooseRefusal` uses.
+ */
+export function plotlinesHandoffRefusal(
+    view: StoryViewData,
+    hasAction: boolean
+): string {
+    if (!hasAction) return 'The phrase start route is not available in this shell.';
+    if (plotlinesStarted(view))
+        return 'Phrase 2 has already started on this Story: its copied Seed is the text every chapter entry, revision and claim key was written against, so a new Seed means a new Story rather than a re-start (D-72).';
+    if (!summaryIsCompiled(view))
+        return 'There is no compiled Summary to start Phrase 2 from yet — the Overview (or the reviewed Summary) is the text the phrase copies, so the gate is above this control (R5).';
+
+    return '';
+}
+
+/**
+ * The custom-seed arm's own refusal: `''` when the Author has typed a Seed worth starting on.
+ *
+ * THE ROUTE'S 400 IS THE SHAPE OF THIS RULE (`routes.ts:PhraseStartBody`): a `'custom'` start with an empty (or
+ * whitespace-only) `text` is refused, because the copied Seed is the one text every entry, revision and claim key
+ * is written against — starting a phrase on an empty brief would leave a phrase with nothing to write FROM. The
+ * control states that reason instead of sending a request the server will answer with a sentence.
+ */
+export const customSeedRefusal = (text: string): string =>
+    text.trim().length === 0
+        ? 'Write the Seed first — a custom start copies what you type into the phrase, and an empty Seed leaves Phrase 2 with nothing to write from (the route refuses it).'
+        : '';
+
+/**
+ * T-W4 — the phrase-swap view the SHARED panes render Phrase ② through.
+ *
+ * WHY A SWAP AND NOT A SECOND SET OF SELECTORS: every phrase selector in this file resolves its rows through
+ * `view.phrase` (`phraseGroups`, `groupOpenFindings`, `groupLockError`, the score marks), and the Phrase ② read is
+ * the SAME shape with different rows. Copying those selectors for the second phrase would be two rules per rule —
+ * and the two would drift the first time a finding-scoping fix landed in one and not the other. So this helper
+ * hands the pane a view whose `phrase` slot holds the Phrase ② read (and whose `phraseError` is that read's own
+ * failure, never the Summary's), and the selectors need no branch because they are reading the right rows already.
+ *
+ * It is a shallow copy on purpose: the Story row, the findings, the runs and the Goal are Story-level facts that
+ * belong to both phrases, and the entries are the phrase's.
+ */
+export function plotlinesSurfaceView(view: StoryViewData): StoryViewData {
+    return {
+        ...view,
+        // The two wire types differ in exactly the two places this file already handles separately: `mode` (the
+        // detail's is `PhraseMode`, whose off word is `classic`) and `review.mirror` (the Summary's legacy prose
+        // check, absent on Phrase ②). Nothing the swapped view is used for reads either one — the caller has
+        // already decided the mode (`isPlotlinesGroups`) and the shared panes read rows, findings and install
+        // metadata — so the cast states the swap rather than hiding one, and `classic` cannot reach `isGroupSummary`
+        // through it: that predicate answers false on an unknown word, which is the honest answer.
+        phrase: (view.phraseDetail ?? null) as StoryViewData['phrase'],
+        phraseError: view.phraseDetailError ?? null
+    };
+}
+
+/** The Plotlines dial's own words on the Settings pane (T-W4), next to the Editor-locking switch (R2). */
+export const PLOTLINE_MODE_LABEL = 'Phrase 2 — chapter entries (the grouped Plotlines pipeline)';
+
+/** What the Phrase ② dial does, and what closing it means, in the two sentences the Author needs. */
+export const PLOTLINE_MODE_NOTE =
+    "On, the Plotlines phrase writes one chapter entry per chapter its brief declares, and those entries are the surface you revise. Off (the default, and every Story written before Phrase 2), the classic §4.3 plotline tools own the contracts and the Plotlines pane shows their records. The dial closes the moment the phrase starts: the entries and the brief were written against the mode that produced them, so switching it afterwards would leave rows the new mode cannot explain.";
+
+/**
+ * The Phrase ② dial's reason for being shut, `''` when it is live.
+ *
+ * TWO REFUSALS, and the order is the one the Author meets: the phrase started (a started phrase's entries and brief
+ * were written against the mode that produced them — the route 409s, and the Settings pane refuses from the SAME
+ * projected flag rather than making the Author discover it by clicking), or the shell has no verb bound (U-16's
+ * standing rule: a shut control says which route is missing).
+ */
+export function plotlinesModeRefusal(view: StoryViewData, hasAction: boolean): string {
+    if (!hasAction) return 'The Story settings route is not available in this shell, so the Setting cannot be changed.';
+    if (plotlinesStarted(view))
+        return 'Phrase 2 has started on this Story: its Seed, its brief and its chapter entries were written against the mode that produced them, so the dial closed with the start — switching it now would leave rows the new mode cannot explain.';
+
+    return '';
+}
+
+/**
+ * The dial's own `title`: why it is shut, or what the NEXT click does. It states the direction of the write
+ * (`checked` is the Setting's state, not local state), so the hover matches the body the `PATCH` will carry.
+ */
+export function plotlinesModeTitle(story: Story, refusal: string, nextOn: boolean): string {
+    if (refusal !== '') return refusal;
+
+    return nextOn
+        ? 'Turn Phrase 2 onto the chapter-entry pipeline: the Plotlines phrase writes one entry per chapter its brief declares, and those entries are what you revise.'
+        : `Turn Phrase 2 back to the classic plotline tools: the Plotlines pane goes back to the §4.3 records, and no chapter entries are written for this Story.`;
+}
+
+/** Is the Phrase ② dial on? `story.plotlines_mode`, where absent means classic (the projection's own default). */
+export const isPlotlinesGroupsEnabled = (story: Story): boolean => story.plotlines_mode === 'groups';
 
 /**
  * Whether the phrase read has LANDED for this Story. The one honest answer to "is the group surface

@@ -16,10 +16,19 @@ import {
     ALL_STORY_PHRASES,
     DEFAULT_STORY_SELECTION,
     STORY_PHRASES,
+    STORY_SUPPLEMENTS,
     attentionFor,
     directiveFocus,
+    // T-W4 — Phrase ②'s rail model: its ref prefix, its entry rows, and the two predicates the rail's marks
+    // are painted from. Pinned by name, in this file, beside the Summary's equivalents.
+    parsePlotlineGroupRef,
     parseSummaryGroupRef,
     phraseLoaded,
+    plotlineGroupFocus,
+    plotlineGroupRef,
+    plotlineRailEntries,
+    plotlinesRailSurfaceOpen,
+    plotlinesReadyToStart,
     selectionExists,
     selectionTitle,
     storyAttention,
@@ -28,9 +37,13 @@ import {
     summaryGroupRef,
     summaryReadyForReview
 } from './story-nav';
+import type { PlotlineRailEntry } from './story-nav';
 import { fixturePhrase, fixtureView } from './story-fixtures';
-import { groupedPhraseView } from '../testing/shell-fakes';
-import type { PhraseView } from '../api';
+import { groupedPhraseView, phraseDetailView } from '../testing/shell-fakes';
+// T-W4 — the Phrase ② read's type is pinned by name so the fixture builder above cannot drift off the wire
+// shape, and `StoryViewData` is the view every helper below is called with.
+import type { PhraseDetailView, PhraseView } from '../api';
+import type { StoryViewData } from './story-contract';
 // T3 — the entry type is pinned by NAME here, not inferred: the key-presence assertions below pass an entry
 // that may be `undefined` (a missing key must fail loudly, and `Object.keys(undefined)` would throw), so the
 // helper's signature is part of the contract being checked.
@@ -65,19 +78,25 @@ function summaryPhase(overrides: { locked?: boolean; failing?: boolean } = {}) {
     };
 }
 
-describe('story-nav — one phrase in the rail, four in the pane vocabulary (U1)', () => {
-    it('offers exactly the Summary phrase, numbered one, and keeps every folder', () => {
-        expect(STORY_PHRASES).toEqual([{ key: 'summary', number: 1, title: 'Summary' }]);
-        // Characters/Plotlines/Chapters are NOT removed from the product: they are removed from the rail.
+describe('story-nav — two numbered phrases in the rail, the sheet off the numbering (U1, T-W4)', () => {
+    it('offers the Summary and Plotlines phrases, numbered one and two, and keeps every folder', () => {
+        expect(STORY_PHRASES).toEqual([
+            { key: 'summary', number: 1, title: 'Summary' },
+            { key: 'plotlines', number: 2, title: 'Plotlines' }
+        ]);
+        // T-W4 — the numbering follows the pipeline: Summary ① → Plotlines ② → Chapters ③. Characters is NOT
+        // removed from the product, only from the numbering (it is a supplementary sheet the loop never signs
+        // off), and Chapters keeps its pane and its key while having no rail row of its own.
         expect(ALL_STORY_PHRASES.map((phrase) => [phrase.number, phrase.key])).toEqual([
             [1, 'summary'],
-            [2, 'characters'],
-            [3, 'plotlines'],
-            [4, 'chapters']
+            [2, 'plotlines'],
+            [3, 'chapters']
         ]);
+        // The sheet the rail still offers, one row deep, with NO number to print.
+        expect(STORY_SUPPLEMENTS).toEqual([{ key: 'characters', title: 'Characters' }]);
     });
 
-    it("defaults the desk's selection to the Summary phrase's own header, not to a group", () => {
+    it('defaults the desk\'s selection to the Summary phrase\'s own header, not to a group', () => {
         expect(DEFAULT_STORY_SELECTION).toEqual({ panel: 'summary' });
         // A header selection is the Overview: no ref, so `summaryGroupFocus` names no group.
         const view = midReview();
@@ -473,5 +492,253 @@ describe('story-nav — a directive about a group addresses the group (U5)', () 
         expect(directiveFocus(midReview(), { panel: 'summary', ref: summaryGroupRef('grp-retired') }).refs).toEqual(
             ['sum1']
         );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// T-W4 — Phrase ②'s rail model, pinned next to the Summary's because it is the SAME model with a different
+// prefix and a different row source. A chapter entry's address is `plotlines-group:<uuid>`; the two prefixes
+// never cross, because the panel decides which surface to open and a parser that accepted either would open the
+// wrong pane from a correct id. The marks come from the phrase read (`GET /stories/:id/phrases/plotlines`), and
+// the readiness mark comes from the story's two projected flags — never from a row count, because a phrase that
+// has not started and a phrase whose read failed both have zero rows.
+// ---------------------------------------------------------------------------
+describe('story-nav — Phrase ② addresses a chapter entry, and the rail reads the flags (T-W4)', () => {
+    /**
+     * The grouped book with Phrase ②'s facts set by the caller. `detail` is the phrase read: a `PhraseDetailView`
+     * (landed), `null` (failed) or absent (never fetched). The three T-W4 fields sit on the STORY VIEW
+     * (`api.ts:StoryView`), not on `story`, except the dial's row value, which `isPlotlinesGroups` reads first.
+     */
+    function phraseTwo(
+        over: {
+            mode?: 'groups' | 'classic';
+            started?: boolean;
+            compiled?: boolean;
+            detail?: PhraseDetailView | null;
+        } = {}
+    ): StoryViewData {
+        const view = fixtureView({ phrase: fixturePhrase() });
+
+        return {
+            ...view,
+            plotlines_mode: over.mode ?? 'groups',
+            phrase_started: { summary: true, plotlines: over.started === true },
+            summary_compiled: over.compiled === true,
+            story: { ...view.story, plotlines_mode: over.mode ?? 'groups' },
+            ...(over.detail === null
+                ? { phraseDetailError: 'the gateway is not answering' }
+                : over.detail === undefined
+                  ? {}
+                  : { phraseDetail: over.detail })
+        };
+    }
+
+    /**
+     * The chapter-entry read with the marks a real book carries: Chapter 1 has one blocking finding and one
+     * proposal the Author has approved (open, but not a blocker — U4's badges), Chapter 2 is held by a live
+     * Writer pass, and Chapter 3 has never been written. Chapter 1 also carries the lock, which the rail prints
+     * as a word and the pane prints as a badge — both from the same row.
+     */
+    function entryRead(): PhraseDetailView {
+        const base = phraseDetailView('s1');
+
+        return {
+            ...base,
+            groups: base.groups.map((row) =>
+                row.key === 'chapter_1'
+                    ? { ...row, locked: true, locked_by: 'author', locked_revision: 1 }
+                    : row.key === 'chapter_2'
+                      ? { ...row, writer_busy: true }
+                      : {
+                            ...row,
+                            revision: 0,
+                            content: '',
+                            previous_content: '',
+                            history: [],
+                            writer_busy: false
+                        }
+            ),
+            findings: [
+                {
+                    id: 'f-chapter-cross',
+                    title: 'chapter 2 pays a price chapter 1 never sets up',
+                    cost: 'critical',
+                    kind: 'issue',
+                    state: 'confirmed',
+                    seen_count: 2,
+                    group_refs: ['entry-chapter_1'],
+                    unscoped: false,
+                    targeted: ['entry-chapter_1'],
+                    resolved: [],
+                    missing: ['entry-chapter_1'],
+                    resolved_all: false
+                },
+                {
+                    id: 'f-chapter-note',
+                    title: 'chapter 1 restates the brief in other words',
+                    cost: 'minor',
+                    kind: 'proposal',
+                    state: 'approved',
+                    seen_count: 1,
+                    group_refs: ['entry-chapter_1'],
+                    unscoped: false,
+                    targeted: ['entry-chapter_1'],
+                    resolved: [],
+                    missing: ['entry-chapter_1'],
+                    resolved_all: false
+                },
+                {
+                    id: 'f-chapter-fixed',
+                    // A `fixed` row is in no active list: no badge, no rail mark (U5's rule, restated here for
+                    // the second phrase so a row of THIS surface cannot leak one).
+                    title: 'the crossing was already attempted',
+                    cost: 'critical',
+                    kind: 'issue',
+                    state: 'fixed',
+                    seen_count: 4,
+                    group_refs: ['entry-chapter_1'],
+                    unscoped: false,
+                    targeted: ['entry-chapter_1'],
+                    resolved: ['entry-chapter_1'],
+                    missing: [],
+                    resolved_all: true
+                }
+            ]
+        };
+    }
+
+    it('addresses an entry by its id, and never resolves the other phrase’s prefix', () => {
+        expect(plotlineGroupRef('entry-chapter_1')).toBe('plotlines-group:entry-chapter_1');
+        expect(parsePlotlineGroupRef('plotlines-group:entry-chapter_1')).toBe('entry-chapter_1');
+        // The prefixes are the only thing that tells the two surfaces apart, so neither parser may accept the
+        // other's id: a uuid that resolves in both panes is how a rail click opens the wrong contract.
+        expect(parsePlotlineGroupRef(summaryGroupRef('grp-promise'))).toBeUndefined();
+        expect(parseSummaryGroupRef(plotlineGroupRef('entry-chapter_1'))).toBeUndefined();
+        // An empty id is not an entry, and neither is an absent ref (the header's selection).
+        expect(parsePlotlineGroupRef('plotlines-group:')).toBeUndefined();
+        expect(parsePlotlineGroupRef(undefined)).toBeUndefined();
+    });
+
+    it('resolves the entry the ref names — by id, never by row position — and only on Phrase ②’s panel', () => {
+        const view = phraseTwo({ started: true, detail: phraseDetailView('s1') });
+
+        // The rows arrive in composition order; a ref naming the middle row must still find the middle row's
+        // CONTRACT even when the server sends them in another order (the same U2 rule the Summary's rows follow).
+        const reversed: StoryViewData = {
+            ...view,
+            phraseDetail: { ...view.phraseDetail!, groups: [...view.phraseDetail!.groups].reverse() }
+        };
+
+        expect(plotlineGroupFocus(view, { panel: 'plotlines', ref: plotlineGroupRef('entry-chapter_2') })?.title).toBe(
+            'Chapter 2 — The Salt Road'
+        );
+        expect(
+            plotlineGroupFocus(reversed, { panel: 'plotlines', ref: plotlineGroupRef('entry-chapter_2') })?.title
+        ).toBe('Chapter 2 — The Salt Road');
+        // The header's selection names no entry, a ref naming no row names none, and a Phrase ② ref handed to
+        // another panel is ignored rather than guessed at.
+        expect(plotlineGroupFocus(view, { panel: 'plotlines' })).toBeUndefined();
+        expect(plotlineGroupFocus(view, { panel: 'plotlines', ref: plotlineGroupRef('gone') })).toBeUndefined();
+        expect(
+            plotlineGroupFocus(view, { panel: 'summary', ref: plotlineGroupRef('entry-chapter_2') })
+        ).toBeUndefined();
+    });
+
+    it('rows the entries the rail paints, with the counts and marks the row itself reports', () => {
+        const rows = plotlineRailEntries(phraseTwo({ started: true, detail: entryRead() }));
+
+        // (ref, title, blocking, open, writer holds it, written, locked) — the whole list, so a reorder or a
+        // count derived from the wrong read fails. Chapter 1 badges ONE (the critical issue): the approved
+        // proposal is open but costs nothing, and the `fixed` row is in no list at all.
+        expect(
+            rows.map((row) => [
+                row.ref,
+                row.entry.title,
+                row.blockingFindings,
+                row.openFindings,
+                row.writerBusy,
+                row.written,
+                row.locked === true,
+                row.lockedBy,
+                row.lockedRevision
+            ])
+        ).toEqual([
+            ['plotlines-group:entry-chapter_1', 'Chapter 1 — The Salt Road', 1, 2, false, true, true, 'author', 1],
+            ['plotlines-group:entry-chapter_2', 'Chapter 2 — The Salt Road', 0, 0, true, true, false, undefined, undefined],
+            ['plotlines-group:entry-chapter_3', 'Chapter 3 — The Salt Road', 0, 0, false, false, false, undefined, undefined]
+        ]);
+
+        // The lock's keys are ABSENT on an unlocked row rather than `false`/`null`: the rail renders nothing for
+        // an absent mark, and a row that printed `undefined` would put a word in the accessible name.
+        expect(Object.keys(rows[1]!).sort()).toEqual(
+            ['blockingFindings', 'entry', 'openFindings', 'ref', 'writerBusy', 'written'].sort()
+        );
+    });
+
+    it('rows nothing for a book whose Phrase ② has no chapter entries (the classic records stay in the pane)', () => {
+        // A classic book's `view.plotlines` records are the OTHER surface (§4.3), and putting them in the rail as
+        // well would put two Plotlines lists on one screen. The rail asks the Setting, not the record count.
+        expect(plotlineRailEntries(phraseTwo({ mode: 'classic' }))).toEqual([]);
+        // Started on the grouped pipeline, read not landed: no rows yet, which the rail's pending line owns.
+        expect(plotlineRailEntries(phraseTwo({ started: true }))).toEqual([]);
+    });
+
+    it('prompts the handoff exactly between “compiled” and “started”, and reads the surface from the flags', () => {
+        // The four states of the rail's mark. `plotlinesRailSurfaceOpen` is the wider question — is there a
+        // chapter-entry surface to open at all — and it answers true for either flag.
+        expect(
+            [
+                plotlinesReadyToStart(phraseTwo({ compiled: true, started: false })),
+                plotlinesReadyToStart(phraseTwo({ compiled: true, started: true })),
+                plotlinesReadyToStart(phraseTwo({ compiled: false, started: false })),
+                plotlinesReadyToStart(phraseTwo({ compiled: false, started: true }))
+            ]
+        ).toEqual([true, false, false, false]);
+
+        expect(
+            [
+                plotlinesRailSurfaceOpen(phraseTwo({ started: true, mode: 'classic' })),
+                plotlinesRailSurfaceOpen(phraseTwo({ started: false, mode: 'groups' })),
+                plotlinesRailSurfaceOpen(phraseTwo({ started: false, mode: 'classic' }))
+            ]
+        ).toEqual([true, true, false]);
+    });
+
+    it('names Phrase ② and its entry for the pane’s heading, and Characters with no phrase number', () => {
+        const view = phraseTwo({ started: true, detail: phraseDetailView('s1') });
+
+        expect(selectionTitle(view, { panel: 'plotlines' })).toBe('Phrase 2 — Plotlines');
+        expect(selectionTitle(view, { panel: 'plotlines', ref: plotlineGroupRef('entry-chapter_1') })).toBe(
+            'Phrase 2 — Plotlines · Chapter 1 — The Salt Road'
+        );
+        // An entry the read does not have falls back to the phrase's own title: the pane then says what it is
+        // looking at rather than inventing a row.
+        expect(selectionTitle(view, { panel: 'plotlines', ref: plotlineGroupRef('gone') })).toBe(
+            'Phrase 2 — Plotlines'
+        );
+        // The supplementary sheet keeps its title with NO number — the exact claim T-W4 retires.
+        expect(selectionTitle(view, { panel: 'characters' })).toBe('Characters');
+        expect(STORY_SUPPLEMENTS.map((sheet) => [sheet.key, sheet.title])).toEqual([['characters', 'Characters']]);
+    });
+
+    it('keeps an entry selected while its read is in flight, and drops it once the rows say it is gone', () => {
+        const landed = phraseTwo({ started: true, detail: phraseDetailView('s1') });
+
+        expect(selectionExists(landed, { panel: 'plotlines', ref: plotlineGroupRef('entry-chapter_3') })).toBe(true);
+        expect(selectionExists(landed, { panel: 'plotlines', ref: plotlineGroupRef('retired') })).toBe(false);
+        // Not landed (in flight, or the read failed): an unread entry is not a deleted entry, so the selection
+        // holds and the pane shows its loading line — the same U6 rule as a Summary group.
+        expect(
+            selectionExists(phraseTwo({ started: true }), { panel: 'plotlines', ref: plotlineGroupRef('retired') })
+        ).toBe(true);
+        expect(
+            selectionExists(phraseTwo({ started: true, detail: null }), {
+                panel: 'plotlines',
+                ref: plotlineGroupRef('retired')
+            })
+        ).toBe(true);
+        // A bare uuid on this panel is still a classic §4.3 record, and resolves against `view.plotlines`.
+        expect(selectionExists(landed, { panel: 'plotlines', ref: landed.plotlines[0]!.id })).toBe(true);
+        expect(selectionExists(landed, { panel: 'plotlines', ref: 'no-such-record' })).toBe(false);
     });
 });

@@ -226,7 +226,7 @@ describe('AgentsPanel — the global employee roster', () => {
         ).toBe('true');
     });
 
-    it('states the rank every employee holds, and invents no Entry role (R15)', () => {
+    it('states the rank every employee holds, and invents no Entry role (V-2, D-38a)', () => {
         render(<AgentsPanel agents={idle} />);
 
         const panel = screen.getByTestId('agents-panel');

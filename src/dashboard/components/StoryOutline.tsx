@@ -1,12 +1,12 @@
-// The left rail's second half: the Summary phrase, its children, and the Story's supporting folders.
+// The left rail's second half: the Story's phrases, their children, and the Story's supporting sheets and folders.
 //
-// R6 — WHAT THE PHRASE LIST HOLDS NOW. `STORY_PHRASES` carries the Summary alone, because the rail is the
-// content area's table of contents and a grouped book's content area opens the Summary Overview, one of the
-// five groups, or a folder. Characters/Plotlines/Chapters are phases the crew works through, not panes the
-// Author navigates to from here, and a rail row that opened nothing would be a dead end (the four-phrase
-// vocabulary stays in `story-nav.ALL_STORY_PHRASES` for the directive label and for a later phase's rail).
-// Under the Summary header the rows are the server's GROUP rows when the book is group-managed, and the
-// sampling round's `Revision 1 … N` drafts when it is not — see `groupChildren`/`summaryChildren`.
+// R6 — WHAT THE PHRASE LIST HOLDS. T-W4 turned the second phrase on, so `STORY_PHRASES` now carries Summary ① and
+// Plotlines ②: the rail is the content area's table of contents, and a grouped book's content area opens the Summary
+// Overview, one of its five groups, the Plotlines phrase, one of its chapter entries, or a folder. Under each phrase
+// header the rows are the server's ENTRY rows when the book is group-managed on that phrase, and the sampling round's
+// `Revision 1 … N` drafts under Summary when it is not — see `groupChildren`/`summaryChildren`/`plotlineChildren`.
+// Chapters still has no rail row (no group loop writes its rows), and Characters is no longer numbered: it is a
+// supplementary sheet the crew builds from the Summary, so it rides the rail under `Supplements` (T-W4).
 //
 // WHY THE RAIL IS A PURE NAVIGATOR: the content area shows exactly one thing at a time, and the
 // rail is the only place that decision is made. It therefore renders the phrase/folder list and
@@ -18,7 +18,7 @@
 // itself stays in the accessible name, and the reason stays in the tooltip). Minor findings never badge —
 // they are filed, not raised. A child row is a leaf, so it carries no chevron: there is nothing to expand.
 //
-// A PHRASE HEADER IS ALSO A DISCLOSURE CONTROL (R8): clicking `Phrase 1` folds its children away and
+// A PHRASE HEADER IS ALSO A DISCLOSURE CONTROL (U-21): clicking `Phrase 1` folds its children away and
 // clicking it again unfolds them, which is how the Author gets the rail back to four lines. It changes
 // what the rail SHOWS and nothing else — the collapsed phrase's rows are unmounted, never deleted, so
 // re-expanding restores every row, its strike-through, its badge and its tooltip, in the same order.
@@ -26,11 +26,16 @@ import { useState } from 'react';
 import {
     STORY_FOLDERS,
     STORY_PHRASES,
+    STORY_SUPPLEMENTS,
     attentionFor,
     castMembers,
     chaptersInOrder,
     phraseLoaded,
+    // T-W4 — Phrase ②'s rail vocabulary: the chapter-entry rows, and the predicate that decides whether the
+    // header offers a `start` tick.
+    plotlineRailEntries,
     plotlinesInOrder,
+    plotlinesReadyToStart,
     summaryGroupEntries,
     summaryReadyForReview,
     summaryRevisionRef,
@@ -40,9 +45,16 @@ import type { StoryAttention, StoryPhraseKey, StorySelection, SummaryRevisionEnt
 import {
     groupLockActorLabel,
     isGroupSummary,
+    // T-W4 — Phrase ②'s read states. `isPlotlinesGroups` is the dial question (absent means classic) and the two
+    // read predicates are what separate "the entries are on their way" from "the entries could not be read",
+    // which is the U6 rule restated for the second phrase.
+    isPlotlinesGroups,
     isOpenFinding,
+    phraseDetailReadError,
+    phraseDetailReadLanded,
     phraseOverallScore,
     phraseReadError,
+    plotlinesStarted,
     type PhraseLockActor,
     type StoryViewData
 } from './story-contract';
@@ -176,6 +188,36 @@ function groupChildren(view: StoryViewData): OutlineChildSpec[] {
         ...(entry.writerBusy
             ? { mark: 'writer', markTone: 'writer' as const }
             : entry.written
+              ? {}
+              : { mark: 'to write', markTone: 'todo' as const })
+    }));
+}
+
+/**
+ * T-W4 — the rail's children of Phrase ②: the server's CHAPTER-ENTRY rows, in composition order, named by their
+ * own titles ("Chapter 1 — The Salt Road"), each addressed by `plotlines-group:<uuid>`.
+ *
+ * WHY NOT `Plotline 1 … N`. Those rows belong to the other Plotlines surface: a classic book's §4.3 records pane,
+ * whose list the pane itself draws from `view.plotlines`. Which of the two the rail shows is the Setting's answer
+ * (`story.plotlines_mode` + the phrase's own `mode`, read by `isPlotlinesGroups`), never a count of rows — so a
+ * book that has both (a classic history, a dial the Author just turned on) cannot get a mixed rail.
+ *
+ * The marks come from `story-nav.plotlineRailEntries`, which evaluates the SAME `groupBlockingFindings` and
+ * `isGroupLocked` selectors the entry pane uses (through the phrase-swap view), so a badge can never disagree
+ * with the pane it points at. No score percentages here: Phrase ②'s entries are contracts, and nothing in the wire
+ * scores a contract the way a Reader pass scores a Summary section.
+ */
+function plotlineChildren(view: StoryViewData): OutlineChildSpec[] {
+    return plotlineRailEntries(view).map((row) => ({
+        ref: row.ref,
+        title: row.entry.title,
+        findings: row.blockingFindings,
+        ...(row.locked === true
+            ? { locked: true as const, lockedBy: row.lockedBy, lockedRevision: row.lockedRevision }
+            : {}),
+        ...(row.writerBusy
+            ? { mark: 'writer', markTone: 'writer' as const }
+            : row.written
               ? {}
               : { mark: 'to write', markTone: 'todo' as const })
     }));
@@ -327,7 +369,7 @@ export interface StoryOutlineProps {
 const outlineChildrenId = (phrase: StoryPhraseKey): string => `outline-children-${phrase}`;
 
 export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
-    // R8 — the phrases the Author has folded away. A Set of KEYS (not a boolean per phrase, not indices):
+    // U-21 — the phrases the Author has folded away. A Set of KEYS (not a boolean per phrase, not indices):
     // empty means every phrase is expanded, which is the default the rail had before this existed, so no
     // existing row test changes. It is view state, not story state: it is local to this rail, never sent to
     // the server, never in the URL, and a refetch of `view` does not reset it (the fold survives a poll).
@@ -359,13 +401,28 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
 
     const ready = summaryReadyForReview(view);
     const cast = castMembers(view);
-    const plotlines = plotlinesInOrder(view);
     const chapters = chaptersInOrder(view);
     const revisions = summaryRevisions(view);
     // R6 — the one question that decides what the Summary phrase's children ARE: the server's five group rows,
     // or the sampling round's Revision 1…N drafts. `isGroupSummary` reads `story.summary_mode` (echoed by the
     // phrase read), so the answer cannot drift from what the wire says the book is.
     const grouped = isGroupSummary(view);
+    // T-W4 — the same question for Phrase ②, and it is a DIFFERENT dial: `story.plotlines_mode` (echoed by the
+    // Phrase ② read). A book may be grouped on one phrase and classic on the other, and the two answers may not
+    // borrow each other's value — a Summary switch does not rewrite the Plotlines surface, and vice versa.
+    const groupedPlotlines = isPlotlinesGroups(view);
+    // T-W4 — R5's step ②: the Summary is compiled and Phrase ② has not started, which is the one frame where the
+    // handoff is live. Same predicate the pane's button is built from (`plotlinesReadyToStart` →
+    // `story-contract.plotlinesHandoffRefusal`), so a rail tick that promises "start" and a disabled button cannot
+    // appear on the same frame. The phrase's own read gates the ROWS below, never this tick.
+    const plotlinesStart = plotlinesReadyToStart(view);
+    // The phrase's own started flag (`story.phrase_started.plotlines`), read separately from the tick above on
+    // purpose: an uncompiled Summary makes the tick absent too, and the two marks mean different things.
+    const plotlinesStartedNow = plotlinesStarted(view);
+    // T-W4 — whether Phrase ②'s read has LANDED, which is the only thing that separates "the entries are on their
+    // way" from "the entries could not be read" (the U6 rule, for the second route). It reads `view.phraseDetail`,
+    // the frame's own cache slot, so the rail and the pane answer from one fact.
+    const plotlinesDetailLanded = phraseDetailReadLanded(view);
     // T3 — the phrase header's OVERALL score, the mean of every group's latest score. It is undefined unless
     // EVERY group carries one, because one scoring pass scores all five: a book with four scored rows is a
     // pass that has not reached the fifth, and an average of the rows that happened to arrive is a number
@@ -395,20 +452,23 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                 ? grouped
                                   ? groupChildren(view)
                                   : summaryChildren(revisions)
-                                : phrase.key === 'characters'
-                                  ? cast.map((member) => ({ ref: member.id, title: member.name || member.id }))
-                                  : phrase.key === 'plotlines'
-                                    ? plotlines.map((plotline) => ({
-                                          ref: plotline.id,
-                                          title: `Plotline ${plotline.order}${plotline.heading ? ` — ${plotline.heading}` : ''}`
-                                      }))
+                                : // T-W4 — Phrase ②'s rows are the chapter entries, and ONLY on the grouped
+                                  // pipeline. A classic book's rail row opens the §4.3 records pane, which lists
+                                  // its own plotlines in the content area; putting those records in the rail as
+                                  // well would put two Plotlines lists on screen at once.
+                                  phrase.key === 'plotlines'
+                                  ? groupedPlotlines
+                                      ? plotlineChildren(view)
+                                      : []
+                                  : phrase.key === 'characters'
+                                    ? cast.map((member) => ({ ref: member.id, title: member.name || member.id }))
                                     : chapters.map((chapter) => ({
                                           ref: chapter.id,
                                           title: `Chapter ${chapter.order} — ${chapter.title}`
                                       }));
 
                         const phraseAttention = attentionFor(view, phrase.key);
-                        // R8: fold state is per phrase, so folding Summary leaves Characters open.
+                        // U-21: fold state is per phrase, so folding Summary leaves Characters open.
                         const isCollapsed = collapsed.has(phrase.key);
                         // The ONE condition that decides whether the rows exist: expanded AND non-empty. It
                         // drives both the `<ul>` below and the header's `aria-controls`, so the IDREF can never
@@ -421,7 +481,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                     type="button"
                                     className={`outline-item outline-item--phrase${selection.panel === phrase.key ? ' outline-item--active' : ''}${attentionClass(phraseAttention)}`}
                                     aria-current={isActive(selection, phrase.key) ? 'page' : undefined}
-                                    // R8: the header doubles as the disclosure control for this phrase's rows.
+                                    // U-21: the header doubles as the disclosure control for this phrase's rows.
                                     // `aria-expanded` is ALWAYS present and current — it is the state a reader
                                     // announces. `aria-controls` is only meaningful while the list it names is in
                                     // the DOM, and a folded list (and a childless phrase's list) is UNMOUNTED
@@ -434,7 +494,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                     data-attention={phraseAttention?.tone}
                                     title={phraseAttention?.label}
                                     onClick={() => {
-                                        // R8: one click folds, the next unfolds — on the WHOLE header, because a
+                                        // U-21: one click folds, the next unfolds — on the WHOLE header, because a
                                         // second control (a chevron) would be chrome the rail has never had and
                                         // the package's other disclosure rows put the toggle on the row itself.
                                         toggleCollapsed(phrase.key);
@@ -460,6 +520,43 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                             start
                                         </span>
                                     ) : null}
+                                    {/* T-W4 — R5's handoff prompt, Phrase ②'s equivalent of the Summary's tick. The
+                                        Summary is compiled and the phrase has not started, so the pane the Author is
+                                        one click from has a live "start Phrase 2 from the compiled Summary" button —
+                                        and ONLY that predicate says so (`story-contract.summaryIsCompiled` +
+                                        `phrase_started.plotlines`, the same two facts the button's refusal reads).
+                                        A started phrase shows no tick: the handoff is one-way (D-72), and a mark that
+                                                kept promising a start nobody can press is noise. */}
+                                    {phrase.key === 'plotlines' && plotlinesStart ? (
+                                        <span
+                                            className="outline-start"
+                                            data-testid="outline-plotlines-start"
+                                            title="the compiled Summary is ready to start Phrase 2"
+                                        >
+                                            start
+                                        </span>
+                                    ) : null}
+                                    {/* T-W4 — the started mark, on the phrase's own flag (`story.phrase_started.plotlines`)
+                                        rather than on the absence of the tick above: an uncompiled Summary also makes
+                                        the tick absent, and labelling THAT "started" would be a lie. Once the phrase
+                                        has started, the rail says so rather than leaving the row ambiguous: the copied
+                                        Seed, the entries and the claim keys were written against it, so nothing here is
+                                        repeatable (D-72), and the Author who wonders "did it start?" reads one word
+                                        instead of opening the pane. The tooltip names WHICH pipeline it started on,
+                                        because that decides whether the pane below shows entries or records. */}
+                                    {phrase.key === 'plotlines' && plotlinesStartedNow ? (
+                                        <span
+                                            className="outline-state outline-state--writer"
+                                            data-testid="outline-plotlines-state"
+                                            title={
+                                                groupedPlotlines
+                                                    ? 'Phrase 2 has started: its Seed is copied, and its chapter entries are the surface you revise.'
+                                                    : 'Phrase 2 is running on the classic plotline tools: the pane shows the §4.3 records, not chapter entries.'
+                                            }
+                                        >
+                                            started
+                                        </span>
+                                    ) : null}
                                     {/* T3 — the phrase's OVERALL score, the mean of the five groups. It rides the
                                         Summary header because the header is the one row that stands for the whole
                                         Overview, and it is the number the Author compares between passes. The
@@ -482,7 +579,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                     )}
                                 </button>
 
-                                {/* R8: a folded phrase renders NO list at all, so its rows leave the DOM and the
+                                {/* U-21: a folded phrase renders NO list at all, so its rows leave the DOM and the
                                     tab order rather than sitting there hidden — the point of the request is to
                                     clear the rail. Nothing is deleted: the rows come back exactly as they were,
                                     with their strikes, badges and tooltips, on the next click. A phrase with no
@@ -608,7 +705,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                     showing a phrase with nothing under it, which reads as an empty book. One line,
                                     not a spinner (U-11), and it is gone the moment `GET /stories/:id/phrases`
                                     answers — including when it answers with five unwritten groups, which is a real
-                                    state and gets real rows. A folded phrase keeps showing nothing (R8 unmounts the
+                                    state and gets real rows. A folded phrase keeps showing nothing (U-21 unmounts the
                                     rows on purpose). */}
                                 {phrase.key === 'summary' && grouped && !phraseLoaded(view) && !isCollapsed ? (
                                     phraseReadError(view) === undefined ? (
@@ -631,10 +728,80 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                         </p>
                                     )
                                 ) : null}
+                                {/* T-W4 / U6 — the SAME three answers for Phrase ②: rows on their way, rows unread,
+                                    or nothing to show. The gating differs from Summary's in one honest way: Phrase ②
+                                    is fetched on demand (only when the dial is on or the surface is already open —
+                                    `state.ts:phraseDetailWanted`), so a classic, unstarted book has NO read and must
+                                    not render a loading line for a route it never called. That is why the line hangs
+                                    off `groupedPlotlines` (the Setting's answer) and not off the selection: an Author
+                                    standing on the §4.3 records pane gets no Phrase ② furniture at all. */}
+                                {phrase.key === 'plotlines' && groupedPlotlines && !isCollapsed ? (
+                                    !plotlinesDetailLanded ? (
+                                        phraseDetailReadError(view) === undefined ? (
+                                            /* Pending: the read is in flight and the entries arrive with it. */
+                                            <p
+                                                className="outline-pending"
+                                                data-testid="outline-plotlines-pending"
+                                            >
+                                                reading the chapter entries…
+                                            </p>
+                                        ) : (
+                                            /* R-T2/F2, restated for the second phrase: the entries exist and are
+                                               merely unread, and the server's own sentence is the actionable fact. */
+                                            <p
+                                                className="outline-pending outline-pending--error"
+                                                data-testid="outline-plotlines-error"
+                                                title={phraseDetailReadError(view)}
+                                            >
+                                                {`Chapter entries unread: ${phraseDetailReadError(view)}`}
+                                            </p>
+                                        )
+                                    ) : plotlinesStartedNow && children.length === 0 ? (
+                                        /* The phrase started on the grouped pipeline and the read answered with NO
+                                           entries — the brief has not been accepted yet, so the chapter entries have
+                                           not been materialized. This is a real state, not a loading one, and it
+                                           names the wait above the empty list. */
+                                        <p className="outline-pending" data-testid="outline-plotlines-empty">
+                                            no chapter entries yet — the phrase's brief has to be accepted before the
+                                            chapters exist
+                                        </p>
+                                    ) : null
+                                ) : null}
                             </li>
                         );
                     })}
                 </ol>
+            </div>
+
+            {/* T-W4 — SUPPLEMENTS: the sheets the crew builds FROM the phrases, which are not steps in the
+                numbered pipeline. Characters lives here now (it was Phrase 2 in the old numbering): the loop has no
+                Characters phase to sign off, its records come from `view.cast` on the Story payload rather than from
+                a phrase read, and the Author still needs the sheet one click away. It navigates with the same
+                `{panel:'characters'}` selection it always used, so its pane, its rows and its tests are unchanged —
+                only the heading above it moved, and the "Phrase 2" number is gone. */}
+            <div className="outline-group">
+                <h2 className="outline-heading">Supplements</h2>
+                <ul className="outline-folders" data-testid="outline-supplements">
+                    {STORY_SUPPLEMENTS.map((supplement) => {
+                        const supplementAttention = attentionFor(view, supplement.key);
+
+                        return (
+                            <li key={supplement.key}>
+                                <button
+                                    type="button"
+                                    className={`outline-item outline-item--folder${isActive(selection, supplement.key) ? ' outline-item--active' : ''}${attentionClass(supplementAttention)}`}
+                                    aria-current={isActive(selection, supplement.key) ? 'page' : undefined}
+                                    data-attention={supplementAttention?.tone}
+                                    title={supplementAttention?.label}
+                                    onClick={() => onSelect({ panel: supplement.key })}
+                                >
+                                    <span className="outline-name">{supplement.title}</span>
+                                    {supplementAttention ? <AttentionMark attention={supplementAttention} /> : null}
+                                </button>
+                            </li>
+                        );
+                    })}
+                </ul>
             </div>
 
             <div className="outline-group">

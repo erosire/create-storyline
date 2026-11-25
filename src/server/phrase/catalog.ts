@@ -1,14 +1,24 @@
-// SUMMARY PHRASE — the catalog's life in the book (R1, R6).
+// THE PHRASE CATALOG — the catalog's life in the book (R1, R6), now for every phrase kind.
 //
-// WHAT THIS MODULE OWNS: the rule that turns the CODE catalog (`shared/phrase.ts` — which groups
-// exist and what they are called) into RECORDS (`phrases`, `phrase_groups`), plus the one predicate
-// that says whether a Story is group-managed at all, plus the one PREDICATE that says whether a
-// group's current text is locked (`isPhraseGroupLocked` — the lock's WRITES belong to `locks.ts`,
-// and every other read asks this one). Nothing here decides what a Writer may write,
-// when the loop dispatches, or what a review means: `revisions.ts`, `loop/work.ts` and
+// WHAT THIS MODULE OWNS: the rule that turns the CODE catalog (`shared/phrase.ts` — which phrases
+// exist, what each composes from and what its entries are called) into RECORDS (`phrases`,
+// `phrase_groups`), plus the predicates that say whether a Story runs a GIVEN phrase in the group
+// model, plus the one PREDICATE that says whether a group's current text is locked
+// (`isPhraseGroupLocked` — the lock's WRITES belong to `locks.ts`, and every other read asks this
+// one). Nothing here decides what a Writer may write, when the loop dispatches, or what a review
+// means: `revisions.ts`, the phrase CONTROLLERS (`controller.ts`), `loop/work.ts` and
 // `loop/engine.ts` do, and they all ask THIS module the questions it is allowed to answer
-// — "which groups does this Story have, in what order?", "is this Story group-managed?", and "is this
-// group locked?".
+// — "which entries does this phrase have on this book, in what order?", "is this Story
+// phrase-managed?", and "is this group locked?".
+//
+// WHAT CHANGED WHEN PHRASE ② ARRIVED: every read here is now either SCOPED (it names a `phraseId` or
+// a phrase kind key — `phraseGroupsOfPhrase`, `storyPhraseByKey`) or it keeps its old, unscoped meaning
+// and is documented as "every phrase's rows" (`phraseGroupsOf`) / "the Summary's row" (`storyPhrase`).
+// The unscoped forms are the pre-Phrase-② call sites, and they keep behaving identically until the
+// loop and api waves migrate them; the scoped forms are what new phrase-aware code must use. The
+// phrase-level install and pipeline reads take a phrase id and default to the Story's PRIMARY phrase
+// (its lowest-`order` row — the Summary), so their answers cannot silently start including a second
+// phrase's entries.
 //
 // WHY AN ENSURE RATHER THAN A MIGRATION (R6): a Story written before the redesign has no phrase
 // rows, and this build does not migrate books on load — a legacy Story keeps its `'sampling'`
@@ -25,9 +35,11 @@
 // `store.commit('phrase_catalog', () => ensurePhraseCatalog(...))`.
 import {
     PHRASE_SUMMARY_KEY,
+    autoCreatedPhraseDefinitions,
     composePhraseContent,
-    enabledPhraseDefinitions,
     phraseGroupRank,
+    phraseGroupRankOf,
+    type PhraseDefinition,
     type PhraseGroupDefinition
 } from '../../shared/phrase';
 import type { GroupRevision, Phrase, PhraseGroup, Story, Summary } from '../../shared/types';
@@ -67,6 +79,38 @@ export const phraseIdFactoryOf = (options: PhraseOptions = {}): PhraseIdFactory 
  */
 export const isGroupManagedStory = (story: Story | undefined): boolean => story?.summary_mode === 'groups';
 
+/**
+ * The per-PHRASE dial: "is this Story's NAMED phrase group-managed?" (the general form of
+ * {@link isGroupManagedStory}).
+ *
+ * WHY A PREDICATE PER PHRASE RATHER THAN ONE FOR THE BOOK: the two phrases are separate authoring
+ * models with separate dials, exactly as `summary_mode` already was — a Story may run Phrase ① in the
+ * group model while Phrase ② stays on the classic `createPlotline` tools, or the reverse. A single
+ * book-level flag would force them to move together and make Phrase ② a Summary setting instead of a
+ * phrase.
+ *
+ * ABSENT MEANS THE PRE-PHRASE VALUE, per phrase, and the values are NOT spelled the same on purpose:
+ * the Summary's off value is `'sampling'` (the pre-redesign machinery that actually ran) and the
+ * Plotlines' off value is `'classic'` (the classic §4.3 + §8.1 tool path). Both are what a book
+ * written before the phrase exists reads as, so no migration is needed and a pure read never writes.
+ *
+ * It reads the STORY SETTING, never the presence of rows, for the reason `isGroupManagedStory` already
+ * states: rows can exist while a start step is still settling, and a Story deliberately set back must
+ * stop being phrase-managed at once instead of being held by its own history.
+ *
+ * `isGroupManagedStory` stays the Summary's one predicate for every existing call site; this is the
+ * form a phrase-generic caller (a controller, and later the loop's phrase pass) asks.
+ */
+export const isPhraseGroupManaged = (story: Story | undefined, phraseKey: string): boolean => {
+    if (story === undefined) return false;
+
+    // The dial values are per-phrase, so the lookup is data-shaped rather than a shared constant: a
+    // third phrase adds its own line here and its own `Story` field, and changes nothing above it.
+    if (phraseKey === PHRASE_SUMMARY_KEY) return story.summary_mode === 'groups';
+
+    return story.plotlines_mode === 'groups';
+};
+
 // ---------------------------------------------------------------------------
 // The group lock predicate (the flag on the row; the operations live in `locks.ts`)
 // ---------------------------------------------------------------------------
@@ -102,20 +146,35 @@ export function lockedPhraseGroupIds(store: Store, storyId: string): Set<string>
  * Sorting by `(order, catalog rank, id)` rather than by insertion order means a freshly hydrated
  * store, a hand-edited book, and a store that just created the rows all render the same Overview
  * order — and the group review's prompt hash depends on that stability (§5's cache argument).
+ *
+ * WITHOUT `phraseId` this is EVERY phrase's rows: it is the raw read, not a Summary read, and once a
+ * Story holds a Plotlines phrase the two phrases' entries interleave by `order` (`chapter_1` and
+ * `premise` are both order 1). A caller that means one phrase — which is every pipeline caller —
+ * passes `phraseId`, or asks {@link phraseGroupsOfPhrase} where scoping cannot be forgotten. The rank
+ * tie-break is resolved inside the phrase when one is named (seam S1), so a chapter set composes in
+ * chapter order rather than in an id tie.
  */
 export function phraseGroupsOf(store: Store, storyId: string, phraseId?: string): PhraseGroup[] {
+    // The phrase key is read ONCE for a scoped call: resolving it per row would make a sort over N
+    // rows do N catalog lookups, and the answer is the same for every row of one phrase. A phrase id
+    // the book does not have scopes to nothing anyway (the filter drops every row), so the empty
+    // namespace below is unreachable in practice and answers the summary rank, which is harmless.
+    const scopedKey = phraseId === undefined ? undefined : (store.phrases.get(phraseId)?.key ?? PHRASE_SUMMARY_KEY);
+
     return store.phraseGroups
         .list()
         .filter((group) => group.story_id === storyId && (phraseId === undefined || group.phrase_id === phraseId))
         .sort(
             (left, right) =>
                 left.order - right.order ||
-                phraseGroupRank(left.key) - phraseGroupRank(right.key) ||
+                (scopedKey === undefined
+                    ? phraseGroupRank(left.key) - phraseGroupRank(right.key)
+                    : phraseGroupRankOf(scopedKey, left.key) - phraseGroupRankOf(scopedKey, right.key)) ||
                 left.id.localeCompare(right.id)
         );
 }
 
-/** The Story's phrase rows, in catalog order (more than one only if a future phrase kind is enabled). */
+/** The Story's phrase rows, in catalog order (more than one once a second phrase kind has been started). */
 export function storyPhrases(store: Store, storyId: string): Phrase[] {
     return store.phrases
         .list()
@@ -127,9 +186,68 @@ export function storyPhrases(store: Store, storyId: string): Phrase[] {
  * The Summary Phrase row. `undefined` means the Story is not group-managed yet (a legacy book, or a
  * catalog that has not been ensured), and every caller that reads that as "serve the legacy Summary
  * instead" is what R6 asks for — the read path must never write.
+ *
+ * IT IS THE SUMMARY's row by key, not "the Story's phrase": with Phrase ② started there are two rows
+ * on the book, and this one keeps meaning what it always meant. A phrase-generic caller asks
+ * {@link storyPhraseByKey} or {@link primaryPhraseOf} instead.
  */
 export function storyPhrase(store: Store, storyId: string): Phrase | undefined {
     return storyPhrases(store, storyId).find((phrase) => phrase.key === PHRASE_SUMMARY_KEY);
+}
+
+/**
+ * A Story's phrase row BY KIND KEY (seam S5) — the phrase-scoped form of {@link storyPhrase}.
+ *
+ * The generic name is what lets a controller ask for its own phrase without the loop naming a phrase:
+ * `storyPhraseByKey(store, storyId, controller.key)`. `undefined` is the normal "this phrase has not
+ * been started on this book" answer, never an error: an un-started phrase is a state the Author can
+ * leave a book in.
+ */
+export function storyPhraseByKey(store: Store, storyId: string, phraseKey: string): Phrase | undefined {
+    return storyPhrases(store, storyId).find((phrase) => phrase.key === phraseKey);
+}
+
+/**
+ * The Story's PRIMARY phrase — its lowest-`order` row, which is the Summary for every book this build
+ * can create.
+ *
+ * WHY THIS EXISTS NEXT TO {@link storyPhrase}: the pre-Phrase-② pipeline callers read "the Story's
+ * phrase" without naming a kind, and that read has to keep meaning the Summary even once a Plotlines
+ * row exists. Resolving it by `order` rather than by the `'summary'` literal keeps it data-driven (a
+ * catalog that ever reorders phrases moves the answer with it) while staying one row, and it lets the
+ * phrase-level reads below default to the phrase they always implicitly meant.
+ */
+export function primaryPhraseOf(store: Store, storyId: string): Phrase | undefined {
+    return storyPhrases(store, storyId)[0];
+}
+
+/**
+ * ONE phrase's group rows, in composition order, with the scoping REQUIRED (seam S5).
+ *
+ * `phraseGroupsOf`'s third argument is optional, which is how a Summary read and a phrase read look
+ * identical at the call site and behave differently the moment a second phrase exists. This is the
+ * form a phrase-aware caller is supposed to reach for: the phrase id is not omittable, so a call site
+ * cannot silently start reading two phrases.
+ */
+export function phraseGroupsOfPhrase(store: Store, storyId: string, phraseId: string): PhraseGroup[] {
+    return phraseGroupsOf(store, storyId, phraseId);
+}
+
+/**
+ * The SEED a phrase was written from — the one read that interprets {@link Phrase.seed} (seam S2).
+ *
+ * PHRASE SCOPING IS WHAT MAKES THE PHRASES DISCRETE: every phrase-level gate (the brief's `seed_hash`,
+ * the prompt's SEED block, a re-arm check) hashes THIS text, so Phrase ② keeps its own input after
+ * Phrase ① is edited or deleted. A row created before the field exists has no `seed`, and the honest
+ * reading of that is the Story's idea — the only text that phrase could have been written from — so a
+ * legacy book needs no migration and every existing Summary gate hashes an identical string.
+ */
+export function phraseSeedOf(phrase: Phrase | undefined, story: Story | undefined): string {
+    const seed = phrase?.seed;
+
+    if (typeof seed === 'string') return seed;
+
+    return story?.idea ?? '';
 }
 
 /** A group by its uid address — the shape a route parameter, a finding's `group_refs` and a run's carry. */
@@ -171,7 +289,13 @@ export interface PhraseCatalogResult {
     created_phrase: boolean;
 }
 
-/** A group row's payload from its definition. The phrase id is filled by the caller (see the note there). */
+/**
+ * A group row's payload from its definition. The phrase id is filled by the caller (see the note there).
+ *
+ * It works for BOTH phrase kinds because a definition is a definition: the Summary's five static group
+ * definitions and the Plotlines phrase's generated `chapter_<n>` definitions produce the same row
+ * shape, and the row's `order` is what orders the phrase's composition in each case.
+ */
 function groupInitOf(
     story: Story,
     group: PhraseGroupDefinition
@@ -195,10 +319,28 @@ function groupInitOf(
 }
 
 /**
- * Creates the Story's phrase rows for every ENABLED catalog definition, leaving existing rows alone
- * (R1, idempotent).
+ * The SEED a phrase row is created with, from the definition's `seed_source` (seam S2).
+ *
+ * THE COPY IS THE POINT: the phrase gets its OWN string, so nothing upstream of it — an edit of
+ * `stories.idea`, a deleted Phrase ① — can change what this phrase's gates hash later. For
+ * `'story_idea'` the content is the same text every existing Summary gate already hashes, so behavior
+ * is unchanged; for `'supplied'` the text is handed to the start step rather than read off the Story,
+ * and `ensurePhraseCatalog` never sees that phrase at all (it is `starts_on_demand`).
+ */
+export function phraseSeedInitOf(definition: PhraseDefinition, story: Story, supplied?: string): string {
+    return definition.seed_source === 'supplied' ? (supplied ?? '') : story.idea;
+}
+
+/**
+ * Creates the Story's phrase rows for every definition that starts WITH the Story, leaving existing
+ * rows alone (R1, idempotent).
  *
  * WHAT IT DELIBERATELY DOES NOT DO:
+ *   - create an `enabled` phrase that `starts_on_demand` — Phrase ② has no seed until the Author hands
+ *     one to it, and a phrase row minted before then would be a phrase over an empty seed that some
+ *     gate would later hash as though the Author had written it. Its row comes from its own start step
+ *     (`server/phrase/controllers/plotlines.ts:startPlotlinesPhrase`), which is the same "known to the
+ *     catalog, created by one explicit step" rule R1 already states for a DISABLED definition;
  *   - import legacy prose — that is {@link importLegacySummary}, because copying the Summary's fields
  *     into group history is a decision the Author makes, not a side effect of the loop wanting
  *     somewhere to write;
@@ -209,9 +351,10 @@ function groupInitOf(
  *   - write anything at all in the steady state: the ordered `group_refs` list is rewritten only when
  *     it disagrees with the rows, so a restart's second ensure adds no journal line.
  *
- * Returns `undefined` when the catalog has NO enabled definition (R1's dial turned off): there is
- * then nothing to create and no phrase to hand back, and callers treat that as "no group work"
- * rather than inventing a phrase row the catalog refused.
+ * Returns `undefined` when the catalog has NO definition that starts with the Story (R1's dial turned
+ * off, or every remaining phrase starting on demand): there is then nothing to create and no phrase to
+ * hand back, and callers treat that as "no group work" rather than inventing a phrase row the catalog
+ * refused.
  */
 export function ensurePhraseCatalog(
     store: Store,
@@ -219,7 +362,7 @@ export function ensurePhraseCatalog(
     attribution: Attribution,
     options: PhraseOptions = {}
 ): PhraseCatalogResult | undefined {
-    const definitions = enabledPhraseDefinitions();
+    const definitions = autoCreatedPhraseDefinitions();
 
     if (definitions.length === 0) return undefined;
 
@@ -242,7 +385,11 @@ export function ensurePhraseCatalog(
                 content: '',
                 order: definition.order,
                 revision: 0,
-                group_refs: []
+                group_refs: [],
+                // THE COPIED SEED (seam S2). A `story_idea` phrase copies `stories.idea` at creation,
+                // which is the same text every existing gate hashes, so nothing downstream moves. A
+                // `supplied` phrase is never reached here (see `autoCreatedPhraseDefinitions`).
+                seed: phraseSeedInitOf(definition, story)
             },
             attribution
         );
@@ -434,12 +581,33 @@ export function importLegacySummary(
  * that disagree would put a different Overview in front of the Author, the Reviewer and the API.
  */
 export function composeGroupContent(store: Store, storyId: string, phraseId: string): string {
-    return composeGroupContentFrom(phraseGroupsOf(store, storyId, phraseId));
+    // THE RANK IS RESOLVED INSIDE THE PHRASE (seam S7): a chapter set composes in chapter order and a
+    // Summary composes in catalog order, and neither is "the" global order any more. A phrase id the
+    // book does not have falls back to the default (Summary) rank, which is what it always did.
+    const phraseKey = store.phrases.get(phraseId)?.key;
+
+    return composeGroupContentFrom(
+        phraseGroupsOf(store, storyId, phraseId),
+        phraseKey === undefined ? undefined : (key: string) => phraseGroupRankOf(phraseKey, key)
+    );
 }
 
-/** The same composition over rows already in hand — the form `revisions.ts` uses mid-install. */
-export function composeGroupContentFrom(groups: readonly PhraseGroup[]): string {
-    return composePhraseContent(groups.map((group) => ({ key: group.key, title: group.title, content: group.content })));
+/**
+ * The same composition over rows already in hand — the form `revisions.ts` uses mid-install.
+ *
+ * `rankOf` is optional and defaults to the Summary's rank, so every existing Summary call site is
+ * byte-identical. A caller holding another phrase's rows either passes that phrase's rank or relies on
+ * having handed the rows over in composition order already (which is what `phraseGroupsOfPhrase`
+ * guarantees), because unknown-key ranks tie and the sort is stable.
+ */
+export function composeGroupContentFrom(
+    groups: readonly PhraseGroup[],
+    rankOf?: (key: string) => number
+): string {
+    return composePhraseContent(
+        groups.map((group) => ({ key: group.key, title: group.title, content: group.content })),
+        rankOf
+    );
 }
 
 // ---------------------------------------------------------------------------

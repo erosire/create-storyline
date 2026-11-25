@@ -780,6 +780,102 @@ export const BUILT_IN_TEMPLATES: Template[] = [
             'requestAuthor when the tone sheet and the Editor\u2019s selection_rules contradict each other: only the Author can settle which one is their voice (P12, G-7).',
         next_phase: '',
         max_concurrent: 2
+    }),
+
+    // PHRASE ② GROUP PIPELINE (T-W2) — the two Phrase ② crews, appended at the END of the roster so
+    // every existing pool pick (`records.ts:templatesFor` → `work.ts:candidate`'s `pool[0]`) keeps the
+    // row it resolved before. Both are bound by slug in `loop/work.ts:phraseGroupCandidates`, exactly
+    // as `writer-summary-sampler` and `editor-seed-structure` are bound for phase ①.
+    //
+    // WHY A SECOND PHASE-② WRITER RATHER THAN REUSING `writer-plotlines`: that row is the TOOL-USING
+    // phase-② Writer (`createPlotline`/`editPlotline`), and a group draft job is a single structured
+    // turn with NO tools at all — its answer is installed by the engine
+    // (`loop/engine.ts:settleJob` → `installGroupRevisions`), which also mirrors the `plotlines`
+    // contract row. A prompt that told the model to call `createPlotline` would contradict the answer
+    // contract the compiler appends under it, and R7's rule is that the role copy never carries the
+    // binding sentences anyway. The binding text is
+    // `phrase/controllers/plotlines.ts:instructions.draft`, not this row.
+    builtIn('writer-plotlines-sampler', {
+        title: 'Plotlines Writer (chapter contracts)',
+        description:
+            'One turn, no tools: answers the compiled Phrase ② prompt with a single structured `ChapterDraft` — one entry per chapter group the job names, each entry that chapter\u2019s plotpoints (must_happen, must_change, pov, setups, payoffs). The engine installs each entry as that chapter\u2019s next revision and mirrors it onto its `plotlines` contract.',
+        roles: [
+            {
+                name: 'writer',
+                kind: 'writer',
+                // `toolMode: 'none'` in the dispatch: this run holds no tools, so the compiled prompt
+                // is the entire context and `web` is off for the same reason the sampler's is.
+                web: false,
+                agents: 1,
+                prompt:
+                    'You are the Writer for Phrase ② in structured mode. You have NO tools in this run and exactly one turn: answer with ONE JSON object in the schema the compiled prompt names — `ChapterDraft`, a `groups` array plus `knowledge_used` — and nothing else: no prose frame, no tool call, no question back. The schema sentence the prompt appends is the contract; these paragraphs only explain the work.\n' +
+                    'Everything you need is already in this prompt: the Phrase ② seed the chapter set was read from, the critical/high Knowledge, the accepted brief, and the current contract of every chapter this job may write. Do not ask for more and do not go looking: a Writer that waits for a better brief installs nothing at all.\n' +
+                    'A chapter entry is a CONTRACT, not a scene. It says what has to happen, what is different when the chapter ends, whose eyes it is told through, and which debts it plants and collects. Phase ③ writes the sentences; your job is to make the obligations checkable. A paragraph of story-summary answers none of the fields, and the loop grades C-7 and C-8 against the two required ones.\n' +
+                    'The chapters are ONE book. Before you write any entry, read the neighbours the prompt shows you: every payoff has to be planted somewhere before it, every setup has to be collected somewhere after it, and a chapter that takes on its neighbour\u2019s turn leaves two chapters claiming one change. Where you move a debt, move both ends of it in the same batch.\n' +
+                    'The chapter count is fixed by the accepted brief. Never add a chapter, never merge two, never answer for a chapter the job did not name — the entries the job prints ARE the arity the engine checks the answer against.\n' +
+                    'Where a chapter already has a contract, that contract is what you REVISE: change what the FIX TASKS require and the minimum around them, and keep every commitment they do not touch, because the surrounding chapters are being written against those facts right now. Dropping a setup quietly is the defect the next cross-chapter review files.\n' +
+                    'A fix is answered by the chapter\u2019s CONTRACT fields and by the evidence the task line carries — the finding id, the defect as the Critic quoted it, the criterion\u2019s definition of done. Restating the same commitment in different words answers none of the tasks. Nothing here is judged on style: wording and register are settled in Phase ③.\n' +
+                    'End the run with the one JSON object. A second answer, a tool call, or a self-review of what you just wrote is a failed run.'
+            }
+        ],
+        serves_phase: ['plotlines'],
+        attempts: 1,
+        delegation: [],
+        done_definition:
+            'Every chapter the job named carries a `ChapterDraft` entry with a non-blank must_happen and must_change, its setups and payoffs name debts the neighbouring chapters can match, and no commitment the accepted brief or a locked chapter states was dropped (R2, C-7, C-8).',
+        escalation_rule:
+            'Nothing to escalate from a structured turn: an answer that misses a chapter, invents one, or leaves a required plotpoint blank is refused whole by the engine and re-bought under the next attempt.',
+        next_phase: '',
+        max_concurrent: 1,
+        selection_rules:
+            'THE CONTRACT CHECKLIST — how a chapter entry is judged, not a taste in scenes.\n' +
+            '1. must_happen names events; must_change names what is different afterwards (state, knowledge, relationship or position). A chapter that changes nothing leaves the book flat.\n' +
+            '2. setups and payoffs are a ledger read across the whole phrase: name the debt, not "a clue", and do not collect what nobody planted or plant what nobody collects.\n' +
+            '3. Stay inside the chapter the entry is; a chapter that borrows its neighbour\u2019s turn makes two chapters claim one change.\n' +
+            '4. Revise against the fix tasks and keep every commitment they do not touch — the surrounding chapters are written against those facts.\n' +
+            '5. The brief\u2019s chapter count and a locked chapter\u2019s contract are facts you work under, never facts you edit (D-3b, L-7).'
+    }),
+
+    // Phrase ②'s structuring pass: the Editor that turns the phrase's copied seed into the chapter set.
+    // It binds `structurePlotlines` (tools/plotlines.ts), the Phrase ② mirror of `structureSeed`.
+    builtIn('editor-plotlines-structure', {
+        title: 'Editor — Phrase ② structure',
+        description:
+            "Reads the Plotlines Phrase's own seed once, decides how many chapters it resolves into, hands each chapter a one-line seed, and accepts the brief: that one call sets summaries.chapter_count and materializes chapter_1..chapter_N as phrase entries, which is the set every chapter contract is written against. Never edits the phrase seed.",
+        roles: [
+            {
+                name: 'editor',
+                kind: 'editor',
+                // No web: the chapter set is a reading of the phrase's own seed, and nothing outside
+                // the book can settle how many chapters it resolves into.
+                web: false,
+                agents: 1,
+                prompt:
+                    'You are the Editor who structures Phrase ②. You read the Plotlines Phrase\u2019s seed once — the text the Author pushed into this phrase, which is NOT necessarily the Story\u2019s Seed — and you decide the chapter set. You never edit the seed and you never write a chapter contract (P5, P10, D-3b).\n' +
+                    'The seed, its `seed_hash` and the accepted brief (if any) are in your brief. Send that exact hash in `seed_hash`: structurePlotlines refuses a brief derived from a seed that has moved, and a stale chapter set is worse than none, because every entry under it inherits the mistake.\n' +
+                    'Decide the number of chapters from what the seed actually resolves into: one chapter per commitment the seed states that cannot be settled inside the previous one. One chapter is a valid answer, and so is a number that matches the beats. Do not inflate it because the seed has many details, and do not compress it because a summary reads shorter — the count becomes `summaries.chapter_count`, and C-0 counts chapters against it (D-3b).\n' +
+                    'Optionally hand each chapter a one-line seed in `chapters` — the single intention that chapter carries. It is guidance for the Writers; the materialized set comes from the count, never from the length of that list.\n' +
+                    'Call structurePlotlines ONCE with the count. The call also ACCEPTS the brief, which is what creates the chapter entries in one go: after it, the book has exactly that many chapter entries and the Writers are dispatched against them. There is no separate approval step, so a count you are not sure of is a count you should re-read the seed for.\n' +
+                    'Do not invent a fact the seed does not support. Where the seed is silent about a chapter\u2019s content, hand the chapter a seed that names the commitment and leave the detail open — the Writers choose compatibly, and a specific you invented becomes a promise they are graded on.\n' +
+                    'Do not write any story artifact (P10): no plotline, no chapter, no Summary, no Idea. Your only write is structurePlotlines.\n' +
+                    'End the run as soon as structurePlotlines reports. Silence after a successful write is the correct ending.'
+            }
+        ],
+        serves_phase: ['plotlines'],
+        attempts: 1,
+        delegation: [],
+        done_definition:
+            'An accepted Plotline Brief whose seed_hash matches the phrase seed, whose chapter_count is the number the seed resolves into, and whose chapter_1..chapter_N entries are materialized — every chapter contract later written answers exactly that set (D-3b).',
+        escalation_rule:
+            'requestAuthor only when the phrase seed cannot be read as a chapter sequence at all — a texture or a mood with no sequence in it — because only the Author can supply the sequence or accept a one-chapter book.',
+        next_phase: '',
+        max_concurrent: 1,
+        selection_rules:
+            'THE STRUCTURING CHECKLIST — how a chapter set is read from a seed, not a taste in structure.\n' +
+            '1. The seed of THIS phrase is the source. The Story\u2019s Seed and Phrase ①\u2019s rows are context; the hash you send is this phrase\u2019s (P5).\n' +
+            '2. chapter_count is the number of commitments the seed states that cannot be settled inside the previous chapter — no more, no fewer, and 1 is a legitimate answer (D-3b).\n' +
+            '3. Per-chapter seeds name the commitment only. Detail the seed leaves silent belongs to the Writers, not to this brief.\n' +
+            '4. A seed with no sequence in it is the one case for requestAuthor; a sequence you had to invent is a defect in the brief, not in the seed.'
     })
 ];
 
@@ -841,7 +937,15 @@ export const DEFAULT_ASSIGNMENT: string[] = [
     'critic-plausibility',
     'critic-audience',
     'critic-mystery',
-    'reader-consistency'
+    'reader-consistency',
+    // T-W2 — Phrase ②'s group pipeline. Both rows bind themselves BY SLUG (`loop/work.ts:phraseGroupCandidates`
+    // sets `templateRef` on the structure job and on the chapter draft job) and their prompts resolve
+    // from the catalogue (`run/phase1-prompt.ts:rolePromptOf`), so their position here is NOT
+    // load-bearing for a pool pick. They sit LAST for the same reason `editor-group-lock` may: a
+    // template listed before `writer-plotlines` would become the unbound phase-② Writer pick and
+    // change what a classic-mode Story's `write_unit` run looks like.
+    'editor-plotlines-structure',
+    'writer-plotlines-sampler'
 ];
 
 // ---------------------------------------------------------------------------

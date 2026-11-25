@@ -45,7 +45,15 @@ import { seedHashOf } from '../../shared/seed-hash';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
-import type { GroupDraft, GroupLockDecision, GroupReview, IssueList, SectionScores, SummarySample } from '../../shared/schemas';
+import type {
+    ChapterDraft,
+    GroupDraft,
+    GroupLockDecision,
+    GroupReview,
+    IssueList,
+    SectionScores,
+    SummarySample
+} from '../../shared/schemas';
 import type { Cost, Finding, SampledFixVerification, Story } from '../../shared/types';
 import type { LoopEngineConfig, SweepReport } from './types';
 
@@ -183,6 +191,16 @@ export interface CrewBehaviour {
      * Work Item was never dispatched for, prose that is not JSON.
      */
     groupDraft?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => GroupDraft | string;
+    /**
+     * PHRASE ② (T-W2) — what a chapter lane's `draft_groups` run answers. SAME Work Item kind as
+     * `groupDraft`, different contract: the job's `response_format.name` is `ChapterDraft`, and the answer
+     * carries PLOTPOINTS (`must_happen`/`must_change`, plus the optional heading/pov/setups/payoffs)
+     * because a chapter entry is a contract, not prose. The default names exactly the group refs the Work
+     * Item carried, so `phrase/plotpoints.ts:parseChapterDraftAnswer` accepts the batch; the hook is how a
+     * test scripts a thin answer (a blank `must_happen`), an id outside the phrase, or prose that is not
+     * JSON — all three of which refuse the whole install (R2's atomicity, one phrase down).
+     */
+    chapterDraft?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => ChapterDraft | string;
     /**
      * What a `review_groups` run answers (the gate that decides whether a group draft becomes
      * current). Default: clean. The hook is how a test files GROUP-SCOPED issues, which is the only
@@ -1189,13 +1207,18 @@ function structuredAnswer(
             ? 'screen_samples'
             : formatName === 'GroupDraft'
               ? 'draft_groups'
-              : formatName === 'GroupReview'
-                ? 'review_groups'
-                : formatName === 'SectionScores'
-                  ? 'score_sections'
-                  : formatName === 'GroupLockDecision'
-                    ? 'group_lock'
-                    : 'sample_unit';
+              : // PHRASE ② (T-W2): the chapter lane's draft job — the SAME Work Item kind as the Summary's
+                // batch (`draft_groups`), distinguished only by the contract it answers under. The literal
+                // is `CHAPTER_DRAFT_SCHEMA_NAME` from `shared/schemas/chapter-draft.ts`.
+                formatName === 'ChapterDraft'
+                ? 'draft_groups'
+                : formatName === 'GroupReview'
+                  ? 'review_groups'
+                  : formatName === 'SectionScores'
+                    ? 'score_sections'
+                    : formatName === 'GroupLockDecision'
+                      ? 'group_lock'
+                      : 'sample_unit';
     const pool = store.runs
         .list()
         .filter((run) => LIVE_RUN_STATES.includes(run.state))
@@ -1227,10 +1250,19 @@ function structuredAnswer(
     // `parseGroupDraftAnswer` accepts.
     if (kind === 'draft_groups') {
         const groupRefs = chosen.groupRefs ?? [];
-        const answer =
-            crew.groupDraft !== undefined
-                ? crew.groupDraft({ item: chosen, groupRefs, prompt })
-                : defaultGroupDraftAnswer(groupRefs);
+        // PHRASE ② (T-W2): the CONTRACT decides the answer shape, and the contract is the request's own
+        // `response_format.name`. A chapter batch answers plotpoints; a Summary batch answers prose.
+        // Both are `draft_groups`, and the engine validates them through different parsers
+        // (`phrase/plotpoints.ts:parseChapterDraftAnswer` vs `phrase/revisions.ts:parseGroupDraftAnswer`),
+        // so answering a chapter job with a `GroupDraft` would refuse the whole install.
+        const chapter = formatName === 'ChapterDraft';
+        const answer = chapter
+            ? crew.chapterDraft !== undefined
+              ? crew.chapterDraft({ item: chosen, groupRefs, prompt })
+              : defaultChapterDraftAnswer(groupRefs)
+            : crew.groupDraft !== undefined
+              ? crew.groupDraft({ item: chosen, groupRefs, prompt })
+              : defaultGroupDraftAnswer(groupRefs);
 
         return typeof answer === 'string' ? answer : JSON.stringify(answer);
     }
@@ -1332,6 +1364,33 @@ const defaultGroupDraftAnswer = (groupRefs: string[]): GroupDraft => ({
     groups: groupRefs.map((group_ref) => ({
         group_ref,
         content: `The ${group_ref} line this story refuses to lose.`
+    })),
+    knowledge_used: []
+});
+
+/**
+ * The default `ChapterDraft` answer (PHRASE ②, T-W2): one entry per group ref the Work Item carried, in
+ * that order, with both required plotpoints filled in.
+ *
+ * WHY THE EXACT-SET RULE: `phrase/plotpoints.ts:parseChapterDraftAnswer` refuses the whole batch for one
+ * missing chapter, one extra chapter, or a blank `must_happen`/`must_change` — a chapter title with no
+ * contract is not a contract — so a default that left either field empty would make every loop test about
+ * the chapter lane a test about a refused install.
+ *
+ * The plotpoints are worded off the ENTRY, not off a counter, because the entry key (`chapter_3`) is the
+ * identity the `plotlines` mirror writes at that order: a test that wants to know which chapter produced a
+ * contract row can read the number out of the installed text. A test that wants particular prose — or a
+ * deliberately thin answer — scripts `crew.chapterDraft`.
+ */
+const defaultChapterDraftAnswer = (groupRefs: string[]): ChapterDraft => ({
+    groups: groupRefs.map((group_ref) => ({
+        group_ref,
+        heading: `The turn at ${group_ref}`,
+        must_happen: `What ${group_ref} has to put on the page: the event the chapter exists to deliver.`,
+        must_change: `What is different when ${group_ref} ends — the position, the knowledge, or the debt.`,
+        pov: 'the keeper',
+        setups: `The thing ${group_ref} plants that a later chapter collects.`,
+        payoffs: `The thing ${group_ref} collects that an earlier chapter planted.`
     })),
     knowledge_used: []
 });

@@ -3572,7 +3572,12 @@
     font-weight: 500;
 }
 
-.sv-summary-revise-button {
+/* T-W4 — `sv-plotlines-handoff-button` is the handoff card's own verb: it SHARES this look, and it is a separate
+   class on purpose. The StoryView phase tests count `.sv-summary-revise-button` INSIDE `.sv-summary-column` to
+   prove the phase block renders exactly once, and the handoff card lives in that same column — a shared class
+   would read as a second phase control and make that pin lie about the wrong thing. */
+.sv-summary-revise-button,
+.sv-plotlines-handoff-button {
     align-self: flex-start;
     margin-top: 0.2rem;
     padding: 0.3rem 0.62rem;
@@ -3586,12 +3591,14 @@
     cursor: pointer;
 }
 
-.sv-summary-revise-button:hover:not(:disabled) {
+.sv-summary-revise-button:hover:not(:disabled),
+.sv-plotlines-handoff-button:hover:not(:disabled) {
     border-color: var(--accent);
     color: var(--text-strong);
 }
 
-.sv-summary-revise-button:disabled {
+.sv-summary-revise-button:disabled,
+.sv-plotlines-handoff-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

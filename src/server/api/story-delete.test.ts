@@ -6,6 +6,10 @@ import { MockChatClient, msg } from '../llm/mock';
 import { buildStorylineRuntime } from './server';
 import { MockToolRuntime, AUTHOR_ATTR, seedChapter, seedFinding, seedIdea, seedPlotline, seedRevision, seedTask } from '../run/mock';
 import { installGroupRevisions } from '../phrase/revisions';
+// PHRASE ② (T-W6): the three domain operations that put a second phrase on the book the delete has to
+// purge — the start (its copied Seed), the Editor's structure pass, and the accept that materializes the
+// chapter entries. They come from the phrase barrel, the same surface `loop/**` and `api/routes.ts` use.
+import { acceptPlotlineBrief, createPlotlineBrief, startPlotlinesPhrase } from '../phrase';
 import { Store } from '../store/store';
 import type { Hono } from 'hono';
 import type { StoryRow } from '../../dashboard/api';
@@ -155,7 +159,7 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
         expect((await call(world.app, 'GET', `/stories/${storyId}/knowledge`)).status).toBe(404);
     });
 
-    it('purges the Summary Phrase catalog, its Overview and its whole revision history (P1, R1)', async () => {
+    it('purges both Phrase catalogs with the book: the Summary rows, and Phrase ②\u2019s row, entries, history and brief (P1, R1, D-63, D-77)', async () => {
         const world = makeApp();
 
         const created = await call(world.app, 'POST', '/stories', {
@@ -247,6 +251,51 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
             [{ id: lockedStory.id, rev: lockedStory.rev }]
         );
 
+        // PHRASE ② (T-W6) — the second phrase on the SAME book: a started row with its copied Seed, the
+        // chapter entries its accepted structure pass materialized, and one row of those entries' history.
+        // `plotline_briefs` is the collection the delete had NO line for: the rows stayed in the book
+        // naming a `story_id` (and a `phrase_id`) the store no longer held — the same leak the three
+        // Summary collections above had before the 2026-11-24 hardening closed it.
+        const storyRowA = world.store.stories.require(storyId);
+        const started = startPlotlinesPhrase(
+            world.store,
+            storyRowA,
+            'Premise: a mapmaker returns. Promise: the chart reconciles. Ending: she floods the valley.',
+            AUTHOR_ATTR
+        );
+        const structure = acceptPlotlineBrief(
+            world.store,
+            world.store.stories.require(storyId),
+            createPlotlineBrief(
+                world.store,
+                world.store.stories.require(storyId),
+                started.phrase,
+                { chapter_count: 2, chapters: [{ order: 1, seed: 'the chart is wrong' }, { order: 2, seed: 'the valley pays' }] },
+                AUTHOR_ATTR
+            ),
+            AUTHOR_ATTR
+        );
+        const entryHistory = world.store.groupRevisions.create(
+            {
+                story_id: storyId,
+                phrase_id: started.phrase.id,
+                group_id: structure.groups[0]!.id,
+                group_key: structure.groups[0]!.key,
+                number: 1,
+                content: 'Must happen: the chart is wrong.',
+                state: 'latest'
+            },
+            { run_ref: 'run_plotlines', why: 'seed: one chapter-entry revision the delete must remove (T-W6)' }
+        );
+
+        // The pre-state: two phrases on one book, the chapter entries under the Plotlines row, and one
+        // brief the Author accepted. Each of these is a row the Story owns (P1).
+        expect(
+            world.store.phrases.list().filter((row) => row.story_id === storyId).map((row) => row.key).sort()
+        ).toEqual(['plotlines', 'summary']);
+        expect(structure.groups.map((group) => group.key)).toEqual(['chapter_1', 'chapter_2']);
+        expect(world.store.plotlineBriefs.list().filter((row) => row.phrase_id === started.phrase.id)).toHaveLength(1);
+
         // Story B: another group-managed book, one install deep. The delete is scoped by `story_id`, so
         // B's addresses, texts and history keep their exact values.
         const createdB = await call(world.app, 'POST', '/stories', {
@@ -284,6 +333,25 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
         // And the rows that JOIN on those ids go with them (findings/tasks ride the §4 deletes).
         expect(world.store.findings.list().filter((row) => row.story_id === storyId)).toEqual([]);
         expect(world.store.tasks.list().filter((row) => row.story_id === storyId)).toEqual([]);
+
+        // PHRASE ② (T-W6) — the fourth collection goes in the SAME commit. Asserted per phrase, not only
+        // per story, so a delete that took the Summary rows and left the Plotlines phrase standing cannot
+        // pass: the brief row is the one the `phrases`/`phrase_groups`/`group_revisions` deletes above
+        // never reached, and its `phrase_id` would name a row this commit deleted.
+        expect(world.store.plotlineBriefs.list().filter((row) => row.story_id === storyId)).toEqual([]);
+        expect(world.store.plotlineBriefs.list().filter((row) => row.phrase_id === started.phrase.id)).toEqual([]);
+        expect(
+            world.store.phraseGroups.list().filter((group) => group.phrase_id === started.phrase.id)
+        ).toEqual([]);
+        expect(
+            world.store.groupRevisions.list().filter((row) => row.phrase_id === started.phrase.id)
+        ).toEqual([]);
+        // The rows BY ID, so a purge that deleted the Summary's rows and kept Phrase ②'s cannot pass on a
+        // story_id filter that happens to be empty.
+        expect(world.store.phrases.get(started.phrase.id)).toBeUndefined();
+        expect(world.store.plotlineBriefs.get(structure.brief.id)).toBeUndefined();
+        expect(world.store.groupRevisions.get(entryHistory.id)).toBeUndefined();
+        expect(world.store.phraseGroups.get(structure.groups[0]!.id)).toBeUndefined();
 
         // Story B is untouched by any of it — same ids, same texts, same five revisions.
         expect(rowShape(groupsOf(storyB))).toEqual(beforeB);

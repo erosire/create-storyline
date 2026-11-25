@@ -145,7 +145,12 @@ const COLLECTION_ACCESSOR: Record<
     // its guard, not a claim that a tool may name a score row. `summary_scores` is deliberately NOT in
     // {@link RESOLVABLE}: scores are a display surface, no §7.1 tool takes a `section_score_*` id, and
     // leaving it out keeps `resolveRef`'s sniffing honest about the families a call may address.
-    summary_scores: (store) => store.summaryScores
+    summary_scores: (store) => store.summaryScores,
+    // PHRASE ② PLOTLINES. The accessor exists only because this map is TOTAL by construction — that is
+    // its guard, and it is the same reason `summary_scores` above is here. Like the score rows, a
+    // `plotline_brief` is deliberately NOT in {@link RESOLVABLE}: no §7.1 tool takes a `plotline_brief_*`
+    // id, so leaving it out keeps `resolveRef`'s sniffing honest about the families a call may address.
+    plotline_briefs: (store) => store.plotlineBriefs
 };
 
 /** Reads the store's typed collection by name without a per-collection switch. */

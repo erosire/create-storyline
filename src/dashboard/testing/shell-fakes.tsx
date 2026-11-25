@@ -12,8 +12,16 @@ import type { ReactNode } from 'react';
 import { vi } from 'vitest';
 import type {
     ApiClient,
+    PhraseDetailView,
+    PhraseEntryReviseResult,
     PhraseGroupLockResult,
     PhraseGroupReviseResult,
+    PhraseGroupRow,
+    PhraseGroupScore,
+    PhraseReviewedChooseResult,
+    PhraseReviewedGroup,
+    PhraseReviewedSummary,
+    PhraseStartResult,
     PhraseView,
     QueueItem,
     StoryRow,
@@ -116,6 +124,72 @@ export function storyView(row: StoryRow): StoryView {
 }
 
 /**
+ * The D-65/T3 scoring pass the clean five-group book carries: ONE Critic run over the whole group vector, so
+ * all five rows carry the same `vector_hash` and `at` (`api.ts:PhraseGroupScore`'s rule — a test may not invent
+ * a per-group pass). The numbers are pinned by the shell tests: `StorylineApp.groups.test.tsx` and
+ * `StoryOutline.test.tsx` print them as `84% / 76% / 70% / 88% / 66%`, and their mean (384 / 5 = 76.8 → `77%`)
+ * is the phrase header's overall score.
+ */
+const LIVE_SCORE_HASH = 'vh-9';
+const LIVE_SCORE_AT = '2026-11-09T12:00:00.000Z';
+const LIVE_SCORE_VALUES: Record<string, number> = { premise: 84, promise: 76, theme: 70, tone: 88, ending: 66 };
+
+/** One Critic score row, in the shape the projection attaches to a group (`api.ts:PhraseGroupScore`). */
+function scoreRow(value: number, hash: string, at: string): PhraseGroupScore {
+    return { value, vector_hash: hash, at, run_ref: `run_critic_${hash}` };
+}
+
+/**
+ * ONE group's row inside the Reviewed Summary block (D-67), defaulted to the shape the block exists to show
+ * when it HAS a selection: a clean revision that IS the newest text, with no open issue and no score attached.
+ *
+ * The defaults are readable rather than random because a test asserts the ref the selection forms: the selected
+ * row's id is `rev-<key>-<number>` and the clean verdict names `run_clean_<key>`, so a pane's `title` string
+ * (`SummaryGroupPane.test.tsx`'s `(run run_clean_premise)`) is derivable from the group the test names.
+ *
+ * A test overrides only what its case is about (`scores`, `gap`, `superseded`); `id` and `key` are required so
+ * the derived defaults cannot silently point at the wrong group.
+ */
+export function reviewedGroup(
+    overrides: Partial<PhraseReviewedGroup> & Pick<PhraseReviewedGroup, 'id' | 'key'>
+): PhraseReviewedGroup {
+    return {
+        selected_revision: 1,
+        selected_id: `rev-${overrides.key}-1`,
+        clean_run_ref: `run_clean_${overrides.key}`,
+        latest_revision: 1,
+        superseded: false,
+        issues_open: false,
+        gap: null,
+        scores: [],
+        ...overrides
+    };
+}
+
+/**
+ * The Reviewed Summary block (D-67/D-68), defaulted to the EMPTY `pending` block the wire sends for a book
+ * with no groups (`api/projections.ts:PhraseView.reviewed` is ALWAYS present, so the fake never omits it).
+ *
+ * `story-contract.ts:EMPTY_REVIEWED` is the client's tolerance for a payload that predates the feature; this is
+ * the payload itself. A test that models a real state passes the fields that state has and leaves the rest.
+ */
+export function reviewedBlock(overrides: Partial<PhraseReviewedSummary> = {}): PhraseReviewedSummary {
+    return {
+        state: 'pending',
+        complete: false,
+        vector: {},
+        vector_hash: '',
+        overview: '',
+        groups: [],
+        chosen: null,
+        stale: false,
+        blocking_issues: [],
+        writer_busy: false,
+        ...overrides
+    };
+}
+
+/**
  * R6 — the `GET /stories/:id/phrases` read, DEFAULTING TO THE SAMPLING ECHO the server sends for a legacy book
  * (`mode:'sampling'`, empty rows, never a 404 — `server/api/projections.ts`). That default is what keeps every
  * shell test written before the phrase read existed behaving exactly as it did: a Story with no `summary_mode`
@@ -147,6 +221,9 @@ export function phraseView(storyId: string, overrides: Partial<PhraseView> = {})
             open_tasks: 0,
             mirror: { summary_id: null, in_sync: true, locked: false, fields: [] }
         },
+        // D-67 — the reviewed block travels on EVERY phrase read, including a sampling book's echo: the wire
+        // answers `pending` with nothing in it rather than dropping the key, so the fake may not either.
+        reviewed: reviewedBlock(),
         ...overrides
     };
 }
@@ -184,12 +261,38 @@ export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView
                 run_ref: 'run_1',
                 finding_refs: [],
                 task_refs: [],
-                chars: 48
+                chars: 48,
+                // D-67 — this book's ONE revision per group is the clean one: a cross-group Critic pass closed
+                // on it with no unresolved defect, which is the only thing that makes it selectable into the
+                // reviewed Summary. `SummaryGroupPane.test.tsx`'s clean-stamp case pins the badge and the
+                // `(run run_clean_<key>)` title off exactly these two fields.
+                clean: true,
+                clean_run_ref: `run_clean_${definition.key}`
             }
         ],
         owed_by_findings: [] as string[],
-        writer_busy: false
+        writer_busy: false,
+        // T3 — the one pass that scored this book's vector, attached to every group. The rail prints the number
+        // and the header prints their mean; `story-contract.ts:phraseOverallScore` stays silent if any is missing.
+        scores: [scoreRow(LIVE_SCORE_VALUES[definition.key], LIVE_SCORE_HASH, LIVE_SCORE_AT)]
     }));
+
+    // D-67 — the reviewed block for the cleanest grouped book the shell tests use: every group written ONCE, and
+    // that one revision is clean, so the selection is COMPLETE and `ready` — which is what lets the Overview
+    // pane offer the Author's choose (`SummaryOverviewPane.test.tsx`'s "drops nothing" case) and lets every other
+    // shell test keep reading a grouped book without naming the reviewed state by hand.
+    const cleanGroups = groups.map((group) =>
+        reviewedGroup({
+            id: group.id,
+            key: group.key,
+            selected_revision: group.revision,
+            selected_id: group.history[0].id,
+            latest_revision: group.revision,
+            // The wire's join is the reviewed vector's hash, and on THIS book the clean vector IS the live
+            // vector — one pass, one hash, so both reads report the same rows.
+            scores: group.scores ?? []
+        })
+    );
 
     return phraseView(storyId, {
         mode: 'groups',
@@ -202,7 +305,9 @@ export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView
             unwritten_groups: [],
             written_groups: groups.length,
             vector: Object.fromEntries(groups.map((group) => [group.id, group.revision])),
-            vector_hash: 'grp-hash-1',
+            // The digest the Critic pass below scored (`LIVE_SCORE_HASH`) — the same hash on the score rows, so
+            // the rail's number describes the text the read is showing (D-65's join, `projections.ts`).
+            vector_hash: LIVE_SCORE_HASH,
             review_seats: 1,
             reviews_on_current_vector: 1,
             deep_reviews_on_current_vector: 1,
@@ -211,7 +316,405 @@ export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView
             open_tasks: 0,
             mirror: { summary_id: 'sum_1', in_sync: true, locked: false, fields: [] }
         },
+        reviewed: reviewedBlock({
+            state: 'ready',
+            complete: true,
+            vector: Object.fromEntries(groups.map((group) => [group.id, group.revision])),
+            vector_hash: LIVE_SCORE_HASH,
+            overview: groups.map((group) => group.content).join('\n\n'),
+            groups: cleanGroups
+        }),
         ...overrides
+    });
+}
+
+/**
+ * T-W4 — PHRASE ②'s read (`GET /stories/:id/phrases/plotlines`), the second entry surface.
+ *
+ * THE DEFAULT IS A STARTED, GROUPED PHRASE with three chapter entries, each written once, because that is the
+ * frame every Phrase ② test starts from and the one a test then narrows (`mode:'classic'`, `groups: []`, a
+ * `brief` that is still a draft). Like `groupedPhraseView`, the ids are readable rather than random: a rail ref
+ * is `plotlines-group:entry-chapter_1`, and a test that asserts a ref or a stale-ref fallback reads better with
+ * names than with uuids.
+ *
+ * WHAT IS DIFFERENT FROM THE SUMMARY'S READ, on purpose:
+ *   - `key:'plotlines'` and `mode:'groups'|'classic'` (the Summary's off word is `sampling`);
+ *   - NO `review.mirror` — R6's legacy `summaries` prose check is the Summary's, and Phrase ②'s downstream sync
+ *     is the `plotlines` contract the entry rows already show;
+ *   - `seed_head`/`seed_chars`, the copied Seed's prefix and true length (the pane prints them so the Author can
+ *     recognise which text the phrase was started from);
+ *   - `brief`, the structure decision the chapter entries were materialized from.
+ * `scores` is absent on the entry rows: nothing in the loop scores a chapter contract the way a Reader pass
+ * scores a Summary section, and an invented `0` would claim a review that never ran.
+ */
+export function phraseDetailView(storyId: string, overrides: Partial<PhraseDetailView> = {}): PhraseDetailView {
+    const chapters = [1, 2, 3];
+    const groups: PhraseGroupRow[] = chapters.map((n) => ({
+        id: `entry-chapter_${n}`,
+        key: `chapter_${n}`,
+        title: `Chapter ${n} — The Salt Road`,
+        description: `The ${n}${n === 1 ? 'st' : n === 2 ? 'nd' : 'rd'} chapter's contract: what it must happen, what must change.`,
+        order: n,
+        content:
+            `## Chapter ${n} — The Salt Road\n` +
+            `- Must happen: the crossing is attempted.\n` +
+            `- Must change: the mentor's price is paid.`,
+        revision: 1,
+        updated_by: 'writer',
+        previous_content: '',
+        history: [
+            {
+                id: `rev-chapter_${n}-1`,
+                number: 1,
+                state: 'latest',
+                at: '2026-11-09T10:00:00.000Z',
+                run_ref: 'run_1',
+                finding_refs: [],
+                task_refs: [],
+                chars: 96,
+                clean: true,
+                clean_run_ref: `run_clean_chapter_${n}`
+            }
+        ],
+        owed_by_findings: [],
+        writer_busy: false
+    }));
+
+    return {
+        story_id: storyId,
+        key: 'plotlines',
+        mode: 'groups',
+        phrase_id: 'phrase_plotlines_1',
+        revision: 1,
+        overview: groups.map((group) => group.content).join('\n\n'),
+        groups,
+        findings: [],
+        tasks: [],
+        review: {
+            mode: 'groups',
+            unwritten_groups: [],
+            written_groups: groups.length,
+            vector: Object.fromEntries(groups.map((group) => [group.id, group.revision])),
+            vector_hash: 'plotlines-vector-1',
+            review_seats: 0,
+            reviews_on_current_vector: 0,
+            deep_reviews_on_current_vector: 0,
+            open_findings: 0,
+            blocking_findings: 0,
+            open_tasks: 0
+        },
+        reviewed: reviewedBlock(),
+        seed_head: 'A smuggler pays the tide to cross the salt road, and the road collects.',
+        seed_chars: 67,
+        brief: { status: 'accepted', chapter_count: 3, accepted_at: '2026-11-09T10:00:00.000Z' },
+        ...overrides
+    };
+}
+
+/**
+ * The D-67/D-68 reviewed frames the Summary tab branches on. `stale` and `writer_busy` are NOT wire states —
+ * the wire's three are `pending` / `ready` / `chosen` — they are the two flag combinations the panes have to
+ * render differently (`reviewed.stale` beside `state:'ready'`, and `reviewed.writer_busy` refusing the choose),
+ * so the fixture names them to keep a test's intent legible.
+ */
+export type ReviewedFixtureState = 'pending' | 'ready' | 'chosen' | 'stale' | 'writer_busy';
+
+// The three Ending texts, and the reason all three exist: the Summary tab's whole claim is that the LIVE
+// Overview appears nowhere on it, and that is only an assertion when the live and reviewed texts are DIFFERENT
+// texts (`SummaryOverviewPane.test.tsx`'s D-67 cases). `newest` is what the Writer installed and no pass closed;
+// `clean` is the r2 the Reviewers passed; `chose` is the text the Author took.
+const LIVE_ENDING_TEXT = 'Ending — the newest text the Writer installed, which no pass has closed on.';
+const CLEAN_ENDING_TEXT = 'Ending — the clean text the Reviewers passed at Revision 2.';
+const CHOSEN_TEXT_SUFFIX = ' — the text the Author chose.';
+
+/** The vector the CLEAN selection is keyed by, and the numbers that judged it (D-67's join). */
+const CLEAN_VECTOR_HASH = 'vh-clean-1';
+const CLEAN_SCORE_AT = '2026-11-09T13:00:00.000Z';
+const CLEAN_SCORE_VALUES: Record<string, number> = { premise: 79, promise: 71, theme: 66, tone: 83, ending: 62 };
+
+/** The vector the AUTHOR's choice adopted. It differs from the clean one, which is the only reason `stale` is true. */
+const CHOSEN_VECTOR_HASH = 'vh-chosen-1';
+const CHOSEN_SCORE_AT = '2026-11-09T12:00:00.000Z';
+const CHOSEN_AT = '2026-11-09T14:00:00.000Z';
+const STALE_CHOSEN_AT = '2026-11-08T09:00:00.000Z';
+const CHOSEN_SCORE_VALUES: Record<string, number> = { premise: 74, promise: 75, theme: 76, tone: 77, ending: 78 };
+
+/** A partial selection still has a hash; it is the one thing no Reader row claims, so the strip prints no numbers. */
+const PARTIAL_VECTOR_HASH = 'vh-partial';
+
+/** One `PhraseRevisionRow`, so the two history lists below stay one-line and cannot drift from the wire's shape. */
+function fixtureRevision(
+    key: string,
+    number: number,
+    state: string,
+    chars: number,
+    clean: boolean,
+    at: string
+): PhraseGroupRow['history'][number] {
+    return {
+        id: `rev-${key}-${number}`,
+        number,
+        state,
+        at,
+        run_ref: `run_write_${key}_${number}`,
+        finding_refs: [],
+        task_refs: [],
+        chars,
+        clean,
+        clean_run_ref: clean ? `run_clean_${key}` : null
+    };
+}
+
+/**
+ * The grouped book in ONE reviewed state — the fixture the D-67/D-68 pane, store, and contract tests share.
+ *
+ * It deliberately models the pair of numbers the feature exists to show: the Ending's newest revision (r3) is
+ * NOT the clean one, so the selection stands at r2 while the book has moved past it. The live rows carry their
+ * D-65 trend scores (`vh-9`: 84/76/70/88/66) and the reviewed rows carry the DIFFERENT numbers that judged the
+ * clean vector (`vh-clean-1`: 79/71/66/83/62) — a wrong join therefore prints a visible wrong number rather than
+ * a plausible one (`story-contract.groups.test.ts`'s D-67 join case).
+ *
+ * Each state also keeps the wire's own arithmetic, because the panes read the fields independently:
+ *   - `ready` — complete selection, no choice, no writer, no blocking issue;
+ *   - `stale` — the SAME ready selection plus a recorded choice on a different hash (`stale` is a flag beside
+ *     `state:'ready'`, never a third state — see `story-contract.ts:reviewedChooseRefusal`);
+ *   - `chosen` — the choice record is the only reviewed Summary the book has: the installed rows carry no clean
+ *     stamp, so the live selection is empty and the pane must read the numbers off the CHOICE (D-68);
+ *   - `pending` — a PARTIAL selection (Premise r2 and Ending r1 are in, three groups are not), each missing
+ *     group for a different reason, and one unresolved issue holding a clean verdict back;
+ *   - `writer_busy` — `ready` while a live Writer pass holds the Ending group, the state the choose refuses on
+ *     (R4: the same read the route's 409 answers with).
+ */
+export function reviewedPhraseView(storyId: string, state: ReviewedFixtureState = 'ready'): PhraseView {
+    const base = groupedPhraseView(storyId);
+    const byKey = new Map(base.groups.map((group) => [group.key, group]));
+
+    /** The five reviewed rows for a complete selection: every group clean at r1, the Ending one revision old. */
+    const cleanSelection = (groups: PhraseGroupRow[]): PhraseReviewedGroup[] =>
+        groups.map((group) =>
+            reviewedGroup({
+                id: group.id,
+                key: group.key,
+                selected_revision: group.key === 'ending' ? 2 : group.revision,
+                selected_id: group.key === 'ending' ? `rev-ending-2` : `rev-${group.key}-1`,
+                latest_revision: group.revision,
+                superseded: group.key === 'ending',
+                scores: [scoreRow(CLEAN_SCORE_VALUES[group.key], CLEAN_VECTOR_HASH, CLEAN_SCORE_AT)]
+            })
+        );
+
+    /** The clean Overview: the four installed groups, and the Ending's CLEAN r2 — never the live r3 text. */
+    const cleanOverview = (groups: PhraseGroupRow[]): string =>
+        groups.map((group) => (group.key === 'ending' ? CLEAN_ENDING_TEXT : group.content)).join('\n\n');
+
+    /** The chosen Overview, recomposed from the rows the choice names (D-68). */
+    const chosenOverview = (groups: PhraseGroupRow[]): string =>
+        groups.map((group) => `${group.title}${CHOSEN_TEXT_SUFFIX}`).join('\n\n');
+
+    const chosenRecord = (groups: PhraseGroupRow[], at: string) => ({
+        vector: Object.fromEntries(groups.map((group) => [group.id, 1])),
+        vector_hash: CHOSEN_VECTOR_HASH,
+        at,
+        overview: chosenOverview(groups),
+        scores: Object.fromEntries(
+            groups.map((group) => [
+                group.id,
+                [scoreRow(CHOSEN_SCORE_VALUES[group.key], CHOSEN_VECTOR_HASH, CHOSEN_SCORE_AT)]
+            ])
+        )
+    });
+
+    // ── `pending` — the mid-review book: partial selection, four different waits, one unresolved issue ──
+    if (state === 'pending') {
+        const groups = base.groups.map((group) =>
+            group.key === 'premise'
+                ? {
+                      ...group,
+                      revision: 2,
+                      // r2 is the text a cross-group pass closed on; r1 predates the fix and never passed, which
+                      // is why the selection names r2 and the history keeps both (R2's retained history).
+                      history: [
+                          fixtureRevision('premise', 2, 'latest', 52, true, '2026-11-09T11:30:00.000Z'),
+                          { ...fixtureRevision('premise', 1, 'archived', 48, false, '2026-11-09T10:00:00.000Z'), clean_run_ref: `run_clean_premise`, clean: false }
+                      ]
+                  }
+                : group
+        );
+        const idOf = (key: string): string => byKey.get(key)?.id ?? `grp-${key}`;
+        const reviewedGroups = groups.map((group) => {
+            if (group.key === 'premise' || group.key === 'ending') {
+                return reviewedGroup({
+                    id: group.id,
+                    key: group.key,
+                    selected_revision: group.revision,
+                    selected_id: group.history[0].id,
+                    latest_revision: group.revision
+                });
+            }
+
+            if (group.key === 'promise') {
+                // Written, never passed, and an unresolved ISSUE names it — the wait the Author can act on.
+                return reviewedGroup({
+                    id: group.id,
+                    key: group.key,
+                    selected_revision: null,
+                    selected_id: null,
+                    clean_run_ref: null,
+                    latest_revision: group.revision,
+                    issues_open: true,
+                    gap: 'no_clean_revision'
+                });
+            }
+
+            if (group.key === 'theme') {
+                return reviewedGroup({
+                    id: group.id,
+                    key: group.key,
+                    selected_revision: null,
+                    selected_id: null,
+                    clean_run_ref: null,
+                    latest_revision: group.revision,
+                    gap: 'unwritten'
+                });
+            }
+
+            // Tone is written and clean-less with nothing open on it — the plain "awaiting a clean pass".
+            return reviewedGroup({
+                id: group.id,
+                key: group.key,
+                selected_revision: null,
+                selected_id: null,
+                clean_run_ref: null,
+                latest_revision: group.revision,
+                gap: 'no_clean_revision'
+            });
+        });
+
+        return phraseView(storyId, {
+            ...base,
+            story_id: storyId,
+            groups,
+            findings: [
+                {
+                    id: 'f-clean-block',
+                    title: 'the promise names a cost the premise never sets up',
+                    cost: 'major',
+                    // An ISSUE, not a proposal: only an issue holds a clean verdict back (D-67).
+                    kind: 'issue',
+                    state: 'confirmed',
+                    seen_count: 2,
+                    group_refs: [idOf('promise')],
+                    unscoped: false,
+                    targeted: [idOf('promise')],
+                    resolved: [],
+                    missing: [idOf('promise')],
+                    resolved_all: false
+                }
+            ],
+            review: { ...base.review, open_findings: 1, blocking_findings: 1 },
+            reviewed: reviewedBlock({
+                state: 'pending',
+                complete: false,
+                // A partial selection still names the groups it HAS (Premise r2, Ending r1).
+                vector: { [idOf('premise')]: 2, [idOf('ending')]: 1 },
+                vector_hash: PARTIAL_VECTOR_HASH,
+                // `''` while the selection is partial — the rule that keeps the live Overview off the tab.
+                overview: '',
+                groups: reviewedGroups,
+                blocking_issues: [
+                    {
+                        id: 'f-clean-block',
+                        title: 'the promise names a cost the premise never sets up',
+                        cost: 'major',
+                        group_keys: ['promise']
+                    }
+                ]
+            })
+        });
+    }
+
+    // ── `chosen` — the Author took the Summary; the installed rows carry no clean stamp ──────────────
+    if (state === 'chosen') {
+        const groups = base.groups.map((group) => ({
+            ...group,
+            // The choose installs the chosen text, so it IS the live text here — and a `discarded` row is
+            // hidden from `history` (D-68), which is why the list is the one row that stands.
+            content: `${group.title}${CHOSEN_TEXT_SUFFIX}`,
+            // Installed, not reviewed: nobody has re-read the text the choose just wrote, so the clean verdicts
+            // are gone and the live selection is empty. The strip reads the CHOICE record instead.
+            history: [{ ...group.history[0], clean: false, clean_run_ref: null }],
+            previous_content: '',
+            scores: group.scores
+        }));
+
+        return phraseView(storyId, {
+            ...base,
+            story_id: storyId,
+            groups,
+            overview: chosenOverview(groups),
+            reviewed: reviewedBlock({
+                state: 'chosen',
+                complete: false,
+                vector: {},
+                vector_hash: CHOSEN_VECTOR_HASH,
+                overview: '',
+                groups: groups.map((group) =>
+                    reviewedGroup({
+                        id: group.id,
+                        key: group.key,
+                        selected_revision: null,
+                        selected_id: null,
+                        clean_run_ref: null,
+                        latest_revision: group.revision,
+                        gap: 'no_clean_revision'
+                    })
+                ),
+                chosen: chosenRecord(groups, CHOSEN_AT)
+            })
+        });
+    }
+
+    // ── `ready` / `stale` / `writer_busy` — one complete selection, three differences beside it ──────
+    const groups = base.groups.map((group) =>
+        group.key === 'ending'
+            ? {
+                  ...group,
+                  content: LIVE_ENDING_TEXT,
+                  revision: 3,
+                  // r3 replaced the clean r2, and r2's body is the one older text the wire still sends.
+                  previous_content: CLEAN_ENDING_TEXT,
+                  history: [
+                      fixtureRevision('ending', 3, 'latest', 76, false, '2026-11-09T12:30:00.000Z'),
+                      fixtureRevision('ending', 2, 'archived', 60, true, '2026-11-09T11:00:00.000Z'),
+                      fixtureRevision('ending', 1, 'archived', 48, false, '2026-11-09T10:00:00.000Z')
+                  ],
+                  // R4 — the Writer holding the group is the state `writer_busy` refuses the choose on, and the
+                  // SAME read the revise/choose routes 409 with (`phrase/exclusion.ts`).
+                  writer_busy: state === 'writer_busy'
+              }
+            : group
+    );
+    const vector = Object.fromEntries(
+        groups.map((group) => [group.id, group.key === 'ending' ? 2 : group.revision])
+    );
+
+    return phraseView(storyId, {
+        ...base,
+        story_id: storyId,
+        groups,
+        overview: groups.map((group) => group.content).join('\n\n'),
+        reviewed: reviewedBlock({
+            state: 'ready',
+            complete: true,
+            vector,
+            vector_hash: CLEAN_VECTOR_HASH,
+            overview: cleanOverview(groups),
+            groups: cleanSelection(groups),
+            // `stale` is the flag beside `state:'ready'` that renames the verb: a choice on an OLDER hash.
+            chosen: state === 'stale' ? chosenRecord(groups, STALE_CHOSEN_AT) : null,
+            stale: state === 'stale',
+            writer_busy: state === 'writer_busy'
+        })
     });
 }
 
@@ -287,6 +790,88 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 locked_at: null,
                 view: groupedPhraseView(storyId)
             })
+        ),
+        // T-W4 — PHRASE ②'s read, on the same convention as `getPhrase`: a SEPARATE route with its own cache slot
+        // (`snapshot.phraseDetails`), so the default is the plain read and a Phrase ② test overrides it
+        // (`fakeApi({ getPhraseDetail: vi.fn(async () => phraseDetailView('s1', {…})) })`).
+        getPhraseDetail: vi.fn(async (storyId) => phraseDetailView(storyId)),
+        // T-W4 — the on-demand start. The default answers the COMPILED arm (what the handoff button sends) with the
+        // started phrase read, which is what `state.ts:startPhrase` commits straight away; a test that wants the
+        // 409 (already started / no compiled Summary / empty custom text) overrides this with a rejecting `vi.fn`,
+        // so the refusal line is pinned against the sentence the server actually sends.
+        startPhrase: vi.fn(
+            async (storyId: string, key: string, input): Promise<PhraseStartResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_plotlines_1',
+                key,
+                source: input?.source === 'custom' ? 'custom' : 'compiled',
+                seed_chars: 67,
+                seed_head:
+                    input?.source === 'custom'
+                        ? (input.text ?? '')
+                        : 'A smuggler pays the tide to cross the salt road, and the road collects.',
+                started: { phrase_id: 'phrase_plotlines_1', key, started_at: '2026-11-09T10:00:00.000Z' },
+                view: phraseDetailView(storyId)
+            })
+        ),
+        // T-W4 — ONE CHAPTER ENTRY's hand revision: the revise envelope, but with the PHRASE ② read as `view`
+        // (`routes.ts:phraseVerbView` answers the phrase that was written, never the Summary by default).
+        revisePhraseEntry: vi.fn(
+            async (storyId: string, groupId: string): Promise<PhraseEntryReviseResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_plotlines_1',
+                revision: 2,
+                installed: [
+                    { group_id: groupId, group_key: 'chapter_1', revision_id: `rev-${groupId}-2`, number: 2 }
+                ],
+                archived: [
+                    { group_id: groupId, group_key: 'chapter_1', revision_id: `rev-${groupId}-1`, number: 1 }
+                ],
+                mirror: { summary_id: null, fields: [], written: false, reason: 'no_summary' },
+                view: phraseDetailView(storyId)
+            })
+        ),
+        // D-68 — the Author's whole-Summary choose. The default answers what the route answers: the install
+        // report plus the REFRESHED read, which the projection reports as `state:'chosen'` (the rows the choose
+        // installed carry no clean stamp). `state.ts` commits that `view` and then re-reads, so a test asserting
+        // the frame is asserting the read, not this echo.
+        choosePhraseReviewed: vi.fn(
+            async (storyId: string): Promise<PhraseReviewedChooseResult> => {
+                const phrase = reviewedPhraseView(storyId, 'chosen');
+
+                return {
+                    story_id: storyId,
+                    phrase_id: 'phrase_summary_1',
+                    revision: 7,
+                    vector: Object.fromEntries(phrase.groups.map((group) => [group.id, 1])),
+                    vector_hash: CHOSEN_VECTOR_HASH,
+                    at: CHOSEN_AT,
+                    overview: phrase.reviewed.chosen?.overview ?? '',
+                    installed: phrase.groups.map((group) => ({
+                        group_id: group.id,
+                        group_key: group.key,
+                        revision_id: `rev-${group.key}-1`,
+                        number: 1
+                    })),
+                    // The Ending's r3 is the text the clean r2 selection passed over — the drop the pane names.
+                    discarded: [
+                        { group_id: 'grp-ending', group_key: 'ending', revision_id: 'rev-ending-3', number: 3 }
+                    ],
+                    sources: phrase.groups.map((group) => ({
+                        group_id: group.id,
+                        group_key: group.key,
+                        source_revision: 1,
+                        source_id: `rev-${group.key}-1`,
+                        installed_revision: 1
+                    })),
+                    mirror: {
+                        summary_id: 'sum_1',
+                        fields: phrase.groups.map((group) => group.key),
+                        written: true
+                    },
+                    view: phrase
+                };
+            }
         ),
         getStoryKnowledge: vi.fn(async (storyId) => ({
             story_id: storyId,

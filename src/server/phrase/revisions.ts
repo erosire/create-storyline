@@ -14,9 +14,12 @@
 //   3. the group row's `content`/`revision` set to the new text;
 //   4. the phrase row's Overview recomposed and its `revision` bumped ONCE per install (not once
 //      per group — the phrase number counts installs, the group numbers count group texts);
-//   5. the legacy `summaries` mirror written with the same content, in the SAME commit (R6), so no
-//      reader — the Dashboard, the Digest, the criteria engine, phases ②/③ — can ever see a new
-//      group text beside an old mirror or the reverse.
+//   5. the phrase's DOWNSTREAM SYNC, in the SAME commit: for the Summary Phrase that is the legacy
+//      `summaries` mirror (R6), and for the Plotlines Phrase it is the chapter's `plotlines` contract
+//      row. Either way no reader — the Dashboard, the Digest, the criteria engine, phases ②/③ — can
+//      ever see a new entry text beside an old synced record or the reverse. WHICH sync runs is an
+//      explicit branch on the phrase row's kind, chosen before the first write, and an unknown kind
+//      refuses the batch instead of syncing nothing (seam S3).
 //
 // WHY VALIDATION RUNS BEFORE THE FIRST WRITE: a batch that answers for a group it was not asked
 // for, or skips one it was, must be refused WHOLE. Writing three of four groups and then noticing
@@ -25,7 +28,13 @@
 // So every check below is a pure read, and the write section that follows has no `if` left in it.
 import { createHash } from 'node:crypto';
 
-import { SUMMARY_MIRROR_FIELDS, type SummaryMirrorField } from '../../shared/phrase';
+import {
+    PHRASE_PLOTLINES_KEY,
+    PHRASE_SUMMARY_KEY,
+    SUMMARY_MIRROR_FIELDS,
+    phraseGroupRankOf,
+    type SummaryMirrorField
+} from '../../shared/phrase';
 import type {
     GroupDraft,
     GroupReview,
@@ -33,7 +42,17 @@ import type {
 } from '../../shared/schemas';
 import type { GroupRevision, Phrase, PhraseGroup, Story, Summary } from '../../shared/types';
 import type { Attribution, Store } from '../store';
-import { composeGroupContentFrom, isPhraseGroupLocked, phraseGroupsOf, storyPhrase } from './catalog';
+import {
+    composeGroupContentFrom,
+    isPhraseGroupLocked,
+    phraseGroupsOf,
+    primaryPhraseOf,
+    storyPhrase
+} from './catalog';
+// PHRASE ②'s phrase-specific install work lives in `plotpoints.ts` rather than inline here. That module
+// imports NOTHING from `phrase/**`, so the install can call it without an import cycle, and the one
+// thing it must not become is a second copy of the composition rule.
+import { syncPlotlineContract, type PlotpointFields } from './plotpoints';
 
 // ---------------------------------------------------------------------------
 // Reads — the current text, the history, and the review vector
@@ -70,18 +89,24 @@ export function groupRevisionHistory(store: Store, groupId: string): GroupRevisi
 }
 
 /**
- * The Story's CURRENT revision vector: `group id -> its latest revision number`, for every group
- * (an unwritten group is `0`).
+ * The CURRENT revision vector of ONE phrase: `group id -> its latest revision number`, for every entry
+ * of the phrase (an unwritten entry is `0`).
  *
- * This is what a cross-group review is KEYED by. A review of the Overview is a review of a specific
- * combination of five texts, and the combination — not a draft id — is what has to be stable across
+ * This is what a cross-entry review is KEYED by. A review of the Overview is a review of a specific
+ * combination of texts, and the combination — not a draft id — is what has to be stable across
  * a restart: the same vector yields the same claim key, so a restarted loop neither re-buys a review
  * it already ran nor mistakes a new combination for one it read before (L-2/L-3).
+ *
+ * `phraseId` is optional and DEFAULTS TO THE STORY'S PRIMARY PHRASE (seam S5): the vector is a
+ * phrase-level identity — a Summary review and a cross-chapter review are different combinations of
+ * different rows, and a hash that mixed them would re-arm one phrase when the other moved. The default
+ * keeps every pre-Phrase-② call site answering what it always answered.
  */
-export function groupRevisionVector(store: Store, storyId: string): Record<string, number> {
+export function groupRevisionVector(store: Store, storyId: string, phraseId?: string): Record<string, number> {
     const vector: Record<string, number> = {};
+    const scoped = phraseId ?? primaryPhraseOf(store, storyId)?.id;
 
-    for (const group of phraseGroupsOf(store, storyId)) vector[group.id] = group.revision;
+    for (const group of phraseGroupsOf(store, storyId, scoped)) vector[group.id] = group.revision;
 
     return vector;
 }
@@ -153,7 +178,8 @@ export function parseGroupDraftAnswer(
     store: Store,
     storyId: string,
     requestedGroupRefs: readonly string[],
-    structured: unknown
+    structured: unknown,
+    phraseId?: string
 ): GroupDraftDecision | GroupDraftRefusal {
     const answer = structured as GroupDraft | undefined;
     const rows = Array.isArray(answer?.groups) ? answer.groups : undefined;
@@ -162,7 +188,11 @@ export function parseGroupDraftAnswer(
         return { ok: false, refusal: 'the GroupDraft answer carried no `groups` entries' };
     }
 
-    const groups = phraseGroupsOf(store, storyId);
+    // THE PHRASE THE JOB BELONGS TO (seams S5/S12). `requestedGroupRefs` already carries the phrase's
+    // arity, so the exact-set rule is phrase-aware by construction; scoping the ROWS is what stops a
+    // Summary answer naming one of this book's chapter ids from passing the "is one of this Story's
+    // groups" check and then failing on a confusing "not requested" refusal.
+    const groups = phraseGroupsOf(store, storyId, phraseId ?? primaryPhraseOf(store, storyId)?.id);
     const byId = new Map(groups.map((group) => [group.id, group] as const));
     const requested = new Set(requestedGroupRefs);
     const seen = new Map<string, string>();
@@ -239,13 +269,21 @@ export type GroupReviewDecision = { ok: true; review: GroupReview } | { ok: fals
  * the loop's to tidy), and `fix_verifications` is carried through verbatim — a missing entry is a
  * graded `unknown` later (`records.ts:sampleFixDemand`'s rule), not something to invent here.
  */
-export function parseGroupReviewAnswer(store: Store, storyId: string, structured: unknown): GroupReviewDecision {
+export function parseGroupReviewAnswer(
+    store: Store,
+    storyId: string,
+    structured: unknown,
+    phraseId?: string
+): GroupReviewDecision {
     const answer = structured as GroupReview | undefined;
     const issues = Array.isArray(answer?.issues) ? answer.issues : undefined;
 
     if (issues === undefined) return { ok: false, refusal: 'the GroupReview answer carried no `issues` array' };
 
-    const owned = new Set(phraseGroupsOf(store, storyId).map((group) => group.id));
+    // A review issue is attributable only within the phrase the pass was dispatched over (seam S5).
+    const owned = new Set(
+        phraseGroupsOf(store, storyId, phraseId ?? primaryPhraseOf(store, storyId)?.id).map((group) => group.id)
+    );
     const checked: GroupReviewIssue[] = [];
 
     for (const issue of issues) {
@@ -277,10 +315,18 @@ export function parseGroupReviewAnswer(store: Store, storyId: string, structured
 // The install (R2 + R5 + R6, in one commit)
 // ---------------------------------------------------------------------------
 
-/** One group's text to install: normally the `{group, content}` pair a parsed draft answer carried. */
+/**
+ * One entry's text to install: normally the `{group, content}` pair a parsed draft answer carried.
+ *
+ * `plotpoints` is the PHRASE ② payload — the fields the chapter's `plotlines` mirror is written from.
+ * It is optional because the Summary's answer contract has no such thing (its text IS its answer), and
+ * the install REQUIRES it for a chapter entry: a chapter install without plotpoints would write a
+ * readable block and leave the contract the loop checks pointing at the previous pass.
+ */
 export interface GroupInstallEntry {
     group: PhraseGroup;
     content: string;
+    plotpoints?: PlotpointFields;
 }
 
 /** Where the install came from — every one of these rides onto the new revision rows for P11's audit. */
@@ -299,18 +345,41 @@ export interface GroupInstallOptions {
     promptHash?: string;
 }
 
+/** What an install did to the `plotlines` collection — the Plotlines Phrase's downstream sync. */
+export interface GroupContractSyncResult {
+    /** `plotlines` ids THIS install created (a chapter whose contract did not exist yet). */
+    created: string[];
+    /** `plotlines` ids THIS install updated by chapter ORDER (a redraft of an existing chapter). */
+    updated: string[];
+}
+
 /** What an install did, in the exact shapes a settlement and a test can assert. */
 export interface GroupInstallResult {
-    /** The new `latest` rows, in catalog order. */
+    /** The new `latest` rows, in the phrase's composition order. */
     installed: GroupRevision[];
     /** The rows THIS install flipped to `archived`, in the same order (one per written group that had a latest). */
     archived: GroupRevision[];
-    /** The group rows after the install, catalog order. */
+    /** The group rows after the install, the phrase's composition order. */
     groups: PhraseGroup[];
     /** The phrase row after the install: recomposed Overview, `revision` + 1. */
     phrase: Phrase;
-    /** What happened to the legacy `summaries` mirror (R6). */
-    mirror: { summary_id: string | null; fields: string[]; written: boolean; reason?: 'locked' | 'no_summary' };
+    /**
+     * What happened to the legacy `summaries` mirror (R6) — which is to say, what happened to the
+     * SUMMARY phrase's downstream sync. For another phrase it is an explicit
+     * `reason: 'not_summary_phrase'`, never a silent empty answer: the install knows which phrase it
+     * is installing for (seam S3), and `contracts` says what it did instead.
+     */
+    mirror: {
+        summary_id: string | null;
+        fields: string[];
+        written: boolean;
+        reason?: 'locked' | 'no_summary' | 'not_summary_phrase';
+    };
+    /**
+     * PHRASE ② — the chapter contracts this install wrote, from the same plotpoints as the entry texts,
+     * in the same commit. Empty for a phrase with no contract mirror.
+     */
+    contracts: GroupContractSyncResult;
 }
 
 /**
@@ -377,11 +446,41 @@ export function installGroupRevisions(
         }
     }
 
-    const phrase = storyPhrase(store, story.id);
+    // THE PHRASE IS THE ENTRIES', not "the Story's Summary" (seam S5): a batch of chapter entries
+    // belongs to the Plotlines phrase, and recomposing the Summary row over them would write an
+    // Overview out of chapters. The entry's own `phrase_id` is the address the catalog minted and the
+    // rows already carry, so it needs no guessing; the fallback to the Story's PRIMARY phrase is only
+    // for a caller that handed a group built outside the catalog, and it is the row every pre-Phrase-②
+    // call site has always meant.
+    const phrase = store.phrases.get(entries[0].group.phrase_id) ?? primaryPhraseOf(store, story.id);
 
     if (phrase === undefined) {
         throw new Error(
-            `installGroupRevisions: story ${story.id} has no Summary Phrase row — ensurePhraseCatalog must create the catalog before any group is written`
+            `installGroupRevisions: story ${story.id} has no Phrase row — ensurePhraseCatalog must create the catalog before any group is written`
+        );
+    }
+
+    // THE DOWNSTREAM SYNC IS CHOSEN BEFORE THE FIRST WRITE (seam S3), and the three arms are the whole
+    // list of what an install mirrors:
+    //   - the SUMMARY phrase mirrors §4.2's legacy prose fields (R6), and nothing else;
+    //   - the PLOTLINES phrase mirrors §4.3's `plotlines` contract, and REQUIRES the plotpoints to do
+    //     it — an entry without them would leave the contract the loop checks pointing at the last
+    //     pass while the entry text moved on;
+    //   - any other phrase key THROWS. A new phrase kind must say here what its install writes below
+    //     the entry rows; the alternative — falling through to "mirrored nothing" — is the silent no-op
+    //     this seam exists to forbid, because a batch that syncs nothing still spends a claim key and an
+    //     attempt and looks, from the journal, exactly like a batch that synced everything.
+    if (phrase.key === PHRASE_PLOTLINES_KEY) {
+        for (const entry of entries) {
+            if (entry.plotpoints === undefined) {
+                throw new Error(
+                    `installGroupRevisions: ${entry.group.key} arrived without plotpoints — a chapter entry install has to carry the contract it writes, or the \`plotlines\` row it mirrors keeps the previous pass's plotpoints (P4)`
+                );
+            }
+        }
+    } else if (phrase.key !== PHRASE_SUMMARY_KEY) {
+        throw new Error(
+            `installGroupRevisions: the "${phrase.key}" phrase has no declared downstream sync — a new phrase kind must say what its install writes below the entry rows instead of installing a batch that silently mirrors nothing (seam S3)`
         );
     }
 
@@ -389,6 +488,7 @@ export function installGroupRevisions(
     const installed: GroupRevision[] = [];
     const archived: GroupRevision[] = [];
     const groups: PhraseGroup[] = [];
+    const contracts: GroupContractSyncResult = { created: [], updated: [] };
 
     for (const entry of entries) {
         const current = latestGroupRevision(store, entry.group.id);
@@ -449,28 +549,69 @@ export function installGroupRevisions(
                 [{ id: entry.group.id, rev: entry.group.rev }]
             )
         );
+
+        // PLOTLINES MIRROR (§4.3 — the Phrase ② equivalent of R6's legacy mirror): the chapter's
+        // contract is rewritten from the SAME plotpoints the entry text was composed from. HERE rather
+        // than after the loop, so a batch that throws on its fourth chapter cannot leave three chapters
+        // with a new contract and one chapter with a new text; the store's rollback makes the commit
+        // atomic either way, and this ordering keeps the invariant true in the middle of the loop too.
+        if (phrase.key === PHRASE_PLOTLINES_KEY && entry.plotpoints !== undefined) {
+            const synced = syncPlotlineContract(store, story, entry.group, entry.plotpoints, attribution);
+
+            if (synced.created) contracts.created.push(synced.row.id);
+            else contracts.updated.push(synced.row.id);
+        }
     }
 
-    // -- The Overview, recomposed from the rows as they now are -----------------------------------
+    // -- The phrase's whole text, recomposed from the rows as they now are --------------------------
     const refreshed = phraseGroupsOf(store, story.id, phrase.id);
     const updatedPhrase = store.phrases.update(
         phrase.id,
-        // Recomposed from the REFRESHED rows (not from `entries`): a group this batch did not touch
-        // still belongs in the Overview, and composing from the batch alone would drop the groups the
-        // Author already has. `catalog`'s composition rule owns the format (one home for it).
-        { content: composeGroupContentFrom(refreshed), revision: phrase.revision + 1 },
+        // Recomposed from the REFRESHED rows (not from `entries`): an entry this batch did not touch
+        // still belongs in the phrase's text, and composing from the batch alone would drop the entries
+        // the Author already has. `catalog`'s composition rule owns the format (one home for it), and
+        // the RANK IS RESOLVED INSIDE THIS PHRASE (seam S7): the Summary's five catalog keys, a chapter
+        // set's chapter numbers. For the Summary the two ranks are the same function, so the Overview
+        // this writes is byte-identical to the one this install always produced.
+        {
+            content: composeGroupContentFrom(refreshed, (key) => phraseGroupRankOf(phrase.key, key)),
+            revision: phrase.revision + 1
+        },
         attribution,
         [{ id: phrase.id, rev: phrase.rev }]
     );
 
-    // -- The legacy mirror (R6), in the same commit -----------------------------------------------
-    const mirror = syncSummaryMirror(store, story, groups, attribution);
+    // -- The downstream sync, in the same commit, chosen per phrase (seam S3) -----------------------
+    // The arm taken is the one the check BEFORE the first write proved exists. `syncSummaryMirror` is
+    // explicitly the SUMMARY phrase's sync: the `summaries` row is the legacy record Phrase ①'s five
+    // groups were built to mirror (R6), and Phrase ② has no legacy record to mirror into — its mirror is
+    // the `plotlines` contract written in the loop above. Saying so here, with a reason in the result,
+    // is what keeps "this phrase has no prose mirror" a readable fact instead of a fallthrough nobody
+    // can see.
+    let mirror: GroupInstallResult['mirror'];
 
-    return { installed, archived, groups, phrase: updatedPhrase, mirror };
+    if (phrase.key === PHRASE_SUMMARY_KEY) {
+        mirror = syncSummaryMirror(store, story, groups, attribution);
+    } else if (phrase.key === PHRASE_PLOTLINES_KEY) {
+        mirror = { summary_id: null, fields: [], written: false, reason: 'not_summary_phrase' };
+    } else {
+        // Unreachable — the pre-write check refused this batch. It stays as an assertion so a later
+        // phrase kind added to one of the two lists and not the other fails loudly rather than reporting
+        // a mirror it never wrote.
+        throw new Error(`installGroupRevisions: no downstream sync is declared for the "${phrase.key}" phrase (seam S3)`);
+    }
+
+    return { installed, archived, groups, phrase: updatedPhrase, mirror, contracts };
 }
 
 /**
  * Rewrites the legacy `summaries` prose fields from the installed group texts (R6).
+ *
+ * THIS IS THE SUMMARY PHRASE'S SYNC AND IT IS CALLED FROM EXACTLY ONE ARM of the install's phrase
+ * branch. It is not "the install's mirror" in general: the map it reads is typed to the Summary's five
+ * keys precisely so a chapter key can never be pushed through it, and a phrase without a legacy record
+ * reports `reason: 'not_summary_phrase'` from the install rather than arriving here and quietly writing
+ * nothing (seam S3).
  *
  * THE MIRROR IS A PROJECTION, NOT A SECOND SOURCE: it is written from the group rows in the same
  * commit that made them current, it maps by {@link SUMMARY_MIRROR_FIELDS} (the identity map — the

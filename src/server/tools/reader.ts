@@ -22,7 +22,18 @@ import { criterionById } from '../../shared/criteria';
 // copies of that rule is how a finding ends up open against a group nobody was told about.
 // R1 adds the lock's one predicate to the same import: the tool and the planner read "is this group's
 // text settled?" off one function (`phrase/catalog.ts:isPhraseGroupLocked`).
-import { isGroupManagedStory, isPhraseGroupLocked, phraseGroupsOf } from '../phrase';
+// T-W2b adds the OTHER phrase's ownership reads: `findingGroupNamespace` is the R3 namespace once a
+// chapter entry can be a writing surface, and the two `plotlineChapter*` reads are the contract →
+// entry mapping the finding route below needs. They come from the domain, not from a local copy, for
+// the same reason as the sentence above: the loop's planner and the install's mirror use the same map.
+import {
+    findingGroupNamespace,
+    isGroupManagedStory,
+    isPhraseGroupLocked,
+    plotlineLaneIsLive,
+    plotlineChapterGroupOf,
+    plotlineChapterGroups
+} from '../phrase';
 // U-3a: only the ID crosses this boundary — `digest_gap` is the §4.6 open-thread ref D-13 gives a crew
 // for reporting a bad Digest, and the builder is the module that owns the name (src/server/digest).
 import { DIGEST_GAP_CRITERION } from '../digest/digest';
@@ -35,6 +46,7 @@ import {
     openTask,
     ownerFor,
     resolvedChapter,
+    resolvedPlotline,
     revisionRows,
     scoreLine,
     stableFingerprint
@@ -655,9 +667,75 @@ const raiseFinding: ToolDefinition = {
         // stored is the part of the reporter's scope that can still be rewritten (R1).
         let groupRefs = groupRefsOf(ctx.args.group_refs);
         // The book's own group rows, read ONCE and used twice: to refuse an id the Story does not have,
-        // and to tell the reporter which ids it may name. A non-group book has none, and every group
-        // rule below is inert for it (R6: a legacy Story's finding keeps its old meaning).
-        const ownedGroups = isGroupManagedStory(ctx.story) ? phraseGroupsOf(ctx.store, ctx.storyId) : [];
+        // and to tell the reporter which ids it may name. A book with no group-managed phrase has none,
+        // and every group rule below is inert for it (R6: a legacy Story's finding keeps its old meaning).
+        // T-W2b moved this behind `findingGroupNamespace`: once chapter ENTRIES are a writing surface, the
+        // namespace is not "the Summary's five entries" — it is the entries of every group-managed phrase.
+        const ownedGroups = findingGroupNamespace(ctx.store, ctx.story);
+
+        // PHRASE ② GROUP MODE — A FINDING ON A CONTRACT IS A FINDING ON A CHAPTER ENTRY (T-W2b).
+        //
+        // The hybrid keeps phase ②'s READING legs (the `check_unit` trio over the `plotlines` rows) and
+        // moved the WRITING surface to the lane's chapter entries, so a reader reports a contract defect
+        // against the mirrored ROW while the text that must change lives in the GROUP. Two reads join on
+        // `group_refs` and neither can see an unscoped row: `phrase/findings.ts:findingResolution` decides
+        // closure over the groups the finding names, and `phrase/exclusion.ts:groupWorkTargets` arms a
+        // group from `findingGroupsStillOwed`. An unscoped contract defect therefore stays open through
+        // the install that answers it, and it arms a classic `wi_fix_plotline_*` pass whose only tool —
+        // `editPlotline` — is the writing surface this book no longer has. The reporter is not asked to
+        // know the entry ids: the row's `order` names its entry, the SAME mapping the install mirrors by
+        // (`phrase/plotpoints.ts:syncPlotlineContract`), so the finding lands on the group whose revise →
+        // install → mirror path is the one that can close it.
+        //
+        // Deliberately narrow, in this order:
+        //   * only when the lane is THE writing surface here: the per-phrase dial plus a STARTED Phrase ②
+        //     row (`phrase/plotpoints.ts:plotlineLaneIsLive`), never `story.phase`. The dial alone would
+        //     over-report, because `loop/engine.ts:2887` defaults `plotlines_mode` to `'groups'` — a book
+        //     with no Phrase ② at all keeps the classic meaning of an unscoped finding, which is what every
+        //     pre-lane phase-② walk does (measured: `loop/findings.test.ts`, green, 9 failures on a dial-only
+        //     reading). A `plotlines_mode: 'classic'` book is inert in every phase, and a grouped book in
+        //     phase ③ keeps this routing — the dial is the fact);
+        //   * only when the reporter named NO groups. Its own attribution always wins, including a
+        //     cross-cutting defect that names several entries on purpose;
+        //   * only for a `plotlines` target. A chapter, Summary or Story defect is not a contract.
+        //
+        // WHEN THERE IS NO ENTRY FOR THAT ORDER the finding is REFUSED rather than filed unscoped: on a
+        // grouped book an unscoped row reads as "every entry", which would spend every chapter contract on
+        // one sentence. That is the same shape as the R1 narrowing below, and the fix names the route.
+        if (plotlineLaneIsLive(ctx.store, ctx.story) && groupRefs.length === 0 && target.collection === 'plotlines') {
+            const plotline = resolvedPlotline(target);
+            const entry = plotlineChapterGroupOf(ctx.store, ctx.storyId, plotline.order);
+            const entries = plotlineChapterGroups(ctx.store, ctx.storyId);
+
+            if (entry === undefined) {
+                const listed = entries.map((group) => `${group.key}=${group.id}`).join(', ');
+
+                throw new ToolRefusal(
+                    'R3',
+                    `this Story's Plotlines phrase is group-managed, so a defect on chapter ${plotline.order}'s contract has to name the chapter entry it is about, and ${
+                        entries.length === 0
+                            ? 'this Story has no chapter entries yet — its Plotlines brief is not accepted, so no entry can own the defect'
+                            : `no entry covers that order — this Story's entries are ${listed}`
+                    }. A grouped book's finding is scoped to an entry (R3).`,
+                    {
+                        field: 'group_refs',
+                        expected: entries.map((group) => group.id),
+                        order: plotline.order,
+                        target_ref: target.id,
+                        // NO "omit it" escape here: on a grouped book an absent ref list means every entry,
+                        // which is the expensive reading R3 exists to prevent (the same reasoning as the
+                        // unknown-id refusal below).
+                        fix: `call raiseFinding again with group_refs naming the chapter entry this defect is about${
+                            entries.length === 0
+                                ? ' — accept the Plotlines brief so its chapter entries exist first'
+                                : ` (this Story's entries: ${listed})`
+                        }`
+                    }
+                );
+            }
+
+            groupRefs = [entry.id];
+        }
 
         // T6/R2c: phase ①'s defect must say WHICH DRAFT it describes, at the moment it is filed.
         //

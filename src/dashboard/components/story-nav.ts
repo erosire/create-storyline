@@ -34,6 +34,15 @@ import {
     isPendingRevision,
     isReviewableRevision,
     isSupersededSummaryDraft,
+    // T-W4 — Phrase ②'s reads. The rail's chapter-entry rows are built from these, not from a second copy of the
+    // group rules: `plotlinesEntries` is the same composition-order sort the phrase's own panes use, and
+    // `plotlinesSurfaceView` is what lets the shared finding/lock selectors answer about Phrase ②'s rows.
+    isPlotlinesGroups,
+    plotlinesEntries,
+    plotlinesEntryById,
+    plotlinesStarted,
+    plotlinesSurfaceView,
+    summaryIsCompiled,
     phraseGroupById,
     phraseGroups,
     phraseReadLanded,
@@ -71,26 +80,59 @@ export interface StoryPhraseSpec {
 }
 
 /**
- * The rail's PHRASES. U1 is the product's decision, not a rendering detail: for now the Author's Story
- * workspace has ONE phrase — Summary — and the folders that support it. Characters, Plotlines and
- * Chapters are later phases: their panes, their rail helpers and their tests stay in the build, and the
- * rail offers no row, card or dropdown that navigates to them, so an Author on the Summary workspace
- * cannot click through to a phase the product has not turned on yet.
+ * The rail's PHRASES — the numbered pipeline the Author navigates (T-W4: Summary ① and Plotlines ②).
  *
- * This is the ACTIVE list. `ALL_STORY_PHRASES` below keeps the full four-phrase vocabulary for the panes
- * that still address a phrase directly (`StoryView` routes a `panel` prop, and a later phase hands the
- * same selection object in), so narrowing the rail never means a pane's title reads "The story".
+ * WHY ONLY THESE TWO CARRY A NUMBER. The rail is the content area's table of contents, so a row exists only when
+ * the desk has a surface to open and a loop behind it that WRITES the surface's rows. Phrase ① has its five groups
+ * and Phrase ② has its chapter entries (`GET /stories/:id/phrases/:key` for each), and each one's rail row folds a
+ * live list of entries. Chapters has no group loop yet — its pane opens records the classic phase ③ writer makes,
+ * which the rail already reaches through the chapters' own list in the pane — so a numbered row for it would
+ * promise a phrase pipeline that is not built, which is the U1 decision this list has always encoded.
+ *
+ * This is the ACTIVE list. `ALL_STORY_PHRASES` below keeps the full vocabulary for the panes that still address a
+ * phrase directly (`StoryView` routes a `panel` prop, and a later phase hands the same selection object in), so
+ * narrowing the rail never means a pane's title reads "The story".
  */
 export const STORY_PHRASES: readonly StoryPhraseSpec[] = [
-    { key: 'summary', number: 1, title: 'Summary' }
+    { key: 'summary', number: 1, title: 'Summary' },
+    { key: 'plotlines', number: 2, title: 'Plotlines' }
 ];
 
-/** The full phrase vocabulary, in reading order: the rail shows {@link STORY_PHRASES}, the panes route on all four. */
+/**
+ * The full phrase vocabulary, in reading order: the rail shows {@link STORY_PHRASES}, the panes route on all of these.
+ *
+ * T-W4 REMOVES CHARACTERS FROM THE NUMBERED RAIL, AND THE NUMBERING MOVES WITH IT. The Author's pipeline is now
+ * Summary ① → Plotlines ② → Chapters ③: Phrase ② is the first step AFTER the Summary (the handoff copies the
+ * compiled Overview into the phrase's Seed), so Plotlines takes the number the rail prints and Chapters follows it.
+ * Characters keeps its key, its pane and its records — it is a SUPPLEMENTARY SHEET the crew builds from the Summary
+ * (see {@link STORY_SUPPLEMENTS}), not a phase the loop signs off, and the loop's `story.phase` has no Characters
+ * phase either. A pane that is handed `panel:'characters'` still gets "Characters" as its title from this list.
+ */
 export const ALL_STORY_PHRASES: readonly StoryPhraseSpec[] = [
     { key: 'summary', number: 1, title: 'Summary' },
-    { key: 'characters', number: 2, title: 'Characters' },
-    { key: 'plotlines', number: 3, title: 'Plotlines' },
-    { key: 'chapters', number: 4, title: 'Chapters' }
+    { key: 'plotlines', number: 2, title: 'Plotlines' },
+    { key: 'chapters', number: 3, title: 'Chapters' }
+];
+
+/**
+ * A supporting sheet the rail offers OUTSIDE the numbered pipeline: the panel key, and the title it shows.
+ *
+ * It is not a `StoryPhraseSpec` on purpose — there is no `number` to print, and a rail row that printed "Phrase 2"
+ * beside Characters is the exact claim T-W4 retires. The `key` is still a `StoryPanelKey`, so the selection model,
+ * `selectionTitle` and the pane routing are untouched.
+ */
+export interface StorySupplementSpec {
+    key: StoryPanelKey;
+    title: string;
+}
+
+/**
+ * Characters, off the rail's numbering (T-W4). The cast sheet stays reachable — the rail lists it under
+ * {@link STORY_FOLDERS} — and its pane keeps every record it showed before, because what changed is WHICH heading
+ * it sits under, not whether the Author can open it.
+ */
+export const STORY_SUPPLEMENTS: readonly StorySupplementSpec[] = [
+    { key: 'characters', title: 'Characters' }
 ];
 
 export interface StoryFolderSpec {
@@ -534,6 +576,134 @@ export function summaryGroupEntries(view: StoryViewData): SummaryGroupEntry[] {
  */
 export { selectedSummaryRevision };
 
+// ---------------------------------------------------------------------------
+// PLOTLINE PHRASE ② — the chapter-entry rail's refs, entries and focus (T-W4)
+//
+// THE SAME THREE RULES AS THE SUMMARY'S RAIL SECTION ABOVE, and for the same reasons:
+//   - A GROUP REF IS A UUID UNDER THE PHRASE'S OWN PREFIX. `plotlines-group:<uuid>` is distinguishable from
+//     `summary-group:<uuid>`, so a selection survives a refetch and a reorder, a deleted entry fails
+//     `selectionExists` and falls back to the phrase's own pane, and a Summary selection can never be read as a
+//     chapter entry on a Story that has both phrases running (which is every grouped book once Phrase ② starts).
+//   - THE ROWS ARE THE SERVER'S ENTRY ROWS, in composition order, named by their own titles. The classic
+//     `Plotline 1 — <heading>` rows are NOT re-numbered here: they come from `view.plotlines`, they address the §4.3
+//     records pane, and the two surfaces are chosen by `story.plotlines_mode`, never by which list happens to be
+//     non-empty (L-14: the dashboard does not re-derive a mode from the presence of rows).
+//   - EVERY MARK IS A CONTRACT SELECTOR. The badge and the lock word are the same `groupBlockingFindings` /
+//     `isGroupLocked` reads the entry pane uses, evaluated through `plotlinesSurfaceView` so Phrase ②'s rows are
+//     the rows the selectors resolve — one rule per rule, rail and pane included.
+// ---------------------------------------------------------------------------
+
+const PLOTLINE_GROUP_PREFIX = 'plotlines-group:';
+
+/** The rail ref for one Phrase ② chapter entry. */
+export const plotlineGroupRef = (entryId: string): string => `${PLOTLINE_GROUP_PREFIX}${entryId}`;
+
+/** Reads a rail ref back into the chapter entry's id; `undefined` for anything that is not a Phrase ② ref. */
+export function parsePlotlineGroupRef(ref: string | undefined): string | undefined {
+    if (ref === undefined || !ref.startsWith(PLOTLINE_GROUP_PREFIX)) return undefined;
+
+    const id = ref.slice(PLOTLINE_GROUP_PREFIX.length);
+
+    return id.length > 0 ? id : undefined;
+}
+
+/** The rail's chapter-entry selection, resolved against the live rows; `undefined` names no live entry. */
+export function plotlineGroupFocus(
+    view: StoryViewData,
+    selection: StorySelection
+): PhraseGroupRow | undefined {
+    if (selection.panel !== 'plotlines') return undefined;
+
+    const id = parsePlotlineGroupRef(selection.ref);
+
+    return id === undefined ? undefined : plotlinesEntryById(view, id);
+}
+
+/**
+ * True when Phrase ②'s rail row has a SURFACE to open: the phrase has started, or its dial is on.
+ *
+ * WHY NOT `plotlines.length > 0`. The classic records are a different surface (`PlotlinesPane`'s §4.3 view), and the
+ * chapter entries only exist once the phrase has started on the grouped pipeline. The rail asks the wire, in the
+ * order the wire answers: `story.phrase_started.plotlines` is the projection's read of the phrase row, and
+ * `story.plotlines_mode === 'groups'` is the Setting the Author just turned on (whose verb loads the entries). A
+ * classic, unstarted book answers false, and the rail then offers the Plotlines row for the records pane it has
+ * always offered — it just has no entry rows underneath it.
+ */
+export function plotlinesRailSurfaceOpen(view: StoryViewData): boolean {
+    return plotlinesStarted(view) || isPlotlinesGroups(view);
+}
+
+/**
+ * The Phrase ② rail's "start" prompt: the Summary is compiled and the phrase has not started, which is the one
+ * moment the handoff button is live (its refusal text is the same read — `plotlinesHandoffRefusal`).
+ *
+ * The rail's mark is deliberately the SAME predicate the pane's control is built from, so a tick that promises a
+ * start and a disabled button cannot appear on the same frame.
+ */
+export function plotlinesReadyToStart(view: StoryViewData): boolean {
+    return !plotlinesStarted(view) && summaryIsCompiled(view);
+}
+
+/** One Phrase ② rail row: the entry, the ref that opens it, and the marks the rail paints. */
+export interface PlotlineRailEntry {
+    entry: PhraseGroupRow;
+    /** The selection ref — `plotlines-group:<uuid>`. */
+    ref: string;
+    /** Open findings at the Story's blocking costs that name this entry; 0 draws no badge. */
+    blockingFindings: number;
+    /** Every open finding that names this entry, including the costs the dial tolerates. */
+    openFindings: number;
+    /** The Writer holds this entry's contract right now (R4's `writer_busy`, the same flag the route refuses with). */
+    writerBusy: boolean;
+    /** Written at least once: `revision > 0` is the loop's "never written" line (R1). */
+    written: boolean;
+    /**
+     * The entry's contract is LOCKED IN — settled, not revisable, its findings void. PRESENT ONLY WHEN TRUE, on
+     * the rail's own rule for a mark: a row that renders `entry.locked` prints nothing at all when the key is
+     * absent, so an unlocked entry keeps the accessible name it had before locks existed on this phrase.
+     */
+    locked?: boolean;
+    /** Who made the lock (`'author'` | `'editor'`), absent when the wire names none. Tooltip words only. */
+    lockedBy?: PhraseLockActor;
+    /** The revision the lock stands on, for the row's tooltip. Absent when the entry is open. */
+    lockedRevision?: number;
+}
+
+/**
+ * The rail's children of Phrase ② — the chapter entries, in composition order.
+ *
+ * `[]` for a classic book (no entries exist) and for a read that has not landed; only `phraseDetailReadLanded`
+ * tells those apart, which is why the rail renders its own pending/error line rather than an empty phrase
+ * (U6's rule, restated for the second phrase). The marks are read through the swapped view so the rail's badge,
+ * the entry pane's chips and the phrase's own counts are three readings of one finding-scoping rule.
+ */
+export function plotlineRailEntries(view: StoryViewData): PlotlineRailEntry[] {
+    const surface = plotlinesSurfaceView(view);
+
+    return plotlinesEntries(view).map((entry) => ({
+        entry,
+        ref: plotlineGroupRef(entry.id),
+        blockingFindings: groupBlockingFindings(surface, entry.id).length,
+        openFindings: groupOpenFindings(surface, entry.id).length,
+        writerBusy: isGroupWriterBusy(entry),
+        written: isGroupWritten(entry),
+        // The lock, read through the SAME selectors the entry pane's badge uses, so a rail row can never print
+        // `Locked` over an entry the pane says is open. Keys are added only for a locked row.
+        ...(isGroupLocked(entry)
+            ? {
+                  locked: true as const,
+                  ...(groupLockActor(entry) === undefined
+                      ? {}
+                      : { lockedBy: groupLockActor(entry) as PhraseLockActor }),
+                  ...(groupLockRevision(entry) === undefined
+                      ? {}
+                      : { lockedRevision: groupLockRevision(entry) as number })
+              }
+            : {})
+    }));
+}
+
+
 /**
  * True while a Summary round has not settled: drafts are still `drafted`/`competing`, or a Writer is
  * still filling a block.
@@ -601,7 +771,7 @@ export function selectionTitle(view: StoryViewData, selection: StorySelection): 
         return 'Seed';
     }
 
-    // `ALL_STORY_PHRASES`, not the rail's one-phrase list: a later phase can hand this selection in
+    // `ALL_STORY_PHRASES`, not the rail's phrase list: a later phase can hand this selection in
     // directly, and a title that fell through to "The story" would be a lie about what is on screen.
     const phrase = ALL_STORY_PHRASES.find((candidate) => candidate.key === selection.panel);
 
@@ -610,11 +780,25 @@ export function selectionTitle(view: StoryViewData, selection: StorySelection): 
         return entry ? `${phraseLabel(phrase)} · ${entry}` : phraseLabel(phrase);
     }
 
+    // T-W4 — a SUPPLEMENTARY SHEET (Characters) keeps its own heading with NO phrase number: the pane is reachable
+    // from the rail's supplements list, and a title that printed "Phrase 2 — Characters" would re-number a sheet the
+    // pipeline no longer counts as a step. Its entries are still addressed by id, so the sheet's row names itself.
+    const supplement = STORY_SUPPLEMENTS.find((candidate) => candidate.key === selection.panel);
+
+    if (supplement) {
+        const entry = selection.ref ? phraseEntryTitle(view, supplement.key, selection.ref) : undefined;
+        return entry ? `${supplement.title} · ${entry}` : supplement.title;
+    }
+
     const folder = STORY_FOLDERS.find((candidate) => candidate.key === selection.panel);
     return folder?.title ?? 'The story';
 }
 
-function phraseEntryTitle(view: StoryViewData, phrase: StoryPhraseKey, ref: string): string | undefined {
+function phraseEntryTitle(
+    view: StoryViewData,
+    phrase: StoryPhraseKey | StoryPanelKey,
+    ref: string
+): string | undefined {
     if (phrase === 'summary') {
         // R6 — the rail's Summary children are GROUPS, so the opened entry is named by its own title
         // ("Premise"), never by a revision number and never by a label this file invented (U2/U7).
@@ -633,6 +817,16 @@ function phraseEntryTitle(view: StoryViewData, phrase: StoryPhraseKey, ref: stri
         return view.cast.find((member) => member.id === ref)?.name;
     }
     if (phrase === 'plotlines') {
+        // T-W4 — TWO REF SHAPES, ONE PANEL. A `plotlines-group:<uuid>` ref is a CHAPTER ENTRY on the grouped
+        // pipeline (the row's own title, exactly as a Summary group names itself); a bare uuid is a §4.3 plotline
+        // record on a classic book, which keeps the `Plotline N — <heading>` label this panel has always printed.
+        // The prefix decides, never the question of which list happens to be non-empty: the mode is the Setting's
+        // answer, and a ref invented by one surface cannot resolve against the other's rows.
+        const entryId = parsePlotlineGroupRef(ref);
+        const entry = entryId === undefined ? undefined : plotlinesEntryById(view, entryId);
+
+        if (entry !== undefined) return entry.title;
+
         const plotline = view.plotlines.find((candidate) => candidate.id === ref);
         return plotline ? `Plotline ${plotline.order}${plotline.heading ? ` — ${plotline.heading}` : ''}` : undefined;
     }
@@ -668,6 +862,17 @@ export function selectionExists(view: StoryViewData, selection: StorySelection):
         return view.cast.some((member) => member.id === selection.ref);
     }
     if (selection.panel === 'plotlines') {
+        // T-W4 — the chapter-entry ref resolves against the PHRASE's rows, and it stays alive while the read is
+        // still in flight (the same U6 rule as a Summary group: an unread entry is not a deleted entry). A bare
+        // uuid is a classic §4.3 record and keeps resolving against `view.plotlines`.
+        const entryId = parsePlotlineGroupRef(selection.ref);
+
+        if (entryId !== undefined) {
+            if (view.phraseDetail === undefined || view.phraseDetail === null) return true;
+
+            return plotlinesEntryById(view, entryId) !== undefined;
+        }
+
         return view.plotlines.some((plotline) => plotline.id === selection.ref);
     }
     if (selection.panel === 'chapters') {
@@ -860,11 +1065,14 @@ export interface DirectiveFocus {
     refs: string[];
 }
 
-/** The slices the directive bar reads; the raw `getStory` payload satisfies it too (plus the phrase read, R6). */
+/** The slices the directive bar reads; the raw `getStory` payload satisfies it too (plus the phrase read, R6).
+ * T-W4 adds `phraseDetail` as an OPTIONAL slice: a Phrase ② chapter entry is addressed by its uuid, which only the
+ * Phrase ② read carries, and a bar that has not fetched that read simply keeps addressing the plotline set. */
 export type DirectiveFocusView = Pick<
     StoryViewData,
     'story' | 'summary' | 'cast' | 'plotlines' | 'chapters' | 'phrase'
->;
+> &
+    Partial<Pick<StoryViewData, 'phraseDetail'>>;
 
 /** The focus the directive bar should show for the rail's current selection. */
 export function directiveFocus(view: DirectiveFocusView, selection: StorySelection): DirectiveFocus {
@@ -913,6 +1121,22 @@ export function directiveFocus(view: DirectiveFocusView, selection: StorySelecti
     }
 
     if (selection.panel === 'plotlines') {
+        // T-W4 — A CHAPTER ENTRY ADDRESSES ITSELF. With a Phrase ② entry open, the sentence is about that
+        // chapter's contract and the ref is the entry's UUID, which is the address `POST …/phrases/plotpoints`
+        // takes (the same shape the Summary group directive uses, R6/U5). The classic records keep the label,
+        // the sentence and the refs they had, because a `sampling`-mode book hands a bare plotline uuid in.
+        const entryId = parsePlotlineGroupRef(selection.ref);
+        const entry = entryId === undefined ? undefined : plotlinesEntryById(view, entryId);
+
+        if (entry !== undefined) {
+            return {
+                label: `Plotlines → ${entry.title} → Editor`,
+                target: `the ${entry.title} chapter entry of the Plotlines phrase`,
+                placeholder: `e.g. rewrite ${entry.title.toLowerCase()} so it pays off the set-up · keep the chapter order`,
+                refs: [entry.id]
+            };
+        }
+
         const plotline = selection.ref ? view.plotlines.find((candidate) => candidate.id === selection.ref) : undefined;
         return {
             label: plotline

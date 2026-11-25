@@ -1,10 +1,13 @@
-// Phrase 2 — Characters. The cast sheet the crew builds from the Summary.
+// Characters — the cast sheet the crew builds from the Summary, and NOT a numbered phrase since T-W4.
+//
+// WHY IT IS A SUPPLEMENT. The rail's numbering follows the loop's signed artifacts, and the loop has no Characters
+// phase to sign off: the cast is a SHEET the Writer maintains from the Summary under §7's `cast` permission row, so
+// the pane keeps its records and loses the "Phrase 2" heading. The rail reaches it through the supplements list with
+// the same `{panel:'characters'}` selection it always used, and "start the cast" stays a directive to the Editor
+// rather than a second write path — this pane never edits a cast member itself.
 //
 // WHY THIS READS THE BOOK AND NOT THE KNOWLEDGE ARTICLE: §4.5's cast is the tracked sheet a
 // reviewer checks behaviour against (D-9, C-9), so the pane shows the records as they stand.
-// "Phrase 2 can be started" is a directive to the Editor, not a second write path: the Author
-// says start (or update) and the loop's own Writer remains the only thing that edits the cast
-// (§7's `cast` permission row).
 import type { CastMember } from '../../shared/types';
 import type { StoryActions, StoryViewData } from './story-contract';
 import { castMembers, summaryReadyForReview } from './story-nav';
@@ -83,8 +86,12 @@ export function CharactersPane({ view, actions, selectedRef }: CharactersPanePro
     return (
         <section className="sv-pane sv-characters" aria-label="Characters">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Characters — Phrase 2</h3>
-                <span className="sv-pane-badge">the cast the story is written against (D-9)</span>
+                <h3 className="sv-pane-title">Characters</h3>
+                {/* T-W4 — the badge says what the sheet IS now that the number is gone: a supplement the crew keeps
+                    from the Summary, not a step the Author signs off. */}
+                <span className="sv-pane-badge">
+                    the cast the story is written against (D-9) · a supplement, not a signed phrase
+                </span>
             </header>
 
             {shown.length === 0 ? (

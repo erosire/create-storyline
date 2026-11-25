@@ -14,7 +14,7 @@
 // the centre (its Seed, phases and prose), never which employees exist or what the rest of the
 // book is doing to them.
 //
-// WHAT A TILE SAYS: the employee's RANK (all five are Rank A peers, R15 — rank alone delegates to
+// WHAT A TILE SAYS: the employee's RANK (all five are Rank A peers, D-38a — rank alone delegates to
 // nobody between peers; V-2 restricts Work Items to Rank A and allows a Rank B employee only as a
 // delegation target), the MODEL it will ask for (U-8 / T-6b), and whether it is running right now.
 // The thread DETAIL deliberately does not live on this rail: a thread belongs to a Story's phase
@@ -36,7 +36,7 @@ import { LoopLimitControl } from './LoopLimitControl';
 
 /**
  * The fixed render order: alphabetical by employee title. Writer is not first for any reason;
- * the Editor is the Author's channel, not an authority above its peers (R15), so the rail sorts
+ * the Editor is the Author's channel, not an authority above its peers (D-38a, V-2), so the rail sorts
  * like any other roster.
  *
  * The Researcher is the fifth row of the phase-1 pipeline (documents/phase-1-research-pipeline.md
@@ -224,10 +224,10 @@ export function AgentsPanel({
                             >
                                 <span className="sv-agent-tile__head">
                                     <span className="sv-agent-tile__name">{agent.title}</span>
-                                    {/* R15: rank is the harness's authority vocabulary; all four are A (V-2). */}
+                                    {/* V-2: rank is the harness's authority vocabulary; all four are A (V-2). */}
                                     <span
                                         className="sv-agent-tile__rank"
-                                        title="every harness configures these employees at Rank A — rank alone grants no delegation between peers (R15); only Rank A owns a Work Item (V-2)"
+                                        title="every harness configures these employees at Rank A — rank alone grants no delegation between peers (D-38a); only Rank A owns a Work Item (V-2)"
                                     >
                                         Rank {agent.rank ?? 'A'}
                                     </span>

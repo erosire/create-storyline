@@ -11,7 +11,14 @@ import {
     findingKindLabel,
     findingKindToken,
     isEditorGroupLockingEnabled,
-    isOpenFinding
+    isOpenFinding,
+    // T-W4 — Phrase ②'s dial: its words, its state, and the two sentences that say why it is shut.
+    PLOTLINE_MODE_LABEL,
+    PLOTLINE_MODE_NOTE,
+    isPlotlinesGroupsEnabled,
+    plotlinesModeRefusal,
+    plotlinesModeTitle,
+    plotlinesStarted
 } from './story-contract';
 import { FINDING_COSTS } from '../../shared/types';
 import type { Cost, LedgerEntry } from '../../shared/types';
@@ -59,16 +66,23 @@ export interface SettingsPaneProps {
  */
 export function SettingsPane({ view, actions }: SettingsPaneProps) {
     const { story } = view;
+    // T-W4 — the Phrase ② dial's shut-reason, computed ONCE: the checkbox's `disabled`, its `title` and the sentence
+    // under it are three readings of one refusal (`story-contract.plotlinesModeRefusal`), so a greyed box can never
+    // promise a different reason than the line beside it. `plotlinesStartedNow` is the same flag on its own, for the
+    // two places that render the "closed" mark rather than a refusal.
+    const plotlinesModeRefuse = plotlinesModeRefusal(view, actions.setPlotlinesMode !== undefined);
+    const plotlinesStartedNow = plotlinesStarted(view);
 
     return (
         <section className="sv-pane sv-settings" aria-label="Settings">
             <header className="sv-pane-head">
                 <h3 className="sv-pane-title">Settings — how the machine may act</h3>
-                {/* The two dials named in one line, so the pane's own header says what is switchable here before
-                    the Author scrolls it. R2 added the second: the auto-approve dial still sets the gate AND the
-                    drain threshold, and the new switch says who may lock a phrase group. */}
+                {/* The dials named in one line, so the pane's own header says what is switchable here before
+                    the Author scrolls it. R2 added the Editor-locking switch, and T-W4 added Phrase ②'s pipeline
+                    dial: the auto-approve dial still sets the gate AND the drain threshold. */}
                 <span className="sv-pane-badge">
-                    the approval gate and the drain threshold (D-35, D-35b) · who may lock a phrase group (R2)
+                    the approval gate and the drain threshold (D-35, D-35b) · who may lock a phrase group (R2) ·
+                    which pipeline Phrase 2 writes (T-W4)
                 </span>
             </header>
 
@@ -155,6 +169,75 @@ export function SettingsPane({ view, actions }: SettingsPaneProps) {
                 <p className="sv-setting-note" data-testid="editor-group-locking-note">
                     {EDITOR_GROUP_LOCKING_NOTE}
                 </p>
+            </div>
+
+            <div className="sv-setting" data-testid="setting-plotlines-mode">
+                {/* T-W4 — PHRASE ②'s DIAL, and it is off until the Author says otherwise (`plotlines_mode` absent
+                    means `'classic'`, which is every book written before the phrase existed).
+
+                    WHY IT SITS BESIDE THE EDITOR-LOCKING SWITCH. Both answer "how may the machine act on my
+                    behalf?", and both decide WHOSE model of the artifact is authoritative: R2's switch says whether
+                    the Editor may commit one Summary group; this one says whether Phrase 2 commits CONTRACTS (one
+                    entry per chapter, each with its `must_happen`/`must_change` and its own revisions) or the
+                    classic §4.3 tools keep owning the plotline records.
+
+                    WHY IT CLOSES ON THE START. The start copies the Seed, the brief is written from that Seed, and
+                    the entries are materialized from the brief — all three under the mode that was standing. A dial
+                    that stayed live afterwards would let a later click strand rows the new mode cannot explain, so
+                    the route refuses the write (409) and the control refuses it first, off the same projected flag
+                    (`story.phrase_started.plotlines`), and says why. A started book still reads which mode it runs
+                    on: the box stays ticked and disabled rather than disappearing.
+
+                    `checked` is the Setting's state, not local state (P1), and the write is an explicit mode word —
+                    turning a dial OFF has to be a body the server can tell apart from a body that never mentioned
+                    it, exactly as `editor_group_locking` is written. */}
+                <label
+                    className="sv-setting-row"
+                    data-testid="setting-plotlines-mode-row"
+                    title={plotlinesModeRefuse === '' ? undefined : plotlinesModeRefuse}
+                >
+                    <input
+                        type="checkbox"
+                        checked={isPlotlinesGroupsEnabled(story)}
+                        disabled={!actions.setPlotlinesMode || plotlinesStartedNow}
+                        aria-label={PLOTLINE_MODE_LABEL}
+                        data-testid="plotlines-mode"
+                        title={plotlinesModeTitle(
+                            story,
+                            plotlinesModeRefuse,
+                            !isPlotlinesGroupsEnabled(story)
+                        )}
+                        onChange={(event) => {
+                            // The handler guards too, not just the `disabled` attribute: every other shut control
+                            // in this package refuses in its handler (the handoff's start, the group revise, the
+                            // lock pair), and a write the settings route would answer with a 409 must not leave
+                            // the desk whatever the browser does with a click on a disabled box.
+                            if (!actions.setPlotlinesMode || plotlinesStartedNow) return;
+
+                            void actions.setPlotlinesMode(
+                                story.id,
+                                event.currentTarget.checked ? 'groups' : 'classic'
+                            );
+                        }}
+                    />
+                    <span className="sv-setting-name">{PLOTLINE_MODE_LABEL}</span>
+                    {/* One word for the dial's state, in TEXT, so the row is readable without the checkbox's shape:
+                        a started phrase's box is ticked AND shut, and "closed" is the fact that would otherwise
+                        live only in a greyed control. */}
+                    {plotlinesStartedNow ? (
+                        <span className="sv-setting-quiet" data-testid="plotlines-mode-closed">
+                            closed with the start
+                        </span>
+                    ) : null}
+                </label>
+                <p className="sv-setting-note" data-testid="plotlines-mode-note">
+                    {PLOTLINE_MODE_NOTE}
+                </p>
+                {plotlinesStartedNow ? (
+                    <p className="sv-setting-note sv-setting-note--closed" data-testid="plotlines-mode-refusal">
+                        {plotlinesModeRefusal(view, true)}
+                    </p>
+                ) : null}
             </div>
 
             <CostDistributionPanel distribution={view.cost_distribution} />

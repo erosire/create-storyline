@@ -20,6 +20,9 @@ import { GoalPanel } from './GoalPanel';
 import { IdeasTray } from './IdeasTray';
 import { PlotlineChapters } from './PlotlineChapters';
 import { PlotlinesPane } from './PlotlinesPane';
+// T-W4 — Phrase ②'s surface (the brief, the chapter entries and the entry pane) and the Summary column's handoff card.
+import { PlotlinesEntryPane, PlotlinesOverviewPane } from './PlotlinesPhrasePane';
+import { PlotlinesHandoff } from './PlotlinesHandoff';
 import { StalledReview } from './story-stalled-review';
 import { SummaryGroupPane } from './SummaryGroupPane';
 import { SummaryOverviewPane } from './SummaryOverviewPane';
@@ -28,6 +31,7 @@ import { PhaseControls } from './story-phase-controls';
 import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
 import {
     DEFAULT_STORY_SELECTION,
+    plotlineGroupFocus,
     recommendedRevisionId,
     selectionExists,
     summaryGroupFocus,
@@ -37,7 +41,19 @@ import {
     summaryRevisionUnit
 } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { isGroupSummary, isLiveRun, backtrackStatement, lockCheck, runsStoppedByPause, selectedSummaryRevision, storyStatusLabel } from './story-contract';
+import {
+    isGroupSummary,
+    // T-W4 — the phrase question and the phrase-swap view: the route picks the surface from the Setting, and the
+    // shared entry components read the phrase slot, so Phrase ② renders through the swapped view.
+    isPlotlinesGroups,
+    plotlinesSurfaceView,
+    isLiveRun,
+    backtrackStatement,
+    lockCheck,
+    runsStoppedByPause,
+    selectedSummaryRevision,
+    storyStatusLabel
+} from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 
 /** D-2a/L-34/L-37a: awaiting the Author is calm, stalled is urgent — and neither is an error. */
@@ -125,6 +141,12 @@ export function StoryView({
     // group once the phrase read has landed — and a ref whose read has NOT landed resolves to `undefined` too, so
     // the Overview's own pending line is what the Author reads while the rows are on their way (U6).
     const groupFocus = grouped ? summaryGroupFocus(view, active) : undefined;
+    // T-W4 — the same pair of questions for Phrase ②: WHICH surface (the chapter entries, or the §4.3 records) and
+    // WHICH entry the rail's ref addresses. `plotlineGroupFocus` resolves `plotlines-group:<uuid>` against the
+    // phrase's live rows, so a stale or cross-phrase ref lands on the overview rather than an empty pane, and the
+    // pane itself keeps looking rows up by id (U2).
+    const groupedPlotlines = isPlotlinesGroups(view);
+    const plotlinesFocus = groupedPlotlines ? plotlineGroupFocus(view, active) : undefined;
 
     return (
         <div className="sv-story">
@@ -240,6 +262,20 @@ export function StoryView({
                         {story.phase === 'summary' && revisionFocus === undefined && groupFocus === undefined ? (
                             <PhaseControls view={view} actions={actions} lock={lock} />
                         ) : null}
+
+                        {/* T-W4 — THE HANDOFF, R5's step ②, and it lives on the MAIN Summary item for one reason:
+                            the text it copies is the Summary. The gate is the same one the phase controls use
+                            (`revisionFocus === undefined && groupFocus === undefined` IS "the main Summary item"),
+                            so a Revision pane or a group pane never grows a second copy of the verb. It renders
+                            while the phrase has NOT started (the button, or the sentence saying why not) and as the
+                            receipt afterwards, so the Author who starts the phrase from here sees the copied Seed
+                            and the way into Phrase 2 without losing the frame they pressed in.
+                            It is NOT gated on `story.phase === 'summary'`: the compiled Summary stays the phrase's
+                            Seed after phase ① signs off, and an Author who reaches the Summary late still has to be
+                            able to start the next phrase. */}
+                        {revisionFocus === undefined && groupFocus === undefined ? (
+                            <PlotlinesHandoff view={view} actions={actions} onSelect={onSelect} />
+                        ) : null}
                     </div>
                 ) : null}
 
@@ -248,8 +284,33 @@ export function StoryView({
                 ) : null}
 
                 {active.panel === 'plotlines' ? (
+                    // T-W4 — TWO PLOTLINES SURFACES, ONE ROUTE. A book on the grouped pipeline gets the phrase's
+                    // own surface: the brief, the chapter entries, and the ONE entry the rail's ref addresses
+                    // (rendered through `plotlinesSurfaceView`, which puts Phrase ②'s read in the slot the shared
+                    // entry components read). A classic book keeps `PlotlinesPane`'s §4.3 records exactly as they
+                    // were, because nothing about Phrase ② changes what those rows say. The question is the
+                    // Setting's (`isPlotlinesGroups`: the phrase read's `mode`, else `story.plotlines_mode`), never
+                    // a count of rows, so a slow read cannot flip a book's surface mid-frame.
                     <>
-                        <PlotlinesPane view={view} selectedRef={active.ref} />
+                        {isPlotlinesGroups(view) ? (
+                            plotlinesFocus === undefined ? (
+                                <PlotlinesOverviewPane
+                                    view={plotlinesSurfaceView(view)}
+                                    actions={actions}
+                                    selection={active}
+                                    onSelect={onSelect}
+                                />
+                            ) : (
+                                <PlotlinesEntryPane
+                                    view={plotlinesSurfaceView(view)}
+                                    actions={actions}
+                                    selection={active}
+                                    onSelect={onSelect}
+                                />
+                            )
+                        ) : (
+                            <PlotlinesPane view={view} selectedRef={active.ref} />
+                        )}
                         {story.phase === 'plotlines' || story.plotlines_locked ? (
                             <PhaseControls
                                 view={view}
@@ -269,7 +330,9 @@ export function StoryView({
                             paused={paused}
                             liveRuns={liveRuns}
                             killedRuns={killedRuns}
-                            title="Chapters — Phrase 4"
+                            // T-W4 — the numbering moved with the rail: Phrase ② is Plotlines, so Chapters is ③.
+                            // The pane's heading and the rail's vocabulary are one fact (`story-nav.ALL_STORY_PHRASES`).
+                            title="Chapters — Phrase 3"
                             onlyChapterRef={active.ref}
                         />
                         {story.phase === 'chapters' && view.completion_preview && story.status !== 'completed' ? (

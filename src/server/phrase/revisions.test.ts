@@ -504,14 +504,16 @@ describe('installing a group revision moves one group line and nobody else’s (
         expect(store.groupRevisions.list()).toEqual([]);
         expect(store.phrases.require(store.phrases.list()[0].id).revision).toBe(0);
 
-        // And a book with no phrase row at all is a caller error, not a silent no-op.
+        // And a book with no phrase row at all is a caller error, not a silent no-op. The message names
+        // the PHRASE row rather than the Summary specifically: the install now resolves the book's PRIMARY
+        // phrase, whatever kind that is, so the missing row it reports is a phrase row of any kind.
         const bare = Store.empty();
         const bareStory = seedStory(bare, { phase: 'summary' });
 
         expect(() =>
             installGroupRevisions(bare, bareStory, [{ group: { ...(groups[0] as PhraseGroup), story_id: bareStory.id }, content: 'x' }], AUTHOR_ATTR)
         ).toThrow(
-            `installGroupRevisions: story ${bareStory.id} has no Summary Phrase row — ensurePhraseCatalog must create the catalog before any group is written`
+            `installGroupRevisions: story ${bareStory.id} has no Phrase row — ensurePhraseCatalog must create the catalog before any group is written`
         );
     });
 });

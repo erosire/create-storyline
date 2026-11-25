@@ -157,18 +157,20 @@ describe('H2/R5 — the hill ledger is derived from stored rows, and survives th
         const root = await scratchDir();
         const rig = await installedRig({ store: await Store.load(root) });
 
-        armRefinementRound(rig);
+        const { task } = armRefinementRound(rig);
 
         await settleUntil(rig, () =>
-            rig.store.tasks.list().some((task) => task.kind === 'escalation' && task.state === 'open')
+            rig.store.tasks.list().some((task_row) => task_row.kind === 'escalation' && task_row.state === 'open')
         );
 
         const before = ledger(samplingProgressOf(rig.store, storyOf(rig), 2));
 
         // THE POLICY, in numbers. Four attempts because the first one MEASURED the hill and the next
         // three proved nothing better (`SAMPLING_NO_PROGRESS_STREAK`); the ceiling is the static cap,
-        // because nothing was ever improved. A regression rig — a draft that introduces a blocking
-        // issue — never measures at all and stops after three (`phase1-hill-climb.test.ts`, N-1).
+        // because nothing was ever improved. A regression rig — a draft that introduces a blocking issue
+        // — never measures at all, so its streak only closes the drain and the escalation; the sample
+        // queue stops on the cap (`work.ts:1537`), which is the four attempts that rig spends too
+        // (`phase1-hill-climb.test.ts`, N-1).
         expect(before).toEqual({
             round: 2,
             wave: 0,
@@ -217,13 +219,31 @@ describe('H2/R5 — the hill ledger is derived from stored rows, and survives th
         ]);
 
         // And the escalation the Author reads states the same numbers the ledger derived: the copy is a
-        // rendering of the ledger, not a second count that could disagree with it.
+        // rendering of the ledger, not a second count that could disagree with it. The rendering is the
+        // H1/N-1 shape `documents/phase-1-research-pipeline.md` pins — the cap in the title, the wave and
+        // the draft count in the head, and one `task_n (unresolved on revision_n)` clause per refused
+        // draft — and only `SAMPLING_FAILURE_PREFIX` plus the head's `wave: n` marker are load-bearing for
+        // the loop (`openEscalationTask`'s reuse key and `engine.ts:rearmSamplingWave`). The title tail and
+        // the detail's prose are free to change; the four attempts, the wave, and the outstanding rows
+        // are the row's own claim, and they still match `before` above.
         const row = reloaded.tasks
             .list()
-            .find((task) => task.kind === 'escalation' && task.title.startsWith(SAMPLING_FAILURE_PREFIX));
+            .find((task_row) => task_row.kind === 'escalation' && task_row.title.startsWith(SAMPLING_FAILURE_PREFIX));
 
+        expect(row?.title).toBe(
+            `${SAMPLING_FAILURE_PREFIX} 4 attempts — no draft answered the fixes this round was armed with`
+        );
+        expect(row?.detail).toContain('round 2 drafted 4 Summary drafts and no screening pass certified them (wave: 0).');
         expect(row?.detail).toContain(
-            'Hill progress in wave 0: 4 of 4 attempts, best unresolved blocking fix 1, 3 consecutive attempts without improvement.'
+            [
+                `Outstanding: ${task.id} (unresolved on revision_1);`,
+                `${task.id} (unresolved on revision_2);`,
+                `${task.id} (unresolved on revision_3);`,
+                `${task.id} (unresolved on revision_4).`
+            ].join(' ')
+        );
+        expect(row?.detail).toContain(
+            'The selected Summary is unchanged and every fix task is still open — nothing was closed on a draft that failed (§6.8, R4).'
         );
 
         await reloaded.close();
@@ -277,13 +297,16 @@ describe('H2/R5 — the hill ledger is derived from stored rows, and survives th
             spent: false
         });
 
-        // What the spent wave OWED is frozen in its escalation: `4 of 4`. Re-reading wave 0 after the
-        // bump is the ROUND-family read — `records.ts:samplePrefixOf` gives wave 0 the whole round
-        // prefix, so wave 1's key (`..._w1_1`) sits inside it and the count is 5. That is the documented
-        // shape of the wave-0 read, and no live reader takes it: every one of them passes
-        // `samplingWaveOf(story)`, which is 1 here (and the escalation below was written while it was 0).
+        // What the spent wave OWED is frozen in its escalation: the four drafts the wave bought, spelled
+        // in its head. Re-reading wave 0 after the bump is the ROUND-family read — `records.ts:samplePrefixOf`
+        // gives wave 0 the whole round prefix, so wave 1's key (`..._w1_1`) sits inside it and the count is
+        // 5. That is the documented shape of the wave-0 read, and no live reader takes it: every one of
+        // them passes `samplingWaveOf(story)`, which is 1 here (and the escalation below was written while
+        // it was 0, so the copy still says four).
         expect(ledger(samplingProgressOf(rig.store, storyOf(rig), 2, 0)).attempts).toBe(5);
-        expect(escalationOf(rig).detail).toContain('Hill progress in wave 0: 4 of 4 attempts');
+        expect(escalationOf(rig).detail).toContain(
+            'round 2 drafted 4 Summary drafts and no screening pass certified them (wave: 0).'
+        );
 
         // Let wave 1's first candidate finish being screened: it MEASURES the hill at the same height
         // wave 0 left it (one unresolved blocking fix), and measuring is not an improvement — so the

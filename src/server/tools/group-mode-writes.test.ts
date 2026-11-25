@@ -34,11 +34,14 @@ import { describe, expect, it } from 'vitest';
 
 import { installGroupRevisions } from '../phrase/revisions';
 import { ensurePhraseCatalog } from '../phrase/catalog';
+// T-W2b: the Phrase ② lifecycle, so the guard's fixture is the PRODUCT's state (started phrase, accepted
+// brief, materialized chapter entries) rather than hand-minted rows that could miss a field.
+import { acceptPlotlineBrief, createPlotlineBrief, startPlotlinesPhrase } from '../phrase/controllers/plotlines';
 import { AUTHOR_ATTR, seedStory } from '../run/mock';
 import { Store } from '../store';
 import { recordUidAt } from '../store/persist';
 import { createToolRuntime } from './index';
-import type { PhraseGroup, Story } from '../../shared/types';
+import type { PhraseGroup, Plotline, Story } from '../../shared/types';
 import type { RunSession, RunToolContext, ToolRuntime } from './index';
 
 interface Book {
@@ -295,4 +298,216 @@ describe('the unknown-group fix line matches the book\u2019s pipeline (R3, item 
     });
 
     void idOf;
+});
+
+// ── T-W2b — THE PLOTLINE PHRASE OWNS THE CONTRACT TEXT ON ITS OWN BOOK (R2, R6) ───────────────
+//
+// WHY THE TOOL LAYER CARRIES THIS GUARD AT ALL: `loop/work.ts` stopped generating the classic
+// `write_unit` candidates on a group-managed book, but the Writer's capability did not change (the
+// phase-② matrix still grants `editPlotline` WRITE), and an Author or any other caller reaches the same
+// two tools. §4.3's `plotlines` row is the MIRROR `phrase/plotpoints.ts:syncPlotlineContract` writes in
+// the install's commit, so a tool write lands OUT OF BAND: `phrase_groups.content` and `group_revisions`
+// keep one text and the row keeps another until the next install silently overwrites it. R2 ("one
+// writing surface per entry") is an invariant about the WRITER, so it has to hold at the tool — this is
+// the same shape as `editSummary`'s R6 refusal above, one phrase down.
+//
+// WHAT IS PINNED AND WHY IT IS NARROW:
+//   * the refusal is keyed on the PER-PHRASE dial (`isPhraseGroupManaged(story, 'plotlines')`), never on
+//     `story.phase`, and on the order being PHRASE-OWNED (a chapter entry exists for it). A row at an
+//     order the entry set does not cover — the stray 7th contract on a three-chapter brief — is not the
+//     lane's artifact and keeps its §8.1 tool;
+//   * an UNSTARTED Plotlines phrase owns nothing, so a grouped book with no Phrase ② still writes
+//     contracts with the tools it always had;
+//   * `plotlines_mode: 'classic'` is inert even when the phrase's entries exist — the dial, not the
+//     rows, decides who owns the text.
+describe('a group-managed Plotlines phrase is the one writing surface for a chapter contract (R2, R6)', () => {
+    /** The seed the Author hands Phrase ② — its own copied text, never `stories.idea` (seam S2). */
+    const PLOTLINES_SEED =
+        'Premise: a cartographer returns. Promise: the map reconciles. Ending: she floods the valley.';
+
+    interface ContractBook {
+        store: Store;
+        story: Story;
+        /** The chapter ENTRIES the phrase materialized, in composition order (`chapter_1..`). */
+        chapters: PhraseGroup[];
+        /** The §4.3 contract row, when the book has one. */
+        contract?: Plotline;
+        runtime: ToolRuntime;
+        writer: RunToolContext;
+    }
+
+    /**
+     * A phase-② book with the dials the test asks for, Phrase ② started and ACCEPTED (accepting the
+     * brief is what materializes `chapter_1..chapter_N`), and optionally one contract row. Ids are the
+     * pinned `recordUidAt` sequence: Phrase ① is 0..5, Phrase ② starts at 20 and its entries are 21+.
+     */
+    function seedContractBook(
+        dial: { summary: 'groups' | 'sampling'; plotlines: 'groups' | 'classic' },
+        options: { start?: boolean; contractOrder?: number; chapterCount?: number } = {}
+    ): ContractBook {
+        const store = Store.empty();
+        const seeded = seedStory(store, { phase: 'plotlines' });
+        const story = store.stories.update(
+            seeded.id,
+            { summary_mode: dial.summary, plotlines_mode: dial.plotlines },
+            AUTHOR_ATTR,
+            [{ id: seeded.id, rev: seeded.rev }]
+        );
+
+        let next = 0;
+        const newId = () => recordUidAt(next++);
+
+        ensurePhraseCatalog(store, story, AUTHOR_ATTR, { newId });
+
+        let chapters: PhraseGroup[] = [];
+
+        if (options.start !== false) {
+            // Phrase ①'s ensure minted 0..5, so Phrase ② and its entries keep their own literal range.
+            next = 20;
+            const started = startPlotlinesPhrase(store, story, PLOTLINES_SEED, AUTHOR_ATTR, { newId });
+            const brief = createPlotlineBrief(
+                store,
+                story,
+                started.phrase,
+                { chapter_count: options.chapterCount ?? 3 },
+                AUTHOR_ATTR
+            );
+
+            chapters = acceptPlotlineBrief(store, story, brief, AUTHOR_ATTR, { newId }).groups;
+        }
+
+        const contract =
+            options.contractOrder === undefined
+                ? undefined
+                : store.plotlines.create(
+                      {
+                          story_id: story.id,
+                          order: options.contractOrder,
+                          heading: 'The return',
+                          must_happen: 'Mara walks the drowned road.',
+                          must_change: 'She knows the valley is flooded on purpose.',
+                          pov: 'Mara',
+                          setups: 'The drowned road',
+                          payoffs: '',
+                          // Engine-owned flags (D-1): a seeded contract starts aligned and unchecked.
+                          contract_locked: false,
+                          aligned: false,
+                          needs_recheck: false
+                      },
+                      AUTHOR_ATTR
+                  );
+
+        const runtime = createToolRuntime(store);
+
+        return {
+            store,
+            story,
+            chapters,
+            contract,
+            runtime,
+            writer: runtime.createContext(sessionFor(story.id, 'writer'))
+        };
+    }
+
+    /** The create call the classic Writer leg files (the Story-level `expects` is added by the caller). */
+    const createCall = (order: number) => ({
+        heading: `Chapter ${order}`,
+        order,
+        must_happen: 'Mara confronts the engineer.',
+        must_change: 'The file is public.',
+        why: 'the contract this chapter has to satisfy (C-7, C-8)'
+    });
+
+    it('refuses createPlotline on an entry-owned order, naming the entry and its revise route', async () => {
+        const book = seedContractBook({ summary: 'groups', plotlines: 'groups' });
+        const entry = book.chapters.find((group) => group.order === 2)!;
+        const result = await book.runtime.execute(book.writer, 'createPlotline', {
+            ...createCall(2),
+            // T-4 asks a create to expect the Story row (§8 lists `expects` here because appending a
+            // contract changes the outline), so the refusal under test is R6 and not the runtime's guard.
+            expects: [{ id: book.story.id, rev: book.store.stories.require(book.story.id).rev }]
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.refused).toBe('R6');
+        expect(result.message).toBe(
+            refusal(
+                'R6',
+                `this Story writes its Plotlines phrase group by group, so chapter 2's contract is the \`chapter_2\` entry (${entry.id}) and the \`plotlines\` row is its MIRROR — \`createPlotline\` would write the mirror out of band, and the next install overwrites it, so the entry and the row diverge (R2, R6). Draft the entries with the \`draft_groups\` job, or revise one entry: POST /stories/${book.story.id}/phrases/groups/${entry.id}/revise.`
+            )
+        );
+        // The structured detail names the SAME door, and it is the group id a caller can act on.
+        expect((result as { group_ref?: string; group_key?: string; plotlines_mode?: string }).group_ref).toBe(
+            entry.id
+        );
+        expect((result as { group_key?: string }).group_key).toBe('chapter_2');
+        expect((result as { plotlines_mode?: string }).plotlines_mode).toBe('groups');
+        // NOTHING moved (P1): the lane owns the only contract rows this book has, and it wrote none here.
+        expect(book.store.plotlines.list().map((row) => ({ ...row }))).toEqual([]);
+    });
+
+    it('refuses editPlotline on a mirrored row, and writes the contract at an order no entry covers', async () => {
+        const book = seedContractBook({ summary: 'groups', plotlines: 'groups' }, { contractOrder: 1 });
+        const mirrored = book.contract!;
+        const entry = book.chapters.find((group) => group.order === 1)!;
+        const refused = await book.runtime.execute(book.writer, 'editPlotline', {
+            plotline_id: mirrored.id,
+            must_happen: 'A hand-written must_happen the install never saw.',
+            expects: [{ id: mirrored.id, rev: mirrored.rev }],
+            why: 'patching the contract directly'
+        });
+
+        expect(refused.ok).toBe(false);
+        expect(refused.refused).toBe('R6');
+        expect(refused.message).toBe(
+            refusal(
+                'R6',
+                `this Story writes its Plotlines phrase group by group, so chapter 1's contract is the \`chapter_1\` entry (${entry.id}) and the \`plotlines\` row is its MIRROR — \`editPlotline\` would write the mirror out of band, and the next install overwrites it, so the entry and the row diverge (R2, R6). Draft the entries with the \`draft_groups\` job, or revise one entry: POST /stories/${book.story.id}/phrases/groups/${entry.id}/revise.`
+            )
+        );
+        expect((refused as { group_ref?: string }).group_ref).toBe(entry.id);
+        // The row is byte-for-byte what the install left it — the refusal is the whole effect.
+        expect(book.store.plotlines.require(mirrored.id)).toEqual({ ...mirrored });
+
+        // The scope is PHRASE-OWNED ORDERS, not every row on the dial: order 5 is outside the accepted
+        // three-chapter brief, so nothing installed that row and the §8.1 tool is still its owner.
+        const outside = seedContractBook({ summary: 'groups', plotlines: 'groups' }, { contractOrder: 5 });
+        const written = await outside.runtime.execute(outside.writer, 'editPlotline', {
+            plotline_id: outside.contract!.id,
+            must_happen: 'The epilogue the brief never counted.',
+            expects: [{ id: outside.contract!.id, rev: outside.contract!.rev }],
+            why: 'a contract the phrase never wrote'
+        });
+
+        expect(written.ok).toBe(true);
+        expect(outside.store.plotlines.require(outside.contract!.id).must_happen).toBe(
+            'The epilogue the brief never counted.'
+        );
+    });
+
+    it('leaves the classic dial and the unstarted phrase exactly as they were', async () => {
+        // The dial is the fact, not the rows: a `classic` book with materialized entries still writes its
+        // contracts with §8.1, because the phrase's groups are not its writing surface there.
+        const classic = seedContractBook({ summary: 'groups', plotlines: 'classic' });
+        const classicWrite = await classic.runtime.execute(classic.writer, 'createPlotline', {
+            ...createCall(1),
+            expects: [{ id: classic.story.id, rev: classic.store.stories.require(classic.story.id).rev }]
+        });
+
+        expect(classicWrite.ok).toBe(true);
+        expect((classicWrite as { data?: Record<string, unknown> }).data).toMatchObject({
+            order: 1,
+            heading: 'Chapter 1'
+        });
+
+        // An unstarted phrase owns nothing yet, so the lane has not taken the tool away either.
+        const unstarted = seedContractBook({ summary: 'groups', plotlines: 'groups' }, { start: false });
+        const unstartedWrite = await unstarted.runtime.execute(unstarted.writer, 'createPlotline', {
+            ...createCall(1),
+            expects: [{ id: unstarted.story.id, rev: unstarted.store.stories.require(unstarted.story.id).rev }]
+        });
+
+        expect(unstartedWrite.ok).toBe(true);
+        expect(unstarted.store.plotlines.list().map((row) => row.order)).toEqual([1]);
+    });
 });

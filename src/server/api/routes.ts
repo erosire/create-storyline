@@ -66,6 +66,11 @@ import {
     importLegacySummary,
     installGroupRevisions,
     isGroupManagedStory,
+    // T-W3 — the PER-PHRASE gate. `revise`/`lock`/`unlock` used to ask `isGroupManagedStory` (the book's
+    // Summary switch) whatever group the path named; they now resolve the group's OWN phrase and ask the
+    // dial that phrase answers to, so a grouped chapter entry is writable on a book whose Summary is
+    // `sampling`, and vice versa. The Summary's refusal strings stay byte-identical (pinned).
+    isPhraseGroupManaged,
     // F8 — the Author's edit and the Writer's install race on ONE group row. The rail disables the
     // button off the same read the route refuses with (`projections.ts:writer_busy`), so the 409 is the
     // server's answer to a request the UI already tried to prevent, not a surprise.
@@ -77,10 +82,21 @@ import {
     // renders as the 409 the rail prints; the route never re-implements a lock rule.
     lockPhraseGroup,
     unlockPhraseGroup,
+    // T-W3 — the phrase CONTROLLERS and the on-demand start. `POST …/phrases/:key/start` is generic: it
+    // looks the kind up here and calls THAT controller's `start`, which copies the seed onto the row. The
+    // compiled Summary the button copies is composed by the projection's own read, so the rail's preview
+    // and the copied text cannot disagree.
+    phraseController,
+    storyPhraseByKey,
+    // The labeled plotpoint block a chapter entry's text is composed from — the SAME derivation the
+    // loop's install uses, so a hand edit of a chapter entry and a Writer's answer write one text.
+    chapterEntryContent,
     type GroupInstallResult,
     type PhraseImportResult,
     type PhraseLockResult,
+    type PhraseStartResult,
     type PhraseUnlockResult,
+    type PlotpointFields,
     type ReviewedChooseResult
 } from '../phrase';
 import type { Store } from '../store';
@@ -96,6 +112,9 @@ import {
     SUMMARY_REVIEW_LIMIT,
     type Cost,
     type Criterion,
+    // T-W3 — the phrase ENTRY row, named by the per-phrase gate helper below (`phraseGateOf` resolves a
+    // `:groupId` to its group and that group's phrase, and returns the row it found, which may be none).
+    type PhraseGroup,
     type Revision,
     type Run,
     type Story,
@@ -108,9 +127,15 @@ import type { StoryThreadLog } from '../run/thread-log';
 import {
     agentThreads,
     agentThreadsAcross,
+    // T-W3 — the compiled Summary, composed by the SAME read the rail's preview uses (a complete reviewed
+    // Overview when one exists, else the Overview as it stands). The Start verb seeds from this, so the
+    // text the handoff button shows and the text the phrase copies are one function's answer.
+    compiledSummaryOf,
     feedEvents,
     goalSurface,
     mergeAgentStatuses,
+    // T-W3 — the per-phrase read: the pinned `phraseView` shape plus that phrase's deltas.
+    phraseDetailView,
     phraseView,
     queueItems,
     queueItemsAcross,
@@ -121,6 +146,10 @@ import {
     storyView
 } from './projections';
 import type { FeedEvent, ProjectionDeps } from './projections';
+// The two phrase KIND KEYS, from the catalog that owns them (R1: the keys are product data). The gates
+// name these rather than a string literal, so a retired kind is a compile error here and not a 409 that
+// quotes a phrase the catalog no longer has.
+import { PHRASE_PLOTLINES_KEY, PHRASE_SUMMARY_KEY } from '../../shared/phrase';
 
 /** §8.6 — the Author-invoked harness. Seeded at boot by `./server` (D-17: built-in, duplicate-only). */
 export const ASSISTANT_TEMPLATE = 'assistant';
@@ -235,6 +264,114 @@ const authorWhy = (route: string, storyId: string, detail = '') =>
     `the Author used ${route} on ${storyId}${detail ? ` — ${detail}` : ''} (§10 dashboard write)`;
 
 // ---------------------------------------------------------------------------
+// T-W3 — the PER-PHRASE gate the group verbs share
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ENTRY NOUN a phrase's refusal uses, so one sentence serves both phrases without pretending the
+ * chapter entries are a Summary. The Summary's copy is the pinned one (`this Summary`); Phrase ②'s
+ * entries are chapters, and the live-Writer refusal is the sentence this feeds.
+ */
+const phraseEntryNoun = (phraseKey: string): string =>
+    phraseKey === PHRASE_PLOTLINES_KEY ? 'the chapter entries' : 'this Summary';
+
+/**
+ * THE refusal a phrase-verb prints when the phrase the path names is not run as entries on this book.
+ *
+ * The Summary arm is reproduced BYTE FOR BYTE — four sentences in it are pinned verbatim by
+ * `phrase-routes.test.ts`, `phrase-lock-routes.test.ts`, `dashboard/api.phrases.test.ts` and
+ * `dashboard/real-server-phrases.test.tsx`, and the dashboard is only allowed to relay them. The
+ * Plotlines arm names the two moves that would make the verb work, because a refusal the Author cannot
+ * act on is a dead end: the dial (`plotlines_mode`) and the phrase's own start verb. It points at neither
+ * `summary_mode` nor the import route, which are Phrase ①'s business and would send the Author to change
+ * the wrong Setting.
+ */
+const groupModeRefusal = (
+    storyId: string,
+    phraseKey: string,
+    /** The rule tokens the Summary's sentence ends with — pinned per verb (`R6`, `R1, R6`, `R6, D-68`). */
+    summaryTokens: string,
+    /** The same tokens for the Plotlines arm: that phrase's rule is P4's, not R1/R6's. */
+    plotlinesTokens = 'P4'
+): string =>
+    phraseKey === PHRASE_PLOTLINES_KEY
+        ? `this Story's chapter entries are not its writable surface (\`plotlines_mode\` is not 'groups', so contracts are still written by the classic plotline tools); set \`plotlines_mode\` to 'groups' with PATCH /stories/${storyId} and start the phrase with POST /stories/${storyId}/phrases/plotlines/start (${plotlinesTokens}).`
+        : `this Story's Summary is still written as one text (no group catalog); POST /stories/${storyId}/phrases/import turns the flat Summary into groups first (${summaryTokens}).`;
+
+/**
+ * WHICH phrase a `:groupId` addresses, and the key its gate reads (T-W3).
+ *
+ * The gate used to be `isGroupManagedStory(story)` — the book's Summary switch — asked of whatever group
+ * the path happened to name, which was right only while a book had one phrase. It now resolves the
+ * GROUP'S phrase and asks that phrase's dial (`phrase/catalog.ts:isPhraseGroupManaged`), so a chapter
+ * entry is writable on a book whose Summary is `sampling`, and a Summary group stays writable on a book
+ * whose `plotlines_mode` is `classic`.
+ *
+ * AN ID THE BOOK DOES NOT HOLD resolves to the SUMMARY's dial rather than to a 404. That is deliberate
+ * and it is what keeps a legacy book's answer unchanged: a `sampling` book has no group rows at all, so
+ * every `:groupId` a stale rail or a typo sends is "the Summary verb on a book with no catalog", the 409
+ * that names the import — the same sentence the pre-Phrase-② route produced and the tests pin. Only a
+ * row that really exists can move a verb onto the Plotlines gate.
+ */
+const phraseGateOf = (
+    store: Store,
+    story: Story,
+    groupId: string
+): { group: PhraseGroup | undefined; phraseKey: string } => {
+    const group = phraseGroupById(store, story.id, groupId);
+
+    if (group === undefined) return { group: undefined, phraseKey: PHRASE_SUMMARY_KEY };
+
+    return { group, phraseKey: store.phrases.get(group.phrase_id)?.key ?? PHRASE_SUMMARY_KEY };
+};
+
+/**
+ * THE `view` a phrase verb answers with — the pinned Summary shape, or this phrase's wider one.
+ *
+ * `GET …/phrases`' shape is a PINNED contract (`phrase-routes.test.ts` asserts the verb responses equal it
+ * key for key, and `dashboard/api.ts` consumes it field-for-field), so a group verb acting on the Summary
+ * must keep answering exactly that object and may not smuggle the Phrase ② deltas in. A verb acting on a
+ * Phrase ② entry answers `phraseDetailView` instead, which is the same projection plus `key`,
+ * `seed_head`, `seed_chars`, `brief` and WITHOUT `review.mirror` (R6's mirror is the Summary's legacy prose,
+ * and a chapter entry has none). One helper, so all three group verbs and the start verb agree about which
+ * phrase's read they return rather than each handler deciding.
+ */
+const phraseVerbView = (store: Store, story: Story, phraseKey: string) =>
+    phraseKey === PHRASE_SUMMARY_KEY ? phraseView(store, story) : phraseDetailView(store, story, phraseKey);
+
+/**
+ * The Author's contract fields for ONE chapter entry, validated the way the domain validates a Writer's
+ * answer (`phrase/plotpoints.ts:parseChapterDraftAnswer`): the two required plotpoints must be non-blank,
+ * because an entry that says neither what happens nor what changes is a chapter title, not a contract,
+ * and the `plotlines` row the install mirrors would otherwise keep the previous pass's plotpoints (P4).
+ *
+ * `undefined` means "this body does not carry a contract" — the route turns it into its own 400 rather
+ * than letting the install throw a domain sentence at an Author who never saw the field list.
+ */
+const plotpointsFromBody = (value: unknown): PlotpointFields | undefined => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+    const fields = value as Record<string, unknown>;
+    const text = (key: string): string => (typeof fields[key] === 'string' ? fields[key].trim() : '');
+    const mustHappen = text('must_happen');
+    const mustChange = text('must_change');
+
+    if (mustHappen === '' || mustChange === '') return undefined;
+
+    // The optional plotpoints travel only when they say something, which is the same rule
+    // `chapterEntryContent` applies when it composes the entry's stored text: a blank label in a contract
+    // block reads like a promise the chapter makes and pays with nothing.
+    return {
+        must_happen: mustHappen,
+        must_change: mustChange,
+        ...(text('heading') === '' ? {} : { heading: text('heading') }),
+        ...(text('pov') === '' ? {} : { pov: text('pov') }),
+        ...(text('setups') === '' ? {} : { setups: text('setups') }),
+        ...(text('payoffs') === '' ? {} : { payoffs: text('payoffs') })
+    };
+};
+
+// ---------------------------------------------------------------------------
 // Body shapes (pinned by `src/dashboard/api.ts`; validated, never trusted)
 // ---------------------------------------------------------------------------
 
@@ -255,6 +392,15 @@ interface StoryCreateBody {
      * definition and needs no migration.
      */
     summary_mode?: unknown;
+    /**
+     * PHRASE ② (T-W3) — `'groups'` (the default the engine gives a NEW Story: the chapter entries of the
+     * Plotlines phrase, structured from that phrase's own copied seed) or `'classic'` (the §4.3 + §8.1
+     * plotline tool path every book written before Phrase ② existed runs, because its row carries no
+     * `plotlines_mode` at all). Validated the same way `summary_mode` is: the two words name two
+     * pipelines, and a typo would otherwise be accepted as the new default and book the Author into work
+     * they did not ask for.
+     */
+    plotlines_mode?: unknown;
 }
 
 interface StoryPatchBody {
@@ -276,6 +422,45 @@ interface StoryPatchBody {
      * validates the shape and stores the boolean.
      */
     editor_group_locking?: unknown;
+    /**
+     * PHRASE ②'s dial (T-W3) — `'groups'` or `'classic'`, settable ONLY while the Plotlines phrase has
+     * not been started. Starting the phrase is the moment its copied seed, its entries and its claim keys
+     * exist, and the lane the loop writes into is decided by this dial from then on; moving it afterwards
+     * would leave a started phrase whose entries are written by a pipeline nobody chose. The 409 names the
+     * phrase row that made the dial unmovable.
+     */
+    plotlines_mode?: unknown;
+}
+
+/**
+ * T-W3 — the body of `POST /stories/:id/phrases/:key/start`: WHERE the seed comes from.
+ *
+ * `source: 'compiled'` (the default) copies Phrase ①'s compiled Summary; `'custom'` copies the Author's
+ * own `text`, which is how a book skips Phrase ①'s pipeline entirely. Both arms end in the same call and
+ * the same copy — the phrase row stores the string it was handed, so nothing either phrase does later can
+ * reach it. `text` is read only for `'custom'`; a stray `text` beside `'compiled'` is ignored rather than
+ * half-applied, because a request that sends both is asking for one of them and the route refuses to guess
+ * which one the client meant.
+ */
+interface PhraseStartBody {
+    source?: unknown;
+    text?: unknown;
+}
+
+/**
+ * T-W3 — the body of the Author's hand revision of ONE phrase entry.
+ *
+ * `content` is the Summary group's new prose. For a CHAPTER ENTRY the body carries `plotpoints` instead:
+ * a chapter entry's stored text is a DERIVATION of its contract fields
+ * (`phrase/plotpoints.ts:chapterEntryContent`), and the install refuses a plotlines entry with no
+ * plotpoints because the `plotlines` row it mirrors would keep the previous pass's contract while the
+ * entry text moved on (P4). A `content` key beside `plotpoints` is not read — deriving the text is the
+ * point — and a chapter entry body with neither is the 400 that names the contract.
+ */
+interface PhraseGroupReviseBody {
+    content?: unknown;
+    note?: unknown;
+    plotpoints?: unknown;
 }
 
 interface WhyBody {
@@ -616,7 +801,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (!parsed.ok) return parsed.response;
 
-        const { title, idea, chapter_count, summary_sampling, summary_critics, summary_mode } = parsed.body;
+        const { title, idea, chapter_count, summary_sampling, summary_critics, summary_mode, plotlines_mode } =
+            parsed.body;
 
         if (typeof idea !== 'string' || idea.trim().length === 0) {
             return errorResponse(
@@ -668,6 +854,24 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
+        // PHRASE ② (T-W3) — the same rule one phrase over: the two words name two pipelines, and a typo
+        // ('group', 'chapter') would otherwise be accepted as the new default and book the Author into
+        // chapter-entry work they did not ask for. Note the off-word is `classic`, NOT `sampling` — that word
+        // belongs to Phrase ①'s switch, and a client that sends it here is asking for the other phase.
+        // Omitting the key is the engine's NEW default (`'groups'`), while an EXISTING row with no field is a
+        // classic book (R6 applied to this dial, §4.1): neither reading is a migration, and neither is a guess.
+        if (
+            plotlines_mode !== undefined &&
+            plotlines_mode !== 'groups' &&
+            plotlines_mode !== 'classic'
+        ) {
+            return errorResponse(
+                c,
+                400,
+                '`plotlines_mode` must be `\'groups\'` (the chapter entries, one per chapter the Plotlines brief declares) or `\'classic\'` (the §4.3 plotline tools, the pipeline every book written before Phrase ② runs).'
+            );
+        }
+
         let storyId: string;
 
         try {
@@ -677,7 +881,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 ...(chapter_count === undefined ? {} : { chapter_count }),
                 ...(summary_sampling === undefined ? {} : { summary_sampling: summary_sampling as number }),
                 ...(summary_critics === undefined ? {} : { summary_critics: summary_critics as number }),
-                ...(summary_mode === undefined ? {} : { summary_mode: summary_mode as 'groups' | 'sampling' })
+                ...(summary_mode === undefined ? {} : { summary_mode: summary_mode as 'groups' | 'sampling' }),
+                // T-W3 — passed only when the Author named it: the engine's own default is `'groups'`, and an
+                // omitted key must reach that default rather than a route-invented one (R6 applied to this dial keeps the absent
+                // field on existing books meaning `classic`).
+                ...(plotlines_mode === undefined ? {} : { plotlines_mode: plotlines_mode as 'groups' | 'classic' })
             });
 
             storyId = created.story_id;
@@ -808,6 +1016,198 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     });
 
     /**
+     * R11 / D-76 — ONE phrase's rail read: `GET /stories/:id/phrases/:key` (T-W3).
+     *
+     * This is the read the Plotlines rail (and Phrase ③'s, unchanged) needs, and it is the pinned
+     * `GET …/phrases` projection scoped to the phrase the path names: its entry rows, its vector, its
+     * findings, its live Writers — plus `key`, the copied Seed's preview, and that phrase's `brief`.
+     *
+     * WHY A `:key` 404 AND NOT A DEFAULT TO THE SUMMARY: the catalog is the Server's (R1), so a path cannot
+     * invent a phrase, and a rail that mistypes `plotlines` must learn that from a 404 rather than be shown
+     * the Summary's five sections under a Plotlines heading.
+     *
+     * AN UNWRITTEN PHRASE IS NOT A 404: `plotlines` on a book nobody has started answers the EMPTY shape
+     * with `mode: classic` (or `groups`, once the dial is set) and `brief: null`, because R6's rule for the
+     * Summary — readable, never migrated, never gated on having rows — is generalised to every phrase. The
+     * rail's "start this phrase" row is exactly that read.
+     */
+    app.get('/stories/:id/phrases/:key', (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        const phraseKey = c.req.param('key');
+
+        if (phraseController(phraseKey) === undefined) return missing(c, 'phrase', phraseKey);
+
+        return c.json(phraseDetailView(store, story, phraseKey), 200);
+    });
+
+    /**
+     * R5 / D-76 — the Author STARTS an on-demand phrase: `POST /stories/:id/phrases/:key/start` (T-W3).
+     *
+     * WHAT THE ROUTE OWNS vs WHAT THE DOMAIN OWNS: this handler resolves the phrase KIND (the catalog's),
+     * decides where the Seed comes from, and turns the two domain refusals into Author-shaped answers. It
+     * then calls THAT phrase's controller (`phrase/controller.ts:phraseController` → `start`), which owns
+     * the copy — the seed lands on the Phrase row as the text this phrase is written from, and the
+     * `supplied` / `story_idea` distinction is a catalog fact, not a branch here. A third phrase is one more
+     * catalog entry with `starts_on_demand: true`; this route does not change.
+     *
+     * THE SEED IS COPIED, NOT REFERENCED (D-72, and the property the whole phrase-independence rule rests
+     * on): `startPlotlinesPhrase` writes the string it is handed onto `phrases.seed`, and every later read
+     * of this phrase goes through `phrase/catalog.ts:phraseSeedOf`. Editing `stories.idea` or the Summary
+     * after a start therefore cannot move Phrase ② — which is why the rail shows the copied text
+     * (`seed_head`) rather than re-deriving it, and why a `GET` after a Seed edit still says the same thing.
+     *
+     * NO PHASE GATE, ON PURPOSE: the loop's phase counter says nothing about whether the Author may start
+     * Phrase ②. Starting is an Author decision (R5), so the only refusals here are about the STATE of the
+     * text being handed over — never about "phase ① is not locked yet".
+     *
+     * THE REFUSALS, each with its own sentence:
+     *   - 400 — `source: 'custom'` without a non-blank `text`. This verb does not author the Seed;
+     *   - 409 — `source: 'compiled'` and there is no compiled Summary to copy. The sentence names the move
+     *     that produces one (the import verb), because "there is nothing to copy" is otherwise a dead end;
+     *   - 409 — the phrase is ALREADY started. `startPlotlinesPhrase` refuses a re-seed outright (its seed
+     *     is the input every entry, revision and claim key was written against), and the route says so
+     *     before running a write it knows will throw; and
+     *   - 409 — the kind is not `starts_on_demand` (Phrase ①). 409 rather than 404: the phrase exists and the
+     *     loop writes it, so "start it by hand" is the impossible part, not the name.
+     *
+     * THE `view` IS THE POINT OF THE RESPONSE: one round trip gives the rail its started phrase, its empty
+     * entry set and its copied Seed preview, so the press does not need a follow-up `GET` to show anything.
+     */
+    app.post('/stories/:id/phrases/:key/start', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        const phraseKey = c.req.param('key');
+        const controller = phraseController(phraseKey);
+
+        if (controller === undefined) return missing(c, 'phrase', phraseKey);
+
+        // A CATALOG PHRASE THE LOOP WRITES (Phrase ①) is 409, not 404: the phrase exists and the verb does
+        // not know how to fail more precisely than "this one has no seed to hand over". `starts_on_demand` is
+        // catalog DATA (R1), so the refusal is read off the definition rather than named here — a third kind
+        // that starts on demand lands in the 200 arm without this route changing.
+        if (!controller.definition.starts_on_demand) {
+            return errorResponse(
+                c,
+                409,
+                `the ${phraseKey} Phrase is not an on-demand start: its entry set comes from the catalog and the loop writes it, so there is no seed for the Author to hand over. POST /stories/${story.id}/phrases/plotlines/start is the verb that takes one (R1: \`starts_on_demand\` is catalog data, and this route reads it).`
+            );
+        }
+
+        // A body is OPTIONAL here (the published contract says so): absent means `source: compiled`. A body
+        // that arrives and is not an object is still the shared 400 sentence — the route refuses to guess
+        // what `[...]` or `"compiled"` was meant to be.
+        const raw = await c.req.json().catch(() => undefined);
+
+        if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) {
+            return errorResponse(c, 400, 'this route needs a JSON object body.');
+        }
+
+        const body = (raw ?? {}) as PhraseStartBody;
+        const source = body.source === undefined ? 'compiled' : body.source;
+
+        if (source !== 'compiled' && source !== 'custom') {
+            return errorResponse(
+                c,
+                400,
+                "`source` must be 'compiled' (this Story's compiled Summary, the default) or 'custom' (the Author's own `text`)."
+            );
+        }
+
+        // 409 BEFORE the write, so the Author is told what stands rather than what threw: the domain's own
+        // refusal (`startPlotlinesPhrase`) carries the same fact, and this sentence is the one the rail prints.
+        const startedAlready = controller.phraseOf(store, story.id);
+
+        if (startedAlready !== undefined) {
+            return errorResponse(
+                c,
+                409,
+                `the ${phraseKey} Phrase is already started on this Story (${startedAlready.id}); its copied seed is the text every entry, revision and claim key was written against, so a new seed means a new phrase, not a re-start (D-72).`
+            );
+        }
+
+        // THE SEED, from the arm the Author chose. `compiled` goes through the SAME projection read the rail
+        // previews (`projections.ts:compiledSummaryOf` — the complete reviewed Overview if the crew produced
+        // one, else the Overview as it stands), so the text the button showed and the text the phrase stores
+        // cannot disagree. `custom` is trimmed but otherwise untouched: the Author's words are the Seed.
+        const rawSeed =
+            source === 'compiled'
+                ? compiledSummaryOf(store, story)
+                : typeof body.text === 'string'
+                  ? body.text
+                  : '';
+        const seed = rawSeed.trim();
+
+        if (source === 'custom' && seed === '') {
+            return errorResponse(
+                c,
+                400,
+                "`source` is 'custom', so `text` must be a non-empty string — it is the seed this Phrase is written from, and this route does not write it for you (D-76)."
+            );
+        }
+
+        if (seed === '') {
+            return errorResponse(
+                c,
+                409,
+                `this Story has no compiled Summary to start the ${phraseKey} Phrase from; POST /stories/${story.id}/phrases/import turns the flat Summary into groups, and a written Overview is what gets copied (R5, D-76).`
+            );
+        }
+
+        try {
+            // Captured in the closure like every other phrase verb: `Store.commit` answers "did it happen",
+            // and the row this call minted is the answer the rail needs. One commit, because the phrase row
+            // and its journal line are one decision — a phrase that exists without its start recorded in the
+            // journal is a phrase the Author cannot explain afterwards.
+            let started: PhraseStartResult | undefined;
+
+            await store.commit('phrase_start', () => {
+                started = controller.start(
+                    store,
+                    requireStory(store, story.id),
+                    authorAttr(
+                        authorWhy(
+                            'POST /stories/:id/phrases/:key/start',
+                            story.id,
+                            `the ${controller.definition.title} was started from ${source === 'compiled' ? "the Story's compiled Summary" : "the Author's own text"} (D-72)`
+                        )
+                    ),
+                    { seedText: seed }
+                );
+            });
+
+            if (started === undefined) return refusal(c, new Error('the phrase start produced no result'));
+
+            // Read back AFTER the commit, from the row: `seed_head`/`seed_chars` here are the phrase's own
+            // projection fields, so the receipt and the rail cannot drift about what was copied, and the
+            // response carries no second copy of the truncation rule.
+            const view = phraseDetailView(store, requireStory(store, story.id), started.phrase.key);
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    phrase_id: started.phrase.id,
+                    key: started.phrase.key,
+                    source,
+                    seed_chars: view.seed_chars,
+                    seed_head: view.seed_head,
+                    started: started.started,
+                    view
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
      * R2 — the Author rewrites ONE group by hand.
      *
      * The same install the loop uses (`phrase/revisions.ts:installGroupRevisions`), so an Author edit
@@ -826,32 +1226,62 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
-        if (!isGroupManagedStory(story)) {
-            return errorResponse(
-                c,
-                409,
-                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R6).`
-            );
+        // T-W3 — WHICH PHRASE this group belongs to is a read of the GROUP ROW, and the dial the verb asks is
+        // that phrase's (`phrase/catalog.ts:isPhraseGroupManaged`), not the book's Summary switch. A chapter
+        // entry is therefore writable on a book whose Summary is `sampling`, and a Summary section stays
+        // writable on a book whose Phrase ② is `classic`. An id the book does not hold resolves to the
+        // Summary's dial — see `phraseGateOf` — which is what keeps a legacy book's answer byte-identical: a
+        // `sampling` book has no rows, so every id a stale rail sends still lands on the import sentence.
+        const groupId = c.req.param('groupId');
+        const { group, phraseKey } = phraseGateOf(store, story, groupId);
+
+        if (!isPhraseGroupManaged(story, phraseKey)) {
+            return errorResponse(c, 409, groupModeRefusal(story.id, phraseKey, 'R6'));
         }
 
-        const parsed = await readBody<{ content?: unknown; note?: unknown }>(c);
+        // 404 only once a REAL row could have answered: the gate above is about the book, this one is about
+        // the address (the route's long-standing order, kept because a pinned test asserts 409-before-404).
+        if (group === undefined) return missing(c, 'phrase group', groupId);
+
+        const parsed = await readBody<PhraseGroupReviseBody>(c);
 
         if (!parsed.ok) return parsed.response;
 
-        const content = typeof parsed.body.content === 'string' ? parsed.body.content.trim() : '';
+        // THE TEXT, taken from the field THIS phrase writes. A Summary section's text is the Author's prose,
+        // verbatim (R2). A chapter entry's text is a DERIVATION of its contract fields
+        // (`phrase/plotpoints.ts:chapterEntryContent`), the same function the loop's install composes with,
+        // so a hand edit and a Writer's answer leave one text — and the contract travels with it, because
+        // `installGroupRevisions` refuses a plotlines entry with no plotpoints rather than mirroring a stale
+        // `plotlines` row under new prose (P4). A `content` key beside `plotpoints` is not read.
+        let content: string;
+        let plotpoints: PlotpointFields | undefined;
 
-        if (content === '') {
-            return errorResponse(
-                c,
-                400,
-                '`content` is the group\'s new text and must be a non-empty string (R2: an empty group text is a refusal, not a revision).'
-            );
+        if (phraseKey === PHRASE_PLOTLINES_KEY) {
+            const fields = plotpointsFromBody(parsed.body.plotpoints);
+
+            if (fields === undefined) {
+                return errorResponse(
+                    c,
+                    400,
+                    '`plotpoints` is a chapter entry\'s text: `must_happen` and `must_change` must both be non-empty strings, and the entry\'s text and its `plotlines` contract are composed from them together (P4).'
+                );
+            }
+
+            plotpoints = fields;
+            content = chapterEntryContent(group, fields);
+        } else {
+            content = typeof parsed.body.content === 'string' ? parsed.body.content.trim() : '';
+
+            if (content === '') {
+                return errorResponse(
+                    c,
+                    400,
+                    '`content` is the group\'s new text and must be a non-empty string (R2: an empty group text is a refusal, not a revision).'
+                );
+            }
         }
 
-        const groupId = c.req.param('groupId');
-        const group = phraseGroupById(store, story.id, groupId);
-
-        if (group === undefined) return missing(c, 'phrase group', groupId);
+        const note = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
 
         // F8 / R4 — the Author's hand edit IS a Writer op on that group row: it installs a new revision
         // and archives the one it replaces. A live `draft_groups` run on the same group would install
@@ -872,8 +1302,6 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
-        const note = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
-
         try {
             // Captured in the closure for the same reason as the import route above: `Store.commit`
             // returns nothing, and the install's per-group report is what the Author's rail needs to
@@ -884,7 +1312,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 install = installGroupRevisions(
                     store,
                     requireStory(store, story.id),
-                    [{ group: store.phraseGroups.require(groupId), content }],
+                    // The row is re-read INSIDE the commit (the CAS discipline every phrase verb uses), and
+                    // `plotpoints` rides along only on the chapter leg — on a Summary section it is absent,
+                    // which is what tells the install's sync there is no `plotlines` contract to write (P4).
+                    [{ group: store.phraseGroups.require(groupId), content, ...(plotpoints === undefined ? {} : { plotpoints }) }],
                     authorAttr(
                         authorWhy(
                             'POST /stories/:id/phrases/groups/:groupId/revise',
@@ -919,7 +1350,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                         number: row.number
                     })),
                     mirror: install.mirror,
-                    view: phraseView(store, requireStory(store, story.id))
+                    // THE PHRASE THAT WAS WRITTEN answers, not the Summary by default: on a chapter entry the
+                    // rail needs its own entry rows and its `brief`, and the pinned `PhraseView` shape stays
+                    // reserved for the Summary's verbs.
+                    view: phraseVerbView(store, requireStory(store, story.id), phraseKey)
                 },
                 200
             );
@@ -959,19 +1393,17 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
-        // A `sampling` book has no group rows at all, so there is no group to lock; importing is the
-        // Author's opt-in (R6), and the 409 names that door rather than answering 404 about a group id
-        // that could never exist here (the same shape the revise and choose routes use).
-        if (!isGroupManagedStory(story)) {
-            return errorResponse(
-                c,
-                409,
-                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R1, R6).`
-            );
-        }
-
+        // T-W3 — the gate is THIS group's phrase's dial (`phraseGateOf` resolves the row, then its kind), so a
+        // chapter entry is lockable on a `sampling` Summary book and a Summary section stays lockable while
+        // Phrase ② is classic. On the Summary leg the sentence, the tokens and the 409-before-404 order are
+        // the pinned ones: a `sampling` book has no rows, so every id a stale rail sends still answers the
+        // import sentence rather than a 404 about an id that could never exist here.
         const groupId = c.req.param('groupId');
-        const group = phraseGroupById(store, story.id, groupId);
+        const { group, phraseKey } = phraseGateOf(store, story, groupId);
+
+        if (!isPhraseGroupManaged(story, phraseKey)) {
+            return errorResponse(c, 409, groupModeRefusal(story.id, phraseKey, 'R1, R6'));
+        }
 
         // 404 for an address this book never minted, checked before any verb (the revise route's rule): a
         // typo must not reach a commit and come back as a 409 that reads like a refusal about real content.
@@ -1017,7 +1449,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
             if (locked === undefined) return refusal(c, new Error('the group lock produced no result'));
 
-            const view = phraseView(store, requireStory(store, story.id));
+            // The read of the phrase the GROUP belongs to (T-W3): the lock badge on a chapter row lives on
+            // the Plotlines rail, and that rail has no use for the Summary's five sections.
+            const view = phraseVerbView(store, requireStory(store, story.id), phraseKey);
 
             return c.json(
                 {
@@ -1063,16 +1497,15 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
-        if (!isGroupManagedStory(story)) {
-            return errorResponse(
-                c,
-                409,
-                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R1, R6).`
-            );
-        }
-
+        // T-W3 — the same per-phrase gate as the lock verb, for the same reason: the flag is on a row of ONE
+        // phrase, and the dial that makes it liftable is that phrase's. The Summary's sentence and tokens
+        // stay byte-identical.
         const groupId = c.req.param('groupId');
-        const group = phraseGroupById(store, story.id, groupId);
+        const { group, phraseKey } = phraseGateOf(store, story, groupId);
+
+        if (!isPhraseGroupManaged(story, phraseKey)) {
+            return errorResponse(c, 409, groupModeRefusal(story.id, phraseKey, 'R1, R6'));
+        }
 
         if (group === undefined) return missing(c, 'phrase group', groupId);
 
@@ -1109,7 +1542,8 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
             if (opened === undefined) return refusal(c, new Error('the group unlock produced no result'));
 
-            const view = phraseView(store, requireStory(store, story.id));
+            // The phrase the GROUP belongs to (T-W3) — same rule as on the lock verb.
+            const view = phraseVerbView(store, requireStory(store, story.id), phraseKey);
 
             return c.json(
                 {
@@ -1176,13 +1610,21 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         const note = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
 
+        // T-W3 — THE GATE AND THE SCAN ARE THE SUMMARY's, and now say so. With Phrase ② started on the same
+        // book, an unscoped read would mix the chapter rows into the selection (`complete` would then demand
+        // a clean CHAPTER selection too, so a book that merely also has chapters could never have a Reviewed
+        // Summary) and would let a chapter Writer refuse the Summary's choose. Passing the Summary's phrase id
+        // — even when the book has no Summary row at all, which is the legacy shape a pinned test asserts —
+        // keeps this verb answering the one question it has always answered.
+        const summaryPhraseId = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY)?.id;
+
         // THE GATE, read from the ONE function the scoring seat also arms on
         // (`phrase/reviewed.ts:cleanSelectionOf`). Checking it here instead of letting the domain call
         // throw keeps the refusal Author-shaped: the response lists the groups and says whether each one
         // is unwritten, has no clean revision, or is being held open by an unresolved issue. The domain
         // call still throws — the guard is for every other caller — but a route should not answer a 409
         // by formatting an exception.
-        const selection = cleanSelectionOf(store, story);
+        const selection = cleanSelectionOf(store, story, summaryPhraseId);
 
         if (!selection.complete) {
             return errorResponse(
@@ -1199,7 +1641,9 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         // (`projections.ts:reviewed.writer_busy`), so a greyed-out control and this 409 agree.
         const holders = new Set<string>();
 
-        for (const group of phraseGroupsOf(store, story.id)) {
+        // SCOPED TO THE SUMMARY's entries (T-W3): a live CHAPTER pass is not a Writer inside the reviewed
+        // Overview, and refusing the Summary's choose for it would be a 409 the Author cannot act on.
+        for (const group of phraseGroupsOf(store, story.id, summaryPhraseId)) {
             for (const run of liveGroupWriters(store, story.id, group.id)) holders.add(run.id);
         }
 
@@ -1207,7 +1651,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return errorResponse(
                 c,
                 409,
-                `the Writer is rewriting part of this Summary right now (${[...holders].join(', ')}), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).`
+                `the Writer is rewriting part of ${phraseEntryNoun(PHRASE_SUMMARY_KEY)} right now (${[...holders].join(', ')}), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).`
             );
         }
 
@@ -1297,7 +1741,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             // deliberately NOT widened to name it: that copy is pinned verbatim (L-13, the Author reads it
             // as the list of verbs), and a body that carries THIS field with the wrong type gets the
             // field's own 400 one line later, which is the accurate sentence for that mistake.
-            body.editor_group_locking !== undefined;
+            body.editor_group_locking !== undefined ||
+            // T-W3 — Phrase ②'s dial, for the same reason and with the same pinned sentence left alone: a
+            // body carrying `plotlines_mode` IS a field this verb knows (so it must clear the `hasEdit`
+            // gate), and its own 400/409 name it one line later.
+            body.plotlines_mode !== undefined;
 
         if (!hasEdit)
             return errorResponse(
@@ -1360,13 +1808,52 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             );
         }
 
+        // PHRASE ②'s dial (T-W3): the same two words, each naming a pipeline, so the same strict validation.
+        if (
+            body.plotlines_mode !== undefined &&
+            body.plotlines_mode !== 'groups' &&
+            body.plotlines_mode !== 'classic'
+        ) {
+            return errorResponse(
+                c,
+                400,
+                "`plotlines_mode` must be 'groups' (the chapter entries) or 'classic' (the plotline tools); omitting it leaves the Story as it is (R11)."
+            );
+        }
+
+        // THE START GATE (P4, and the one field on this row with a start-time rule): a started Phrase ② owns
+        // its copied seed, its entries and its claim-family keys, and the lane the loop writes into is
+        // decided by this dial FROM THEN ON. Moving it afterwards would leave a phrase whose entries are
+        // written by a pipeline nobody chose — so the dial is Author-movable exactly while the row does not
+        // exist, and the 409 names the row that made it unmovable.
+        //
+        // A value equal to the effective one is NOT refused: it is a no-op the rail can send by re-PUTting the
+        // row it read, and refusing a write that changes nothing would make an idempotent client fail. The
+        // effective value is `story.plotlines_mode ?? 'classic'`, the same reading the projection and the
+        // gate predicate use (R6 applied to this dial: an absent field is the old pipeline, never a silently-open phrase).
+        if (body.plotlines_mode !== undefined && (story.plotlines_mode ?? 'classic') !== body.plotlines_mode) {
+            const plotlinesPhrase = storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY);
+
+            if (plotlinesPhrase !== undefined) {
+                return errorResponse(
+                    c,
+                    409,
+                    `this Story's Plotlines Phrase is already started (${plotlinesPhrase.id}), so \`plotlines_mode\` no longer moves: its copied seed, its chapter entries and its claim keys were written under the pipeline that was chosen at the start, and switching lanes now would leave entries nobody chose (P4).`
+                );
+            }
+        }
+
         return verb(c, story.id, async () => {
             if (
                 body.title !== undefined ||
                 body.auto_approve !== undefined ||
                 body.summary_sampling !== undefined ||
                 body.summary_critics !== undefined ||
-                body.editor_group_locking !== undefined
+                body.editor_group_locking !== undefined ||
+                // T-W3 — Phrase ②'s dial rides on the same row edit: it is a Story-row Setting like the dial
+                // and the locking permission, not an engine verb, and `idea`/`chapter_count` keep their own
+                // engine legs below.
+                body.plotlines_mode !== undefined
             ) {
                 await store.commit('patch_story', () => {
                     const fresh = requireStory(store, story.id);
@@ -1388,7 +1875,14 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                             // reaches this object at all.
                             ...(body.editor_group_locking === undefined
                                 ? {}
-                                : { editor_group_locking: body.editor_group_locking as boolean })
+                                : { editor_group_locking: body.editor_group_locking as boolean }),
+                            // T-W3 — one of the two words, validated above, written as the Author named it.
+                            // This branch is reached only when the value DIFFERS from the effective one or the
+                            // phrase is un-started, so a stored `plotlines_mode` always says which pipeline the
+                            // Author chose rather than repeating a default the row never needed.
+                            ...(body.plotlines_mode === undefined
+                                ? {}
+                                : { plotlines_mode: body.plotlines_mode as 'groups' | 'classic' })
                         },
                         authorAttr(
                             authorWhy(
@@ -1403,7 +1897,13 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                                         // of the journal has to say which.
                                         body.editor_group_locking !== undefined
                                         ? `the Editor may${body.editor_group_locking === true ? '' : ' not'} lock a phrase group (R1)`
-                                        : `phase ① now samples ${body.summary_sampling ?? 'the existing'} Writers with ${body.summary_critics ?? 'the existing'} Critics per draft`
+                                        : // T-W3 — its own journal line, because "Phrase ② writes its chapters
+                                          // as entries" vs "the plotline tools still write the contracts" is a
+                                          // decision about who writes a whole phase, and a future read of the
+                                          // journal has to say which way the Author moved it and when.
+                                          body.plotlines_mode !== undefined
+                                          ? `Phrase ② now writes ${body.plotlines_mode === 'groups' ? 'its chapter entries' : 'its plotlines through the classic tools'} (R11)`
+                                          : `phase ① now samples ${body.summary_sampling ?? 'the existing'} Writers with ${body.summary_critics ?? 'the existing'} Critics per draft`
                             )
                         ),
                         [{ id: fresh.id, rev: fresh.rev }]

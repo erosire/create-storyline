@@ -45,7 +45,12 @@ import {
 // The catalog order the atomic batch is cut and re-sorted in (D-66): the same rank every group list in
 // this package is written in, read from its owner rather than re-derived here.
 import { phraseGroupRank } from '../../shared/phrase';
-import { isPhraseGroupLocked, phraseGroupsOf } from './catalog';
+import { isPhraseGroupLocked, phraseGroupsOf, primaryPhraseOf } from './catalog';
+// SEAM S8: the draft claim-key ref comes from the PHRASE CONTROLLER, because which record a claim
+// family keys on is a fact about the phrase, not about the loop (`summaryRef` was that fact spelled out
+// by hand while the Summary was the only phrase). `controller.ts` reaches the engine through
+// `catalog.ts`/`revisions.ts` and never back into this module, so the import has no cycle.
+import { phraseController } from './controller';
 // The vector identity the review seats are keyed by, and the history the write-allowance counts
 // against — both owned by `phrase/revisions.ts`, both read here rather than re-derived.
 import { groupRevisionHistory, groupRevisionVector, groupVectorHash } from './revisions';
@@ -82,6 +87,32 @@ export const groupItemPrefixOf = (kind: (typeof GROUP_HOLDING_KINDS)[number]): s
 export const GROUP_DRAFT_ITEM_PREFIX = groupItemPrefixOf('draft_groups');
 
 /**
+ * The ref a phrase's draft claim family embeds (seam S8) — the loop's drop-in for the summary-only
+ * expression it builds keys with today (`storySummary(store, story.id)?.id`).
+ *
+ * WHY IT DELEGATES INSTEAD OF REPEATING THE RULE: "which row namespaces this phrase's claim keys" belongs
+ * to the phrase, and both owners already exist — the Summary contributes the `summaries` row id (so every
+ * persisted `wi_draft_groups_summary_0_…` key survives), Phrase ② contributes its own phrase row id (so a
+ * chapter batch and a Summary batch on one book can never claim each other's attempts). A second spelling
+ * of that rule here is how the two would drift, so this is a lookup: resolve the phrase (the PRIMARY one
+ * when the caller names none, which is what the loop has always meant), ask its controller, and fall back
+ * to the row's own id for a kind the registry does not know — still a family disjoint from the Summary's.
+ *
+ * `''` means "this phrase has nothing to key on yet", the same empty answer the loop already reads as
+ * "generate no job".
+ */
+export function groupDraftClaimRef(store: Store, story: Story, phraseId?: string): string {
+    const phrase =
+        phraseId === undefined
+            ? primaryPhraseOf(store, story.id)
+            : store.phrases.list().find((row) => row.story_id === story.id && row.id === phraseId);
+
+    if (phrase === undefined) return '';
+
+    return phraseController(phrase.key)?.draftClaimRef(store, story, phrase) ?? phrase.id;
+}
+
+/**
  * Whether a run row belongs to a kind that holds its groups.
  *
  * The trailing `_` is the anchor, not decoration: `wi_draft_groups_<summaryRef>_…` is the family, and
@@ -110,12 +141,17 @@ export const isGroupHoldingRun = (run: Run): boolean =>
  * is one deferred sweep, and the cost of the permissive one is two writers installing over each
  * other and an archived revision nobody reviewed.
  */
-export function liveGroupSets(store: Store, storyId: string): string[][] {
+export function liveGroupSets(store: Store, storyId: string, phraseId?: string): string[][] {
     const live = liveRuns(store, storyId).filter(isGroupHoldingRun);
 
     if (live.length === 0) return [];
 
-    const all = phraseGroupsOf(store, storyId).map((group) => group.id);
+    // Scoped to the phrase the caller is planning (default: the Story's PRIMARY phrase — what this read
+    // always meant). Without scoping, a chapter entry of Phrase ② would appear in the "every group"
+    // fallback below and a Summary run with no `group_refs` would hold chapters it never touched.
+    const all = phraseGroupsOf(store, storyId, phraseId ?? primaryPhraseOf(store, storyId)?.id).map(
+        (group) => group.id
+    );
 
     return live.map((run) => {
         const refs = Array.isArray(run.group_refs) ? run.group_refs.filter((ref) => typeof ref === 'string') : [];
@@ -125,10 +161,10 @@ export function liveGroupSets(store: Store, storyId: string): string[][] {
 }
 
 /** The union of every held group id — the fast answer generation and dispatch both ask for. */
-export function liveGroupRefs(store: Store, storyId: string): Set<string> {
+export function liveGroupRefs(store: Store, storyId: string, phraseId?: string): Set<string> {
     const held = new Set<string>();
 
-    for (const set of liveGroupSets(store, storyId)) for (const id of set) held.add(id);
+    for (const set of liveGroupSets(store, storyId, phraseId)) for (const id of set) held.add(id);
 
     return held;
 }
@@ -152,8 +188,8 @@ export function liveGroupWriters(store: Store, storyId: string, groupId: string)
 }
 
 /** The ids in `groupRefs` that a live Writer already holds, in the order the caller named them. */
-export function heldGroupRefs(store: Store, storyId: string, groupRefs: readonly string[]): string[] {
-    const held = liveGroupRefs(store, storyId);
+export function heldGroupRefs(store: Store, storyId: string, groupRefs: readonly string[], phraseId?: string): string[] {
+    const held = liveGroupRefs(store, storyId, phraseId);
 
     return groupRefs.filter((id) => held.has(id));
 }
@@ -182,9 +218,10 @@ export function heldGroupRefs(store: Store, storyId: string, groupRefs: readonly
 export function partitionGroupRefs(
     store: Store,
     storyId: string,
-    groupRefs: readonly string[]
+    groupRefs: readonly string[],
+    phraseId?: string
 ): { free: string[]; deferred: string[] } {
-    const held = heldGroupRefs(store, storyId, groupRefs);
+    const held = heldGroupRefs(store, storyId, groupRefs, phraseId);
     const heldSet = new Set(held);
 
     return {
@@ -197,9 +234,10 @@ export function partitionGroupRefs(
 export function partitionGroups(
     store: Store,
     storyId: string,
-    groups: readonly PhraseGroup[]
+    groups: readonly PhraseGroup[],
+    phraseId?: string
 ): { free: PhraseGroup[]; deferred: PhraseGroup[] } {
-    const held = liveGroupRefs(store, storyId);
+    const held = liveGroupRefs(store, storyId, phraseId);
 
     return {
         free: groups.filter((group) => !held.has(group.id)),
@@ -382,8 +420,11 @@ const drivesGroupWork = (finding: Finding): boolean =>
  *     finding whose every group is locked drops out with no target at all: it drives no work, and the
  *     drain probe reads the same list, so "owed" and "done" cannot disagree about it.
  */
-export function groupWorkTargets(store: Store, story: Story): GroupWorkTarget[] {
-    const groups = phraseGroupsOf(store, story.id);
+export function groupWorkTargets(store: Store, story: Story, phraseId?: string): GroupWorkTarget[] {
+    // Scoped to ONE phrase, defaulting to the Story's PRIMARY one (the Summary) — the phrase this read
+    // has always answered. With Phrase ② started, an unscoped read would offer a chapter entry to the
+    // Summary's batch planner, and the Summary's answer contract has no chapter in it.
+    const groups = phraseGroupsOf(store, story.id, phraseId ?? primaryPhraseOf(store, story.id)?.id);
 
     if (groups.length === 0) return [];
 
@@ -518,7 +559,12 @@ export function findingGroupSets(targets: readonly GroupWorkTarget[]): GroupWork
  * cross-group defect forever — the D-66 set shrinks to the groups that remain writable instead of
  * waiting on one that cannot move.
  */
-export function planGroupDraftBatch(store: Store, story: Story, targets: readonly GroupWorkTarget[]): GroupWorkTarget[] {
+export function planGroupDraftBatch(
+    store: Store,
+    story: Story,
+    targets: readonly GroupWorkTarget[],
+    phraseId?: string
+): GroupWorkTarget[] {
     // R-LOCK — a locked group cannot be written, so it belongs to no set this sweep dispatches, even when
     // the caller's list still names it (a target list cut before the lock landed, or a caller that read the
     // rows mid-commit). `findingGroupsStillOwed` already keeps locked groups out of the sets this cuts, so
@@ -538,7 +584,7 @@ export function planGroupDraftBatch(store: Store, story: Story, targets: readonl
 
     if (writable.length === 0) return [];
 
-    const held = liveGroupRefs(store, story.id);
+    const held = liveGroupRefs(store, story.id, phraseId ?? primaryPhraseOf(store, story.id)?.id);
     const batchSize = Math.max(1, samplingSizeOf(story));
 
     // finding id -> the groups it STILL owes. Read from the FINDINGS, not from `targets`: the question
@@ -713,19 +759,23 @@ export interface GroupPipelineOwed {
  *
  * The caller (`loop/status.ts`) composes the sentences; this answers the counts.
  */
-export function groupPipelineOwed(store: Store, story: Story): GroupPipelineOwed {
-    const groups = phraseGroupsOf(store, story.id);
+export function groupPipelineOwed(store: Store, story: Story, phraseId?: string): GroupPipelineOwed {
+    // Scoped to ONE phrase, defaulting to the PRIMARY one. The counts are per-phrase facts — the drain's
+    // sentence about a Summary that still owes a draft must not count a chapter entry.
+    const groups = phraseGroupsOf(store, story.id, phraseId ?? primaryPhraseOf(store, story.id)?.id);
 
     if (groups.length === 0) return { drafts: 0, structuredReviews: 0, deepReviews: 0 };
 
-    const drafts = groupWorkTargets(store, story).length;
+    const drafts = groupWorkTargets(store, story, phraseId).length;
 
     // No installed text means nothing to review: the seats only open once a group has a revision
     // (`hasText` in the generator), and the drafts line above already says what is owed.
     if (!groups.some((group) => group.revision > 0)) return { drafts, structuredReviews: 0, deepReviews: 0 };
 
     const critics = screeningSizeOf(story);
-    const vectorHash = groupVectorHash(groupRevisionVector(store, story.id));
+    // The ONE vector this phrase's seats key on: the primary phrase's when the caller names none, so the
+    // Summary's review seats keep hashing the same five-group combination they always did.
+    const vectorHash = groupVectorHash(groupRevisionVector(store, story.id, phraseId));
     const closedOn = (key: string): boolean => runsForItem(store, key).some((run) => !isLiveRun(run));
 
     let structuredReviews = 0;

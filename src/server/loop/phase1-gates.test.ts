@@ -8,7 +8,7 @@
 //   C — screening exhaustion degrades to a partial-review selection + ONE Author escalation;
 //   D — a round may not select before its full sample set exists unless sampling is exhausted;
 //   E — a cleared sampling-failure escalation re-arms the round as a new WAVE;
-//   H6 — R8/D-49's negative gate: round 2 does not arm without an open fix task, nor over an
+//   H6 — D-49's negative gate: round 2 does not arm without an open fix task, nor over an
 //        unconfirmed blocking finding.
 import { describe, expect, it } from 'vitest';
 
@@ -357,10 +357,10 @@ describe('T12/E — clearing the sampling-failure escalation re-arms the round a
 });
 
 // ---------------------------------------------------------------------------
-// H6 — R8/D-49's negative gate, read through the shipped predicate
+// H6 — D-49's negative gate, read through the shipped predicate
 // ---------------------------------------------------------------------------
 
-describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed blocking finding (R8, D-49)', () => {
+describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed blocking finding (D-49, D-52)', () => {
     it('refuses the round with no fix task and with an unconfirmed blocking finding, and arms on approved work', async () => {
         const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 

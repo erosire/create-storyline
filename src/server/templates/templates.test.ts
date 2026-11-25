@@ -73,6 +73,11 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
     });
 
     it('the roster is the crews the Phase-1 pipeline, §6.2 and §14 item 10 name, and every one is duplicate-only (D-17)', () => {
+        // T-W2 appends Phrase ②'s two crews at the END of the roster (the structure gate and the
+        // contract sampler). They are last on purpose: `records.ts:templatesFor` keeps catalogue
+        // order, and `work.ts:candidate` takes `pool[0]` for an UNBOUND seat — a row inserted before
+        // `writer-plotlines` would become the phase-② `write_unit` crew and change what a
+        // classic-mode Story's run looks like.
         expect(BUILT_IN_TEMPLATES.map((template) => template.name)).toEqual([
             'editor-seed-structure',
             'researcher-story',
@@ -87,7 +92,9 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'critic-audience',
             'critic-mystery',
             'reader-consistency',
-            'reader-prose'
+            'reader-prose',
+            'writer-plotlines-sampler',
+            'editor-plotlines-structure'
         ]);
 
         for (const template of BUILT_IN_TEMPLATES) {
@@ -584,7 +591,13 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'critic-audience': [],
             'critic-mystery': [],
             'reader-consistency': [],
-            'reader-prose': []
+            'reader-prose': [],
+            // T-W2: Phrase ②'s two crews delegate nothing. The chapter draft is ONE structured turn
+            // whose whole answer the engine installs or discards (`installGroupRevisions`), so a
+            // delegated sub-role inside it could not be attributed to an entry; the structure gate is
+            // a single judgement turn (`structurePlotlines`).
+            'writer-plotlines-sampler': [],
+            'editor-plotlines-structure': []
         });
     });
 
@@ -705,13 +718,28 @@ describe('W8 — T-0 structural assignment rules', () => {
             'critic-plausibility',
             'critic-audience',
             'critic-mystery',
-            'reader-consistency'
+            'reader-consistency',
+            // T-W2: Phrase ②'s structure gate and its contract Writer ride along for the same reason
+            // `editor-group-lock` does — each seat binds its crew BY SLUG
+            // (`loop/work.ts:phase2GroupCandidates` sets `templateRef`) and the prompt resolves from
+            // the catalogue, so their position is not a pool pick. They come LAST because a Writer
+            // listed before `writer-plotlines` would become the unbound phase-② write crew and move
+            // what a classic-mode Story's `write_unit` run looks like.
+            'editor-plotlines-structure',
+            'writer-plotlines-sampler'
         ]);
     });
 
     it('each Writer serves exactly one phase, so every phase has exactly one writer pool', () => {
         // The default carries one Writer per phase and the pools must not overlap: a phase-② job
         // resolved against this set finds `writer-plotlines` and nothing else (D-17b, L-4).
+        //
+        // PHRASE ② (T-W2) is the one phase with TWO Writer rows, and it stays legal under D-38a
+        // ("a second Writer template is legal and means two voices") because neither group seat picks
+        // from the pool: the draft job binds `writer-plotlines-sampler` and the structure job binds
+        // `editor-plotlines-structure` by slug. The unbound phase-② write crew is still
+        // `writer-plotlines` alone, because it is the only phase-② Writer listed ahead of the sampler
+        // in `DEFAULT_ASSIGNMENT` (`records.ts:templatesFor` order → `work.ts:candidate`'s `pool[0]`).
         const writers = BUILT_IN_TEMPLATES.filter((template) =>
             template.roles.some((role) => role.kind === 'writer')
         );
@@ -723,9 +751,18 @@ describe('W8 — T-0 structural assignment rules', () => {
             ])
         ).toEqual([
             ['summary', ['writer-summary-sampler']],
-            ['plotlines', ['writer-plotlines']],
+            ['plotlines', ['writer-plotlines', 'writer-plotlines-sampler']],
             ['chapters', ['writer-chapters']]
         ]);
+
+        // And the pool pick itself, stated rather than implied: the classic path's crew is FIRST.
+        expect(
+            DEFAULT_ASSIGNMENT.filter(
+                (name) =>
+                    byName(name).roles.some((role) => role.kind === 'writer') &&
+                    byName(name).serves_phase.includes('plotlines')
+            )
+        ).toEqual(['writer-plotlines', 'writer-plotlines-sampler']);
     });
 
     it('T-0 / D-17b: an assignment with no Writer is refused', () => {

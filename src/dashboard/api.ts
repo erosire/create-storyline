@@ -315,6 +315,36 @@ export interface StoryView {
      * additive convention: the shipped server always sends it (`round: sampling_round ?? 1`).
      */
     sampling?: SamplingView;
+    /**
+     * T-W4 — PHRASE ②'s per-phrase dial (`story.plotlines_mode`), echoed rather than derived.
+     *
+     * WHY IT IS A SETTING AND NOT A FACT: the same reason `summary_mode` above is one (`StoryPatch.summary_mode`,
+     * R6/D-35) — the Author owns the switch, and rows can exist while a start step is still in flight, so a
+     * derived answer would change underneath a dial the Author is looking at. `projections.ts` sends this key
+     * ALWAYS and answers `'classic'` when the Story row has no value, so a classic book keeps the records view it
+     * has always had; the client types it optional only as the additive-field convention (an older payload omits
+     * the key instead of inventing a mode).
+     */
+    plotlines_mode?: 'groups' | 'classic';
+    /**
+     * T-W4 — which on-demand phrases have been STARTED (`projections.ts:phrase_started`).
+     *
+     * This is the rail's tick and the handoff button's after-state: a phrase that has started has a copied Seed
+     * that every entry, revision and claim key was written against, so its start is not repeatable (the start
+     * route 409s on it). Both keys are always present on the wire, and `summary` answers `true` for every book
+     * the loop wrote, because Phrase ① is not an on-demand phrase.
+     */
+    phrase_started?: { summary: boolean; plotlines: boolean };
+    /**
+     * T-W4 — whether THIS Story has a compiled Summary the Plotlines phrase can be started from.
+     *
+     * IT IS THE HANDOFF BUTTON'S ENABLE CONDITION, and it has exactly one definition in the build: the projection
+     * answers the same predicate the start route copies its seed from (`projections.ts:compiledSummaryOf` — the
+     * complete reviewed Overview when the crew produced one, else the Overview as it stands). A button disabled
+     * here and a route that would have accepted the start are therefore the same fact, and the desk never
+     * re-derives "is the Summary compiled" from group rows on its own (L-14).
+     */
+    summary_compiled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +788,127 @@ export interface PhraseGroupLockResult {
     view?: PhraseView;
 }
 
+// ---------------------------------------------------------------------------
+// PHRASE ② — the per-phrase read, the Author's start, and a chapter entry's contract (T-W4)
+//
+// WHY A SECOND PHRASE SHAPE AND NOT A WIDER `PhraseView`: `GET /stories/:id/phrases` is the PINNED Summary
+// contract (`phrase-routes.test.ts` asserts the verb responses key for key), so the Phrase ② deltas ride on
+// `GET /stories/:id/phrases/:key` instead — the same projection plus `key`, `mode`, `seed_head`, `seed_chars`
+// and `brief`, and WITHOUT `review.mirror`, which is the Summary's legacy `summaries` prose check and has no
+// meaning for a phrase with no legacy record. Field-for-field the server's (`server/api/projections.ts:
+// PhraseDetailView`), because this file is the dashboard's copy of the wire.
+// ---------------------------------------------------------------------------
+
+/**
+ * The dial word a phrase view echoes (`projections.ts:PhraseMode`).
+ *
+ * THE TWO PHRASES' OFF WORDS DIFFER ON PURPOSE: the Summary's is `'sampling'` (the pre-redesign sampler that
+ * actually ran) and the Plotlines' is `'classic'` (the §4.3 + §8.1 tool path). A client that reads
+ * `mode:'classic'` is looking at the classic plotline pipeline, and a rail that conflated the two words would
+ * offer a group surface to a book whose Plotlines the group loop never wrote.
+ */
+export type PhraseMode = 'groups' | 'sampling' | 'classic';
+
+/**
+ * The Plotlines phrase's structure decision, as the rail shows it: what the Editor concluded about the phrase's
+ * copied Seed, and whether the Author has accepted it. The count is the number the chapter entries were
+ * materialized from, and `accepted_at` is present only once the brief is accepted — the full brief (per-chapter
+ * seeds, research questions, notes) stays off this read.
+ */
+export interface PhraseBriefView {
+    /** `draft` until the Author accepts it; `accepted` is the moment the chapter entries exist. */
+    status: string;
+    /** The Editor's chapter count — the number `chapter_1…chapter_N` were materialized from (D-3b). */
+    chapter_count: number;
+    /** The accept's stamp; absent while the brief is still a draft. */
+    accepted_at?: string;
+}
+
+/** One phrase's whole surface — the pinned Summary view plus that phrase's deltas. */
+export interface PhraseDetailView extends Omit<PhraseView, 'mode' | 'review'> {
+    /** The catalog kind this read is scoped to (`phrases.key`). */
+    key: string;
+    /** THIS phrase's dial; the off word is per-phrase, never one shared word. */
+    mode: PhraseMode;
+    /** This phrase's pipeline state, with no `mirror` — R6's legacy prose check belongs to the Summary. */
+    review: Omit<PhraseReviewState, 'mode' | 'mirror'> & {
+        mode: PhraseMode;
+        mirror?: PhraseReviewState['mirror'];
+    };
+    /** A PREFIX of the phrase's copied Seed, never the whole text (the rail only needs to recognise it). */
+    seed_head: string;
+    /** The Seed's true length, so a truncated head still says how much text it stands for. */
+    seed_chars: number;
+    /** The Plotlines structure brief, or `null` for any other phrase and for a phrase nobody structured. */
+    brief: PhraseBriefView | null;
+}
+
+/**
+ * `POST /stories/:id/phrases/:key/start` body (`routes.ts:PhraseStartBody`) — WHERE the phrase's Seed comes from.
+ *
+ * The route treats an absent body as `{source:'compiled'}`, and a stray `text` beside `'compiled'` is IGNORED
+ * rather than half-applied: a request that sends both is asking for one of them, and the route refuses to guess
+ * which one the Author meant. So this client never sends both keys, exactly as `revisePhraseGroup` never sends
+ * an empty `note`.
+ */
+export interface PhraseStartInput {
+    source?: 'compiled' | 'custom';
+    text?: string;
+}
+
+/**
+ * What the start verb answers — a receipt, not a second write.
+ *
+ * `seed_head`/`seed_chars` are read back off the phrase row AFTER the commit (the projection's own fields), so the
+ * receipt and the rail cannot disagree about what was copied. `view` is the refreshed `PhraseDetailView`, which is
+ * what the store commits; the desk re-reads nothing by hand.
+ */
+export interface PhraseStartResult {
+    story_id: string;
+    phrase_id: string;
+    key: string;
+    /** Which arm actually supplied the Seed — the route echoes the resolved source, not the request. */
+    source: 'compiled' | 'custom';
+    seed_chars: number;
+    seed_head: string;
+    /** The domain's own start record (the journal line), so the rail's tick has a source row. */
+    started: unknown;
+    view: PhraseDetailView;
+}
+
+/**
+ * The Author's contract fields for ONE chapter entry (`routes.ts:plotpointsFromBody`).
+ *
+ * A chapter entry's stored text is a DERIVATION of these fields, so the revise body carries the fields and not the
+ * prose: `must_happen` and `must_change` must both be non-empty (the route 400s otherwise), and the optional ones
+ * travel only when they say something — a blank label in a contract block reads like a promise the chapter makes
+ * and pays with nothing. A `content` key beside `plotpoints` is not read: deriving the text is the point (P4).
+ */
+export interface PhrasePlotpointsInput {
+    must_happen: string;
+    must_change: string;
+    heading?: string;
+    pov?: string;
+    setups?: string;
+    payoffs?: string;
+}
+
+/**
+ * `POST …/phrases/groups/:groupId/revise` body for a CHAPTER ENTRY: the contract fields, plus the optional note.
+ *
+ * It is a SEPARATE type from `PhraseGroupReviseInput` rather than a union inside it, so every existing Summary call
+ * site keeps its `{content, note}` shape and the compiler still refuses a Summary revise that forgets the prose.
+ */
+export interface PhraseEntryReviseInput {
+    plotpoints: PhrasePlotpointsInput;
+    note?: string;
+}
+
+/** What the chapter-entry revise answers: the install report, with the refreshed PHRASE ② read. */
+export interface PhraseEntryReviseResult extends Omit<PhraseGroupReviseResult, 'view'> {
+    view: PhraseDetailView;
+}
+
 /**
  * One round of the loop as the stalled screen reads it (U-1a). Field-for-field the server's
  * `LevelHistoryEntry`; declared here because the client contract lives in this file (projections.ts
@@ -831,6 +982,16 @@ export interface CreateStoryInput {
  * `PATCH /stories/:id` body. `auto_approve` is the D-35 dial, which doubles as the drain
  * threshold (D-35b): including `minor` makes the Story drain later, and the sweep re-reads it.
  */
+/**
+ * T-W4 — the catalog key the Phrase ② routes address (`phrases.key`), spelled ONCE.
+ *
+ * The server's phrase catalog owns the word (`server/phrase/catalog.ts`), and every route takes it in the path, so
+ * the store, the panes and the fakes all address the same phrase through this constant. A component that typed
+ * `'plotlines'` by hand would be a second spelling of a server identifier — the failure mode this file's other
+ * aliases exist to prevent.
+ */
+export const PHRASE_PLOTLINES_KEY = 'plotlines';
+
 export interface StoryPatch {
     title?: string;
     idea?: string;
@@ -850,6 +1011,21 @@ export interface StoryPatch {
      * owns the switch — the same reason `auto_approve` and `summary_mode` are settings (D-35, R6).
      */
     editor_group_locking?: boolean;
+    /**
+     * T-W4 — PHRASE ②'s dial, on the same `PATCH /stories/:id` route (`routes.ts` validates the two words exactly
+     * as `summary_mode`'s are validated).
+     *
+     * `'groups'` turns the chapter entries into the Author's writable surface (the loop materializes one entry per
+     * chapter the Plotlines brief declares); `'classic'` keeps the §4.3 plotline tools' pipeline, which is what
+     * every book written before Phrase ② runs. ABSENT MEANS `'classic'` — the projection echoes it that way and the
+     * catalog reads an absent value as classic, so a Story from before the dial keeps its records view.
+     *
+     * THE DIAL CLOSES WHEN THE PHRASE STARTS (`phrase_started.plotlines`): the entry rows and the brief are written
+     * against the mode that produced them, so switching it afterwards would leave rows the new mode cannot explain.
+     * The route refuses with a 409 that names the two controls the Author CAN still act on; the Settings pane
+     * disables the dial from the same projected flag rather than waiting for the refusal.
+     */
+    plotlines_mode?: 'groups' | 'classic';
 }
 
 /** §6.3a L-32 — the two backtrack targets; Phase ③ is the current phase, so only ①/② are reachable. */
@@ -975,7 +1151,7 @@ export interface AgentStatusRow {
     kind: string;
     title: string;
     status: 'idle' | 'running';
-    /** The harness rank this employee holds; `A` is a peer, not a lead (R15, V-2). */
+    /** The harness rank this employee holds; `A` is a peer, not a lead (V-2, D-38a). */
     rank?:
         | 'A'
         | 'B'
@@ -1158,6 +1334,43 @@ export interface ApiClient {
         storyId: string,
         input?: PhraseReviewedChooseInput
     ): Promise<PhraseReviewedChooseResult>;
+    /**
+     * T-W4 — ONE PHRASE's own read: `GET /stories/:id/phrases/:key`.
+     *
+     * It is the Summary's pinned group read, scoped to the phrase the path names, plus that phrase's deltas (its
+     * `mode`, the copied Seed's head, its structure `brief`). A mistyped key is a 404 rather than the Summary under
+     * a new heading — the catalog is the Server's (R1) — and an UNWRITTEN phrase is not: `plotlines` on a book
+     * nobody started answers the empty shape with `mode:'classic'` and `brief:null`, because R6's rule for the
+     * Summary (readable, never migrated, never gated on having rows) is generalised to every phrase. That is
+     * exactly the read the rail's "start this phrase" row needs.
+     */
+    getPhraseDetail(storyId: string, key: string): Promise<PhraseDetailView>;
+    /**
+     * T-W4 — the Author STARTS an on-demand phrase: `POST /stories/:id/phrases/:key/start` (R5 / D-76).
+     *
+     * ONE START PER PHRASE, and the route refuses a second one with a 409: the copied Seed is the text every entry,
+     * revision and claim key was written against, so a new Seed means a new phrase, not a re-start. A `'compiled'`
+     * start (the default, and what an absent body means) copies the same text `StoryView.summary_compiled` is
+     * computed from — the button and the route cannot disagree about whether there is anything to copy.
+     *
+     * THE REFUSALS THE DESK PRINTS VERBATIM (L-13): 409 when the phrase is already started; 409 when a `'compiled'`
+     * start has no compiled Summary to copy; 400 when `source` is `'custom'` and `text` is empty; 409 for a phrase
+     * the loop writes (Phrase ①), which has no seed for an Author to hand over.
+     */
+    startPhrase(storyId: string, key: string, input?: PhraseStartInput): Promise<PhraseStartResult>;
+    /**
+     * T-W4 — the Author rewrites ONE CHAPTER ENTRY (`POST …/phrases/groups/:groupId/revise`, the entry leg).
+     *
+     * Same route as the Summary group's revise, different body: an entry's text is composed from its contract
+     * fields, so this verb sends `plotpoints` and the route derives the prose (`phrase/plotpoints.ts`). It refuses
+     * a plotlines entry with no plotpoints rather than mirroring a stale `plotlines` contract under new prose (P4),
+     * and the refreshed `view` is the PHRASE ② read rather than the Summary's.
+     */
+    revisePhraseEntry(
+        storyId: string,
+        groupId: string,
+        input: PhraseEntryReviseInput
+    ): Promise<PhraseEntryReviseResult>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
     /** The global employee roster: Writer/Editor/Critic/Reader, their models and live threads. */
@@ -1445,6 +1658,34 @@ export const api: ApiClient = {
         post<PhraseReviewedChooseResult>(
             storyPath(storyId, '/phrases/reviewed/choose'),
             input?.note === undefined || input.note === '' ? {} : { note: input.note }
+        ),
+    // T-W4 — the PHRASE ② read. The key is a catalog word, not a UUID, but it still goes through
+    // `encodeURIComponent`: a route parameter is a route parameter, and a client that interpolated raw text into
+    // a path segment would be one mistyped selection away from addressing the wrong resource.
+    getPhraseDetail: (storyId, key) =>
+        request<PhraseDetailView>(storyPath(storyId, `/phrases/${encodeURIComponent(key)}`)),
+    // T-W4 — the on-demand start. The body carries exactly the keys the Author chose: `'custom'` sends its text,
+    // `'compiled'` sends NO text (the route ignores a stray one, and this client does not make it ignore one), and
+    // an absent input sends `{}` — which the route resolves to `'compiled'`, the same default it documents.
+    startPhrase: (storyId, key, input) =>
+        post<PhraseStartResult>(
+            storyPath(storyId, `/phrases/${encodeURIComponent(key)}/start`),
+            input === undefined
+                ? {}
+                : input.source === 'custom'
+                  ? { source: 'custom', text: input.text ?? '' }
+                  : { source: 'compiled' }
+        ),
+    // T-W4 — ONE CHAPTER ENTRY's hand revision. The body carries `plotpoints`, never `content`: the entry's prose
+    // is composed from the contract fields server-side, and a `content` key beside them is not read (P4). The group
+    // is addressed by its UUID, exactly as the Summary group's revise does, so a refetch that reorders the entries
+    // cannot move the write onto a sibling chapter.
+    revisePhraseEntry: (storyId, groupId, input) =>
+        post<PhraseEntryReviseResult>(
+            storyPath(storyId, `/phrases/groups/${encodeURIComponent(groupId)}/revise`),
+            input.note === undefined
+                ? { plotpoints: input.plotpoints }
+                : { plotpoints: input.plotpoints, note: input.note }
         ),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),

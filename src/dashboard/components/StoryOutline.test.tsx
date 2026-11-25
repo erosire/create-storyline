@@ -2,7 +2,7 @@
 //
 // The rail must say exactly that and nothing else: the old knowledge header's subtitle, note
 // count and "one article per folder" sentence are the clutter the redesign removed, and the
-// Summary's tick is the only status it paints. A phrase HEADER is also its disclosure control (R8):
+// Summary's tick is the only status it paints. A phrase HEADER is also its disclosure control (U-21):
 // clicking it folds that phrase's rows away and clicking it again unfolds them, without touching the
 // other phrases or the selection.
 import { readFileSync } from 'node:fs';
@@ -14,7 +14,11 @@ import type { StorySelection } from './story-nav';
 import { fixturePhrase, fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
 // R-T2/F1 + F2: the rail's ready tick and its phrase-read line are driven by the same frame the gate reads,
 // so the regression is pinned on the real rail — the five clean rows coming from the wire-shaped projection.
-import { groupedPhraseView } from '../testing/shell-fakes';
+import { groupedPhraseView, phraseDetailView } from '../testing/shell-fakes';
+// T-W4 — the Phrase ② read the rail paints its marks and entry rows from, and the view type the fixture
+// builder has to return so a wrong field name fails at compile time rather than as an empty rail.
+import type { PhraseDetailView } from '../api';
+import type { StoryViewData } from './story-contract';
 import type { Cost, Finding, FindingState } from '../../shared/types';
 
 /**
@@ -78,23 +82,38 @@ function discardRound() {
 }
 
 describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
-    // R6 / U1 — the rail is the desk's table of contents, and a grouped book's desk opens the Summary Overview,
-    // one of its groups, or a folder. The other three phrases are PHASES the crew works through, not panes the
-    // Author navigates to from here, and a rail row that opened nothing is the defect the acceptance names
-    // ("no nav to hidden phrases"). So the rail carries exactly one phrase row, and the folders and Seed are
-    // untouched — which is what this test now pins, in place of the four phrase rows it used to require.
+    // R6 / U1 + T-W4 — the rail is the desk's table of contents, and a desk opens a PHRASE pane, one of its
+    // entries, a supplementary sheet, or a folder. T-W4 moves Plotlines onto the rail as Phrase ②, so the rail
+    // carries TWO phrase rows, and Characters leaves the numbered rail for the Supplements section. Every row must
+    // be a pane the content column can open — that is the defect the acceptance names ("no nav to hidden
+    // phrases") — so the phrase count and the phrase names below are the assertion: an extra header would be an
+    // unreachable row, and a wrong name would be a rail pointing at the wrong pane.
     it('lists the Summary phrase and the supporting folders, and nothing the content column cannot open (U1)', () => {
         render(<StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />);
 
         expect(screen.getByText('Phrase 1')).toBeTruthy();
+        expect(screen.getByText('Phrase 2')).toBeTruthy();
         expect(screen.getAllByText('Summary').length).toBeGreaterThan(0);
-        // ONE phrase header, and it is the Summary's: the count is the assertion, because a second header would
-        // be a row whose pane the rail can no longer reach.
-        expect(document.querySelectorAll('.outline-item--phrase')).toHaveLength(1);
 
-        for (const hidden of ['Characters', 'Plotlines', 'Chapters']) {
-            expect(screen.queryByText(hidden)).toBeNull();
+        // Plotlines is a rail row and Characters — which left the numbered rail — is a row of the Supplements
+        // section, still one click and still the same `{panel:'characters'}` selection. Chapters is not on the rail
+        // at all: it was not before this phase either (the rail reaches it from a pane's own link), and T-W4 does
+        // not change that.
+        for (const shown of ['Plotlines', 'Characters']) {
+            expect(screen.getAllByText(shown).length).toBeGreaterThan(0);
         }
+
+        expect(screen.queryByText('Chapters')).toBeNull();
+
+        const charactersRow = screen.getByRole('button', { name: 'Characters' });
+
+        expect(charactersRow.closest('[data-testid="outline-supplements"]')).not.toBeNull();
+        // Phrase ② is Plotlines, not Characters: the numbered rail's second row is the one the loop writes.
+        expect(
+            Array.from(document.querySelectorAll<HTMLElement>('.outline-item--phrase')).map(
+                (row) => row.querySelector('.outline-name')?.textContent
+            )
+        ).toEqual(['Summary', 'Plotlines']);
 
         for (const folder of ['Continuity', 'Goal', 'Ideas', 'Findings', 'Digest', 'Settings']) {
             expect(screen.getAllByText(folder).length).toBeGreaterThan(0);
@@ -600,7 +619,7 @@ describe('StoryOutline — the score column is styled as a column (T3)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// R8 — "this should be collapsible: clicking `Phrase 1` collapses it".
+// U-21 — "this should be collapsible: clicking `Phrase 1` collapses it".
 //
 // The rail is four phrases plus a Revision 1…N list under each, and the list is the part that crowds it. The
 // whole header is the toggle — the rail has never carried a chevron of its own, and a second control would be
@@ -609,7 +628,7 @@ describe('StoryOutline — the score column is styled as a column (T3)', () => {
 // UNMOUNTED (so they leave the tab order) rather than deleted — re-expanding restores the same rows, markers,
 // badges and tooltips in the same order, because parked history is not the rail's to throw away.
 // ---------------------------------------------------------------------------
-describe('StoryOutline — the phrase header is a disclosure control (R8)', () => {
+describe('StoryOutline — the phrase header is a disclosure control (U-21)', () => {
     /** One phrase's header button, found by its own title span so an attention mark cannot confuse it. */
     function phraseHeader(container: HTMLElement, title: string): HTMLButtonElement {
         const header = Array.from(container.querySelectorAll<HTMLButtonElement>('.outline-item--phrase')).find(
@@ -696,9 +715,10 @@ describe('StoryOutline — the phrase header is a disclosure control (R8)', () =
     });
 
     // R6 retitles this test rather than weakening it. The rail no longer holds four phrases, so "the others" are
-    // the rows that ARE still there — Seed and the six folders — and U1 says explicitly they are unchanged. What
-    // the fold may still not do is leak: it removes the Summary's rows and nothing else, and it is not undone by
-    // navigating to a folder.
+    // the rows that ARE still there — Seed and the folder rows — and U1 says explicitly they are unchanged. T-W4
+    // moves Characters into a Supplements section that reuses the folder row's class, so the folder-class count
+    // below is seven (six folders + Characters); what the fold may still not do is leak: it removes the Summary's
+    // rows and nothing else, and it is not undone by navigating to a folder.
     it('folds the Summary phrase without touching the Seed or the folders, and keeps its own state', () => {
         const { container } = render(
             <StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
@@ -714,13 +734,13 @@ describe('StoryOutline — the phrase header is a disclosure control (R8)', () =
         );
         const foldersBefore = folderRows();
 
-        expect(container.querySelectorAll('.outline-item--folder')).toHaveLength(6);
+        expect(container.querySelectorAll('.outline-item--folder')).toHaveLength(7);
         expect(container.querySelector('.outline-item--seed')).toBeTruthy();
 
         fireEvent.click(summary);
 
         // The Summary's list is gone, and it took its rows with it — while every row the rail still offers is
-        // untouched: same six folders, same order, same names, and Seed still in place.
+        // untouched: same seven folders, same order, same names, and Seed still in place.
         expect(summary.getAttribute('aria-expanded')).toBe('false');
         expect(summary.hasAttribute('aria-controls')).toBe(false);
         expect(container.querySelector('#outline-children-summary')).toBeNull();
@@ -784,6 +804,259 @@ describe('StoryOutline — the phrase header is a disclosure control (R8)', () =
 });
 
 // ---------------------------------------------------------------------------
+// T-W4 — PHRASE ② ON THE RAIL: Plotlines takes the second numbered slot, and the row carries the marks the
+// Author needs to know the handoff's state without opening the pane: `outline-plotlines-start` (the compiled
+// Summary is waiting to be copied), `outline-plotlines-state` (it has been). Both come from the story's own
+// flags — `summary_compiled` and `phrase_started.plotlines` — never from a row count, because an unstarted
+// phrase and a phrase whose read failed both have zero rows. The entry rows and the read lines come from the
+// phrase read the shell caches (`state.ts:phraseDetails`), which the rail reaches through
+// `story-contract.plotlinesSurfaceView`, and Characters now lives in the Supplements section.
+// ---------------------------------------------------------------------------
+describe('StoryOutline — the Plotlines phrase (T-W4)', () => {
+    /**
+     * The grouped book with Phrase ② in exactly the state the test asks for. `detail` is the phrase read:
+     * a `PhraseDetailView` (it landed), `null` (it failed — the server's sentence goes in `phraseDetailError`,
+     * which is what the rail prints) or absent (it was never fetched).
+     */
+    function phraseTwoView(
+        over: {
+            mode?: 'groups' | 'classic';
+            started?: boolean;
+            compiled?: boolean;
+            detail?: PhraseDetailView | null;
+        } = {}
+    ): StoryViewData {
+        const view = fixtureView({ phrase: fixturePhrase() });
+
+        return {
+            ...view,
+            // The three T-W4 facts travel on the STORY VIEW (`api.ts:StoryView`, lines 319-347): the projection
+            // echoes the dial and computes the compiled/started flags, so the panes read them here rather than
+            // re-deriving them from rows (L-14). `story.plotlines_mode` is the same dial on the row the Settings
+            // pane writes, and `isPlotlinesGroups` reads THAT before the read's `mode` — a frame with neither
+            // answers classic, which is the honest default.
+            plotlines_mode: over.mode ?? 'groups',
+            phrase_started: { summary: true, plotlines: over.started === true },
+            summary_compiled: over.compiled === true,
+            story: { ...view.story, plotlines_mode: over.mode ?? 'groups' },
+            ...(over.detail === null
+                ? { phraseDetailError: 'the gateway is not answering' }
+                : over.detail === undefined
+                  ? {}
+                  : { phraseDetail: over.detail })
+        };
+    }
+
+    /** The rail's Phrase ② header row — the row that carries the marks, found by name, never by index. */
+    function plotlinesRow(container: HTMLElement): HTMLButtonElement {
+        return Array.from(container.querySelectorAll<HTMLButtonElement>('.outline-item--phrase')).find(
+            (element) => element.querySelector('.outline-name')?.textContent === 'Plotlines'
+        )!;
+    }
+
+    it('prompts the handoff on the row only while the compiled Summary has not been handed over', () => {
+        const ready = render(
+            <StoryOutline
+                view={phraseTwoView({ compiled: true })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        // Compiled Summary, phrase not started: the pane one click away holds a live start button, and the row
+        // says so. The started mark is ABSENT — the two marks are anchored to different flags and must never
+        // appear together.
+        expect(ready.getByTestId('outline-plotlines-start').textContent).toBe('start');
+        expect(ready.queryByTestId('outline-plotlines-state')).toBeNull();
+        ready.unmount();
+
+        // Nothing compiled: no prompt. This is the state an in-flight Phrase ① leaves the desk in, and a mark
+        // here would offer a handoff the route would refuse.
+        const waiting = render(
+            <StoryOutline
+                view={phraseTwoView({ compiled: false })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(waiting.queryByTestId('outline-plotlines-start')).toBeNull();
+        expect(waiting.queryByTestId('outline-plotlines-state')).toBeNull();
+        waiting.unmount();
+
+        // Started: the prompt is gone for good (the handoff is one-way, D-72) and the row says `started`.
+        const started = render(
+            <StoryOutline
+                view={phraseTwoView({ compiled: true, started: true, detail: phraseDetailView('s1') })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(started.queryByTestId('outline-plotlines-start')).toBeNull();
+        expect(started.getByTestId('outline-plotlines-state').textContent).toBe('started');
+        expect(
+            started.getByTestId('outline-plotlines-state').getAttribute('title')
+        ).toBe(
+            'Phrase 2 has started: its Seed is copied, and its chapter entries are the surface you revise.'
+        );
+    });
+
+    it('names the classic pipeline on the started mark when the dial is off (D-33)', () => {
+        const { container } = render(
+            <StoryOutline
+                view={phraseTwoView({ mode: 'classic', started: true, compiled: true })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        // A classic book's Phrase ② row must say which surface the pane opens, because the SAME flag drives both
+        // pipelines and only the dial decides whether the Author sees entries or §4.3 records.
+        expect(container.querySelector('[data-testid="outline-plotlines-state"]')?.getAttribute('title')).toBe(
+            'Phrase 2 is running on the classic plotline tools: the pane shows the §4.3 records, not chapter entries.'
+        );
+        // And with the dial off, the phrase has no entry rows: its records belong to the pane, not the rail.
+        expect(container.querySelector('#outline-children-plotlines')).toBeNull();
+    });
+
+    // The entry rows are the pane's addresses, and the address is the row's id — the same rule U2 pins for a
+    // Summary group. A rail that emitted `plotlines-group:1` (an index) would open the wrong contract.
+    it('lists Phrase ②’s chapter entries as its children, in composition order (U2)', () => {
+        const { container } = render(
+            <StoryOutline
+                view={phraseTwoView({ started: true, compiled: true, detail: phraseDetailView('s1') })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(
+            Array.from(container.querySelectorAll('#outline-children-plotlines .outline-child .outline-name')).map(
+                (row) => row.textContent
+            )
+        ).toEqual(['Chapter 1 — The Salt Road', 'Chapter 2 — The Salt Road', 'Chapter 3 — The Salt Road']);
+
+        // The rail's children are under Phrase ②, never under the Summary's list: two entry lists, two parents.
+        expect(container.querySelectorAll('#outline-children-plotlines .outline-child')).toHaveLength(3);
+        expect(container.querySelector('#outline-plotlines-start')).toBeNull();
+        expect(plotlinesRow(container).getAttribute('aria-controls')).toBe('outline-children-plotlines');
+    });
+
+    it('opens the chapter entry a row addresses, with the plotline ref (U2)', () => {
+        const selections: StorySelection[] = [];
+        const { container } = render(
+            <StoryOutline
+                view={phraseTwoView({ started: true, compiled: true, detail: phraseDetailView('s1') })}
+                selection={{ panel: 'summary' }}
+                onSelect={(next) => selections.push(next)}
+            />
+        );
+
+        // The row IS the button (`StoryOutline.tsx:594`), so the rows are selected by the button's own class.
+        const rows = Array.from(
+            container.querySelectorAll<HTMLButtonElement>('#outline-children-plotlines button.outline-child')
+        );
+
+        expect(rows).toHaveLength(3);
+
+        fireEvent.click(rows[1]!);
+        // The header still drops the ref and opens the Overview, exactly as the Summary's does (U-21).
+        fireEvent.click(plotlinesRow(container));
+
+        expect(selections).toEqual([
+            { panel: 'plotlines', ref: 'plotlines-group:entry-chapter_2' },
+            { panel: 'plotlines' }
+        ]);
+    });
+
+    it('tells a read in flight from a read that failed and from a phrase with no entries yet', () => {
+        // In flight: the rows are on their way, and the rail says so instead of showing an empty phrase (U-11).
+        const pending = render(
+            <StoryOutline
+                view={phraseTwoView({ mode: 'groups', started: true, compiled: true })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(pending.getByTestId('outline-plotlines-pending').textContent).toBe('reading the chapter entries…');
+        expect(pending.queryByTestId('outline-plotlines-error')).toBeNull();
+        pending.unmount();
+
+        // Failed: the entries exist and are merely unread, and the server's own sentence is the actionable fact
+        // (R-T2/F2, restated for the second phrase).
+        const failed = render(
+            <StoryOutline
+                view={phraseTwoView({ started: true, compiled: true, detail: null })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(failed.getByTestId('outline-plotlines-error').textContent).toBe(
+            'Chapter entries unread: the gateway is not answering'
+        );
+        expect(failed.getByTestId('outline-plotlines-error').getAttribute('title')).toBe(
+            'the gateway is not answering'
+        );
+        failed.unmount();
+
+        // Started on the grouped pipeline with NO entries: the brief has not been accepted, so the chapters do
+        // not exist yet. A real state, and it names the wait rather than looking like an empty book.
+        const empty = render(
+            <StoryOutline
+                view={phraseTwoView({
+                    started: true,
+                    compiled: true,
+                    detail: phraseDetailView('s1', {
+                        groups: [],
+                        overview: '',
+                        brief: { status: 'draft', chapter_count: 0 }
+                    })
+                })}
+                selection={{ panel: 'summary' }}
+                onSelect={() => undefined}
+            />
+        );
+
+        expect(empty.getByTestId('outline-plotlines-empty').textContent).toBe(
+            "no chapter entries yet — the phrase's brief has to be accepted before the chapters exist"
+        );
+        expect(empty.queryByTestId('outline-plotlines-pending')).toBeNull();
+    });
+
+    // Characters left the numbered rail but did not disappear: the sheet is one click away in the Supplements
+    // section, and the selection it emits is byte-for-byte the one it always emitted, so the pane, its rows and
+    // its tests need no change.
+    it('opens the Characters sheet from the supplements row without a phrase number', () => {
+        const selections: StorySelection[] = [];
+        const { container } = render(
+            <StoryOutline
+                view={phraseTwoView()}
+                selection={{ panel: 'characters' }}
+                onSelect={(next) => selections.push(next)}
+            />
+        );
+
+        const row = screen.getByRole('button', { name: 'Characters' });
+
+        expect(row.closest('[data-testid="outline-supplements"]')).not.toBeNull();
+        expect(row.className).not.toContain('outline-item--phrase');
+        // It is the selection the pane already answers, and `aria-current` marks it as the open one.
+        expect(row.getAttribute('aria-current')).toBe('page');
+
+        fireEvent.click(row);
+
+        expect(selections).toEqual([{ panel: 'characters' }]);
+        // And the numbered rail itself holds no Characters row to compete with it.
+        expect(
+            Array.from(container.querySelectorAll('.outline-item--phrase .outline-name')).map((name) => name.textContent)
+        ).toEqual(['Summary', 'Plotlines']);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // R6 / U1+U2+U6 — the rail of a GROUP-managed book: the Summary phrase, and its five groups.
 //
 // `fixturePhrase()` is the phrase read as `server/api/projections.ts` sends it: the five groups from
@@ -836,8 +1109,9 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         // state to strike).
         expect(container.textContent).not.toContain('Revision');
         expect(container.querySelectorAll('[data-state]')).toHaveLength(0);
-        // U1 — five children, under the ONE phrase header the rail offers.
-        expect(container.querySelectorAll('.outline-item--phrase')).toHaveLength(1);
+        // U1 — five children, under the phrase headers the rail offers (Summary ① and Plotlines ② since T-W4; the
+        // Plotlines row adds no child of the Summary's, and its own list is empty until Phrase ② is started).
+        expect(container.querySelectorAll('.outline-item--phrase')).toHaveLength(2);
         expect(container.querySelectorAll('#outline-children-summary .outline-child')).toHaveLength(5);
         // The catalog's own order (premise → promise → theme → tone → ending), not a client-side sort: the row
         // order is what the Overview composes in.
@@ -1003,7 +1277,7 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         expect(premise[2]).toBe('1');
     });
 
-    it('keeps the group rows inside the disclosure the phrase header governs (R8 + U1)', () => {
+    it('keeps the group rows inside the disclosure the phrase header governs (U-21 + U1)', () => {
         const { container } = render(
             <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
         );

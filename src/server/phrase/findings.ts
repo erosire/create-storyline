@@ -30,9 +30,17 @@
 // the discard at lock time). The ATTRIBUTION itself is never rewritten: `findingGroupScope` still names
 // every group, because the record says what the defect is about even where the book has stopped being
 // able to act on it.
+import { PHRASE_PLOTLINES_KEY, PHRASE_SUMMARY_KEY } from '../../shared/phrase';
 import type { Finding, GroupRevision, PhraseGroup, Story } from '../../shared/types';
 import type { Attribution, Store } from '../store';
-import { isPhraseGroupLocked, lockedPhraseGroupIds, phraseGroupsOf } from './catalog';
+import {
+    isGroupManagedStory,
+    isPhraseGroupLocked,
+    isPhraseGroupManaged,
+    lockedPhraseGroupIds,
+    phraseGroupsOf,
+    storyPhraseByKey
+} from './catalog';
 
 // ---------------------------------------------------------------------------
 // Attribution — which groups a finding is about
@@ -293,6 +301,50 @@ export function findingGroupsStillOwed(store: Store, story: Story, finding: Find
     const owed = new Set(resolution.missing);
 
     return phraseGroupsOf(store, story.id).filter((group) => owed.has(group.id) && !isPhraseGroupLocked(group));
+}
+
+/**
+ * T-W2b — THE GROUP NAMESPACE a reporter may name: which groups exist for `raiseFinding`'s R3 rules.
+ *
+ * WHY THIS IS A FUNCTION AND NOT `phraseGroupsOf(store, storyId)`: the namespace is what makes the
+ * reporter's R3 branch fire at all (an empty list switches those rules off), so widening it silently
+ * changes the meaning of every finding on the book. It follows the DIALS:
+ *
+ *   * neither phrase is group-managed → `[]`. A classic book keeps its legacy semantics exactly:
+ *     `group_refs` is optional and an absent list means "not about a group";
+ *   * the SUMMARY is group-managed → every group of the book, read unscoped, the same list R3 has
+ *     always used (a Summary defect may name any entry, and the phrase's own rows are the ones it
+ *     means). This is the untouched pre-T-W2b behaviour;
+ *   * the PLOTLINE phrase is group-managed → the chapter ENTRIES are in the namespace, whether or not
+ *     the Summary is grouped. This is the case the hybrid creates: phase ②'s reader reports a contract
+ *     defect against a `plotlines` row, and the text that has to change is `chapter_<order>` — a
+ *     reporter that could not name that id could not file a group-scoped finding at all, and an
+ *     unscoped finding on a grouped book means "every entry", which is the expensive reading R3
+ *     refuses. A started-but-classic Plotlines phrase (`plotlines_mode: 'classic'`) adds nothing, and
+ *     the Summary reporter's list is exactly what it was before Phrase ② existed.
+ *
+ * The Summary's rows come first and the Plotlines phrase's second, each in its own catalog order, so a
+ * refusal message lists a stable, phrase-grouped set instead of an interleaved one.
+ */
+export function findingGroupNamespace(store: Store, story: Story): PhraseGroup[] {
+    const summaryManaged = isGroupManagedStory(story);
+    const plotlineManaged = isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY);
+
+    if (!summaryManaged && !plotlineManaged) return [];
+    if (!plotlineManaged) return phraseGroupsOf(store, story.id);
+
+    const plotlinePhrase = storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY);
+
+    if (!summaryManaged) {
+        return plotlinePhrase === undefined ? [] : phraseGroupsOf(store, story.id, plotlinePhrase.id);
+    }
+
+    const summaryPhrase = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY);
+
+    return [
+        ...(summaryPhrase === undefined ? [] : phraseGroupsOf(store, story.id, summaryPhrase.id)),
+        ...(plotlinePhrase === undefined ? [] : phraseGroupsOf(store, story.id, plotlinePhrase.id))
+    ];
 }
 
 /**

@@ -18,7 +18,16 @@ import { ALL_TOOLS, GROUP_OF_TOOL, SPEC_TOOL_NAMES, TOOL_BY_NAME, TOOL_GROUPS, T
 import { mayCallKind } from './permissions';
 import type { ToolDefinition } from './types';
 
-/** §8's five groups, counted straight off the spec's tables (§8.1 8, §8.2 10, §8.3 6, §8.4 17, §8.5 4). */
+/**
+ * §8's five groups, counted straight off the spec's tables (§8.1 8, §8.2 10, §8.3 6, §8.4 17, §8.5 4),
+ * PLUS the one post-§8 group the registry carries.
+ *
+ * PHRASE ② (T-W2): `plotlines` is deliberately its OWN group rather than another `editor` tool. §8.2 is
+ * a transcription of the spec's Editor table, and folding `structurePlotlines` in there would make this
+ * file claim that §8 lists a tool it does not — the same reason `knowledge` and `research` are groups of
+ * their own. The conformance read below then says exactly what it means: §8's tables register what §8
+ * registers, and the Phrase ② surface is a sixth, named addition.
+ */
 const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
     // §8.1 — the Writer surface.
     writer: [
@@ -81,7 +90,10 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
     // section, which is why it is a sixth group rather than a widening of an existing one.
     // `reportNoResearch` is D-51's zero-write report: a dispatched research pass that finds nothing
     // to record still has to be able to report.
-    knowledge: ['structureSeed', 'writeKnowledge', 'readKnowledge', 'retireKnowledge', 'reportNoResearch']
+    knowledge: ['structureSeed', 'writeKnowledge', 'readKnowledge', 'retireKnowledge', 'reportNoResearch'],
+    // PHRASE ② (T-W2) — NOT a §8 table. The chapter lane's one Editor tool, listed last because
+    // `TOOL_GROUPS`' key order is its registration order and the flat catalogue below is read in it.
+    plotlines: ['structurePlotlines']
 };
 
 /**
@@ -466,6 +478,20 @@ const SPEC_TOOL_CONTRACT: Record<
         writes: 'knowledge',
         level: 'read',
         allow: 'nnnn'
+    },
+    // PHRASE ② (T-W2): the chapter lane's structuring call, transcribed off `tools/plotlines.ts`. It is
+    // §7.1's `structureSeed` one phrase down — the same Editor-only shape (`kinds`/`onlyKinds`
+    // `['editor']`, so `describeTool` states `extra_kinds: ['editor']` exactly as `structureSeed` does,
+    // and `allow` is the four-column reading `nynn`), and the same "the guard is the hash, so `expects`
+    // is accepted but not required" rule (T-4). What differs is the WRITE: one call creates the brief AND
+    // accepts it, so `plotline_briefs` is the row it writes while the chapter entries and
+    // `summaries.chapter_count` move inside the same commit through `acceptPlotlineBrief` (§3.3).
+    structurePlotlines: {
+        args: ['seed_hash', 'chapter_count', 'chapters', 'research_questions', 'notes', 'expects', 'why'],
+        required: ['seed_hash', 'chapter_count', 'why'],
+        writes: 'plotline_briefs',
+        level: 'write',
+        allow: 'nynn'
     }
 };
 
@@ -543,11 +569,12 @@ describe('the §8 catalogue', () => {
             });
 
         // T-6a: registration is the flat union of the five §8 sections plus the Phase-1 research
-        // surface — 52 tools, no shadowing. The 52nd is D-51's `reportNoResearch`.
+        // surface plus Phrase ②'s structuring call — 53 tools, no shadowing. The 52nd is D-51's
+        // `reportNoResearch`; the 53rd is T-W2's `structurePlotlines`.
         expect(TOOL_NAMES).toEqual([...SPEC_TOOL_NAMES]);
-        expect(TOOL_NAMES.length).toBe(52);
-        expect(ALL_TOOLS.length).toBe(52);
-        expect(TOOL_BY_NAME.size).toBe(52);
+        expect(TOOL_NAMES.length).toBe(53);
+        expect(ALL_TOOLS.length).toBe(53);
+        expect(TOOL_BY_NAME.size).toBe(53);
         // Every tool knows its own section, which is what `describeTool`'s provenance reads.
         expect(TOOL_NAMES.map((name) => GROUP_OF_TOOL.get(name) ?? 'missing')).toEqual([
             ...SPEC_GROUP_SIZES.writer.map(() => 'writer'),
@@ -555,7 +582,9 @@ describe('the §8 catalogue', () => {
             ...SPEC_GROUP_SIZES.reader.map(() => 'reader'),
             ...SPEC_GROUP_SIZES.plumbing.map(() => 'plumbing'),
             ...SPEC_GROUP_SIZES.research.map(() => 'research'),
-            ...SPEC_GROUP_SIZES.knowledge.map(() => 'knowledge')
+            ...SPEC_GROUP_SIZES.knowledge.map(() => 'knowledge'),
+            // PHRASE ② (T-W2): the seventh group, last in registration order like its tool list.
+            ...SPEC_GROUP_SIZES.plotlines.map(() => 'plotlines')
         ]);
         // And the contract table below cannot silently fall behind the registry.
         expect(Object.keys(SPEC_TOOL_CONTRACT)).toEqual([...TOOL_NAMES]);
@@ -575,7 +604,7 @@ describe('the §8 catalogue', () => {
                 role: data.role,
                 total: data.total,
                 tools: data.tools.map((row: { name: string }) => row.name)
-            }).toEqual({ roleKind, role: roleKind, total: 52, tools: [...TOOL_NAMES] });
+            }).toEqual({ roleKind, role: roleKind, total: 53, tools: [...TOOL_NAMES] });
         }
     });
 
@@ -630,7 +659,7 @@ describe('the §8 catalogue', () => {
                     // `write`, so `describeTool` states the Editor-only surface out loud.
                     ...(name === 'confirmFinding'
                         ? { extra_kinds: ['critic'] }
-                        : name === 'structureSeed'
+                        : name === 'structureSeed' || name === 'structurePlotlines'
                           ? { extra_kinds: ['editor'] }
                           : {})
                 }
@@ -653,7 +682,7 @@ describe('the §8 catalogue', () => {
         expect({ role: data.role, role_name: data.role_name, total: data.total, note: data.note }).toEqual({
             role: 'critic',
             role_name: 'critic_1',
-            total: 52,
+            total: 53,
             note: LIST_NOTE
         });
 
@@ -692,9 +721,13 @@ describe('the §8 catalogue', () => {
         // (`structureSeed`) and THREE Researcher-only tools no other kind may call (`writeKnowledge`,
         // `retireKnowledge`, and D-51's `reportNoResearch`) — which is why the four sums below did not
         // move when the 52nd tool was registered.
+        //
+        // PHRASE ② (T-W2) moves ONLY the Editor sum: `structurePlotlines` is Phrase ②'s structure gate
+        // and it is Editor-gated exactly like `structureSeed` (its permission row is `plotline_briefs`,
+        // write-for-Editor-only), so no Writer, Reader or Critic handoff gained a callable row.
         for (const [kind, total] of [
             ['writer', 39],
-            ['editor', 37],
+            ['editor', 38],
             ['reader', 33],
             ['critic', 34]
         ] as [RoleKind, number][]) {

@@ -23,13 +23,20 @@ import {
 } from './types';
 import { DEFAULT_SUMMARY_CRITICS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
 import { seedHashOf } from '../../shared/seed-hash';
+// PHRASE ② (T-W2): the phrase-seed read the Phrase ② gate needs. It comes from `phrase/catalog.ts`
+// DIRECTLY, not from the `../phrase` barrel: the barrel re-exports `exclusion.ts` and `reviewed.ts`,
+// both of which import this module, and `catalog.ts` imports nothing from `loop/**` — so this edge
+// cannot close a cycle.
+import { phraseSeedOf } from '../phrase/catalog';
 import type {
     Chapter,
     Cost,
     Directive,
     Finding,
     Idea,
+    Phrase,
     Plotline,
+    PlotlineBrief,
     Proposal,
     Revision,
     Run,
@@ -1368,6 +1375,63 @@ export function currentSeedBrief(store: Store, story: Story): SeedBrief | undefi
 
     return brief !== undefined && brief.seed_hash === seedHashOf(story.idea) ? brief : undefined;
 }
+
+// ---------------------------------------------------------------------------
+// PHRASE ② — the Plotline brief (T-W2, Phrase ② step 1's gate)
+// ---------------------------------------------------------------------------
+
+/**
+ * The hash every Phrase ② gate compares: the hash of the PHRASE's own seed.
+ *
+ * It is NOT `seedHashOf(story.idea)`. Phrase ② was built so that the two phrases are discrete
+ * (`phrase/controllers/plotlines.ts`'s start step COPIES the text handed to it), and `phraseSeedOf`
+ * is the one read that interprets `phrases.seed` (seam S2). Importing it straight from
+ * `phrase/catalog.ts` rather than from the `../phrase` barrel is deliberate: the barrel reaches
+ * `exclusion.ts` and `reviewed.ts`, which import THIS module, so the direct path is what keeps the
+ * loop's read layer free of an initialization cycle.
+ */
+export const plotlinePhraseSeedHashOf = (phrase: Phrase | undefined, story: Story | undefined): string =>
+    seedHashOf(phraseSeedOf(phrase, story));
+
+/**
+ * The accepted Plotline brief that describes this phrase's seed AS IT STANDS NOW — Phrase ②'s
+ * equivalent of {@link currentSeedBrief}, and the gate every chapter job waits behind.
+ *
+ * A brief for an older phrase seed counts as NONE, which re-arms the structuring pass exactly the way
+ * a Seed edit re-arms phase ①'s (P5, one phrase down). The scope is the PHRASE ROW, not the Story: a
+ * book whose Phrase ② was replaced keeps the retired brief of the phrase it no longer has, and reading
+ * by `story_id` alone would let that stale structure gate a fresh phrase.
+ */
+export function currentPlotlineBrief(
+    store: Store,
+    story: Story,
+    phrase: Phrase | undefined
+): PlotlineBrief | undefined {
+    if (phrase === undefined) return undefined;
+
+    const hash = plotlinePhraseSeedHashOf(phrase, story);
+
+    return store.plotlineBriefs
+        .list()
+        .find(
+            (brief) => brief.phrase_id === phrase.id && brief.seed_hash === hash && brief.status === 'accepted'
+        );
+}
+
+/**
+ * Phrase ②'s structuring claim key: `wi_structure_plotlines_<phrase seed hash>`.
+ *
+ * WHY IT IS ITS OWN FAMILY AND NOT `wi_structure_seed_<hash>`: the two phrases can hold the SAME text
+ * — an Author who pushes the compiled Summary into Phrase ② and started the book from that same prose
+ * gets an identical hash — and one family would let the Summary's accepted structuring silently
+ * satisfied Phrase ②'s, so the chapter set would never be decided. The prefix is the difference, and
+ * the hash is over the phrase seed.
+ */
+export const plotlinesStructureKeyOf = (phrase: Phrase | undefined, story: Story): string =>
+    `${PLOTLINES_STRUCTURE_ITEM_PREFIX}_${plotlinePhraseSeedHashOf(phrase, story)}`;
+
+/** The family prefix {@link plotlinesStructureKeyOf} builds. Recognised by `invalidation.ts`. */
+export const PLOTLINES_STRUCTURE_ITEM_PREFIX = 'wi_structure_plotlines';
 
 /** The claim key of one brief's research pass — the brief's `rev` IS the generation (§6.4 gate 2). */
 export const researchKeyOf = (brief: SeedBrief): string => `wi_research_${brief.rev}`;

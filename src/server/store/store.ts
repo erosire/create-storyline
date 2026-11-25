@@ -49,6 +49,7 @@ import {
     type Phrase,
     type PhraseGroup,
     type Plotline,
+    type PlotlineBrief,
     type Proposal,
     type Revision,
     type Run,
@@ -689,6 +690,11 @@ export class Store {
     // READER SCORING (D-65) — one Reader run per group vector, five rows per run, accumulating
     // across revisions. Display-only: no loop predicate reads it (see `SummaryScore`).
     readonly summaryScores: Collection<SummaryScore>;
+    // PHRASE ② PLOTLINES — the Editor's structure pass over a phrase's copied seed. Appended to the
+    // registry, so a snapshot written before it existed hydrates it empty (no `SNAPSHOT_VERSION` bump:
+    // the version moves for a format BREAK, and a new empty collection is not one — see
+    // `persist.ts:SNAPSHOT_VERSION`).
+    readonly plotlineBriefs: Collection<PlotlineBrief>;
 
     /** The single registry every generic path (snapshot, CAS resolution, rollback) walks. */
     private readonly collections: Record<CollectionName, Collection<AnyRecord>>;
@@ -776,6 +782,7 @@ export class Store {
         this.phraseGroups = this.collections.phrase_groups as unknown as Collection<PhraseGroup>;
         this.groupRevisions = this.collections.group_revisions as unknown as Collection<GroupRevision>;
         this.summaryScores = this.collections.summary_scores as unknown as Collection<SummaryScore>;
+        this.plotlineBriefs = this.collections.plotline_briefs as unknown as Collection<PlotlineBrief>;
     }
 
     // -- construction -------------------------------------------------------------------

@@ -53,9 +53,21 @@ import {
     SUMMARY_SAMPLE_SCHEMA_NAME,
     GROUP_DRAFT_SCHEMA_NAME,
     GROUP_REVIEW_SCHEMA_NAME,
-    SECTION_SCORES_SCHEMA_NAME
+    SECTION_SCORES_SCHEMA_NAME,
+    // PHRASE ② (T-W2): the chapter contract's answer contract. It is a DIFFERENT schema from
+    // `GroupDraft` on purpose — a Summary group's answer is prose, a chapter entry's answer is
+    // plotpoints — so the mock needs its own branch rather than a flag on the draft one.
+    CHAPTER_DRAFT_SCHEMA_NAME
 } from '../../shared/schemas';
-import type { GroupDraft, GroupReview, IssueList, SectionScores, SummarySample } from '../../shared/schemas';
+import type {
+    ChapterDraft,
+    GroupDraft,
+    GroupReview,
+    IssueList,
+    SectionScores,
+    SummarySample
+} from '../../shared/schemas';
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 import type { Chapter, Cost, Idea, Plotline, Revision, SampledFixVerification, Story, Summary, Verdict } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -112,8 +124,19 @@ export interface CrewContext {
     unitTarget?: string;
     /** The competing draft a review job names (`revision_id=` in the brief), if any. */
     draftIds: string[];
-    /** True for phase ①'s per-draft deep review (the job note carries `Critic pass N of M`). */
+    /**
+     * True for a tool-carrying DEEP REVIEW, whichever family dispatched it — the job note now says
+     * `Critic pass N/M on the selected Summary draft …` (sampling), `… on the installed group
+     * Overview …` (group), or `… on the installed chapter contracts …` (Phrase ②, T-W2). See
+     * `readBrief`'s `reviewPass` for the note sources.
+     */
     reviewPass: boolean;
+    /**
+     * True only for Phrase ②'s chapter-contract pass (T-W2): the seat that judges the chapter SET the
+     * install wrote and files at the Story row. `criticFinds` uses it to fire on the chapter lane only,
+     * so a fixture that wants a phase-② defect does not also hold phase ①'s review open.
+     */
+    chapterPass: boolean;
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
     /** D-19: the directive this review thread must turn into tasks. */
@@ -203,6 +226,13 @@ export interface CrewOptions {
      */
     criticGroupRefs?: (ctx: CrewContext) => string[] | undefined;
     /**
+     * PHRASE ② (T-W2) — the chapter count the Editor's `structurePlotlines` call declares. A slice names
+     * one to pin the materialized set (`3` → `chapter_1..chapter_3`); otherwise the crew answers with the
+     * Author's declared `summaries.chapter_count`, which is the number the classic phase-② pipeline would
+     * have written the same number of contracts for.
+     */
+    plotlineChapters?: (ctx: CrewContext) => number;
+    /**
      * READER SCORING (D-65) — the JSON a `score_sections` run answers. The default scores EVERY group
      * the prompt printed, one deterministic number per group, so a slice can pin the five
      * `summary_scores` rows exactly rather than read whatever the mock invented. Return a STRING to
@@ -212,6 +242,31 @@ export interface CrewOptions {
      * completeness gate.
      */
     sectionScores?: (turn: SectionScoreTurn) => SectionScores | string;
+    /**
+     * PHRASE ② (T-W2) — the JSON a chapter `draft_groups` run answers. The prompt is Phrase ②'s, and the
+     * contract is `ChapterDraft`: one entry per CHAPTER group the prompt printed, each entry that
+     * chapter's plotpoints rather than its prose. The default answers every group the prompt named with
+     * text derived from the entry's KEY (`chapter_2`) and the phrase seed, so an installed contract
+     * provably came from the prompt that asked for it — the guarantee `defaultGroupDraftAnswer` gives a
+     * Summary group, restated for plotpoints because `phrase/plotpoints.ts:parseChapterDraftAnswer`
+     * refuses an entry whose `must_happen`/`must_change` are blank. Return a STRING to answer raw text
+     * (the schema-repair rows), or an answer that skips a group / names a ref outside the batch: that is
+     * a refusal the whole batch pays for, which is how a slice drives R2's all-or-none install on the
+     * chapter lane.
+     */
+    chapterDraft?: (turn: ChapterDraftTurn) => ChapterDraft | string;
+}
+
+/**
+ * The compiled prompt a chapter `draft_groups` run receives (T-W2): Phrase ②'s seed, the chapter
+ * contracts as they stand, and the fix list. Same shape as {@link GroupDraftTurn} — the batch is the
+ * groups the prompt printed, whatever phrase they belong to.
+ */
+export interface ChapterDraftTurn {
+    groups: GroupPromptEntry[];
+    system: string;
+    user: string;
+    prompt: string;
 }
 
 /** The compiled prompt a `score_sections` run receives (D-65): the whole Overview, no fix list. */
@@ -300,7 +355,10 @@ export const STORY_SCOPED_CRITERIA = ['C-4', 'C-10', 'C-11', 'C-13'];
  * there keeps the engine's answer contract out of the group's text.
  */
 function groupEntriesOf(prompt: string): GroupPromptEntry[] {
-    const heading = /^### .+ \(group_ref=([^,]+), key=([a-z_]+), revision=(\d+)\)$/gm;
+    // `key=[a-z0-9_]+`: the Summary's five keys are letters (`premise`, `overview`, …), and Phrase ②'s
+    // are `chapter_1`…`chapter_N` (T-W2) — a letters-only class silently parsed nothing for a chapter
+    // batch, which would leave the mock answering an empty batch and every chapter job refused.
+    const heading = /^### .+ \(group_ref=([^,]+), key=([a-z0-9_]+), revision=(\d+)\)$/gm;
     const entries: GroupPromptEntry[] = [];
     let match: RegExpExecArray | null;
 
@@ -334,6 +392,47 @@ export const defaultGroupDraftAnswer = (
     knowledgeUsed: string[] = []
 ): GroupDraft => ({
     groups: groups.map((group) => ({ group_ref: group.ref, content: `${group.key}: ${logline}` })),
+    knowledge_used: knowledgeUsed
+});
+
+/**
+ * The phrase seed this Story's phrase prompt printed (`## PHRASE SEED`, T-W2). The compiler renders the
+ * phrase's own text — the lines Phrase ② resolves into chapters — so the first content line is the
+ * chapter set's subject, and quoting it is the mock's proof that its answer came from THIS prompt rather
+ * than from a fixture. `## SEED BRIEF`'s `logline:` line is the phase-① equivalent (`loglineOf`).
+ */
+const phraseSeedLineOf = (prompt: string): string => {
+    const section = /## PHRASE SEED[^\n]*\n([\s\S]*?)(?=\n## |$)/.exec(prompt)?.[1] ?? '';
+    const line = section
+        .split('\n')
+        .map((entry) => entry.replace(/^[-*]\s*/, '').trim())
+        .find((entry) => entry !== '' && !entry.startsWith('('));
+
+    return line === undefined ? 'the phrase seed' : line;
+};
+
+/**
+ * The default `ChapterDraft` answer (T-W2): one entry per chapter group the prompt named, in that order,
+ * every plotpoint field filled from the entry's KEY and the phrase seed. All five fields are filled
+ * rather than only the two required ones because the chapter's `plotlines` mirror is written from the
+ * answer's plotpoints (`phrase/plotpoints.ts:syncPlotlineContract`), and a contract with a blank `pov`
+ * or `payoffs` is a contract the C-5/C-6 payoff criteria then measure against an empty field — the
+ * slice would be testing the mock's shorthand, not the lane.
+ */
+export const defaultChapterDraftAnswer = (
+    groups: readonly GroupPromptEntry[],
+    seed: string,
+    knowledgeUsed: string[] = []
+): ChapterDraft => ({
+    groups: groups.map((group) => ({
+        group_ref: group.ref,
+        heading: group.key.replace(/_/g, ' '),
+        must_happen: `${group.key} must deliver: ${seed}`,
+        must_change: `${group.key} leaves the book different: ${seed}`,
+        pov: `${group.key} is told through the protagonist`,
+        setups: `${group.key} plants: ${seed}`,
+        payoffs: `${group.key} pays off: ${seed}`
+    })),
     knowledge_used: knowledgeUsed
 });
 
@@ -495,12 +594,36 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         .map((match) => match[1])
         .filter((id) => !options.omitCriteria?.includes(id));
 
+    // PHRASE ② (T-W2b) — THE HEADING IS THE TARGET. `run/brief.ts:artifactHeading` names the unit's id
+    // explicitly (`ARTIFACT UNDER REVIEW — plotline plotline_0 — chapter 1 (order 1)`), and it is the one
+    // place the product states what this job judges. The free-text scan used to run first, and a
+    // group-managed book's ARTIFACT body now carries the lane's mirrored contract text, which begins with
+    // the chapter ENTRY key (`chapter_1 must deliver: …` — `phrase/plotpoints.ts:syncPlotlineContract`).
+    // So a phase-② reader on such a book filed its UNIT-scoped lines at `chapter_1` — a phrase GROUP key,
+    // not a §4 row — `submitVerdict` refused it (T-3), only the story-scoped line landed, and the chapter
+    // level stalled at 5/7 with C-2/C-3 never judged. The heading wins; the scan stays as the fallback for
+    // briefs that carry no heading (the structured, tool-less seats).
+    const headingTarget = /ARTIFACT UNDER REVIEW — (?:plotline|chapter|summary) ((?:plotline|chapter|summary|story|revision)_[^\s—]+)/.exec(
+        brief
+    )?.[1];
+
     const unitTarget =
         /summary_id=(\S+)/.exec(brief)?.[1] ??
+        headingTarget ??
         /chapter_(\d+)/.exec(brief)?.[0] ??
         /plotline_(\d+)/.exec(brief)?.[0] ??
         summary?.id ??
         story?.id;
+
+    const phase = /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary';
+    // PHRASE ② (T-W2) — the chapter lane's deep review, recognized from the bytes the product writes.
+    // `loop/work.ts:phase2GroupCandidates` gives the seat NO unit (`unit: undefined` — the chapter contract
+    // set is not one row), so the only thing that says what this pass is judging is its sweep note:
+    // `Critic pass N/M on the installed chapter contracts at vector <hash> …` (brief.ts renders the note
+    // under "The sweep's note on this job:"). Keyed on the note, never on a flag, and gated on the phase so
+    // a Summary-phase brief can never read as a chapter pass.
+    const chapterPass =
+        phase === 'plotlines' && /Critic pass \d+\/\d+ on the installed chapter contracts at vector/.test(brief);
 
     return {
         kind: role?.[2] ?? '',
@@ -520,13 +643,32 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         findingIds: [...brief.matchAll(/^- (finding_\d+) \[/gm)].map((match) => match[1]),
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
-        // TWO job-note shapes mean "this is phase ①'s deep review": the sampling pipeline's
-        // `Critic pass N of M` (§6.4 step 6) and the group pipeline's `Critic pass N/M on the installed
-        // group Overview` (`loop/work.ts`'s group deep review, R3/R5). Missing the second one is how a
-        // group book ends up with a review run that submitted no verdict and filed no finding: the crew
-        // falls through to the chapter-Reader branch and the Summary level sits failing forever.
-        reviewPass: /Critic pass \d+ of \d+/.test(brief) || /Critic pass \d+\/\d+ on the installed group Overview/.test(brief),
-        phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
+        // TWO job-note shapes mean "this is phase ①'s deep review", spelled the way `loop/work.ts` spells
+        // them TODAY: the sampling pipeline's `Critic pass N/M on the selected Summary draft <revision>`
+        // (`work.ts:1673`, §6.4 step 6) and the group pipeline's `Critic pass N/M on the installed group
+        // Overview at vector <hash>` (`work.ts:1345`, R3/R5). The legacy `Critic pass N of M` spelling is
+        // kept as a third alternative because the two families are the ONLY notes that use the phrase, and
+        // a double that stops matching the note the product writes is invisible: the review run files no
+        // verdict and no finding (`criticFinds` never runs), the Summary level looks passed on the probe
+        // rows alone, and every round-2 row behind it silently disappears.
+        reviewPass:
+            /Critic pass \d+ of \d+/.test(brief) ||
+            // PHRASE ② (T-W2): the chapter lane's deep review is the same KIND of pass — a tool-carrying
+            // Critic that files real findings — and `loop/work.ts:phase2GroupCandidates` spells its note
+            // `Critic pass N/M on the installed chapter contracts at vector <hash>`. Without this
+            // alternative the double answers the seat as if it were an Idea probe: no verdict line, no
+            // finding, and the chapter level looks passed on the mechanical rows alone.
+            /Critic pass \d+\/\d+ on the (?:selected Summary draft|installed group Overview|installed chapter contracts)/.test(
+                brief
+            ),
+        /**
+         * True only for Phrase ②'s chapter-contract pass. The crew needs it because the artifact shape
+         * differs: the phase-① passes judge a draft row or the composed Overview (both one row, both a
+         * `target_ref` the crew can name), while the chapter seat judges a SET of contracts and files at
+         * the STORY row — the scope `criteria/engine.ts:scopeTargets` grades the phase-② level on.
+         */
+        chapterPass,
+        phase
     };
 }
 // ---------------------------------------------------------------------------
@@ -728,6 +870,51 @@ const editorScript: CrewScript = (ctx) => {
                       }
                   }))
               };
+    }
+
+    // PHRASE ② T-W2 — the chapter structuring pass. Same two-turn shape as phase ①'s structure pass,
+    // with two differences the brief forces:
+    //
+    //   1. there is nothing to READ first. Phase ① reads the Seed because `stories.idea` is behind a tool
+    //      (`readSeed`); Phrase ②'s seed is the PHRASE's copied text, and `work.ts:phase2GroupCandidates`
+    //      prints it — with its `seed_hash` — inside the job note, because the tool refuses a hash it did
+    //      not print (P5, one phrase down). So the crew takes the hash out of the bytes it was handed,
+    //      exactly as a model would, and calls the tool once.
+    //   2. the chapter count is a decision, not a transcription (D-3b). A real Editor chooses it from the
+    //      seed; this scripted crew answers with `CrewOptions.plotlineChapters` when the slice names one
+    //      and with the Author's declared `summaries.chapter_count` otherwise — the same number the
+    //      classic phase ② pipeline would have written contracts for, which is what keeps a lane switch
+    //      from silently changing the book's shape.
+    if (ctx.template === 'editor-plotlines-structure') {
+        const hash = /seed_hash=([0-9a-f]{6,})/.exec(brief)?.[1];
+
+        if (hash === undefined) {
+            return { content: `The structure job printed no seed_hash to answer (brief:\n${brief.slice(0, 240)}…)` };
+        }
+
+        if (ctx.results.length === 0) {
+            const declared = ctx.store.summaries.get(ctx.story?.id ?? '')?.chapter_count;
+            const chapter_count = ctx.options.plotlineChapters?.(ctx) ?? (typeof declared === 'number' ? declared : 3);
+
+            return {
+                toolCalls: [
+                    {
+                        name: 'structurePlotlines',
+                        args: {
+                            seed_hash: hash,
+                            chapter_count,
+                            why: 'The chapter set is the seed read as chapters — the count it resolves into, nothing invented (P5, D-3b).'
+                        }
+                    }
+                ]
+            };
+        }
+
+        const failed = ctx.results.find((result) => result.ok === false) as { refused?: string } | undefined;
+
+        return failed === undefined
+            ? { content: `Structured the phrase seed into its chapter set (${ctx.template}).` }
+            : { content: `structurePlotlines refused (${failed.refused ?? 'T-11'}); nothing to retry from here.` };
     }
 
     // §6.4 step 1: the Editor's structure pass reads the Seed for its `seed_hash` and then writes
@@ -1013,7 +1200,16 @@ const criticScript: CrewScript = (ctx) => {
         // as an error is what sent the group pass down the chapter-Reader branch and left the Summary
         // level failing with no verdict and no finding at all.
         const revisionId = ctx.draftIds[0] ?? '';
-        const target = ctx.unitTarget ?? revisionId;
+        // PHRASE ② (T-W2) — the third artifact shape. Phrase ①'s two passes judge a draft row or the
+        // composed Overview; the chapter lane's deep pass judges the chapter CONTRACT SET, which is not one
+        // row — `work.ts:phase2GroupCandidates` deliberately gives the seat no unit (`unit: undefined`, the
+        // whole-Story artifact for the phase), so `readBrief`'s `chapter_N`/`plotline_N` regex has nothing
+        // real to match and `ctx.unitTarget` is a fallback id from another artifact. The engine aggregates
+        // the phase-② level at the Story row (`criteria/engine.ts:scopeTargets`), so the Story id is the
+        // only target that can move a level — the same reasoning that puts the Summary pass's GOAL verdict
+        // on the Summary unit. `ctx.chapterPass` is read from the seat's sweep note, not from a flag.
+        const chapterPass = ctx.chapterPass;
+        const target = chapterPass ? (ctx.story?.id ?? '') : (ctx.unitTarget ?? revisionId);
 
         if (target === undefined || target === '') return { content: `No artifact named in the Critic brief (${ctx.template}).` };
 
@@ -1052,21 +1248,49 @@ const criticScript: CrewScript = (ctx) => {
             // group of the Story, which is the honest reading of a fixture that simply says "this Overview
             // has a defect" — a cross-cutting defect names them all. A slice that wants the work routed to
             // ONE group resolves that group's id from `ctx.store.phraseGroups` and returns it.
+            //
+            // PHRASE ② (T-W2): on the chapter pass "every group of the Story" would name the Summary's
+            // five groups as well — a Story carries both phrases' rows — and a finding whose `group_refs`
+            // mix phrases is planned against both entry sets, so the defect would buy a Summary rewrite
+            // nobody asked for. The default is therefore the groups of the phrase the SEAT is reviewing:
+            // the Plotlines phrase, whose rows are exactly the chapters the brief printed.
+            const chapterPhrase = chapterPass
+                ? ctx.store.phrases.list().find((row) => row.story_id === ctx.story?.id && row.key === PHRASE_PLOTLINES_KEY)
+                : undefined;
             const groupRefs =
                 ctx.options.criticGroupRefs !== undefined
                     ? ctx.options.criticGroupRefs(ctx)
-                    : ctx.store.phraseGroups.list().filter((group) => group.story_id === ctx.story?.id).map((group) => group.id);
+                    : ctx.store.phraseGroups
+                          .list()
+                          .filter(
+                              (group) =>
+                                  group.story_id === ctx.story?.id &&
+                                  (chapterPhrase === undefined || group.phrase_id === chapterPhrase.id)
+                          )
+                          .map((group) => group.id);
 
             specs.push({
                 name: 'raiseFinding',
                 args: {
                     target_ref: target,
-                    criterion_ref: lines.find((line) => !line.result)?.criterion ?? 'C-14',
-                    title: `Critic: the draft drifts from the Seed (${ctx.template})`,
+                    // The criterion the defect is filed under: a criterion the pass actually failed, or the
+                    // phase's default. C-14 is the Seed-fidelity check and is the phase-① default; the
+                    // chapter pass's contract criterion is C-7 ("the chapter delivers its must_happen"),
+                    // because filing a Summary criterion against a chapter contract is the row the criteria
+                    // engine cannot grade (it scopes C-14 to the Summary artifact).
+                    criterion_ref: lines.find((line) => !line.result)?.criterion ?? (chapterPass ? 'C-7' : 'C-14'),
+                    title: chapterPass
+                        ? `Critic: a chapter contract breaks the phrase seed's chain (${ctx.template})`
+                        : `Critic: the draft drifts from the Seed (${ctx.template})`,
                     // D-30: the Editor needs the what-and-where line, not just the proof. In the group
-                    // model the artifact named is the Overview itself, because there is no draft row.
-                    detail: `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId === '' ? 'the installed group Overview' : revisionId}.`,
-                    evidence: `the Critic pass read ${revisionId === '' ? target : revisionId} against the Seed and found the promise unpaid`,
+                    // model the artifact named is the Overview itself, because there is no draft row; in the
+                    // chapter model it is the chapter set, for the same reason (T-W2).
+                    detail: chapterPass
+                        ? `Chapter 2's contract takes the setup the seed plants and never pays it — see its payoffs field against the phrase seed.`
+                        : `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId === '' ? 'the installed group Overview' : revisionId}.`,
+                    evidence: chapterPass
+                        ? `the Critic pass read the chapter contracts at the vector this seat was claimed for and found the seed's central setup unpaid in chapter 2`
+                        : `the Critic pass read ${revisionId === '' ? target : revisionId} against the Seed and found the promise unpaid`,
                     cost,
                     // D-33 makes a phase-① Summary finding cite the draft it describes; the group model
                     // has no draft row, so the citation is simply absent and R3's `group_refs` below are
@@ -1271,6 +1495,7 @@ export function createCrewClient(
             unitTarget: parsed.unitTarget,
             draftIds: parsed.draftIds,
             reviewPass: parsed.reviewPass,
+            chapterPass: parsed.chapterPass,
             directiveRef: parsed.directiveRef,
             directiveTargets: parsed.directiveTargets,
             options
@@ -1364,6 +1589,21 @@ function structuredAnswer(request: ChatRequest, store: Store, options: CrewOptio
             options.groupDraft !== undefined
                 ? options.groupDraft(turn)
                 : defaultGroupDraftAnswer(turn.groups, loglineOf(prompt), knowledgeFingerprintsOf(prompt));
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // PHRASE ② T-W2 — a chapter `draft_groups` job. The groups are parsed from the SAME headings (the
+    // chapter lane renders entries through the same renderer), and the answer is a `ChapterDraft`:
+    // plotpoints per entry, not prose. Parsing rather than scripting is the point again — a batch of
+    // three chapters and a batch of seven get answers of exactly the arity the engine asked for, which is
+    // the check `parseChapterDraftAnswer` runs against the phrase's rows (seam S12).
+    if (name === CHAPTER_DRAFT_SCHEMA_NAME) {
+        const turn: ChapterDraftTurn = { groups: groupEntriesOf(prompt), system, user, prompt };
+        const answer =
+            options.chapterDraft !== undefined
+                ? options.chapterDraft(turn)
+                : defaultChapterDraftAnswer(turn.groups, phraseSeedLineOf(prompt), knowledgeFingerprintsOf(prompt));
 
         return typeof answer === 'string' ? answer : JSON.stringify(answer);
     }

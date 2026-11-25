@@ -112,6 +112,26 @@ export const PERMISSION_ROWS: PermissionRow[] = [
         note: 'write until `plotlines_locked`, then propose'
     },
     {
+        // T-W2: the row `tools/plotlines.ts:structurePlotlines` writes. It did not exist because no tool
+        // wrote the collection before Phrase ②'s structuring pass, and the registry's invariant ("a tool
+        // naming an ungoverned collection is refused `none` for EVERY kind") is exactly the failure that
+        // would have made the new tool undisposable. The shape mirrors `seed_briefs`: the Editor writes
+        // its own DERIVED projection, and every other kind reads it — a Writer that could edit the chapter
+        // set would be choosing a hard fact (D-3b), and the chapter CONTRACTs are the separate
+        // `plotlines` row above.
+        artifact: 'plotline_briefs (the Phrase ② structure)',
+        collection: 'plotline_briefs',
+        writer: 'read',
+        editor: 'write',
+        reader: 'read',
+        critic: 'read',
+        researcher: 'read',
+        // The brief is derived from the PHRASE's copied seed, never from `stories.idea` (P5), and the
+        // count it declares becomes `summaries.chapter_count` on acceptance (D-3b).
+        criterion_refs: ['P5', 'D-3b', 'L-7'],
+        note: 'the Editor structures Phrase ② into a chapter set; the phrase seed stays read-only, and a locked Plotlines contract refuses a new set (L-7)'
+    },
+    {
         artifact: 'chapters.content (agent-written)',
         collection: 'chapters',
         writer: 'write',

@@ -365,7 +365,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
-    it('answers every employee’s rank, and keeps the newest closed runs on the tile (R15, S-3)', async () => {
+    it('answers every employee’s rank, and keeps the newest closed runs on the tile (D-38a, S-3)', async () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
         const runtime = new MockToolRuntime(store, story.id);
@@ -649,7 +649,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.dispose();
     });
 
-    it('adds all five defined employees to every Story harness, at Rank A, with the Editor routing the session (R15)', () => {
+    it('adds all five defined employees to every Story harness, at Rank A, with the Editor routing the session (D-38a)', () => {
         const store = Store.empty();
         const story = storyOf(store, 'Hollow Sea');
         const runtime = new MockToolRuntime(store, story.id);

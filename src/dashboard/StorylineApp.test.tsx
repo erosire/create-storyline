@@ -176,7 +176,7 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         expect(screen.queryByText('write the summary')).toBeNull();
         expect(screen.getByText(/no thread is running now/)).toBeTruthy();
 
-        // R9 — the Author opens the history by hand, and it is there.
+        // U-22 — the Author opens the history by hand, and it is there.
         await click(archivedTab());
         expect(archivedTab().getAttribute('aria-pressed')).toBe('true');
         expect(screen.getByText('write the summary')).toBeTruthy();

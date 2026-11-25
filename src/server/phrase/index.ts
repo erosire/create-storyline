@@ -21,3 +21,15 @@ export * from './reviewed';
 // READER SCORING (D-65): the SectionScores answer check. Its claim key lives in `exclusion.ts`
 // beside the review seats it re-arms with, and its rows are written by the engine's settle.
 export * from './section-scores';
+// PHRASE ② PLOTLINES' install pieces: the chapter entry's contract block, its answer validation, and
+// the create-or-update-by-order sync onto the `plotlines` row. They sit apart from `revisions.ts`
+// because they are phrase-specific, and apart from the controller because `revisions.ts` has to reach
+// them without an import cycle.
+export * from './plotpoints';
+// THE PHRASE CONTROLLERS — one per enabled phrase kind, and the registry the loop asks instead of
+// naming a phrase (R1's data-driven rule applied to BEHAVIOUR rather than to the catalog). Each phrase
+// module answers the same eleven questions for its own phrase: no inheritance, no name branching, and
+// a third phrase is one more controller plus one more catalog entry.
+export * from './controller';
+export * from './controllers/summary';
+export * from './controllers/plotlines';

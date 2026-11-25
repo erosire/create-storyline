@@ -90,7 +90,7 @@ const STORYLINE_BUILTIN_PLUGINS = BUILTIN_PLUGINS.filter(
 );
 
 /**
- * Every configured employee holds the same rank (the harness's authority model, R15). Rank A for
+ * Every configured employee holds the same rank (the harness's authority model, D-38a). Rank A for
  * all five makes them peers: none is another's subordinate, and the ENGINE registers no
  * `delegate` door for a single-rank roster. The harness still needs a routing name for an
  * unfocused session, and that name is the Editor — the Author's one channel — not a higher-ranked
@@ -115,7 +115,7 @@ export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
  * The employee that routes an unfocused session. VOCABULARY (V-1): "entry" is not a roster role
  * and never reaches the dashboard — the harness needs a routing name, and the Author's one channel
  * is the Editor, so the Editor is that name (the directive handoff). It is routing, never an
- * authority claim (R15).
+ * authority claim (D-38a).
  */
 export const STORY_AGENT_ENTRY: RoleKind = 'editor';
 
@@ -274,7 +274,7 @@ export interface StoryAgentStatus {
     title: string;
     /** `running` means the employee has at least one live thread; `idle` means it has none. */
     status: 'idle' | 'running';
-    /** The harness rank this employee holds; `A` is a peer, not a lead (R15, V-2). */
+    /** The harness rank this employee holds; `A` is a peer, not a lead (V-2, D-38a). */
     rank: AgentRank;
     /**
      * U-8 / T-6b — the model this employee asks for when its template role names none. The
@@ -437,7 +437,7 @@ export class StoryHarness {
         }
 
         // Every configured employee is Rank A: one rank across the roster means the ENGINE
-        // registers no `delegate` door of its own (R15), and the session's routing name is the
+        // registers no `delegate` door of its own (V-2), and the session's routing name is the
         // Editor (the Author's channel) rather than a higher-ranked employee. Storyline's §8
         // `delegate` remains the template's explicit D-17e door, not an authority relation between
         // these peers. V-2 allows a Rank B employee only as a delegation target, never as a Work
@@ -989,7 +989,7 @@ export class StoryHarness {
         };
     }
 
-    /** Every thread this Story ever ran, oldest first (the employee thread surface, R15/U-8). */
+    /** Every thread this Story ever ran, oldest first (the employee thread surface, U-7/U-22). */
     threads(): StoryThreadRecord[] {
         return [...this.history.values()]
             .sort((left, right) => left.startedAt - right.startedAt || left.threadId.localeCompare(right.threadId))

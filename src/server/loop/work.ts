@@ -40,6 +40,14 @@ import {
     competingRevisions,
     createdAfter,
     currentSeedBrief,
+    // PHRASE ② (T-W2): the chapter lane's three brief reads, one per question the generator asks —
+    // is there an ACCEPTED brief (`currentPlotlineBrief`; nothing below the structure job is answerable
+    // without it), what hash does the phrase's own seed carry (the staleness test the tool re-checks),
+    // and the structuring job's claim key (`plotlinesStructureKeyOf`, a DIFFERENT family from phase ①'s
+    // `wi_structure_seed_*` because the two phrases can hold identical text and hash the same).
+    currentPlotlineBrief,
+    plotlinePhraseSeedHashOf,
+    plotlinesStructureKeyOf,
     deepReviewKeyOf,
     dispatchableTasks,
     findingRefs,
@@ -146,9 +154,18 @@ import {
     // carries that a provider could get wrong.
     GROUP_LOCK_SCHEMA_NAME,
     GroupLockDecisionSchema,
+    // PHRASE ② (T-W2): the chapter lane's answer contract — plotpoints, not prose. The batch job carries
+    // it so the provider is bound to the same shape `phrase/plotpoints.ts:parseChapterDraftAnswer`
+    // checks and the controller's `parseDraft` runs (`phrase/controllers/plotlines.ts`).
+    CHAPTER_DRAFT_SCHEMA_NAME,
+    ChapterDraftSchema,
     SUMMARY_SAMPLE_SCHEMA_NAME,
     SummarySampleSchema
 } from '../../shared/schemas';
+// PHRASE ② (T-W2): the phrase KEY, not a phrase name. The lane's gate reads `story.plotlines_mode`
+// through `isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY)`, and the phrase row is looked up by the
+// same constant (`shared/phrase.ts` is the one home of both).
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 // SUMMARY PHRASE (R1-R5) — the group domain, imported from its ONE surface (`../phrase/index`).
 // `isGroupManagedStory` is the switch (`story.summary_mode`, NOT the presence of rows),
 // `phraseGroupsOf`/`storyPhrase` are the book's catalog rows, `findingGroupsStillOwed` routes an
@@ -178,12 +195,34 @@ import {
     // so a refusal re-arms the seat without letting a broken provider buy a Reader forever.
     cleanSelectionOf,
     groupCheckSeatKey,
+    // PHRASE ② (T-W2): the batch's CLAIM REF is the phrase row id (`exclusion.ts:groupDraftClaimRef`,
+    // seam S8), so the Summary's batch and the chapter batch on one book never spend each other's
+    // attempts; and the review seat key is the SAME builder phase ① uses, because the vector hash — not
+    // the family — is what keeps the two phrases' seats apart.
+    groupDraftClaimRef,
+    groupReviewSeatKey,
+    // The PHRASE-level dial (`story.plotlines_mode`). `isGroupManagedStory` above stays the Summary's
+    // predicate for the classic pins; this is the form the phase-② lane asks.
+    isPhraseGroupManaged,
+    // The phrase's OWN copied seed (seam S2) — Phrase ②'s structuring input, never `stories.idea`.
+    phraseSeedOf,
     planGroupDraftBatch,
     phraseGroupsOf,
     scoredVectorHashes,
     SECTION_SCORE_ATTEMPT_CAP,
     sectionScoreClaimKey,
-    storyPhrase
+    storyPhrase,
+    // The Plotlines phrase row, by key. `storyPhrase` (below) stays the PRIMARY/Summary read every
+    // pre-Phrase-② call site uses; a chapter job has to name its own phrase.
+    storyPhraseByKey,
+    // T-W2b: the contract row's chapter entry, by `order` — the inverse of the install's mirror
+    // (`phrase/plotpoints.ts:syncPlotlineContract`). `needsReader` needs it to see the lane's install as
+    // the write that it is; the tools' finding route and the §8.1 guards read the same function.
+    plotlineChapterGroupOf,
+    // T-W2b: THE GATE the three suppressions below share — the dial PLUS a materialized chapter set.
+    // The dial alone over-reports: `loop/engine.ts:2887` defaults `plotlines_mode` to `'groups'`, so a book
+    // whose Author never started Phrase ② would otherwise lose the §4.3 tools and the classic Writer legs.
+    plotlineLaneIsLive
 } from '../phrase';
 // F1: the allowance read and its cap are Author-facing and were exported from THIS module; the
 // re-export keeps `loop/phase1-groups*.test.ts` and any rail-side import site resolving while the
@@ -448,14 +487,49 @@ function findingTouchesUnit(store: Store, findingId: string, unitRef: string): b
 }
 
 /**
+ * T-W2b — IS THIS CONTRACT ROW THE PRODUCT OF THE PHRASE's INSTALL?
+ *
+ * `needsReader`'s no-drafts branch asks "has a crew written to this artifact?" and answers it from the
+ * run ledger (`wi_write_<unit>_*`). A group-managed book has no such run for a contract row: the lane's
+ * `draft_groups` batch installs the chapter ENTRY and `phrase/plotpoints.ts:syncPlotlineContract`
+ * mirrors it onto the row in the same commit, so the write is a `group_revisions` row, not a run naming
+ * the unit. The chapter entry's own counter is the honest record of that event — `PhraseGroup.revision`
+ * is the number of texts installed into the entry — so this reads the row's `order` → entry (the
+ * inverse of the mirror) and asks whether an install has happened.
+ *
+ * `false` for a row that is not the phrase's (no entry at that order, or the phrase is unstarted) and
+ * for the phase-② SET unit (`ref: ''`), where there is no entry to consult.
+ */
+function contractInstalledByPhrase(store: Store, storyId: string, unitRef: string): boolean {
+    const row = store.plotlines.get(unitRef);
+
+    if (row === undefined || row.story_id !== storyId) return false;
+
+    const entry = plotlineChapterGroupOf(store, storyId, row.order);
+
+    return entry !== undefined && entry.revision > 0;
+}
+
+/**
  * Does this unit need a reader?
  *
  * Two cases. A unit with competing drafts needs one per draft (§6.2a's "Reader runs ×M → verdicts per
  * revision"), and a unit whose newest draft has not been judged needs one against the stored artifact.
  * Freshness is a journal-order question, not an id comparison — verdict ids and revision ids come from
  * different counters (records.ts:createdAfter).
+ *
+ * `installedByPhrase` (T-W2b) says the artifact was written by the PHRASE's install rather than by a
+ * `wi_write_*` run — the chapter-contract case on a group-managed book. It is a parameter and not a
+ * lookup inside this function because only the caller knows which surface it is standing in front of
+ * (`generateWork` has the phrase dial), and because the flag keeps this predicate honest for every
+ * classic book: with the flag off, the answer is the byte-for-byte pre-T-W2b answer.
  */
-export function needsReader(store: Store, story: Story, unitRef: string): boolean {
+export function needsReader(
+    store: Store,
+    story: Story,
+    unitRef: string,
+    installedByPhrase = false
+): boolean {
     const competing = competingRevisions(store, story.id, unitRef);
     const newestDraft = last(competing);
     const verdicts = verdictsTargeting(store, story.id, unitRef);
@@ -481,8 +555,19 @@ export function needsReader(store: Store, story: Story, unitRef: string): boolea
             .filter((run) => (run.work_item_ref ?? '').startsWith(`wi_write_${unitRef}`) && run.state !== 'spawning')
     );
 
-    if (newestWrite === undefined) return false;
+    // T-W2b — ON A GROUP-MANAGED BOOK THE INSTALL IS THE WRITE. The chapter contract is written by the
+    // lane's `draft_groups` batch (`phrase/revisions.ts:installGroupRevisions` mirrors the chapter entry
+    // onto the `plotlines` row in the install's commit), and the batch's claim key names the PHRASE row,
+    // not the unit — so no `wi_write_<unit>` run exists, ever, now that the classic Writer leg is
+    // suppressed on this dial. Answering `false` here was what left the contracts unjudged: no reader
+    // pass, no C-2/C-3 verdict lines at the row, and a phase-② Goal that cannot complete. The caller's
+    // flag is the phrase's own record of that write (`PhraseGroup.revision > 0`).
+    if (newestWrite === undefined && !installedByPhrase) return false;
 
+    // The "has anybody judged this unit" test, shared by both write shapes. The freshness rule here is
+    // deliberately the tool-written one (an existence check, not the per-draft journal comparison
+    // above): a contract the lane redrafts is re-judged when L-11's invalidation marks the row, not on
+    // every install, and the classic in-place writer behaves the same way.
     return !judgedBefore(store, story.id, unitRef);
 }
 
@@ -1359,6 +1444,343 @@ function phase1GroupCandidates(
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// PHRASE ② — the chapter group pipeline (T-W2)
+// ---------------------------------------------------------------------------
+//
+// WHY THIS IS A SECOND GENERATOR RATHER THAN A PARAMETERISATION OF `phase1GroupCandidates`: the two
+// lanes agree on every MECHANISM (the owed set, the finding-atomic batch, the vector-keyed seats, the
+// attempt caps) and disagree on every SENTENCE — the Writer answers plotpoints instead of prose, the
+// Critic judges a chapter chain instead of an Overview, the Editor locks a contract instead of a
+// section, and the gate at the top is an accepted PLOTLINE brief rather than a Seed brief plus the
+// research leg. Threading one flag through phase ①'s generator would have rewritten the bytes of every
+// summary job that 1772 tests pin, to save a hundred lines. The RULES are still shared: every read here
+// goes through the same `phrase/exclusion.ts` predicates, and the claim keys are the same families.
+//
+// THE CLAIM-KEY DISJOINTNESS, spelled out because it is the one thing a restart can corrupt:
+//   * `structure_seed`    — `wi_structure_plotlines_<phrase seed hash>` (records.ts), a DIFFERENT family
+//     from `wi_structure_seed_<seed hash>`: the two phrases can hold the same text, and one family would
+//     let phase ①'s accepted structuring silently satisfy Phrase ②'s;
+//   * `draft_groups`      — `wi_draft_groups_<claim ref>_<group set hash>_<attempt>`, where the ref is
+//     the phrase ROW id (`controller.draftClaimRef`, seam S8) instead of the `summaries` row id. Two
+//     batches on one book therefore never spend each other's attempts;
+//   * `review_groups`, `score_sections`, `group_check`, `group_lock` — the SAME families as phase ①,
+//     because each is keyed on the group VECTOR, and a vector is a map of THIS phrase's group ids
+//     (`groupRevisionVector(store, storyId, phraseId)`). Two phrases' vectors cannot collide: their
+//     groups are different rows, so their hashes are different numbers.
+//
+// WHAT IS DELIBERATELY NOT GENERATED HERE: the Researcher's fix-prerequisite queue
+// (`phase1FixPrerequisites`) and the sampling gates. Phrase ② has no research leg — the Seed's pass
+// settled what the world facts are — and the classic phase-② `write_unit`/`select` pair is suppressed
+// while the book is group-managed (`generateWork`, T-W2 + T-W2b), because the chapter contract IS
+// installed by the draft job and there is nothing for an Editor to choose between. The suppression
+// covers BOTH classic write legs — the blind draft pair (`wi_write_<ref>_<gen>_a<n>`) and the
+// finding-armed fix pair (`wi_fix_<unit>_*`) — because R2 allows ONE writing surface per entry: a
+// classic Writer holding `editPlotline` against a mirrored row writes the contract out of band, and
+// the mirror only syncs on install. The classic READING legs stay (the `check_unit` trio, the Editor's
+// `verify_findings`, `whole_story_check`, the drain probes): a reader is not a writing surface, and
+// the findings it files are routed onto the chapter groups (`tools/reader.ts:raiseFinding`) so they
+// arm work through revise → install → mirror.
+//
+// THE ONE GAP WORTH NAMING: a phase-② `fix` task with no FINDING behind it (a hand-armed row) drives no
+// group work, because `groupWorkTargets`' two reasons are "never written" and "an open finding owes it".
+// The classic path would have put it in a `write_unit` brief. In group mode the row simply holds the
+// drain until the Author or the Editor resolves it, which is the fail-closed answer.
+
+/**
+ * Phrase ②'s jobs, in the pipeline's own order. Every one of them is PHRASE-SCOPED: the groups are the
+ * Plotlines phrase's rows, the vector is that phrase's, and the clean selection is that phrase's.
+ */
+export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate[] {
+    const out: WorkCandidate[] = [];
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY);
+
+    // An unstarted Phrase ② has no seed and no entries, so there is nothing to structure and nobody to
+    // draft. Starting it is an AUTHOR act (the compiled Summary is pushed in, or the Author types their
+    // own text) — the loop cannot invent the seed the chapters will be read from.
+    if (phrase === undefined) return out;
+
+    const brief = currentPlotlineBrief(store, story, phrase);
+    const groups = phraseGroupsOf(store, story.id, phrase.id);
+    const seedHash = plotlinePhraseSeedHashOf(phrase, story);
+
+    // -- 1. Structure the phrase seed (P5, one phrase down) --------------------------------------
+    // One thread per phrase-seed hash, and it outranks everything below: with no accepted brief the
+    // book has no chapter COUNT, so there is no entry set to draft and no arity to check an answer
+    // against. `tools/plotlines.ts:structurePlotlines` is what satisfies it, and that call also
+    // materializes `chapter_1..chapter_N` in the same commit.
+    if (brief === undefined) {
+        const built = candidate(
+            store,
+            story,
+            'structure_seed',
+            'editor',
+            undefined,
+            plotlinesStructureKeyOf(phrase, story),
+            'structure the Plotlines Phrase seed into a chapter set before any contract is drafted (P5, D-3b)',
+            0,
+            {
+                // The phase-② crew binds itself, exactly as phase ①'s structurer does: the unbound
+                // Editor pool pick is `editor-general`, and this job is not that job.
+                templateRef: 'editor-plotlines-structure',
+                roleName: 'editor',
+                // The seed and its hash travel in the note because the briefing renders it
+                // (`run/brief.ts:renderJob`) and the tool refuses a hash it did not print. The clip is
+                // the brief builder's, so the tail sentence — the one that says what to DO — is written
+                // before the variable-length quote.
+                note:
+                    `Plotline structure: the PHRASE seed below is the text you are structuring — not the Story's Seed, and not the Summary's prose. Call structurePlotlines once with chapter_count, the number of chapters this seed resolves into, and seed_hash exactly as printed. The call also accepts the brief: that single write declares summaries.chapter_count and creates chapter_1..chapter_N, and every chapter contract is written against that set (D-3b). Never edit the phrase seed, never write a plotline yourself.\n\nPHRASE SEED (seed_hash=${seedHash}):\n${phraseSeedOf(phrase, story)}`
+            }
+        );
+
+        if (built !== undefined) out.push(built);
+
+        // Nothing below this line is answerable: the entry set is the brief's product.
+        return out;
+    }
+
+    // An accepted brief with no entries means materialization never ran (a store restored from before
+    // the entries existed, or a hand-created brief). The accept step is the only writer of the entry
+    // set, so re-arming the structuring job is the honest answer — the same key, so one pass fixes it.
+    if (groups.length === 0) return out;
+
+    const allRefs = groups.map((group) => group.id);
+    const critics = summaryCriticsOf(story);
+
+    // -- 2. The Writer batch: chapter contracts, one pass per finding-set -------------------------
+    // Same three cuts as phase ①, in the same order (R4's deferral, the per-group allowance, the
+    // Author's dial between finding-sets), because all three live in `phrase/exclusion.ts` and the
+    // drain probe reads those same predicates. The only difference is the namespace: `claimRef` is the
+    // PHRASE ROW id (`controller.draftClaimRef`, seam S8) and the targets are this phrase's rows.
+    const targets = groupWorkTargets(store, story, phrase.id);
+    const claimRef = groupDraftClaimRef(store, story, phrase.id);
+
+    if (claimRef !== '' && targets.length > 0) {
+        const batch = planGroupDraftBatch(store, story, targets, phrase.id);
+
+        if (batch.length > 0) {
+            const batchRefs = batch.map((target) => target.group.id);
+            const findingRefs = [...new Set(batch.flatMap((target) => target.findingRefs))];
+            const family = `${GROUP_DRAFT_ITEM_PREFIX}_${claimRef}_${groupVectorHash(Object.fromEntries(batchRefs.map((ref) => [ref, 0])))}`;
+            const attempts = store.runs
+                .list()
+                .filter((run) => run.story_id === story.id && (run.work_item_ref ?? '').startsWith(`${family}_`)).length;
+
+            const built = candidate(
+                store,
+                story,
+                'draft_groups',
+                'writer',
+                // `undefined` = the whole-Story artifact for this phase (`wholeStoryUnit('plotlines')`),
+                // which is what a batch over SEVERAL chapters is. The Summary's lane names its one
+                // `summaries` row because that row IS the artifact; the chapter lane's artifact is the
+                // set of contracts the install mirrors, and no single ref covers it.
+                undefined,
+                claimKey(family, attempts + 1),
+                `rewrite ${batch.length} chapter contract(s) — ${batch.map((target) => target.group.key).join(', ')} — in one structured pass (R2, R5)`,
+                2,
+                {
+                    toolMode: 'none',
+                    // PHRASE ②'s answer contract comes from the CONTROLLER, not from a constant here
+                    // (seam S12): a chapter answer is plotpoints, and the arity the engine checks it
+                    // against is the materialized chapter set rather than the catalog's five.
+                    responseSchema: { name: CHAPTER_DRAFT_SCHEMA_NAME, schema: ChapterDraftSchema },
+                    groupRefs: batchRefs,
+                    findingRefs,
+                    taskRefs: findingRefs
+                        .map((id) => store.findings.get(id))
+                        .flatMap((finding) =>
+                            finding === undefined
+                                ? []
+                                : tasksForFinding(store, story.id, finding.id).map((task) => task.id)
+                        )
+                        .filter((id, index, all) => all.indexOf(id) === index),
+                    templateRef: 'writer-plotlines-sampler',
+                    roleName: 'writer'
+                }
+            );
+
+            if (built !== undefined) out.push(built);
+        }
+    }
+
+    // -- 3. The structured review of the installed chapter set ------------------------------------
+    // Keyed by the CHAPTER vector, so an install re-arms every seat by itself and a cross-chapter
+    // defect can be attributed to both ends of the chain it breaks.
+    const vectorHash = groupVectorHash(groupRevisionVector(store, story.id, phrase.id));
+    const hasText = groups.some((group) => group.revision > 0);
+
+    if (hasText) {
+        for (let pass = 1; pass <= critics; pass += 1) {
+            // The same builder phase ① uses (`exclusion.ts:groupReviewSeatKey`) — the family is shared
+            // and the vector is what keeps the two phrases' seats apart.
+            const key = groupReviewSeatKey(vectorHash, pass);
+
+            if (runsForItem(store, key).length > 0) continue;
+
+            // Phase ② has no `critic-screening` in its pool (that row serves phase ①), so the seats
+            // rotate the assigned phase-② Critic angles — the same four the deep review uses, and the
+            // rotation is what makes N passes N different readers rather than N copies of one.
+            const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
+
+            const built = candidate(
+                store,
+                story,
+                'review_groups',
+                'critic',
+                undefined,
+                key,
+                `Critic ${pass}/${critics} reviews the installed chapter set at vector ${vectorHash} (R3, R5)`,
+                2,
+                {
+                    toolMode: 'none',
+                    responseSchema: { name: GROUP_REVIEW_SCHEMA_NAME, schema: GroupReviewSchema },
+                    // Every chapter, not just the batch that moved the vector: a setup planted in
+                    // chapter 2 and paid in chapter 7 is one issue naming both.
+                    groupRefs: allRefs,
+                    fixRefs: openFixTaskIds(store, story.id),
+                    templateRef: template,
+                    roleName: 'critic'
+                },
+                pass - 1
+            );
+
+            if (built !== undefined) out.push(built);
+        }
+    }
+
+    // -- 3b. The Reader's score of the REVIEWED chapter set (D-65, gated by D-67) ------------------
+    // One seat per CLEAN vector of THIS phrase. `cleanSelectionOf` scoped to the phrase is the whole
+    // difference: a Summary clean selection says nothing about whether chapter 4's contract survived a
+    // cross-chapter pass, and the hash the seat claims has to be the hash of the chapters it renders.
+    const reviewed = cleanSelectionOf(store, story, phrase.id);
+
+    if (reviewed.complete) {
+        const key = sectionScoreClaimKey(reviewed.vector_hash);
+        const scored = scoredVectorHashes(store, story.id).has(reviewed.vector_hash);
+        const attempts = runsForItem(store, key).filter((run) => !isLiveRun(run)).length;
+
+        if (!scored && attempts < SECTION_SCORE_ATTEMPT_CAP) {
+            const built = candidate(
+                store,
+                story,
+                'score_sections',
+                'reader',
+                undefined,
+                key,
+                `Reader scores all ${groups.length} chapter contracts of the reviewed Plotlines at clean vector ${reviewed.vector_hash} (D-65, D-67)`,
+                2,
+                {
+                    toolMode: 'none',
+                    responseSchema: { name: SECTION_SCORES_SCHEMA_NAME, schema: SectionScoresSchema },
+                    groupRefs: allRefs,
+                    // `reader-consistency` serves every phase, so the chapter seat uses the same crew as
+                    // the Summary's: a cross-section score is exactly the contract-chain judgement this
+                    // reader's role prompt is about.
+                    templateRef: 'reader-consistency',
+                    roleName: 'reader'
+                }
+            );
+
+            if (built !== undefined) {
+                built.rank = -1;
+                out.push(built);
+            }
+        }
+    }
+
+    // -- 3c. The Editor's judgement: may this chapter contract be frozen? (R3/T6b) ----------------
+    // The seat is an OFFER, never a debt (`groupPipelineOwed` does not know this family), and it is
+    // armed only while `editor_group_locking` is on. Phrase-scoped, and the phrase scoping is load-
+    // bearing here: an unscoped read would arm a chapter seat against the SUMMARY's clean selection and
+    // the guard would refuse every one of them.
+    for (const evidence of editorLockSeatTargets(store, story, phrase.id)) {
+        const key = groupLockSeatKey(evidence.vector_hash, evidence.group.id);
+
+        if (groupLockSeatSpent(store, evidence)) continue;
+
+        if (
+            out.some((job) => job.item.kind === 'draft_groups' && job.item.groupRefs?.includes(evidence.group.id) === true)
+        )
+            continue;
+
+        const built = candidate(
+            store,
+            story,
+            'group_lock',
+            'editor',
+            undefined,
+            key,
+            `Editor judges whether ${evidence.group.key} may be locked as a finished contract at clean vector ${evidence.vector_hash} (R3)`,
+            2,
+            {
+                toolMode: 'none',
+                responseSchema: { name: GROUP_LOCK_SCHEMA_NAME, schema: GroupLockDecisionSchema },
+                groupRefs: [evidence.group.id],
+                findingRefs: evidence.open_claims.map((claim) => claim.id),
+                // The summary seat's own slug (`editor-group-lock`) serves phase ① only, so the chapter
+                // seat runs on the general Editor crew. The engine-owned lock contract the compiler
+                // appends is Phrase ②'s (`controller.instructions.lock`), which is the half that actually
+                // binds the answer; the role copy is generic adjudication either way.
+                templateRef: 'editor-general',
+                roleName: 'editor'
+            }
+        );
+
+        if (built !== undefined) {
+            built.rank = 1;
+            out.push(built);
+        }
+    }
+
+    // -- 4. The deep cross-chapter review (§6.4 step 6, R5) ---------------------------------------
+    // The tool-carrying pass, offered once the structured seats for this vector have reported: it is
+    // the pass that turns "the Critic noticed a broken chain" into a FINDING carrying `group_refs`, and
+    // R3's closure rule runs on that attribution. Without `group_refs` a complaint means "the whole
+    // book" and the next batch rewrites every chapter.
+    if (hasText) {
+        const reviewsFiled = allReviewSeatsRun(store, vectorHash, critics);
+
+        if (reviewsFiled) {
+            for (let pass = 1; pass <= critics; pass += 1) {
+                const key = groupCheckSeatKey(vectorHash, pass);
+
+                if (runsForItem(store, key).length > 0) continue;
+
+                const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
+
+                const built = candidate(
+                    store,
+                    story,
+                    'check_unit',
+                    'critic',
+                    undefined,
+                    key,
+                    `Critic ${pass}/${critics} reviews the chapter contracts at vector ${vectorHash} against the phrase seed (R3, R5)`,
+                    2,
+                    {
+                        groupRefs: allRefs,
+                        templateRef: template,
+                        roleName: 'critic',
+                        note:
+                            `Critic pass ${pass}/${critics} on the installed chapter contracts at vector ${vectorHash}. THESE ARE CONTRACTS, NOT PROSE, and the book composes them in chapter order: ${groups
+                                .map((group) => group.key)
+                                .join(', ')}. THE PHRASE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the phrase seed, critical Knowledge, or a contract's own setups and payoffs — or a commitment the seed states that the chapter set lacks. Added detail, an open question the seed left silent and unplanted setup are NOT defects. A contract may be SPARSE and still correct: judge it as a contract, not as a scene nobody wrote, and never cost a note because you would have staged the chapter differently — phase \u2462 writes the sentences. ` +
+                            `THE CHAIN IS THE THING TO CHECK: every payoff has a setup in an earlier chapter, every setup is collected in a later one, and a chapter that changes nothing leaves the book flat. Say which end is wrong and name the other end. File the critical and major issues with raiseFinding on ${story.id}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
+                            "`group_refs` naming EVERY chapter the defect crosses, as the chapter group ids in the brief. A defect that crosses chapters is ONE issue naming both, because the repair is one decision about two contracts. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict with submitVerdict at target_ref " +
+                            `${story.id}; there is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`,
+                    },
+                    pass - 1
+                );
+
+                if (built !== undefined) out.push(built);
+            }
+        }
+    }
+
+    return out;
+}
+
 /**
  * Phase ①'s jobs, in the pipeline's own order (§6.4 steps 1-6):
  *
@@ -1721,6 +2143,36 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     // urgency class as phases ②/③'s `write_unit`.
     if (story.phase === 'summary') out.push(...phase1PipelineCandidates(store, story));
 
+    // -- Phase ②, group-managed: structure → draft → review → score → lock (T-W2) -----------------
+    // THE SWITCH IS THE PHRASE'S OWN DIAL (`story.plotlines_mode`), not the Story's and not the presence
+    // of rows: a Story may run Phrase ① in the group model with Phrase ② still on the classic
+    // `createPlotline` tools, and vice versa (`phrase/catalog.ts:isPhraseGroupManaged` says why the two
+    // are separate). An ABSENT field reads `'classic'`, which is what every book written before Phrase ②
+    // existed is, so every existing phase-② pin below keeps running untouched.
+    //
+    // The lane runs the classic verification legs ALONGSIDE it (`verify_findings`, `verify_ideas`, and
+    // the drain probes further down): those answer "is this finding real / is this Idea sourced / is the
+    // queue empty", which is orthogonal to WHO writes the contracts. What the lane does NOT run is the
+    // per-unit trio below (`select`, `check_unit`, `write_unit`), because the batch job installs the
+    // contracts and the Editor's choice between "competing drafts" is a choice this pipeline removed —
+    // exactly the argument §6.5/P6 makes for phase ①'s samples, one phrase down.
+    const plotlinesGroups = story.phase === 'plotlines' && isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY);
+
+    if (plotlinesGroups) out.push(...phase2GroupCandidates(store, story));
+
+    // T-W2b — THE SUPPRESSION NEEDS THE LANE, NOT JUST THE DIAL. `loop/engine.ts:2887` defaults
+    // `plotlines_mode` to `'groups'`, so the flag above is true on every book whose Author never pushed a
+    // Summary into Phrase ② — and the §4.3 tools, the `write_unit` pair, and the classic meaning of an
+    // unscoped finding have to stay EXACTLY where they were for that book (the measured cost of getting
+    // this wrong: the classic phase-② walk in `integration/slice-phases.test.ts` and the findings ladder
+    // in `loop/findings.test.ts`, both green before this wave, both stalled by a dial-only reading).
+    // `phrase/plotpoints.ts:plotlineLaneIsLive` is the gate the three suppressions below share: the DIAL
+    // PLUS A STARTED PHRASE ROW (`phrase/catalog.ts:storyPhraseByKey` reads it — the row the Author's Start
+    // verb wrote, NOT a materialized chapter set). The distinction is live between a start and the accepted
+    // brief: a started phrase with no entries yet has no contracts, and "nothing installed yet" is not a
+    // licence for the classic Writer to draft §4.3 rows out-of-band and have the install overwrite them.
+    const laneWritesContracts = plotlinesGroups && plotlineLaneIsLive(store, story);
+
     // -- Editors first: the choice (L-20) and the verification (D-33, D-27) -----------------------
     const templateAttempts = attemptsOf(templatesFor(store, story, 'writer')[0]);
     // Phase ① has no classic divergence set any more: its samples are the pipeline jobs above, and
@@ -1733,7 +2185,11 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         // PHASE ① HAS NO EDITOR CHOICE. The selector is deterministic (§6.5: fewest critical, then
         // fewest high, then total, then the earliest sample) and runs in the engine's settlement, so
         // offering a `select` run would be a model asked to make a choice the design removed (P6).
-        if (story.phase === 'summary') continue;
+        // PHRASE ② GROUP MODE REMOVES THE SAME CHOICE (T-W2): the batch's install IS the selection —
+        // `phrase/revisions.ts:installGroupRevisions` writes the accepted text and archives the previous
+        // one in the same commit — so a `select` job here would adjudicate between rows that no longer
+        // exist as a set. A classic phase-② Story (`plotlines_mode: 'classic'`) still gets it.
+        if (story.phase === 'summary' || plotlinesGroups) continue;
 
         // An open merge request is the Editor's answer for this unit. Re-asking for a selection
         // while the Writer has not composed the merged text is the exact loop the old surface got
@@ -1852,7 +2308,15 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         // and would starve the drafts that are still owed (they rank below the reader's priority).
         if (divergenceGap(store, story, unit.ref, writerAttempts) > 0) continue;
 
-        if (!needsReader(store, story, unit.ref)) continue;
+        // T-W2b — THE INSTALL COUNTS AS THE WRITE. On this dial the contract was installed by the lane's
+        // batch, so `needsReader`'s run-ledger test cannot see it and the unit would never be judged
+        // (see `contractInstalledByPhrase`). The flag is scoped to the unit KIND the phrase owns — a
+        // CHAPTER unit on the same book is phase ③ prose with a classic Writer leg, and a classic book
+        // never sets it, so every pre-T-W2b answer is byte-for-byte unchanged.
+        const writtenByPhrase =
+            laneWritesContracts && unit.kind === 'plotline' && contractInstalledByPhrase(store, story.id, unit.ref);
+
+        if (!needsReader(store, story, unit.ref, writtenByPhrase)) continue;
 
         // `unitIsChecked` accepts either verdict convention — per-draft verdicts, or unit-level verdicts
         // covering the count, which is what §8.3's `submitVerdict` actually writes because its
@@ -1925,7 +2389,19 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     // Phase ①'s approved findings are answered by a NEW SAMPLING ROUND, not by a hand-fix pass: the
     // open `fix` task is compiled into the round's prompt and consumed by its selection (§6.8), so a
     // `wi_fix_*` job here would be the classic pipeline's shape sneaking back in.
-    const fixJobs = story.phase === 'summary' ? [] : fixWork(store, story, ctx.phase);
+    //
+    // T-W2b — THE ONE WRITING SURFACE (R2) ALSO APPLIES HERE. A `wi_fix_<unit>_*` job is a classic
+    // `write_unit` pass, and in group-managed phase ② the contract text belongs to the chapter group:
+    // the fix reaches it through the lane's revise → install → mirror path, not through a Writer
+    // calling `editPlotline` on the mirrored row. A classic fix pass there is worse than wasted: it
+    // writes the artifact OUT OF BAND, so `phrase_groups.content`/`group_revisions` and the `plotlines`
+    // row drift apart (the mirror only syncs on install), and the refusal ledger the Author reads fills
+    // with phantom T-4/T-11 rows. The filter is scoped to the JOB'S KIND, so an approved finding
+    // against a CHAPTER still buys its fix pass on a book whose prose phrase runs classic — the only
+    // jobs removed are the ones whose unit is a contract the lane owns.
+    const fixJobs = (story.phase === 'summary' ? [] : fixWork(store, story, ctx.phase)).filter(
+        (job) => !(laneWritesContracts && job.kind === 'plotline')
+    );
 
     for (const job of fixJobs) {
         const built = candidate(
@@ -1949,6 +2425,17 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         // new SAMPLING ROUND armed by the open `fix` tasks — not a tool-writing fix pass. Phases
         // ②/③ keep the classic writer below unchanged.
         if (story.phase === 'summary') continue;
+
+        // T-W2b — PHASE ② GROUP MODE HAS NO CLASSIC `write_unit` EITHER (the correction to T-W2): the
+        // lane's `draft_groups` job writes the chapter contracts, and its install mirrors them onto the
+        // `plotlines` rows. A classic draft pass here could only do one of two things — create an order
+        // the install already holds (T-4) or edit the mirrored row out of band (divergence) — so the
+        // candidate is not generated at all. The unit KIND is the scope, not the phase: a book whose
+        // Plotlines phrase is group-managed still gets a classic `write_unit` for a CHAPTER unit, which
+        // is phase ③'s prose and is not owned by Phrase ②. The reader trio above (`check_unit`) and the
+        // Editor's `verify_findings` stay exactly as T-W2 left them — verification is not a writing
+        // surface — and a `plotlines_mode: 'classic'` book keeps this leg (the flag is false).
+        if (laneWritesContracts && unit.kind === 'plotline') continue;
 
         // A unit with an explicit fix job already has its Writer: the `wi_fix_*` Work Item clears
         // the approved findings/task, and the generic draft would be a second Writer racing it on

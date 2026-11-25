@@ -14,6 +14,11 @@
 // path that deletes a locked phase's artifacts — with the one exception D-69 forces (T8 finding 1): a
 // PHRASE GROUP lock whose revision rows this scrap deletes comes off with them, because a flag naming a
 // deleted row is not a lock, it is a deadlock. See the block inside `scrapPhasesAfter`.
+//
+// T-W6 (D-77) extends the same line to Phrase ② rather than bending it: the phase-② artifact is a phrase
+// row on the grouped model, so `scrapPhasesAfter` DELETES that row (and its entries, history and brief)
+// when it reaches above phase ②, and KEEPS it when it lands on phase ② — exactly what the same function
+// does to a §4.3 plotline row. See `scrapPlotlinesPhrase`.
 import {
     authorAttr,
     deletePhaseIdeas,
@@ -30,7 +35,9 @@ import { TASK_KINDS, UNDO_STACK_LIMIT, type LoopChapter, type UndoEntry } from '
 // itself (`phrase/catalog.ts:isGroupManagedStory`). `phraseGroupsOf` + `isPhraseGroupLocked` are the two
 // reads the D-69 lock clear needs, and they come from the SAME catalog module the write layer reads, so
 // a scrap can never disagree with `phrase/locks.ts` about which row carries a live lock.
-import { isGroupManagedStory, isPhraseGroupLocked, phraseGroupsOf } from '../phrase';
+import { isGroupManagedStory, isPhraseGroupLocked, isPhraseGroupManaged, phraseGroupsOf, storyPhraseByKey } from '../phrase';
+// PHRASE ② (T-W2): the phrase KEY the scrap gate above names (see `shared/phrase.ts`).
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 import type { Chapter, ChapterSection, Story, StoryPhase, Task } from '../../shared/types';
 import type { Store } from '../store';
 
@@ -279,6 +286,60 @@ export function materialiseChapters(store: Store, story: Story, count: number): 
 }
 
 /**
+ * T-W6 (D-77, R11) — THE PLOTLINES PHRASE GOES WITH THE PHASE THAT OWNS IT, WHOLE.
+ *
+ * This is the phrase-side half of what the plotline loop two blocks below already does to §4.3: when the
+ * scrap reaches ABOVE phase ②, phase ②'s artifact is deleted rather than reopened. Phrase ②'s artifact is
+ * a `phrases` row plus everything keyed to it — `phrase_groups` (the chapter entries), its
+ * `group_revisions` (the entries' history) and `plotline_briefs` (the structure pass that declared the
+ * entry set) — so "delete the phase" means all four, in one commit, or the book keeps a phrase whose
+ * entries, history and brief belong to a scrapped round.
+ *
+ * WHY THE WHOLE ROW AND NOT A RESET, which is what the SUMMARY phrase gets in `engine.ts:editSeed`:
+ * D-25a's "a Seed edit is a full clear" stays authoritative, and the reason is the Start verb. A phrase
+ * row is the identity its entries, revisions and claim keys name, and `startPlotlinesPhrase` REFUSES a
+ * second start on the same book (409 — D-72's copied seed is the input that history was written
+ * against). So a reset that left the row standing would leave an Author holding a book whose phase ② has
+ * been emptied with no way to re-seed it: the loop cannot start it (only the Author can, D-72), and the
+ * Author cannot start it either (the row is already there). Deleting the row is the one state where the
+ * rail's Start card works again, which is the difference between a cleared book and a dead one.
+ *
+ * THE COPIED-SEED INDEPENDENCE IS NOT WEAKENED (D-72, the user's "phrases are discrete and independent"):
+ * that property is about Phrase ② never READING Phrase ① live — it reads `phrases.seed`, not
+ * `stories.idea` — and deleting the row when the Story-Seed changes says nothing about what a surviving
+ * row reads. The copied-seed rule and the scrap rule are orthogonal, and both are pinned:
+ * `api/phrase-start-routes.test.ts` pins the immunity of a SURVIVING row, and the D-77 pins below name
+ * the four collections this one deletes.
+ *
+ * IT IS NOT GATED ON EITHER DIAL. `plotlines_mode` says who WRITES the contracts, not whether the rows
+ * exist; a started row with the dial off (a seeded book, or one whose dial was moved before the 409 rule
+ * landed) still owns entries that name a scrapped round, and leaving them is exactly the mixed-dial
+ * inconsistency this wave closed: entries at `revision: 3` over a `group_revisions` table with no rows.
+ * The predicate is the ROW (`phrase/catalog.ts:storyPhraseByKey`), and an unstarted book is a no-op.
+ *
+ * WHAT SURVIVES: `summaries.chapter_count` (D-3b's Author truth — neither a scrap nor a Seed edit
+ * touches it), the `plotlines` contract rows (this function's caller deletes them at the same rank), the
+ * findings/tasks/verdicts of the scrapped pass (P11's provenance), and the `summary_scores` rows (they
+ * are keyed by a vector hash, and the scrap has never deleted a score).
+ */
+function scrapPlotlinesPhrase(store: Store, story: Story, why: string): boolean {
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_PLOTLINES_KEY);
+
+    if (phrase === undefined) return false;
+
+    // Briefs first, then the entries they declared, then the history of those entries, then the row that
+    // owns them: every one of these deletes is scoped by `phrase_id` (never `story_id`) so a book with a
+    // second phrase of the same kind — or a Summary whose groups are being RESET rather than deleted two
+    // blocks below — keeps the rows this scrap is not about.
+    store.plotlineBriefs.deleteWhere((row) => row.phrase_id === phrase.id, loopAttr(`${why}; the structure pass that declared this phrase's chapters goes with the phrase (D-77)`));
+    store.phraseGroups.deleteWhere((row) => row.phrase_id === phrase.id, loopAttr(`${why}; the chapter entries go with the phrase that materialised them (D-77)`));
+    store.groupRevisions.deleteWhere((row) => row.phrase_id === phrase.id, loopAttr(`${why}; the entries' history goes with the entries (D-25, D-77)`));
+    store.phrases.delete(phrase.id, loopAttr(`${why}; the Plotlines Phrase row goes with the phase it is (L-31, D-77)`));
+
+    return true;
+}
+
+/**
  * L-31/D-25: scrap everything the later phases produced.
  *
  * What goes: the prose and the structure, hard — chapters and their revisions when backing up to
@@ -295,6 +356,11 @@ export function materialiseChapters(store: Store, story: Story, count: number): 
  * refilled — the Story would strand with nothing to judge and no tool to write.
  * What stays: the verdicts, findings and `selection_note`s of the scrapped work, as provenance
  * (P11 — the Author must still be able to ask why this draft was chosen).
+ *
+ * PHRASE ② TRAVELS WITH ITS PHASE (T-W6, D-77): a scrap that reaches ABOVE phase ② deletes the Plotlines
+ * Phrase — row, chapter entries, entry history and brief — in this same commit, and a scrap that lands ON
+ * phase ② keeps them (only a lock whose revision rows this function deleted comes off, D-69).
+ * `scrapPlotlinesPhrase` states why that delete is a delete rather than the Summary's reset.
  *
  * The Ideas go too (D-36, D-25's note): a phase that was locked already deleted its tray, and a phase
  * that was never locked loses it with the rest, because keeping them means a new Critic proposing what
@@ -391,7 +457,19 @@ export function scrapPhasesAfter(
     // THE BRANCH IS THE RULE, not a matter of placement: a backtrack to `chapters` (`rank >=
     // phaseRank('chapters')`) deletes nothing group-shaped, so every lock there still names a live
     // `latest` row and STANDS — cleared locks would be the bug there, not the fix.
-    if (rank < phaseRank('chapters') && isGroupManagedStory(story)) {
+    // T-W2 (PHRASE ②): the gate is EITHER phrase's dial, not the Summary's alone. A Story with
+    // `summary_mode:'classic'` and `plotlines_mode:'groups'` has `group_revisions` rows — the chapter
+    // lane's history — and leaving them behind on a scrap would keep the D-25 defect alive one phrase
+    // down: the write allowance counts runs after THIS text, the review seats key on the vector those
+    // numbers hash to, and R3's closure joins on claims stamped onto exactly these rows. The lock-clear
+    // loop below reads `phraseGroupsOf` UNSCOPED on purpose: a scrap deletes this Story's whole
+    // `group_revisions` table slice, so a lock on EITHER phrase's row would be left naming a row that
+    // is gone (D-69), and clearing one phrase's flag while the other's history was deleted is the
+    // half-applied state that strands a book in both directions.
+    if (
+        rank < phaseRank('chapters') &&
+        (isGroupManagedStory(story) || isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY))
+    ) {
         counts.groupRevisions = store.groupRevisions.deleteWhere(
             (revision) => revision.story_id === story.id,
             loopAttr(`${why}; the group revisions of the scrapped phase go with their drafts (D-25, R2)`)
@@ -469,6 +547,22 @@ export function scrapPhasesAfter(
             store.verdicts.delete(verdict.id, loopAttr(why));
             counts.verdicts += 1;
         }
+    }
+
+    // PHRASE ② (T-W6, D-77) — the SAME line, drawn one layer up. The block above deletes §4.3's contract
+    // rows when the scrap reaches ABOVE phase ② and UNLOCKS them when it lands ON phase ②; Phrase ②'s
+    // rows are the same artifact on the other authoring model, so the phrase follows the phase with the
+    // identical fork: `rank < phaseRank('plotlines')` (a `backtrack('summary')`, and `editSeed`, which
+    // calls this function at `'summary'`) deletes the phrase whole — row, entries, history and brief —
+    // while `rank === phaseRank('plotlines')` KEEPS it, because the reopened phase's own artifact is what
+    // the Author went back to work on (L-31) and its entries are the text they are about to revise. The
+    // only thing the reopened case does to the phrase is the lock clear above, and it runs there because
+    // this rank DOES delete the `group_revisions` rows (`rank < phaseRank('chapters')`): the entries keep
+    // their TEXT and their numbers — the base for another round, L-31 — and every flag that named a
+    // deleted revision comes off with it (D-69). The briefs survive untouched: the structure pass is the
+    // phrase's own record of how the seed resolves into chapters, and phase ② is reopening to act on it.
+    if (rank < phaseRank('plotlines')) {
+        scrapPlotlinesPhrase(store, story, why);
     }
 
     // The tray of every phase at or after the reopened one. The reopened phase gets an EMPTY tray

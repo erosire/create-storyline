@@ -26,7 +26,7 @@
 import type { SectionScore, SectionScores } from '../../shared/schemas';
 import type { PhraseGroup } from '../../shared/types';
 import type { Store } from '../store';
-import { phraseGroupsOf } from './catalog';
+import { phraseGroupsOf, primaryPhraseOf } from './catalog';
 
 /** The score's inclusive bounds — the rail renders a percentage, so nothing outside this is displayable. */
 export const SECTION_SCORE_MIN = 0;
@@ -110,16 +110,23 @@ const isScoreValue = (value: unknown): value is number =>
  * The answer's text is kept VERBATIM (D-15: the rationale and the quote are the Reader's, not the
  * loop's to tidy). Nothing here recomputes, averages or re-ranks a score.
  */
-export function parseSectionScoreAnswer(store: Store, storyId: string, structured: unknown): SectionScoreDecision {
+export function parseSectionScoreAnswer(
+    store: Store,
+    storyId: string,
+    structured: unknown,
+    phraseId?: string
+): SectionScoreDecision {
     const answer = structured as SectionScores | undefined;
     const sections = Array.isArray(answer?.sections) ? answer.sections : undefined;
 
     if (sections === undefined) return { ok: false, refusal: 'the SectionScores answer carried no `sections` array' };
 
-    // The Story's groups, in catalog order — the set the job was dispatched with, and the only set an
-    // answer may name. `section_score` rows are addressed by group UUID, so an id from another book
-    // would be a row the rail can never label.
-    const groups = phraseGroupsOf(store, storyId);
+    // The PHRASE's sections, in composition order — the set the job was dispatched with, and the only set
+    // an answer may name (seam S12: "name every section exactly once" is phrase arity, five for the
+    // Summary and the materialized chapter count for Phrase ②, so the number comes from the rows and not
+    // from a constant). `section_score` rows are addressed by group UUID, so an id from another book — or
+    // from the other phrase on this one — would be a row the rail can never label.
+    const groups = phraseGroupsOf(store, storyId, phraseId ?? primaryPhraseOf(store, storyId)?.id);
     const byId = new Map(groups.map((group) => [group.id, group]));
     const seen = new Map<string, SectionScore>();
 

@@ -696,6 +696,14 @@ export class RunExecutor {
         // SUMMARY PHRASE (R2/R3/R5): the group model's two one-turn jobs. Both read the ITEM for what
         // they are about, exactly as the sampling pair does, so every pass of one batch renders
         // byte-identical bytes (§5's cache argument) and a restart recompiles the same prompt.
+        //
+        // PHRASE ② (T-W2): `templateSlug`/`roleName` are the item's OWN crew. The compiler decides what
+        // to do with them (`phase1-prompt.ts:slugFor`): the Summary lane keeps the canonical slug from §8
+        // — its `templateRef` is a template POOL pick, a scheduling fact, not the prompt's voice — while
+        // Phrase ② resolves the crew its seats bound themselves to (`writer-plotlines-sampler`, the
+        // rotating Critic angles, the general Editor for a contract lock). The PHRASE itself is never a
+        // parameter: the compilers derive it from the group rows the item names, so a restart compiles the
+        // same bytes without a Work Item field that could disagree with the rows (L-3).
         if (item.kind === 'draft_groups') {
             if (item.groupRefs === undefined || item.groupRefs.length === 0) {
                 // A Writer with no group to write has no answer to give; refusing here keeps a batch
@@ -705,7 +713,9 @@ export class RunExecutor {
 
             return compileGroupDraftPrompt(this.store, item.storyId, {
                 groupRefs: item.groupRefs,
-                fixRefs: item.fixRefs
+                fixRefs: item.fixRefs,
+                templateSlug: item.templateRef,
+                roleName: item.roleName
             });
         }
 
@@ -714,7 +724,9 @@ export class RunExecutor {
                 // An empty set is legal here (unlike a draft): a review with no group rows can only
                 // report against the Seed, and the compiler says so in the prompt rather than throwing.
                 groupRefs: item.groupRefs ?? [],
-                fixRefs: item.fixRefs
+                fixRefs: item.fixRefs,
+                templateSlug: item.templateRef,
+                roleName: item.roleName
             });
         }
 
@@ -735,7 +747,10 @@ export class RunExecutor {
                 // one hash. The Reader is scored against the CLEAN selection that hash identifies, never
                 // against whatever the live vector happens to be when the run starts: a Writer install
                 // mid-queue changes the book, not the judgement this seat was armed for.
-                vectorHash: sectionScoreVectorHashOf(item.id)
+                vectorHash: sectionScoreVectorHashOf(item.id),
+                // PHRASE ② (T-W2): the crew, phrase-resolved by the compiler (see the note above).
+                templateSlug: item.templateRef,
+                roleName: item.roleName
             });
         }
 
@@ -756,7 +771,11 @@ export class RunExecutor {
 
             return compileGroupLockPrompt(this.store, item.storyId, {
                 groupRef: refs[0],
-                vectorHash: groupLockSeatOf(item.id).vector_hash
+                vectorHash: groupLockSeatOf(item.id).vector_hash,
+                // PHRASE ② (T-W2): the seat's own crew — `editor-group-lock` is the Summary's copy, and a
+                // chapter seat runs on the general Editor (`slugFor` keeps the canonical slug for phase ①).
+                templateSlug: item.templateRef,
+                roleName: item.roleName
             });
         }
 
