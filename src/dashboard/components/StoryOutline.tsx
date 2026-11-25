@@ -37,7 +37,15 @@ import {
     summaryRevisions
 } from './story-nav';
 import type { StoryAttention, StoryPhraseKey, StorySelection, SummaryRevisionEntry } from './story-nav';
-import { isGroupSummary, isOpenFinding, phraseReadError, type StoryViewData } from './story-contract';
+import {
+    groupLockActorLabel,
+    isGroupSummary,
+    isOpenFinding,
+    phraseOverallScore,
+    phraseReadError,
+    type PhraseLockActor,
+    type StoryViewData
+} from './story-contract';
 
 function CheckIcon() {
     return (
@@ -84,6 +92,36 @@ interface OutlineChildSpec {
     mark?: string;
     /** The pill's tone: the Writer holding the job reads as activity (accent), unwritten as amber. */
     markTone?: 'writer' | 'todo';
+    /**
+     * T3 — the group's latest Critic score, an integer percentage (`84` prints as `84%`). Set on GROUP rows
+     * only, from `story-nav.summaryGroupEntries`; a sampling rail's Revision rows carry none, so their
+     * accessible names are byte-for-byte what they were before percentages existed on this rail. Absent
+     * means never scored, which renders NOTHING — a `0%` would claim a review that never ran.
+     */
+    score?: number;
+    /**
+     * T3 — the percentage this group's latest score moved FROM, for the row's tooltip only. The rail has
+     * 320px and one number fits; the movement is the fact worth a hover, and it comes from the same
+     * `scores` array the pane prints.
+     */
+    previousScore?: number;
+    /**
+     * R1 — the group's text is LOCKED IN: settled content, not revisable, its own findings void, the other
+     * groups adapting to it. Set only for a locked group row, so an unlocked row (and every sampling-revision
+     * row) keeps the exact accessible name it had before locks existed.
+     */
+    locked?: boolean;
+    /**
+     * R1 — WHO made the lock (`'author'` | `'editor'`), absent when the wire row names no actor. It is tooltip
+     * words only: the rail's one word is `Locked`, and the pane's badge is where the actor is read (the rail is
+     * 320px and the actor changes nothing about which row to click).
+     */
+    lockedBy?: PhraseLockActor;
+    /**
+     * R1 — the revision the lock stands on, for the row's tooltip. The pane's badge prints the same number from
+     * the same selector (`story-nav.summaryGroupEntries`), so rail and pane cannot name two different texts.
+     */
+    lockedRevision?: number;
 }
 
 /** The engine's word for a draft a round parked as history (§4.17, P13/D-22). */
@@ -123,12 +161,70 @@ function groupChildren(view: StoryViewData): OutlineChildSpec[] {
         // U6: the accessible name IS the group title — no id, no number, nothing else to read per row.
         title: entry.group.title,
         findings: entry.blockingFindings,
+        // T3 — the score the pass wrote for THIS group, latest first. `!== undefined` rather than truthy:
+        // a scored-zero group prints `0%`, and rendering nothing there would hide the worst number on the
+        // rail. `previousScore` rides along for the tooltip (the rail has no room for a second figure).
+        ...(entry.score === undefined ? {} : { score: entry.score }),
+        ...(entry.previousScore === undefined ? {} : { previousScore: entry.previousScore }),
+        // R1 — the lock, passed through from the SAME entries the pane's badge reads
+        // (`story-nav.summaryGroupEntries` → `story-contract.isGroupLocked`), so a row can never show `Locked`
+        // over a group the pane says is open. Set only for a locked row: an unlocked group renders no word,
+        // which keeps every pre-lock row name byte-for-byte what its tests already pin.
+        ...(entry.locked === true
+            ? { locked: true as const, lockedBy: entry.lockedBy, lockedRevision: entry.lockedRevision }
+            : {}),
         ...(entry.writerBusy
             ? { mark: 'writer', markTone: 'writer' as const }
             : entry.written
               ? {}
               : { mark: 'to write', markTone: 'todo' as const })
     }));
+}
+
+/**
+ * T3 — the score's tooltip: the number, and the movement behind it when there is one.
+ *
+ * The rail row prints `84%` and nothing else, because the column is 320px and the number is what the eye
+ * compares down the list. What the row cannot fit is the direction, and that is the half the request asks
+ * for ("the user sees how the phrase improves over time"), so it goes where the rail puts every other
+ * un-fittable fact — the row's own `title`. A first pass says so plainly instead of implying a missing zero.
+ */
+function scoreTooltip(score: number, previousScore?: number): string {
+    if (previousScore === undefined) return `Score ${score}% — the first pass over this group`;
+
+    const moved = score - previousScore;
+
+    return `Score ${score}% — ${moved === 0 ? 'unchanged' : moved > 0 ? `up ${moved}` : `down ${-moved}`} from ${previousScore}%`;
+}
+
+/**
+ * R1 — the lock's tooltip words: the two facts the 320px rail cannot fit.
+ *
+ * The row itself prints ONE word, `Locked`, because the row's job is to say "this text is settled" and the
+ * accessible name has to stay short enough to read down the list. WHICH text is settled (the revision the lock
+ * stands on) and WHO settled it are the facts a hover is for, and they come from the same selectors the pane's
+ * badge prints (`story-nav.summaryGroupEntries`), so rail and pane describe one lock. An actor the wire never
+ * named reads as `by crew` rather than as a guessed Author — the pane's badge follows the same rule
+ * (`story-contract.groupLockActorLabel`).
+ */
+function lockTooltip(child: OutlineChildSpec): string {
+    const who = groupLockActorLabel(child.lockedBy).toLowerCase();
+    const revision = child.lockedRevision === undefined ? '' : ` at Revision ${child.lockedRevision}`;
+
+    return `Locked in${revision} by ${who}: this group's text is settled content — it cannot be revised from its pane, and the other groups adapt to it (R1).`;
+}
+
+/**
+ * T3 — the phrase header's tooltip. The header prints ONE number, the average, so the tooltip carries the
+ * breakdown behind it: every group's latest percentage, in server order. `not scored` can only appear on a
+ * group the average already ignores, and since one pass scores all five, in practice it never shows.
+ */
+function overallScoreTooltip(view: StoryViewData): string {
+    const parts = summaryGroupEntries(view).map(
+        (entry) => `${entry.group.title} ${entry.score === undefined ? 'not scored' : `${entry.score}%`}`
+    );
+
+    return `Overall score — the average of every group: ${parts.join(', ')}`;
 }
 
 /**
@@ -166,6 +262,26 @@ function DiscardedMark() {
 }
 
 /**
+ * R1 — the rail's lock mark, and it is a WORD rather than a glyph.
+ *
+ * Same rule the discarded row already follows: the mark has to survive greyscale and a screen reader, and the
+ * accessible name is built from text. `Locked` sits in the row right after the group's title, so a reader
+ * hearing the list hears "Premise Locked" before any of the counts, and the padlock colour (`app.css`) only
+ * adds speed. The word is short on purpose: the rail is 320px, and the facts it cannot fit — which revision is
+ * settled, and who settled it — ride the row's tooltip (`lockTooltip`).
+ */
+function LockMark() {
+    return (
+        <>
+            {' '}
+            <span className="outline-lock" data-testid="outline-group-lock">
+                Locked
+            </span>
+        </>
+    );
+}
+
+/**
  * The row's tooltip, COMPOSED from every reason the row has, joined in reading order.
  *
  * The old spelling was a `??` chain, so an attention label hid the state line entirely. Segments keep both:
@@ -176,6 +292,9 @@ function childTooltip(child: OutlineChildSpec, attention: StoryAttention | undef
     const segments: string[] = [];
 
     if (attention !== undefined) segments.push(attention.label);
+    // R1 — the lock's two un-fittable facts, in reading order after the attention label and before the engine
+    // state line (a group row has no `state`, so for a locked group this is usually the whole tooltip).
+    if (child.locked === true) segments.push(lockTooltip(child));
     if (child.state !== undefined) segments.push(`${child.title} · ${child.state}`);
     if (child.state === DISCARDED_STATE && child.discardReason !== undefined) {
         segments.push(`Discard reason: ${child.discardReason}`);
@@ -247,6 +366,12 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
     // or the sampling round's Revision 1…N drafts. `isGroupSummary` reads `story.summary_mode` (echoed by the
     // phrase read), so the answer cannot drift from what the wire says the book is.
     const grouped = isGroupSummary(view);
+    // T3 — the phrase header's OVERALL score, the mean of every group's latest score. It is undefined unless
+    // EVERY group carries one, because one scoring pass scores all five: a book with four scored rows is a
+    // pass that has not reached the fifth, and an average of the rows that happened to arrive is a number
+    // the server never claimed. Absent means the header renders nothing, exactly as the tick does when the
+    // Summary is not ready.
+    const overallScore = grouped ? phraseOverallScore(view) : undefined;
 
     return (
         <nav className="outline" aria-label="Story phrases" data-testid="story-outline">
@@ -335,6 +460,26 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                             start
                                         </span>
                                     ) : null}
+                                    {/* T3 — the phrase's OVERALL score, the mean of the five groups. It rides the
+                                        Summary header because the header is the one row that stands for the whole
+                                        Overview, and it is the number the Author compares between passes. The
+                                        leading space is a word boundary, not layout: an accessible name is built
+                                        from TEXT, so without it the row reads "…ready for review84%" (the same fix
+                                        R6 pinned for the child rows below). Absent means never scored, and a `0%`
+                                        there would claim a review that never ran. */}
+                                    {overallScore === undefined || phrase.key !== 'summary' ? null : (
+                                        <>
+                                            {' '}
+                                            <span
+                                                className="outline-score outline-score--header"
+                                                data-testid="outline-phrase-score"
+                                                aria-label={`Overall score ${overallScore}%`}
+                                                title={overallScoreTooltip(view)}
+                                            >
+                                                {overallScore}%
+                                            </span>
+                                        </>
+                                    )}
                                 </button>
 
                                 {/* R8: a folded phrase renders NO list at all, so its rows leave the DOM and the
@@ -358,6 +503,15 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                         onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
                                                     >
                                                         <span className="outline-name">{child.title}</span>
+                                                        {/* R1 — the lock word, first thing after the title: a reader
+                                                            scanning the rail learns which sections are settled before
+                                                            reading any of their counts. It sits BEFORE the row's
+                                                            separator block (line 452's `<> </>`), and carries its own
+                                                            leading space, because an accessible name is built from
+                                                            text nodes between elements — the same rule T5 pinned for
+                                                            the discarded row and R6 pinned for the state word. Without
+                                                            it the row would read "PremiseLocked". */}
+                                                        {child.locked === true ? <LockMark /> : null}
                                                         {/* R6 — a GROUP row's one state word. A group has no engine
                                                             state string (`data-state` above stays unset for group
                                                             rows, so they never take the struck-out `discarded`
@@ -421,6 +575,28 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                                 <AttentionMark attention={childAttention} />
                                                             </>
                                                         ) : null}
+                                                        {/* T3 — the group's latest percentage, the LAST thing in the
+                                                            row, so it lands at the right end of the column: the name
+                                                            span already holds `flex: 1`, so this number needs no
+                                                            margin of its own. `84%` alone is not a name, hence the
+                                                            `aria-label`; the direction of travel — the half of the
+                                                            request a 320px rail cannot fit — rides `title`, the same
+                                                            split the badge above it uses. Absent means NEVER scored:
+                                                            an unscored group prints nothing, because `0%` is a score
+                                                            the Critic actually gave and printing one would be a lie. */}
+                                                        {child.score === undefined ? null : (
+                                                            <>
+                                                                {' '}
+                                                                <span
+                                                                    className="outline-score"
+                                                                    data-testid="outline-group-score"
+                                                                    aria-label={`Score ${child.score}%`}
+                                                                    title={scoreTooltip(child.score, child.previousScore)}
+                                                                >
+                                                                    {child.score}%
+                                                                </span>
+                                                            </>
+                                                        )}
                                                     </button>
                                                 </li>
                                             );

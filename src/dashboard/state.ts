@@ -41,6 +41,8 @@ import {
     type LoopSettings,
     type PhraseGroupReviseInput,
     type PhraseGroupReviseResult,
+    type PhraseGroupLockResult,
+    groupLockKey,
     type PhraseView,
     type StoryKnowledgeTree
 } from './api';
@@ -68,6 +70,29 @@ export interface DashboardSnapshot {
      * own honest error line instead of silently rendering the empty state.
      */
     phraseErrors: Record<string, string>;
+    /**
+     * `story_id -> the last refusal of the Reviewed-Summary choose` (D-68), the server's own sentence.
+     *
+     * WHY IT IS CACHED RATHER THAN LEFT TO THE SHELL'S `error` LINE. Every mutation already raises its
+     * refusal there (L-13), but the three choose refusals are long, group-shaped sentences ("premise
+     * (unwritten), ending (an unresolved issue names it) …"), and the decision was made on the Summary tab:
+     * the Author needs the sentence beside the Choose button that produced it, and it has to survive the
+     * refresh the refusal triggers. It is cleared by the next successful choose and by deleting the Story,
+     * so a stale refusal can never sit on a Summary the Author has since chosen.
+     */
+    reviewedErrors: Record<string, string>;
+    /**
+     * R1 — `"<story_id>:<group_id>" -> the last refusal of THAT group's lock or unlock`, the server's own sentence.
+     *
+     * WHY A CACHE RATHER THAN THE SHELL'S `error` LINE. `mutate` already raises every refusal there (L-13), but a
+     * lock refusal is about one row of one Summary — "the Writer is rewriting this group", "nothing is written to
+     * lock in yet" — and the Author made the decision standing on that group's pane, where the badge and the
+     * button are. The shell-wide line is gone the moment anything else succeeds; the cached entry survives the
+     * refresh the refusal triggers, so the pane can keep saying WHY the group is not locked instead of showing an
+     * unlocked group as if the click had never happened. Keyed by group as well as Story, because a refusal on
+     * Tone must not follow the Author into Premise's pane.
+     */
+    groupLockErrors: Record<string, string>;
     /** `story_id -> the durable knowledge directory`, one article per section. */
     knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
@@ -110,6 +135,8 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     storyViews: {},
     phrases: {},
     phraseErrors: {},
+    reviewedErrors: {},
+    groupLockErrors: {},
     knowledge: {},
     queue: [],
     runs: [],
@@ -301,6 +328,66 @@ export function createDashboardStore(client: ApiClient = api) {
     // cannot infer (implicit-any error 7022).
     const stopStory = (storyId: string) => mutate(() => client.stop(storyId), storyId);
 
+    /**
+     * R1 — the refreshed phrase read out of a lock/unlock response, TOLERANT BY CONSTRUCTION.
+     *
+     * The revise and choose routes both answer `{…, view}` and the store commits that object (R2/D-68). The lock
+     * routes are being landed by another wave, so the client accepts either of the two bodies that wave can
+     * honestly send — the `{…, view}` envelope, or the phrase read itself — and falls back to `undefined` for
+     * anything else. `undefined` is not "nothing changed": it means the response carried no rows, so `mutate`'s
+     * own `refreshPhrase(touchedStoryId)` is what puts the new lock state on screen. A cache entry invented from
+     * a body that never carried group rows WOULD be a lie, so nothing is written in that case.
+     */
+    const lockViewOf = (result: unknown): PhraseView | undefined => {
+        const body = result as (PhraseGroupLockResult & Partial<PhraseView>) | undefined;
+        const candidate = (body?.view ?? body) as PhraseView | undefined;
+
+        // `groups` is the phrase read's own discriminator (`api.ts:PhraseView`), so this cannot mistake a Story
+        // row or an install report for group rows.
+        return candidate !== undefined && Array.isArray(candidate.groups) ? candidate : undefined;
+    };
+
+    /**
+     * R1 — one group lock/unlock write, in `chooseReviewedSummary`'s exact choreography (see the two verbs
+     * below for what each route is for). `verb` is the cache's own name for the failure line, never a claim
+     * about what the route did.
+     */
+    const groupLockWrite = (
+        verb: 'lock' | 'unlock',
+        storyId: string,
+        groupId: string,
+        run: () => Promise<PhraseGroupLockResult>
+    ): Promise<PhraseGroupLockResult | null> =>
+        mutate(async () => {
+            const key = groupLockKey(storyId, groupId);
+
+            try {
+                const result = await run();
+                const view = lockViewOf(result);
+
+                commit({
+                    ...(view === undefined ? {} : { phrases: { ...snapshot.phrases, [storyId]: view } }),
+                    // Cleared on the way through, so a stale refusal from an earlier click on THIS group cannot
+                    // outlive the write that answered it.
+                    groupLockErrors: withoutKey(snapshot.groupLockErrors, key)
+                });
+
+                return result;
+            } catch (cause) {
+                // The server's own sentence, verbatim (L-13) — and the verb named, so a pane printing it says
+                // which click refused even after the Author has moved to another group.
+                const sentence = failureText(cause);
+
+                commit({
+                    groupLockErrors: {
+                        ...snapshot.groupLockErrors,
+                        [key]: `${verb === 'lock' ? 'Locking' : 'Unlocking'} this group was refused: ${sentence}`
+                    }
+                });
+                throw cause;
+            }
+        }, storyId);
+
     const store = {
         // ---- external-store contract -------------------------------------------------
         subscribe(listener: () => void): () => void {
@@ -464,7 +551,17 @@ export function createDashboardStore(client: ApiClient = api) {
                     // R6: the deleted book's group rows are gone with it, including a cached refusal —
                     // a Story id can be re-opened, and a stale error would outlive the delete.
                     phrases: withoutKey(snapshot.phrases, storyId),
-                    phraseErrors: withoutKey(snapshot.phraseErrors, storyId)
+                    phraseErrors: withoutKey(snapshot.phraseErrors, storyId),
+                    // D-68: a Story id can be re-opened, and a choose refusal from the deleted book would
+                    // otherwise sit on the Summary tab of whatever took its id.
+                    reviewedErrors: withoutKey(snapshot.reviewedErrors, storyId),
+                    // R1: the same rule per GROUP — the keys are `<storyId>:<groupId>`, so every entry the
+                    // deleted book owned goes with it rather than greeting the next Story that takes the id.
+                    groupLockErrors: Object.fromEntries(
+                        Object.entries(snapshot.groupLockErrors).filter(
+                            ([key]) => !key.startsWith(`${storyId}:`)
+                        )
+                    )
                 });
 
                 return result;
@@ -496,6 +593,65 @@ export function createDashboardStore(client: ApiClient = api) {
                 commit({ phrases: { ...snapshot.phrases, [storyId]: result.view } });
 
                 return result;
+            }, storyId),
+        /**
+         * R1 — the Author locks one group in, and opens it again (`POST …/groups/:id/lock` and `…/unlock`).
+         *
+         * SAME CHOREOGRAPHY AS THE REVISE AND THE CHOOSE, for the same reasons: the route answers the refreshed
+         * phrase read (R2/D-68's convention), the store commits it straight away so the badge and the rail move
+         * in the frame the Author clicked in, and `mutate` then re-reads the Story, the rail and the desk
+         * (P1 — nothing is patched by hand beyond what the response carried).
+         *
+         * THE REFUSAL IS CACHED PER GROUP, not only in the shell-wide `error`: the two refusals this route can
+         * raise are row-shaped sentences ("the Writer is replacing this text", "there is nothing written to lock
+         * in yet"), and the Author needs them beside the button that raised them, through the refresh the refusal
+         * triggers. It is rethrown so `mutate` still commits its own `error` and answers `null`, like every other
+         * verb — and because the answer is `null`, the pane never reads a refused lock as success: the badge it
+         * prints comes from the phrase read the server sent, which still says the group is unlocked.
+         */
+        lockPhraseGroup: (storyId: string, groupId: string) =>
+            groupLockWrite('lock', storyId, groupId, () => client.lockPhraseGroup(storyId, groupId)),
+        unlockPhraseGroup: (storyId: string, groupId: string) =>
+            groupLockWrite('unlock', storyId, groupId, () => client.unlockPhraseGroup(storyId, groupId)),
+        /**
+         * R2 — the Story's Editor-locking Setting, one `PATCH /stories/:id` key (the `setAutoApprove` shape).
+         *
+         * It is written as an explicit boolean rather than by omitting the key, so turning the Setting OFF is a
+         * body the server can tell apart from a body that never mentioned it (absent means off, and every other
+         * dial on this pane is written the same additive way).
+         */
+        setEditorGroupLocking: (storyId: string, enabled: boolean) =>
+            mutate(() => client.patchStory(storyId, { editor_group_locking: enabled }), storyId),
+        /**
+         * D-68 — the Author takes the Reviewed Summary (`POST /stories/:id/phrases/reviewed/choose`).
+         *
+         * It is the whole-Summary sibling of `revisePhraseGroup` and follows the same choreography: the
+         * route answers the refreshed phrase view, which is committed straight away, and `mutate` then
+         * re-reads the Story, the rail and the desk (P1 — the durable store is the only memory, so a choose
+         * that installs five rows is not patched into the cache by hand).
+         *
+         * THE REFUSAL IS ALSO CACHED PER STORY. `mutate` raises every refusal into the shell-wide `error`,
+         * which is right for the top bar and useless beside the control that raised it: the choose's three
+         * 409s are group-shaped sentences, and the refresh `mutate` runs afterwards re-renders the pane
+         * that has to print one. So the refusal goes into `reviewedErrors[storyId]` — and is rethrown, so
+         * `mutate` still commits its own `error` and returns `null` like every other verb (the pane reads
+         * the cache, the top bar reads the shell line, and neither has to know the other exists).
+         */
+        chooseReviewedSummary: (storyId: string, note?: string) =>
+            mutate(async () => {
+                try {
+                    const result = await client.choosePhraseReviewed(storyId, note === undefined ? {} : { note });
+
+                    commit({
+                        phrases: { ...snapshot.phrases, [storyId]: result.view },
+                        reviewedErrors: withoutKey(snapshot.reviewedErrors, storyId)
+                    });
+
+                    return result;
+                } catch (cause) {
+                    commit({ reviewedErrors: { ...snapshot.reviewedErrors, [storyId]: failureText(cause) } });
+                    throw cause;
+                }
             }, storyId),
         /**
          * U-3's biggest button. The pinned route table has no global endpoint, so a global

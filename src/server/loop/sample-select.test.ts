@@ -50,7 +50,7 @@ const revisionWith = (id: string, fields: Record<string, string>): Revision => (
 
 /**
  * One screening issue; `origin` is the hill's question — did THIS draft create it, or did it inherit it
- * from the accepted text? Absent and `unknown` are the Reader declining to say, and the scorer refuses to
+ * from the accepted text? Absent and `unknown` are the Critic declining to say, and the scorer refuses to
  * take that as "not this draft's fault" (fail closed).
  */
 const issue = (severity: SampledIssue['severity'], origin?: SampledIssue['origin']): SampledIssue => ({
@@ -80,7 +80,7 @@ const review = (input: {
     updated_at: '2026-01-01T00:00:00.000Z',
     story_id: 'story_1',
     revision_ref: 'revision_1',
-    reader: 'reader-screening',
+    critic: 'critic-screening',
     issues: input.issues ?? [],
     valid: input.valid ?? true,
     ...(input.fixRefs === undefined ? {} : { fix_refs: input.fixRefs }),
@@ -336,7 +336,7 @@ describe('H1/R2/R3 — scoreSample: the fix certificate', () => {
     });
 
     it('rejects a candidate ONE pass marked unresolved — the certificate is unanimous, not a majority', () => {
-        // With `summary_readers` = 5 a 4-1 vote is a live disagreement, and the loop resolves it by
+        // With `summary_critics` = 5 a 4-1 vote is a live disagreement, and the loop resolves it by
         // resampling rather than by averaging (P6: pass/fail, never a score).
         const scored = scoreSample({
             revision: revision('revision_2'),
@@ -369,7 +369,7 @@ describe('H1/R2/R3 — scoreSample: the fix certificate', () => {
         expect(scored.fixesUnresolved).toEqual(['task_1']);
     });
 
-    it('refuses `unknown`, which is the Reader admitting it cannot tell (R2)', () => {
+    it('refuses `unknown`, which is the Critic admitting it cannot tell (R2)', () => {
         const scored = scoreSample({
             revision: revision('revision_2'),
             reviews: [
@@ -570,7 +570,7 @@ describe('H1/R2/R3 — scoreSample: the fix certificate', () => {
                 updated_at: '2026-01-01T00:00:00.000Z',
                 story_id: 'story_1',
                 revision_ref: 'revision_1',
-                reader: 'reader-screening',
+                critic: 'critic-screening',
                 issues: [issue('high')],
                 valid: true,
                 fix_refs: ['task_1'],
@@ -630,7 +630,7 @@ describe('H1/R3 — the pool a round may choose from', () => {
 // ---------------------------------------------------------------------------
 // THE HILL — an accepted Summary Revision is a STATE, so the only questions about a candidate are (a)
 // did it fix what was demanded, and (b) did it create a new critical/major OF ITS OWN. `origin` is how
-// the screening Reader answers (b), and `minimality` is the tie-break among candidates that did the same
+// the screening Critic answers (b), and `minimality` is the tie-break among candidates that did the same
 // certified work. Requirements 3, 5 and 7 live or die on these numbers, and none of them is a score.
 // ---------------------------------------------------------------------------
 describe('HILL CLIMB — origin, minimality and the bar the hill is climbed by', () => {
@@ -684,7 +684,7 @@ describe('HILL CLIMB — origin, minimality and the bar the hill is climbed by',
         });
     });
 
-    it('fails an origin the Reader did not state CLOSED (requirement 3)', () => {
+    it('fails an origin the Critic did not state CLOSED (requirement 3)', () => {
         // A pass handed the accepted text that does not classify its own issue cannot swear the draft is
         // no worse than the text it replaces — so `unknown` and absent both land in `introduced_*`.
         for (const origin of ['unknown', undefined] as const) {

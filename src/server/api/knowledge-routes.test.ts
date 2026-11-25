@@ -89,7 +89,7 @@ describe('GET /agents', () => {
 
         // §7.3 / U-8: the roster lists ALPHABETICALLY (T12/F1 — the route sorts the harness
         // catalogue projection, which appends the Researcher last).
-        expect(listings.map((row) => row.kind)).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
+        expect(listings.map((row) => row.kind)).toEqual(['critic', 'editor', 'reader', 'researcher', 'writer']);
         expect(listings.every((row) => row.status === 'idle' && row.working.length === 0)).toBe(true);
     });
 });

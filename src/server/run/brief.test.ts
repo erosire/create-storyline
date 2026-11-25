@@ -63,11 +63,11 @@ function seedStore(options: { digests?: number; drafts?: number; draftLength?: n
     });
 
     const template = seedTemplate(store, {
-        name: 'checker-consistency',
+        name: 'reader-consistency',
         roles: [
             {
-                name: 'checker',
-                kind: 'checker',
+                name: 'reader',
+                kind: 'reader',
                 prompt: 'You hunt setup-payoff debt across the unit. Every failing criterion needs an evidence line (D-15).'
             }
         ],
@@ -94,8 +94,8 @@ function itemFor(overrides: Partial<WorkItem> = {}): WorkItem {
         id: 'work_1',
         storyId: 'story_0',
         kind: 'check_unit',
-        templateRef: 'checker-consistency',
-        roleName: 'checker',
+        templateRef: 'reader-consistency',
+        roleName: 'reader',
         unit: { kind: 'chapter', ref: 'chapter_0' },
         ...overrides
     };
@@ -121,17 +121,17 @@ const NOTE_CHAR_CLIP = 600;
  * "the decisive instruction survives the 600-character clip", and a hand-copied mirror can drift into
  * proving a sentence `work.ts` no longer sends. The extraction fails loudly if the note moves or goes.
  *
- * A long note is the whole point of the fixture — at ~1,450 characters the note is always clipped,
+ * A long note is the whole point of the fixture — at ~1,530 characters the note is always clipped,
  * which is exactly what let the verdict instruction be clipped away silently (the shipped note named
  * the right ref at character 1,249 of a 1,514-character string).
  */
-function deepReviewNote(pass: number, readers: number, unitRef: string, revisionId: string): string {
+function deepReviewNote(pass: number, critics: number, unitRef: string, revisionId: string): string {
     const source = readFileSync(`${import.meta.dirname}/../loop/work.ts`, 'utf8');
-    const marker = 'note: `Reader pass';
+    const marker = 'note: `Critic pass';
     const at = source.indexOf(marker);
 
     if (at === -1)
-        throw new Error('loop/work.ts no longer attaches a `Reader pass …` note to the phase-① deep review');
+        throw new Error('loop/work.ts no longer attaches a `Critic pass …` note to the phase-① deep review');
 
     const open = source.indexOf('`', at);
     const close = source.indexOf('`', open + 1);
@@ -142,25 +142,25 @@ function deepReviewNote(pass: number, readers: number, unitRef: string, revision
         // character, so the extraction has to resolve them the same way the template literal does.
         .replace(/\\u2019/g, '’')
         .replace(/\$\{pass\}/g, String(pass))
-        .replace(/\$\{readers\}/g, String(readers))
+        .replace(/\$\{critics\}/g, String(critics))
         .replace(/\$\{selected\.unit_ref\}/g, unitRef)
         .replace(/\$\{selected\.id\}/g, revisionId);
 }
 
-/** Seeds the Reader template one of `DEEP_REVIEW_TEMPLATES` names, with the angle prompt it carries. */
-function seedReaderTemplate(store: Store): void {
+/** Seeds the Critic template one of `DEEP_REVIEW_TEMPLATES` names, with the angle prompt it carries. */
+function seedCriticTemplate(store: Store): void {
     seedTemplate(store, {
-        name: 'reader-genre',
+        name: 'critic-genre',
         serves_phase: ['summary'],
         roles: [
             {
-                name: 'reader',
-                kind: 'reader',
+                name: 'critic',
+                kind: 'critic',
                 web: true,
-                prompt: 'You are a Reader (D-30): you judge the Overview against the Seed from one angle.'
+                prompt: 'You are a Critic (D-30): you judge the Overview against the Seed from one angle.'
             }
         ],
-        // The template's own done-line is the wide Reader capability; a review pass replaces it (D-30).
+        // The template's own done-line is the wide Critic capability; a review pass replaces it (D-30).
         done_definition: 'every proposal is filed as an Idea with its sources'
     });
 }
@@ -175,7 +175,7 @@ describe('brief — S-2 assembly', () => {
         // self-contained" (S-2) — a missing section is a run that has to go look, which is D-13's
         // failure mode.
         expect(brief.sections).toEqual([
-            'ROLE — checker (checker) of checker-consistency',
+            'ROLE — reader (reader) of reader-consistency',
             'PHASE AND GOAL CRITERIA — Cold Mountain',
             'SEED — Author truth, read-only for you at every phase, forever',
             'DIGEST rev 1 (derived by the engine, never a crew: D-12a)',
@@ -214,48 +214,49 @@ describe('brief — S-2 assembly', () => {
         expect(text).toContain('Judge the unit against the criteria above and report with `submitVerdict`');
     });
 
-    it('bounds a Reader review pass: review mode first, findings-first, no Ideas, and no proposal-style done line (D-30)', () => {
+    it('bounds a Critic review pass: review mode first, findings-first, no Ideas, and no proposal-style done line (D-30)', () => {
         const { store, story } = seedStore();
         const revision = seedRevision(store, story.id, 'summary_0', 'DRAFT ONE — the valley under water.', 'run_1', {
             unit_kind: 'summary'
         });
 
         seedTemplate(store, {
-            name: 'reader-genre',
+            name: 'critic-genre',
             roles: [
                 {
-                    name: 'reader',
-                    kind: 'reader',
+                    name: 'critic',
+                    kind: 'critic',
                     web: true,
                     prompt:
-                        'You are a Reader (D-30). You never write the book; proposeIdea is for jobs that ask for Ideas.'
+                        'You are a Critic (D-30). You never write the book; proposeIdea is for jobs that ask for Ideas.'
                 }
             ],
             done_definition: 'every proposal is filed as an Idea with its sources'
         });
 
         const item = itemFor({
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' },
             revisionRef: revision.id
         });
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
-        // The binding mode is rendered before the angle prompt, so the wider Reader capability
+        // The binding mode is rendered before the angle prompt, so the wider Critic capability
         // cannot be read as this pass's job.
         const mode = text.indexOf('PASS MODE — REVIEW');
         expect(mode).toBeGreaterThan(-1);
-        expect(mode).toBeLessThan(text.indexOf('You are a Reader (D-30).'));
+        expect(mode).toBeLessThan(text.indexOf('You are a Critic (D-30).'));
 
         // The template's proposal-style done-definition is replaced, not stacked, for this pass.
         expect(text).not.toContain('Done means: every proposal is filed as an Idea with its sources');
         expect(text).toContain('Done means: every critical and major issue you found is filed');
         expect(text).toContain('do not propose Ideas in this pass');
         // D-33b: the Ideas ban is unchanged, and the sentence now names the pass's one legitimate outlet
-        // for a proposal, which is the half whose absence had the Reader filing wishes as defects.
+        // for a proposal, which is the half whose absence had the Critic filing wishes as defects. The
+        // noun changed with the kind token: a `kind: proposal` row is a Proposal, and the job line says so.
         expect(text).toContain(
-            'REVIEW PASS: report defects and file genuine improvements as `kind: improvement` findings — do not propose Ideas.'
+            'REVIEW PASS: report defects and file genuine Proposals as `kind: proposal` findings — do not propose Ideas.'
         );
         // The sample and the Seed are in the brief, so the pass does not need to go looking.
         expect(text).toContain('DRAFT ONE — the valley under water.');
@@ -274,23 +275,24 @@ describe('brief — S-2 assembly', () => {
 
         expect(revision.id).toBe('revision_0');
 
-        seedReaderTemplate(store);
+        seedCriticTemplate(store);
 
         // The note `work.ts` sends for THIS job (pass 1 of 2, this unit, this draft).
         const note = deepReviewNote(1, 2, 'summary_0', revision.id);
 
-        // Pinned: the note is ~2.4× the clip, so the brief below carries a TRUNCATED note — the shape
+        // Pinned: the note is ~2.5× the clip, so the brief below carries a TRUNCATED note — the shape
         // that hid the verdict instruction in the shipped build (it named the right ref past char 600).
         // The number moved when T3 front-loaded the admissibility clause into the window (it had lived
-        // at characters 950-1,320 of the shipped note, i.e. never sent at all). The pin is here so an
-        // edit that lengthens the note is a deliberate act: the window assertions below, not this number,
-        // are what the doctrine depends on.
-        expect(note.length).toBe(1_442);
+        // at characters 950-1,320 of the shipped note, i.e. never sent at all). It moved again (+78) when
+        // D-33b spelled the Issue/Proposal split into the sweep note — a deliberate lengthening, and the
+        // window assertions below, not this number, are what the doctrine depends on: the two kinds and
+        // the absence rule now sit at characters 0-240, so the rewording pushed nothing past the clip.
+        expect(note.length).toBe(1_520);
 
         const item = itemFor({
             id: 'wi_review_revision_0_a1',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' },
             revisionRef: revision.id,
             note
@@ -342,7 +344,7 @@ describe('brief — S-2 assembly', () => {
         expect(carriedNote).toContain('and the draft\u2019s own line at target_ref revision_0');
         // …and so is T3's admissibility clause, which is the half that decides whether this pass files
         // a finding at all. In the shipped note the `THIS IS THE OVERVIEW, NOT PROSE` calibration sat at
-        // character 950 and the phrasing rule at 1,320 — past the clip — so the Readers that kept costing
+        // character 950 and the phrasing rule at 1,320 — past the clip — so the Critics that kept costing
         // rounds on absences and wordings were never told not to. These two pins are the reason the note
         // is written front-loaded; move a clause past 600 and this test fails instead of the round.
         expect(carriedNote).toContain('THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE');
@@ -369,7 +371,7 @@ describe('brief — S-2 assembly', () => {
         const note = deepReviewNote(1, 2, 'summary_17', 'revision_102');
 
         // The same note, +8 characters from the longer ids.
-        expect(note.length).toBe(1_450);
+        expect(note.length).toBe(1_528);
 
         const carried = note.slice(0, NOTE_CHAR_CLIP);
 
@@ -389,11 +391,11 @@ describe('brief — S-2 assembly', () => {
             unit_kind: 'summary'
         });
 
-        seedReaderTemplate(store);
+        seedCriticTemplate(store);
 
         const item = itemFor({
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' },
             revisionRef: revision.id
         });
@@ -415,19 +417,21 @@ describe('brief — S-2 assembly', () => {
             'Admissible proof is a quotation: file what you can quote the draft contradicting, and nothing that rests on an absence alone.'
         );
         // D-33b — the outlet the stand-down used to leave empty. The pass may not file an absence as a
-        // defect AND may not file an Idea, so without this sentence the Reader's only move was to dress a
+        // defect AND may not file an Idea, so without this sentence the Critic's only move was to dress a
         // proposal in defect wording and watch the Editor dispute it. Pinned with the job line's own words:
         // the marker, the proposing title, and the fact that the Editor's rule for it is different.
         expect(text).toContain(
-            'An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: improvement`'
+            'An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: proposal`'
         );
         expect(text).toContain(
-            'a marked improvement is weighed on whether the story the Seed promises is better for it'
+            'a marked Proposal is weighed on whether the story the Seed promises is better for it'
         );
         // The phrasing rule: in the shipped sweep note this sentence started at character 1,320, i.e. it
-        // was never sent at all, while the rounds it was meant to prevent kept happening.
+        // was never sent at all, while the rounds it was meant to prevent kept happening. D-33b made the
+        // sentence name the KIND, not just the cost, because cost alone left a `taste` Issue looking
+        // legal — and `raiseFinding` now refuses that pairing on the call.
         expect(text).toContain(
-            'word choice, sentence shape, grammar and register are `taste` or `minor` at this phase, because phase \u2462 writes the sentences'
+            'word choice, sentence shape, grammar and register are a PROPOSAL at this phase — `kind: proposal` at cost `taste` or `minor`, never an Issue — because phase \u2462 writes the sentences'
         );
 
         // R2 — THE REVIEW BANNER, engine-owned text rendered ahead of the Author-editable angle prompt
@@ -435,6 +439,11 @@ describe('brief — S-2 assembly', () => {
         // the same permission into a test the pass can apply: quote the contradiction, or the finding is
         // not admissible.
         expect(text).toContain('WHAT COUNTS AS AN ISSUE: the Seed and its Brief are commitments, not an exhaustive outline');
+        // D-33b — the two cost ladders, pinned where an Author cannot edit them away. Each kind's ladder
+        // ends where the other's begins, and `loop/records.ts` and `tools/reader.ts:raiseFinding` refuse
+        // the two pairings this sentence rules out: an `issue` at `taste`, a `proposal` at `critical`.
+        expect(text).toContain('and it is rated `critical`, `major` or `minor` — never `taste`');
+        expect(text).toContain('and it is rated `major`, `minor` or `taste`, never `critical`');
         expect(text).toContain(
             'do not demand explicit stakes, consequences or planting from a Summary unless an explicit Seed or Summary commitment, or an actual contradiction, makes it necessary'
         );
@@ -445,7 +454,7 @@ describe('brief — S-2 assembly', () => {
         // templates: this text declares itself the override, so an improvement rule stated anywhere else
         // is a rule an Author rewrite can delete.
         expect(text).toContain(
-            'The one exception is a PROPOSAL: a change that would genuinely improve the book while contradicting nothing is filed with `kind: improvement`'
+            'The one exception is a PROPOSAL: a change that would genuinely improve the book while contradicting nothing is filed with `kind: proposal`'
         );
 
         // R3 — the gates T3 does NOT relax, pinned in the same text so a future softening of the rule is
@@ -461,10 +470,10 @@ describe('brief — S-2 assembly', () => {
 
         // R4 — the banner binds BEFORE the role prompt, so a wider angle template cannot be read as this
         // pass's job (D-30), and the durable rule therefore outranks an Author rewrite of the angle text.
-        expect(text.indexOf('WHAT COUNTS AS AN ISSUE')).toBeLessThan(text.indexOf('You are a Reader (D-30)'));
+        expect(text.indexOf('WHAT COUNTS AS AN ISSUE')).toBeLessThan(text.indexOf('You are a Critic (D-30)'));
     });
 
-    it('disputes an omission-only finding instead of confirming the absence (T3 — Editor verification and Reader confirmation)', () => {
+    it('disputes an omission-only finding instead of confirming the absence (T3 — Editor verification and Critic confirmation)', () => {
         const { store, story } = seedStore();
 
         // The finding from the Author's report: a stake the Seed never stated, reported as if the Summary
@@ -503,7 +512,7 @@ describe('brief — S-2 assembly', () => {
         // paragraph the verify thread works from. This is the behaviour fix the Author asked for: a
         // proposal used to meet the absence rule and lose, every time, without being weighed.
         expect(verifyText).toContain(
-            'A finding marked `improvement` in its bracket is the one claim this test does NOT judge: the Reader is proposing a change the Seed never had to promise, not reporting a defect, so the absence rule does not apply to it.'
+            'A finding marked `proposal` in its bracket is the one claim this test does NOT judge: the Critic is proposing a change the Seed never had to promise, not reporting a defect, so the absence rule does not apply to it.'
         );
         expect(verifyText).toContain(
             '`confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, and NEVER dispute it merely because the Seed never promised it.'
@@ -514,25 +523,55 @@ describe('brief — S-2 assembly', () => {
         // The cost ladder is described the way the shipped dial actually behaves (no runtime change):
         // `taste` never blocks a phase-① round, and `minor` blocks exactly when the Story's
         // `auto_approve` costs cover it — which they do by default (`shared/types.ts:
-        // DEFAULT_AUTO_APPROVE_COSTS` → `loop/records.ts:summaryBlockingCost`).
+        // DEFAULT_AUTO_APPROVE_COSTS` → `loop/records.ts:summaryBlockingCost`). D-33b adds the kind
+        // clause: a `taste` row can only be a Proposal, since an `issue` at that cost is refused at the
+        // call, so the Editor reading this never has to decide how to triage a taste-cost defect.
         expect(verifyText).toContain(
-            '`taste` never blocks a Summary round, because the prose it would choose between is not written until phase \u2462'
+            'a `taste` row — which by rule is a Proposal, never an Issue — never blocks a Summary round, because the prose it would choose between is not written until phase \u2462'
         );
         expect(verifyText).toContain(
             '`minor` blocks exactly when this Story\u2019s `auto_approve` dial covers `minor`, which it does by default (D-35)'
         );
 
+        // D-33d — the approval half of the same sentence. The paragraph above tells the Editor how to
+        // VERDICT a proposal; this is the half that tells it the proposal still cannot be APPROVED while
+        // an issue is open, which is the refusal `tools/editor.ts:approveFinding` hands back and the one
+        // the crew otherwise discovers by spending a turn on it. The four open states are named because
+        // `approved` is the state a crew reads as "handled" and it is not a resolution.
+        expect(verifyText).toContain(
+            'ISSUES COME FIRST, and they gate the approval as well as the verdict (D-33d): while any issue on this Story is unresolved'
+        );
+        expect(verifyText).toContain(
+            '`fixed` or `discarded` is what closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold it'
+        );
+        expect(verifyText).toContain(
+            '`approveFinding` REFUSES a row marked `proposal`, whatever the dial says'
+        );
+        // …the instruction that follows, so the pass leaves the row where the next pass can finish it…
+        expect(verifyText).toContain(
+            'if it cannot be approved yet leave it `confirmed` — it is not lost, and the pass that has no issue left approves it'
+        );
+        // …the exception, because a refusal that also banned DECLINING would strand the row…
+        expect(verifyText).toContain(
+            'Discarding a proposal is always allowed, because declining a change is not an approval.'
+        );
+        // …and the guarantee that the rule never slows the defects down: the loop must keep taking the
+        // very work that releases the proposals.
+        expect(verifyText).toContain(
+            'An ISSUE row is never held by this rule: the defects that unlock the proposals are exactly the work the loop must not stop taking.'
+        );
+
         const confirm = itemFor({
             id: 'work_3',
             kind: 'confirm_finding',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' },
             findingRefs: [finding.id]
         });
         const { text: confirmText } = buildBrief(store, confirm, resolveHarness(store, confirm));
 
-        // The Reader's own second look carries the same test. Without it the confirmation pass re-approves
+        // The Critic's own second look carries the same test. Without it the confirmation pass re-approves
         // whatever the Editor waved through, because "the Overview really does not mention X" survives any
         // amount of independent checking — the absence keeps being true.
         expect(confirmText).toContain('An absence is not a defect: the Seed is general rather than an outline');
@@ -541,20 +580,22 @@ describe('brief — S-2 assembly', () => {
         );
     });
 
-    it('marks an improvement in the findings block, and renders a plain issue exactly as it always did (D-33b)', () => {
+    it('marks a proposal in the findings block, and renders a plain issue exactly as it always did (D-33b)', () => {
         const { store, story } = seedStore();
 
-        // Two rows on purpose. The improvement has to be visible to the Editor INSIDE the record list the
-        // job carries — the bracket is the only place the finding itself is quoted to that thread — and
-        // the legacy row (no `kind` field at all) has to render byte-identically, because every existing
-        // brief, fixture and `brief_hash` depends on that line not moving.
+        // Two rows on purpose. The proposal has to be visible to the Editor INSIDE the record list the
+        // job carries — the bracket is the only place the finding itself is quoted to that thread, and
+        // `tools/editor.ts` teaches its two evaluation modes off the row's `kind` (its `verifyFinding`
+        // description, and the `Kind: proposal` marker at line 1162) — and the legacy row (no `kind`
+        // field at all) has to render byte-identically, because every existing brief, fixture and
+        // `brief_hash` depends on that line not moving.
         seedFinding(store, story.id, {
             criterion_ref: 'C-11',
             title: 'open the book on the lie instead of the truth',
             detail: 'chapter_1 sec_1 has him tell the truth at once; the lie first gives chapter 2 its tension',
             evidence: 'chapter_1 sec_1: "he told them the truth"',
             cost: 'major',
-            kind: 'improvement'
+            kind: 'proposal'
         });
         seedFinding(store, story.id, {
             criterion_ref: 'C-4',
@@ -574,14 +615,104 @@ describe('brief — S-2 assembly', () => {
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
         expect(text).toContain(
-            '- finding_0 [unconfirmed, cost major, seen 1×, criterion C-11, improvement]: open the book on the lie instead of the truth'
+            '- finding_0 [unconfirmed, cost major, seen 1×, criterion C-11, proposal]: open the book on the lie instead of the truth'
         );
         expect(text).toContain(
             '- finding_1 [unconfirmed, cost major, seen 1×, criterion C-4]: the 1911 map is never paid off'
         );
-        // The marker is a marker, not a rewrite of the line: nothing else about either row moved.
-        expect(text).not.toContain('criterion C-4, improvement');
+        // The marker is a marker, not a rewrite of the line: nothing else about either row moved. The
+        // unmarked row must not pick up EITHER kind word — D-33b's default is applied when a row is read,
+        // never when the line is rendered, so a legacy brief renders byte-identically.
+        expect(text).not.toContain('criterion C-4, proposal');
         expect(text).not.toContain('criterion C-4, issue');
+
+        // D-33c/D-33d — the HEADING of that same block now says why the proposal is stuck. This fixture is
+        // exactly the pass the sentence exists for: a Proposal row in front of an Editor, plus an open
+        // issue the Editor would otherwise discover by calling `approveFinding` and eating a refusal. The
+        // count is an issue COUNT, not a row count, and the one/plural form is pinned because the Author
+        // reads this string.
+        expect(text).toContain(
+            'Findings in front of you (2, 1 unresolved issue — no Proposal is filed or approved until they close (D-33c, D-33d)):'
+        );
+    });
+
+    it('leaves the findings heading byte-identical unless a Proposal row is actually blocked (D-33c, D-33d)', () => {
+        // WHY THE ABSENCE IS PINNED AS HARD AS THE PRESENCE: `runs.brief_hash` (§4.13) is computed over the
+        // assembled brief, and every existing brief in the store — every fixture, every cached comparison —
+        // renders the plain heading. The annotation is conditional on TWO facts (a `proposal` row among
+        // this job's rows, AND an unresolved issue on the Story), so every shape that is NOT that pair has
+        // to come out exactly as it always did.
+        //
+        // ONE STORE PER SHAPE: the open-issue count is read at STORY scope (`records.ts:openIssueFindings`),
+        // not from the job's row list — correct, because the rule the sentence explains is Story-scoped too
+        // — and it is also what makes a shared store poison the other shapes: a second open issue seeded
+        // for one case re-annotates the others underneath the test.
+        const briefFor = (seed: (store: Store, storyId: string) => string[]): string => {
+            const { store, story } = seedStore();
+            const findingRefs = seed(store, story.id);
+            const item = itemFor({
+                id: `work_heading_${findingRefs.join('_')}`,
+                kind: 'verify_findings',
+                templateRef: 'editor-general',
+                roleName: 'editor',
+                unit: { kind: 'summary', ref: 'summary_0' },
+                findingRefs
+            });
+
+            return buildBrief(store, item, resolveHarness(store, item)).text;
+        };
+
+        // (a) A plain issue-only tray. The issue IS open, and the heading still says nothing: no Proposal
+        //     row is in front of this job, so the sentence would only be noise.
+        const issueOnly = briefFor((store, storyId) => [
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-4',
+                title: 'the 1911 map is never paid off',
+                evidence: 'chapter_1 sec_1 mentions the map; nothing answers it',
+                cost: 'major'
+            }).id
+        ]);
+
+        expect(issueOnly).toContain('Findings in front of you (1):');
+        expect(issueOnly).not.toContain('unresolved issue');
+
+        // (b) A Proposal with no issue anywhere to wait for. An open PROPOSAL is not an open ISSUE — the
+        //     predicate counts rows whose KIND is issue (`records.ts:isOpenIssueFinding`).
+        const proposalOnly = briefFor((store, storyId) => [
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-11',
+                title: 'open the book on the lie instead of the truth',
+                evidence: 'chapter_1 sec_1: "he told them the truth"',
+                cost: 'major',
+                kind: 'proposal'
+            }).id
+        ]);
+
+        expect(proposalOnly).toContain('Findings in front of you (1):');
+        expect(proposalOnly).not.toContain('unresolved issue');
+
+        // (c) THE RELEASE CASE. The Story's only issue is `fixed`, which is one of the two states that
+        //     CLOSES one (`records.ts:CLOSED_FINDING_STATES`), so the proposal beside it is approvable and
+        //     the heading has no business carrying the warning.
+        const released = briefFor((store, storyId) => [
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-6',
+                title: 'the survey date is wrong in chapter 3',
+                evidence: 'chapter_3 sec_2: "the 1911 survey"',
+                cost: 'minor',
+                state: 'fixed'
+            }).id,
+            seedFinding(store, storyId, {
+                criterion_ref: 'C-11',
+                title: 'open the book on the lie instead of the truth',
+                evidence: 'chapter_1 sec_1: "he told them the truth"',
+                cost: 'major',
+                kind: 'proposal'
+            }).id
+        ]);
+
+        expect(released).toContain('Findings in front of you (2):');
+        expect(released).not.toContain('unresolved issue');
     });
 
     it('gives a Summary Writer the licence to invent what the Seed leaves silent, and withholds it from the other units (T3)', () => {
@@ -626,15 +757,15 @@ describe('brief — S-2 assembly', () => {
         expect(chapterText).not.toContain('Invention is the job here');
     });
 
-    it('asks only for the Summary-targeted verdict when a Reader review carries no draft ref (defensive, S-2)', () => {
+    it('asks only for the Summary-targeted verdict when a Critic review carries no draft ref (defensive, S-2)', () => {
         const { store } = seedStore();
 
-        seedReaderTemplate(store);
+        seedCriticTemplate(store);
 
         const item = itemFor({
             id: 'wi_review_summary_0',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' }
         });
 
@@ -651,16 +782,16 @@ describe('brief — S-2 assembly', () => {
         expect(text).not.toContain('against the revision named above');
     });
 
-    it('names no invented artifact id when a Reader review carries no unit ref (defensive, S-2)', () => {
+    it('names no invented artifact id when a Critic review carries no unit ref (defensive, S-2)', () => {
         const store = Store.empty();
 
         seedStory(store, { phase: 'summary' });
-        seedReaderTemplate(store);
+        seedCriticTemplate(store);
 
         const item = itemFor({
             id: 'wi_review_summary_0',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: undefined
         });
 
@@ -685,7 +816,7 @@ describe('brief — S-2 assembly', () => {
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
         expect(text).toContain(
-            'You are a checker: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b).'
+            'You are a reader: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b).'
         );
     });
 
@@ -704,7 +835,7 @@ describe('brief — S-2 assembly', () => {
             'Tasks this job must clear (1):\n- task_0 [open, writer-prose, p1, C-4, 0 attempt(s)]: pay off the 1911 map in chapter 3'
         );
         expect(text).toContain(
-            'SELECTED IDEAS THIS RUN MUST ABSORB (D-29 — selected, not yet written in)\n- idea_0 (direction, by reader-continuity, unverified)\nthe steeple bell should ring under the water'
+            'SELECTED IDEAS THIS RUN MUST ABSORB (D-29 — selected, not yet written in)\n- idea_0 (direction, by critic-continuity, unverified)\nthe steeple bell should ring under the water'
         );
     });
 
@@ -798,8 +929,8 @@ describe('brief — S-2 assembly', () => {
             {
                 story_id: 'story_0',
                 work_item_ref: 'work_1',
-                template_ref: 'checker-consistency',
-                role: 'checker',
+                template_ref: 'reader-consistency',
+                role: 'reader',
                 session_ref: '',
                 state: 'spawning',
                 started_at: new Date().toISOString(),
@@ -868,8 +999,8 @@ describe('brief — S-2 assembly', () => {
             {
                 story_id: 'story_0',
                 work_item_ref: 'work_1',
-                template_ref: 'checker-consistency',
-                role: 'checker',
+                template_ref: 'reader-consistency',
+                role: 'reader',
                 session_ref: '',
                 state: 'spawning',
                 started_at: new Date().toISOString(),
@@ -1189,8 +1320,8 @@ describe('SUMMARY PHRASE — the brief gives a phase-① pass the group ids it h
             id: 'work_2',
             storyId: 'story_0',
             kind: 'check_unit',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'summary', ref: 'summary_0' }
         };
     }
@@ -1200,7 +1331,7 @@ describe('SUMMARY PHRASE — the brief gives a phase-① pass the group ids it h
         const item = reviewItem();
         const { text } = buildBrief(group.store, item, resolveHarness(group.store, item));
 
-        // The exact line, in catalog order, in the SAME `key=id` shape `checker.ts:raiseFinding` prints
+        // The exact line, in catalog order, in the SAME `key=id` shape `reader.ts:raiseFinding` prints
         // in its R3 refusal — the pair the model copies has to be the pair the engine wrote.
         const pairs = group.groups.map((entry) => `${entry.key}=${entry.id}`).join(', ');
 

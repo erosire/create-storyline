@@ -95,7 +95,7 @@ describe('DELETE /stories/:id — the Story and its harness go together (P1, §1
             {
                 story_id: storyId,
                 revision_ref: draft.id,
-                reader: 'reader',
+                critic: 'critic',
                 issues: [],
                 valid: true
             },

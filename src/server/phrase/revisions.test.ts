@@ -7,6 +7,10 @@
 // reader of the legacy `summaries` record sees the current text for the groups that were written and
 // nothing else moved.
 //
+// THE LOCK LEG: `installGroupRevisions` refuses a locked group outright (the op is locks.ts) — a
+// locked group is the fixed point the other groups get revised against, so nothing installs over it,
+// whether it was locked before the install or by another writer in the middle of one.
+//
 // THE FIXTURE: `run/mock.ts:seedStory` + `ensurePhraseCatalog` with `recordUidAt`, so every group id
 // in the expectations below is a literal the reader can point at.
 import { describe, expect, it } from 'vitest';
@@ -14,6 +18,7 @@ import { Store } from '../store';
 import { AUTHOR_ATTR, seedStory } from '../run/mock';
 import { recordUidAt } from '../store/persist';
 import { ensurePhraseCatalog, importLegacySummary } from './catalog';
+import { lockPhraseGroup } from './locks';
 import {
     groupRevisionHistory,
     groupRevisionVector,
@@ -213,7 +218,7 @@ describe('a group review answer is refused unless every issue names real groups 
                 location: 'the Ending',
                 quote: 'She floods the valley on purpose.',
                 detail: 'The Ending answers a promise the Promise never makes.',
-                // The double `ending.id` is collapsed; the reader's own text is untouched (D-15).
+                // The double `ending.id` is collapsed; the critic's own text is untouched (D-15).
                 group_refs: [ending.id, premise.id]
             }
         ]);
@@ -527,3 +532,144 @@ describe('the mirror on its own (R6)', () => {
         );
     });
 });
+
+describe('a locked group is refused by the install, whole batch and before the first write (the group lock)', () => {
+    /** The exact refusal `installGroupRevisions` raises for a locked `premise` at revision 1. */
+    const LOCKED_REFUSAL =
+        "installGroupRevisions: premise is locked at revision 1 by author — a locked group's text is the fixed point the other groups are revised against, so nothing installs over it until the Author unlocks it";
+
+    /** The persisted row id of one catalog group — the address the install CASes against. */
+    const idOf = (store: Store, key: string) => store.phraseGroups.list().find((row) => row.key === key)!.id;
+
+    /** One group row as the lock and the text see it. */
+    const rowOf = (store: Store, key: string) => {
+        const group = store.phraseGroups.require(idOf(store, key));
+
+        return {
+            content: group.content,
+            revision: group.revision,
+            updated_by: group.updated_by,
+            locked: group.locked,
+            locked_revision: group.locked_revision,
+            locked_by: group.locked_by
+        };
+    };
+
+    /** Premise and Promise at revision 1; Tone and Ending still unwritten. */
+    function twoWrittenGroups() {
+        const book = seedBook();
+
+        installGroupRevisions(
+            book.store,
+            book.story,
+            [{ group: groupOf(book.groups, 'premise'), content: 'A cartographer walks into the drowned valley.' }],
+            AUTHOR_ATTR,
+            { runRef: 'run_0' }
+        );
+        installGroupRevisions(
+            book.store,
+            book.story,
+            [{ group: groupOf(book.groups, 'promise'), content: 'The map and the territory reconcile in the last chapter.' }],
+            AUTHOR_ATTR,
+            { runRef: 'run_0' }
+        );
+
+        return book;
+    }
+
+    it('refuses a locked target with the sentence the Author reads, and moves nothing', () => {
+        const { store, story, phrase } = twoWrittenGroups();
+
+        lockPhraseGroup(store, story, idOf(store, 'premise'), AUTHOR_ATTR, { actor: 'author', at: '2026-11-25T10:00:00.000Z' });
+
+        const rows = revisionRowOf(store);
+        const groups = store.phraseGroups.list();
+        const events = store.journal.length;
+
+        expect(() =>
+            installGroupRevisions(
+                store,
+                story,
+                [{ group: store.phraseGroups.require(idOf(store, 'premise')), content: 'A cartographer walks in — the rewrite nobody asked for.' }],
+                AUTHOR_ATTR,
+                { runRef: 'run_1' }
+            )
+        ).toThrowError(new Error(LOCKED_REFUSAL));
+
+        // Defense in depth means the refusal costs the book NOTHING: no revision row, no archived row,
+        // no group row, no Overview bump, no mirror write, no journal line.
+        expect(revisionRowOf(store)).toEqual(rows);
+        expect(store.phraseGroups.list()).toEqual(groups);
+        expect(store.phrases.require(phrase.id).revision).toBe(2);
+        expect(store.journal).toHaveLength(events);
+    });
+
+    it('refuses a stale Writer result whose copy of the row predates the lock, and installs none of its siblings', () => {
+        const { store, story } = twoWrittenGroups();
+        // The batch carries the row as the sweep read it — before the Author locked it mid-pass. A check
+        // on `entry.group` alone would wave this through, which is the stale-Writer hole the lock closes.
+        const stalePremise = store.phraseGroups.require(idOf(store, 'premise'));
+
+        lockPhraseGroup(store, story, stalePremise.id, AUTHOR_ATTR, { actor: 'author', at: '2026-11-25T10:00:00.000Z' });
+
+        const rows = revisionRowOf(store);
+
+        expect(() =>
+            installGroupRevisions(
+                store,
+                story,
+                [
+                    { group: store.phraseGroups.require(idOf(store, 'promise')), content: 'The reconciliation is paid in the last chapter.' },
+                    { group: stalePremise, content: 'A cartographer walks into the valley twice.' }
+                ],
+                AUTHOR_ATTR,
+                { runRef: 'run_1' }
+            )
+        ).toThrowError(new Error(LOCKED_REFUSAL));
+
+        // R2's atomicity through the lock: the unlocked sibling in the same batch installed NOTHING, so
+        // the Author's Overview is the one they had, not a half-batch nobody journalled.
+        expect(rowOf(store, 'promise')).toEqual({
+            content: 'The map and the territory reconcile in the last chapter.',
+            revision: 1,
+            updated_by: 'run_0',
+            locked: undefined,
+            locked_revision: undefined,
+            locked_by: undefined
+        });
+        expect(revisionRowOf(store)).toEqual(rows);
+    });
+
+    it('installs every unlocked entry of a book that has a locked sibling elsewhere', () => {
+        const { store, story } = twoWrittenGroups();
+
+        lockPhraseGroup(store, story, idOf(store, 'premise'), AUTHOR_ATTR, { actor: 'author', at: '2026-11-25T10:00:00.000Z' });
+
+        const install = installGroupRevisions(
+            store,
+            story,
+            [
+                { group: store.phraseGroups.require(idOf(store, 'promise')), content: 'The reconciliation is paid in the last chapter.' },
+                { group: store.phraseGroups.require(idOf(store, 'tone')), content: 'Plain, cold, precise.' }
+            ],
+            AUTHOR_ATTR,
+            { runRef: 'run_1' }
+        );
+
+        // The lock stops its own group and nothing else: the loop keeps revising the rest for consistency.
+        expect(install.installed.map((row) => [row.group_key, row.number, row.state])).toEqual([
+            ['promise', 2, 'latest'],
+            ['tone', 1, 'latest']
+        ]);
+        expect(install.archived.map((row) => [row.group_key, row.number, row.state])).toEqual([['promise', 1, 'archived']]);
+        expect(rowOf(store, 'premise')).toEqual({
+            content: 'A cartographer walks into the drowned valley.',
+            revision: 1,
+            updated_by: 'run_0',
+            locked: true,
+            locked_revision: 1,
+            locked_by: 'author'
+        });
+    });
+});
+

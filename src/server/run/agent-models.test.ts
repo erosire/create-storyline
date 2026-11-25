@@ -54,21 +54,21 @@ describe('agent models — the global roster (U-8, T-6b)', () => {
     it('clears one choice with null and ignores malformed settings instead of failing every run', () => {
         const store = Store.empty();
 
+        setAgentModel(store, 'critic', 'critic-model');
         setAgentModel(store, 'reader', 'reader-model');
-        setAgentModel(store, 'checker', 'checker-model');
-        setAgentModel(store, 'reader', null);
-
-        expect(agentModelChoices(store)).toEqual({ checker: 'checker-model' });
-
-        store.setSetting(AGENT_MODELS_SETTING, { writer: '   ', editor: 42, reader: 'reader-model' });
+        setAgentModel(store, 'critic', null);
 
         expect(agentModelChoices(store)).toEqual({ reader: 'reader-model' });
+
+        store.setSetting(AGENT_MODELS_SETTING, { writer: '   ', editor: 42, critic: 'critic-model' });
+
+        expect(agentModelChoices(store)).toEqual({ critic: 'critic-model' });
     });
 
     it('knows all five employee kinds and refuses an unknown one at the boundary', () => {
         // `researcher` is the Phase-1 pipeline's fifth employee (§3.1); the list it is known by is
         // `ROLE_KINDS`, so the boundary test and the model-choice map cannot drift apart.
-        expect(['writer', 'editor', 'reader', 'checker', 'researcher'].every(isAgentKind)).toBe(true);
+        expect(['writer', 'editor', 'critic', 'reader', 'researcher'].every(isAgentKind)).toBe(true);
         expect(isAgentKind('explorer')).toBe(false);
         expect(isAgentKind('')).toBe(false);
     });

@@ -1,6 +1,6 @@
 // Phase ①'s Summary completeness rule, in one place.
 //
-// A Writer's draft reaches the Readers only when every prose block of §4.2 is present: a draft
+// A Writer's draft reaches the Critics only when every prose block of §4.2 is present: a draft
 // that names a premise but not its tone cannot be read as the Overview the whole chain is judged
 // against. The tool layer uses this to say what a partial draft is missing, the loop uses it to
 // decide whether a closed Writer run leaves a `pending` draft or promotes it to `drafted`, and the

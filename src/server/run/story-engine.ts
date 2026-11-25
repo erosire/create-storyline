@@ -1,7 +1,7 @@
 // The Story runtime built on the @underload/harness ENGINE only.
 //
 // VOCABULARY (V-1). The five profiles this file configures are EMPLOYEES — the standing roster
-// entries Writer, Editor, Reader, Checker and Researcher. An employee is not an agent; it becomes
+// entries Writer, Editor, Critic, Reader and Researcher. An employee is not an agent; it becomes
 // one only while a thread is executing. `engine.agents[kind]` is the employee's engine profile,
 // and every Run opens one THREAD under it. A template role chooses which employee kind takes a
 // job; the template itself is neither an employee nor an agent (D-38).
@@ -11,7 +11,7 @@
 // every host — the agent loop, the tool-call protocol, transcript commitment, retries and thread
 // lifecycle — while Storyline owns everything that is specific to the Author: the book, the
 // loop, the permission rows, the criteria and the phases. So Storyline builds ONE harness per
-// Story with the same five employees every story uses (writer, editor, reader, checker,
+// Story with the same five employees every story uses (writer, editor, critic, reader,
 // researcher), and each dispatched Run opens a thread inside that story's harness.
 //
 // ISOLATION. Two stories never share a Harness instance, a tool registry, a transcript or a
@@ -69,7 +69,7 @@ import {
  * `researcher` is the Phase-1 addition (documents/phase-1-research-pipeline.md §3.1): it owns a
  * dispatched Work Item (V-2), reads everything, and writes only `knowledge`.
  */
-const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'reader', 'checker', 'researcher'];
+const STORY_AGENT_KINDS: readonly RoleKind[] = ['writer', 'editor', 'critic', 'reader', 'researcher'];
 
 /**
  * R2/R3 — the harness engine's CONTEXT plugins this host runs. Both are shipped built-ins:
@@ -106,8 +106,8 @@ const STORYLINE_BUILTIN_PLUGINS = BUILTIN_PLUGINS.filter(
 export const STORY_AGENT_RANKS: Record<RoleKind, AgentRank> = {
     writer: 'A',
     editor: 'A',
+    critic: 'A',
     reader: 'A',
-    checker: 'A',
     researcher: 'A'
 };
 
@@ -359,13 +359,13 @@ export const STORY_AGENT_CATALOGUE: readonly StoryAgentCatalogueEntry[] = [
         description: 'Chooses between competing drafts, verifies Ideas and findings, and writes no prose of its own.'
     },
     {
-        kind: 'reader',
-        title: 'Reader',
+        kind: 'critic',
+        title: 'Critic',
         description: 'Reads as an audience, rates what it reads, and proposes Ideas and findings. Never writes.'
     },
     {
-        kind: 'checker',
-        title: 'Checker',
+        kind: 'reader',
+        title: 'Reader',
         description: 'Judges criteria, files findings and tasks, and reports to the Author. Writes no artifacts.'
     },
     {
@@ -832,7 +832,7 @@ export class StoryHarness {
         const agentKey = spec.roleKind;
         const session = this.session(spec.phase);
 
-        // The FOUR employee kinds are the story's fixed roster (writer/editor/reader/checker),
+        // The FOUR employee kinds are the story's fixed roster (writer/editor/critic/reader),
         // created with the harness and shared by every Story that uses the same kinds. A Run opens
         // a THREAD on its kind's engine profile rather than minting a new profile: the employee is
         // the stable identity, while the agent exists only for this thread's lifetime and the

@@ -1,5 +1,5 @@
 /**
- * Acceptance for the findings half of the loop — §12 rows W4e/W4f and decisions D-33, D-34, D-34a,
+ * Acceptance for the findings half of the loop — §12 rows W4e/W4f and decisions D-33, D-33d, D-34, D-34a,
  * D-35, D-35b, D-41c, L-25b, L-16a.
  *
  * The dial (`auto_approve`, §4.1) is the whole difference between the three fixtures below, so each one
@@ -8,8 +8,11 @@
  *   B. the dial does not cover it — the row is a PROMPT, and `approveFinding` is what starts work (D-34);
  *   C. the Editor disputes it — the row is neither (D-33), and the Story still drains (D-35b).
  *
- * `checkerFinds` files the defect from the checker job, which is what §8's catalogue does for a real
- * checker; the target is the unit that was under judgment, so the fix work the engine creates is aimed
+ * A FOURTH describe covers D-33d from the loop's side: the sweep is the one approval funnel nobody
+ * clicks, so it is where "issues are in focus" has to hold even when nothing in the UI is watching.
+ *
+ * `readerFinds` files the defect from the reader job, which is what §8's catalogue does for a real
+ * reader; the target is the unit that was under judgment, so the fix work the engine creates is aimed
  * at a real artifact (L-11a) rather than at the Story row.
  *
  * Every value asserted below is a row in the store. Run values come from the rig's fix runs, not from
@@ -18,6 +21,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRig, walkToChapters, walkToDrain, type Rig } from './mock';
+import type { SweepReport } from './types';
 
 /** The finding rows as one string each: criterion, target, state, cost, who approved, and sightings. */
 function ladder(rig: Rig): string[] {
@@ -65,13 +69,23 @@ function queueRows(rig: Rig): string[] {
         );
 }
 
+/**
+ * What the DIAL approved on one sweep, straight from the report (L-1: the sweep decides, and its report
+ * is what the Author reads). `D-33d` asserts against this rather than the rows alone, because the whole
+ * claim is about what the sweep DID on that pass — a row that is merely still `confirmed` proves less
+ * than a report that says it was skipped.
+ */
+function autoApprovedOf(report: SweepReport, storyId: string): string[] {
+    return report.stories.find((row) => row.story_id === storyId)?.auto_approved ?? [];
+}
+
 /** The one scripted defect every fixture below files. */
 const DEFECT = { cost: 'major' as const, criterion: 'C-13', title: 'the map contradicts the 1911 survey' };
 
 describe('D-35 / W4f — a finding the dial covers becomes work with no author tap', () => {
-    /** Phases ① and ② judged, with the covered defect filed at each unit the checker reached. */
+    /** Phases ① and ② judged, with the covered defect filed at each unit the reader reached. */
     async function worked() {
-        const rig = await createRig({ story: { chapter_count: 2 }, crew: { checkerFinds: [DEFECT] } });
+        const rig = await createRig({ story: { chapter_count: 2 }, crew: { readerFinds: [DEFECT] } });
 
         await walkToChapters(rig, 2);
 
@@ -83,8 +97,8 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         // D-35: the dial is ['critical','major'], so a major defect is already authorised work. The
         // attribution is `auto`, never `author` (D-41c keeps the two decisions distinguishable).
-        // Phase ① files nothing here: the deep-review Reader is a Reader, not the checker whose
-        // `checkerFinds` fixture this is (rig/mock.ts), so the two plotline rows are the whole ladder
+        // Phase ① files nothing here: the deep-review Critic is a Critic, not the reader whose
+        // `readerFinds` fixture this is (rig/mock.ts), so the two plotline rows are the whole ladder
         // this walk reaches.
         const row = rig.store.findings.list().find((finding) => finding.target_ref === 'plotline_0');
 
@@ -100,7 +114,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
         expect(row?.fingerprint).not.toBe('');
 
         // D-34: the approval is what creates the Writer work, aimed at the artifact the finding named.
-        // Phase ②'s checker filed the same defect against each plotline, and each row got its own task.
+        // Phase ②'s reader filed the same defect against each plotline, and each row got its own task.
         expect(taskRows(rig)).toEqual(['task_0:fix:done:finding_0:1', 'task_1:fix:done:finding_1:1']);
         expect(rig.store.tasks.get('task_0')?.detail).toContain('C-13 on plotline_0');
 
@@ -114,7 +128,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
     it('aims the fix at the unit that was under judgment, not at the Story row (L-11a, T-12)', async () => {
         const rig = await worked();
 
-        // Phase ②'s checker filed the same defect against each plotline, so each one got its own task
+        // Phase ②'s reader filed the same defect against each plotline, so each one got its own task
         // against its own unit. A fix task that could not name an artifact would be `blocked` (T-12),
         // and none of these are.
         expect(
@@ -171,7 +185,7 @@ describe('D-35 / W4f — a finding the dial covers becomes work with no author t
 
         await rig.run(30);
 
-        // The checker re-files the same fingerprint on chapter 1 every pass. §8's dedupe
+        // The reader re-files the same fingerprint on chapter 1 every pass. §8's dedupe
         // (server/tools/artifacts.ts:708-712) matches rows that are NOT `fixed`, so a re-claim
         // after a fix opens a FRESH row instead of resurrecting the closed one (L-16a, D-16).
         // The two untouched rows are the first sighting and one same-fingerprint repeat.
@@ -220,7 +234,7 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
     async function parked() {
         const rig = await createRig({
             story: { chapter_count: 2, auto_approve: ['critical'] },
-            crew: { checkerFinds: [DEFECT] }
+            crew: { readerFinds: [DEFECT] }
         });
 
         await walkToDrain(rig, 2);
@@ -339,12 +353,12 @@ describe('D-34 / D-35b — a finding outside the dial is a prompt until the Auth
 });
 
 describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold the drain', () => {
-    /** The same Story, with the Editor ruling against the checker on every claim. */
+    /** The same Story, with the Editor ruling against the reader on every claim. */
     async function disputed() {
         const rig = await createRig({
             story: { chapter_count: 2 },
             crew: {
-                checkerFinds: [DEFECT],
+                readerFinds: [DEFECT],
                 verdictFor: () => ({
                     verdict: 'disputed' as const,
                     evidence: 'the survey agrees with the map on the page'
@@ -401,5 +415,114 @@ describe('D-33 / D-35b — a disputed claim is not a defect, and does not hold t
             cost: 'critical',
             state: 'approved'
         });
+    });
+});
+
+// ── D-33d in the loop: the dial is not a side door around issues-in-focus ────────────────────────
+//
+// WHY THIS ROW EXISTS: D-33d is enforced in four places, and the dial sweep is the one nobody clicks.
+// The sweep used to approve every `confirmed` row whose cost the dial covered, kind-blind, so a Story with
+// five confirmed defects and one `major` PROPOSAL spent the round's Writer capacity on the suggestion —
+// the exact failure the Critic-side rule (D-33c) prevents at filing time, arriving from the other side.
+// The sweep cannot refuse the way the tool does (one commit over the whole Story's tray: a throw would
+// abort the batch and strand the issues), so it SKIPS: the proposal stays `confirmed`, and the report
+// says what it did.
+describe('D-33d — the dial approves the issues before it approves a proposal', () => {
+    /**
+     * One confirmed ISSUE and one confirmed PROPOSAL on the same unit at the same cost, on a Story whose
+     * dial covers that cost. Seeded straight into the store rather than filed through the crew: the rule
+     * is about the ROWS the sweep reads, and the two rows are identical except for `kind` — anything else
+     * and a passing test could be proving something about cost or target instead of about D-33d.
+     */
+    async function tray() {
+        const rig = await createRig({ story: { chapter_count: 2 } });
+
+        for (const kind of ['issue', 'proposal'] as const) {
+            rig.store.findings.create(
+                {
+                    story_id: rig.storyId,
+                    target_ref: 'plotline_0',
+                    criterion_ref: 'C-13',
+                    title: kind === 'issue' ? 'the map contradicts the 1911 survey' : 'open the book on the ridge',
+                    evidence: 'C-13 says the survey is quoted; it is not.',
+                    cost: 'major',
+                    kind,
+                    fingerprint: `fp_d33d_${kind}`,
+                    state: 'confirmed',
+                    seen_count: 1
+                },
+                { why: 'seed: the dial sweep gate (D-33d)' }
+            );
+        }
+
+        return rig;
+    }
+
+    /** `[id]|kind:state:who` — the two columns this rule turns on, plus what moved them. */
+    const trayRows = (rig: Rig): string[] =>
+        rig.store.findings
+            .list()
+            .filter((finding) => finding.story_id === rig.storyId)
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((finding) => `${finding.id}|${finding.kind ?? 'issue'}:${finding.state}:${finding.approved_by ?? 'none'}`);
+
+    it('approves the issue and leaves the proposal confirmed — and reports only what it did', async () => {
+        const rig = await tray();
+
+        const report = await rig.step();
+
+        // The sweep's own report is the honest witness here: a skipped row is ABSENT from `auto_approved`
+        // rather than named in it, which is the shape a batch skip has to have.
+        expect(autoApprovedOf(report, rig.storyId)).toEqual(['finding_0']);
+        expect(trayRows(rig)).toEqual([
+            'finding_0|issue:approved:auto',
+            'finding_1|proposal:confirmed:none'
+        ]);
+
+        // And the skip is not a silent loss: the proposal is still `confirmed`, so U-10's queue, the
+        // Author's tray and the next sweep all still see it. (`trayRows` above is what pins `approved_by`
+        // — an untouched row simply has no value for it, which `toMatchObject` cannot state.)
+        expect(rig.store.findings.require('finding_1')).toMatchObject({
+            kind: 'proposal',
+            state: 'confirmed',
+            cost: 'major',
+            target_ref: 'plotline_0'
+        });
+    });
+
+    it('the next sweep approves the proposal the moment the issue stops being an issue', async () => {
+        const rig = await tray();
+
+        await rig.step();
+
+        // `approved` is NOT a release: the issue is now the loop's work, and work that has not landed is
+        // still an unresolved defect. Closing it (`fixed`) is what releases the proposal.
+        const issue = rig.store.findings.require('finding_0');
+
+        rig.store.findings.update(
+            'finding_0',
+            { state: 'fixed' },
+            { why: 'seed: the repair landed (D-33d)' },
+            [{ id: issue.id, rev: issue.rev }]
+        );
+
+        const second = await rig.step();
+
+        expect(autoApprovedOf(second, rig.storyId)).toEqual(['finding_1']);
+        expect(trayRows(rig)).toEqual(['finding_0|issue:fixed:auto', 'finding_1|proposal:approved:auto']);
+    });
+
+    it('an approved issue still holds the proposal, so only `fixed`/`discarded` release it', async () => {
+        const rig = await tray();
+
+        await rig.step();
+
+        // A second sweep with the issue merely `approved` — work promised, not work done — must not move
+        // the proposal either. This is the case the dial used to get wrong on its own: the row the sweep
+        // had already handled reads as "moving" and the suggestion looked next in line.
+        const again = await rig.step();
+
+        expect(autoApprovedOf(again, rig.storyId)).toEqual([]);
+        expect(trayRows(rig)).toEqual(['finding_0|issue:approved:auto', 'finding_1|proposal:confirmed:none']);
     });
 });

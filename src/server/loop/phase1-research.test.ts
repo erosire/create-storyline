@@ -51,7 +51,7 @@ function samplePromptOf(rig: Rig): string {
 
 describe('§6.4 steps 1-2 — the Seed is structured and researched before anything is sampled', () => {
     it('runs structure_seed, then research, and samples only once both have closed', async () => {
-        const rig = await createRig({ seedStructured: false, summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ seedStructured: false, summarySampling: 1, summaryCritics: 1 });
         const story = rig.story();
 
         // Gate 1: the Editor's structuring pass is the ONLY job, and it is priority 0.
@@ -115,7 +115,7 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
     });
 
     it('re-arms the structuring when the Seed changes, and resets the sampling round (§3.3, P5, §6.6)', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -153,7 +153,7 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
         // the DEFAULT_ASSIGNMENT order decides whether a verification runs on the general Editor's
         // prompt or on the Seed structurer's (the wart this pins). The structure pass is the one
         // phase-① Editor job with an explicit `templateRef`, so it must be unaffected by the order.
-        const fresh = await createRig({ seedStructured: false, summarySampling: 1, summaryReaders: 1 });
+        const fresh = await createRig({ seedStructured: false, summarySampling: 1, summaryCritics: 1 });
         const structure = generateWork(fresh.store, fresh.story(), {
             at: new Date().toISOString(),
             phase: 'summary'
@@ -162,7 +162,7 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
         expect(structure?.item.templateRef).toBe('editor-seed-structure');
 
         // A phase-① verification is unbound: `verify_findings` must resolve to `editor-general`.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -190,7 +190,7 @@ describe('§6.4 steps 1-2 — the Seed is structured and researched before anyth
 
 describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per sample', () => {
     it('dispatches one structured sample at a time, then M screening passes for each drafted sample', async () => {
-        const rig = await createRig({ summarySampling: 3, summaryReaders: 2 });
+        const rig = await createRig({ summarySampling: 3, summaryCritics: 2 });
 
         expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_1']);
         expect((await rig.step()).stories[0].started).toEqual(['wi_sample_summary_0_1_2']);
@@ -244,7 +244,7 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
             toolMode: 'none',
             schema: 'IssueList',
             revisionRef: 'revision_0',
-            templateRef: 'reader-screening'
+            templateRef: 'critic-screening'
         });
 
         await rig.run();
@@ -266,8 +266,8 @@ describe('§6.4 steps 3-4 — N no-tool samples, then M no-tool screens per samp
             'wi_screen_revision_2_2'
         ]);
         expect(
-            rig.store.sampleReviews.list().map((review) => `${review.revision_ref}:${review.reader}:${review.valid}`)
-        ).toEqual(['revision_0:reader:true', 'revision_0:reader:true']);
+            rig.store.sampleReviews.list().map((review) => `${review.revision_ref}:${review.critic}:${review.valid}`)
+        ).toEqual(['revision_0:critic:true', 'revision_0:critic:true']);
     });
 });
 
@@ -277,7 +277,7 @@ describe('§6.5/§6.6 — the deterministic selection, in one commit', () => {
         // high. The winner is therefore not the first draft — the ranking, not creation order, decides.
         const rig = await createRig({
             summarySampling: 3,
-            summaryReaders: 2,
+            summaryCritics: 2,
             crew: {
                 screenAnswer: ({ revisionId }) =>
                     revisionId === 'revision_0'
@@ -413,7 +413,7 @@ describe('§6.4 step 3 — a failed sample costs an attempt, not the round', () 
 
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 sampleAnswer: () => {
                     calls += 1;
@@ -449,7 +449,7 @@ describe('§6.4 step 3 — a failed sample costs an attempt, not the round', () 
     it('escalates to the Author once the round has spent its retry allowance with no sample', async () => {
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { sampleAnswer: () => 'not json' }
         });
 
@@ -485,8 +485,8 @@ describe('§6.4 step 3 — a failed sample costs an attempt, not the round', () 
 });
 
 describe('§6.4 step 6 — the deep review runs on the SELECTED revision, with tools', () => {
-    it('points every Reader pass at the winner, rotating only the four review angles', async () => {
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 3 });
+    it('points every Critic pass at the winner, rotating only the four review angles', async () => {
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 3 });
 
         await rig.run();
 
@@ -499,18 +499,18 @@ describe('§6.4 step 6 — the deep review runs on the SELECTED revision, with t
         ]);
         expect(reviews.map((item) => item.revisionRef)).toEqual(['revision_0', 'revision_0', 'revision_0']);
         // §14 item 10's four angles, and NEVER the one-turn screening template: a deep-review pass
-        // holds the tool catalogue, and `reader-screening` is the no-tool mode.
+        // holds the tool catalogue, and `critic-screening` is the no-tool mode.
         expect(reviews.map((item) => item.templateRef)).toEqual([
-            'reader-genre',
-            'reader-plausibility',
-            'reader-audience'
+            'critic-genre',
+            'critic-plausibility',
+            'critic-audience'
         ]);
-        expect(reviews.map((item) => item.roleName)).toEqual(['reader', 'reader', 'reader']);
+        expect(reviews.map((item) => item.roleName)).toEqual(['critic', 'critic', 'critic']);
         expect(reviews.map((item) => item.toolMode ?? 'tools')).toEqual(['tools', 'tools', 'tools']);
     });
 
     it('reaches the phase sign-off on a round whose deep review found nothing', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -531,7 +531,7 @@ describe('§6.4 step 6 — the deep review runs on the SELECTED revision, with t
 
 describe('§6.8 — the refinement loop: a fix task arms round 2, whose selection consumes it', () => {
     it('samples round 2 from the base revision and the open tasks, then marks the task done', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 

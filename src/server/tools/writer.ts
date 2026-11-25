@@ -215,7 +215,7 @@ const editSummary: ToolDefinition = {
                     state: revision.state,
                     competing: drafts.length,
                     current_rev: existing.rev,
-                    next: `The draft stays pending until this Writer run closes; then Readers review it and an Editor selects between the completed drafts with listRevisions + selectRevision. The Summary still holds the previous text.`
+                    next: `The draft stays pending until this Writer run closes; then Critics review it and an Editor selects between the completed drafts with listRevisions + selectRevision. The Summary still holds the previous text.`
                 },
                 existing.rev,
                 pending === undefined
@@ -720,8 +720,8 @@ const editChapter: ToolDefinition = {
                       }
                     : {
                           // T-6c: the hint names a tool that exists. The Writer cannot verify its own
-                          // work; a checker run does that and reports with `submitVerdict`.
-                          next: 'Keep working the queue — a checker run judges this chapter and reports with submitVerdict.'
+                          // work; a reader run does that and reports with `submitVerdict`.
+                          next: 'Keep working the queue — a reader run judges this chapter and reports with submitVerdict.'
                       })
             },
             written.rev,
@@ -805,7 +805,7 @@ const deleteChapter: ToolDefinition = {
         const ref = artifactRef('chapters', chapter.id);
         const why = whyOf(ctx);
 
-        // Checked before the commit for a cheap refusal, and again inside it, because a checker
+        // Checked before the commit for a cheap refusal, and again inside it, because a reader
         // can raise a finding between the two (D-16).
         if (hasOpenFindings(ctx.store, ctx.storyId, ref)) {
             throw new ToolRefusal(

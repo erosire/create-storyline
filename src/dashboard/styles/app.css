@@ -1124,6 +1124,28 @@
     color: var(--halt);
 }
 
+/* T3 — the finding's claim type on a queue row, by the same chip vocabulary as the cost beside it (border in
+   the chip's own colour, the word itself carrying the meaning so hue is only speed). The queue is the one
+   surface with a per-item Approve/Discard on every row, so "this is broken" versus "this could be better" is
+   the decision the chip exists to make legible. */
+.kind-chip {
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.kind-chip[data-kind='issue'] {
+    color: var(--dim);
+}
+
+.kind-chip[data-kind='proposal'] {
+    color: var(--accent-2);
+}
+
 .queue-item__actions {
     display: flex;
     flex-wrap: wrap;
@@ -1707,6 +1729,52 @@
     border-color: var(--line-strong);
     background: var(--halt-bg);
     color: var(--muted);
+}
+
+/* R1 — the lock word on a Summary group's row. It is TEXT (`StoryOutline.tsx:LockMark`), not a glyph, for the
+   same two reasons the state pills above are text: the rail's row is read by a screen reader as its accessible
+   name, and a mark that is only a colour or an icon is invisible in greyscale. It sits directly after the
+   group's title, so a reader scanning the rail hears which sections are settled before any of their counts,
+   and it keeps the chip language of the state pills so the row reads as one line of marks. The facts the rail
+   cannot fit — which revision is settled, and who settled it — ride the row's `title`
+   (`StoryOutline.tsx:lockTooltip`), and the pane's badge is the full statement. */
+.outline-lock {
+    flex: none;
+    padding: 0 5px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--halt-bg);
+    color: var(--text-strong);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* T3 — the Critic's percentage, at the right end of a Summary group's row. The rail is 320px and the number
+   is the thing the eye compares DOWN the list, so the row shows the percentage alone: the direction of travel
+   and the pass it came from ride the row's own `title` (`StoryOutline.tsx:scoreTooltip`), exactly as the
+   finding badge above it says its count and holds the sentence in a tooltip. `flex: none` is the load-bearing
+   declaration — the name span takes `flex: 1`, and a score that could stretch would push the group's title
+   into an ellipsis and make the column unreadable. Tabular figures keep the five rows' digits in one column. */
+.outline-score {
+    flex: none;
+    min-width: 2.6em;
+    text-align: right;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* The phrase header's OVERALL score: the average of every group, one step stronger than the rows it summarises,
+   and never painted on a book the pass has not finished (a group with no score keeps the whole header silent —
+   see `story-contract.ts:phraseOverallScore`). */
+.outline-score--header {
+    color: var(--text-strong);
+    font-size: 10.5px;
 }
 
 /* R6 — the phrase read has not landed: the five groups exist in the contract and none of them has a

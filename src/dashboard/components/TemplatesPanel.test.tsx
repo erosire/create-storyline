@@ -20,7 +20,7 @@ function card(templateId: string): HTMLElement {
         (element) =>
             // The `t-` ids are not printed, so the card is addressed through its crew's name instead.
             element.querySelector('.sv-template-name')?.textContent ===
-            (templateId === 't-chapters' ? 'chapters' : 'core-reader')
+            (templateId === 't-chapters' ? 'chapters' : 'core-critic')
     );
     if (!found) {
         throw new Error(`no template card for ${templateId}`);
@@ -53,7 +53,7 @@ describe('TemplatesPanel — the Author\u2019s crews (U-8, D-17, D-38)', () => {
 
         // U-8a: the writer is visually distinct from the crew that only judges.
         const kinds = Array.from(card('t-chapters').querySelectorAll('.sv-role-kind')).map((node) => node.textContent);
-        expect(kinds).toEqual(['writer', 'editor', 'reader']);
+        expect(kinds).toEqual(['writer', 'editor', 'critic']);
         expect(card('t-chapters').querySelector('.sv-kind-writer')!.className).toContain('sv-kind-writer');
         expect(card('t-chapters').querySelector('.sv-role-writer')).toBeTruthy();
 
@@ -121,7 +121,7 @@ describe('TemplatesPanel — the Author\u2019s crews (U-8, D-17, D-38)', () => {
 
         // D-38: agents per role, with `merge` as the least-lossy default once a role is a panel.
         // Every role row carries its own 'Set agents' button, so the writer row is the scope —
-        // the assertion is about the writer dial, not the editor's or the reader's.
+        // the assertion is about the writer dial, not the editor's or the critic's.
         const writerRow = card('t-chapters').querySelector('.sv-role-writer') as HTMLElement;
         const writerAgents = writerRow.querySelector('#sv-agents-t-chapters\\:0') as HTMLInputElement;
         expect(writerAgents.value).toBe('3');
@@ -146,8 +146,8 @@ describe('TemplatesPanel — the Author\u2019s crews (U-8, D-17, D-38)', () => {
                         agents: 1
                     },
                     {
-                        name: 'reader',
-                        kind: 'reader',
+                        name: 'critic',
+                        kind: 'critic',
                         prompt: 'Read for the Goal criteria.',
                         web: true,
                         agents: 2,

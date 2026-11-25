@@ -49,7 +49,7 @@ describe('StoryView — one selected phrase in the content area', () => {
         // U-1c: the status line is the one piece of context outside the pane.
         expect((container.querySelector('.sv-story-status-badge') as HTMLElement).textContent).toBe('needs your pick');
         expect(
-            screen.getByText('The Reader proposed three directions; the Author has not chosen one (D-28).')
+            screen.getByText('The Critic proposed three directions; the Author has not chosen one (D-28).')
         ).toBeTruthy();
         // The fixture Story has a signed Summary, so the review tick is present.
         expect(container.querySelector('.sv-summary-ready')).toBeTruthy();
@@ -81,6 +81,38 @@ describe('StoryView — one selected phrase in the content area', () => {
         rerender(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'findings' }} />);
         expect(screen.getByRole('region', { name: 'Findings' })).toBeTruthy();
         expect(screen.getByText('Act two changes nothing')).toBeTruthy();
+    });
+
+    // T3 — the Findings folder is the desk's whole list at once, open and closed, so it is the surface where
+    // the two claim types most need telling apart: the pane's own heading promises "what is broken, and what
+    // was fixed", and until now a Proposal was indistinguishable from a defect in here. `fixtureFindings()` is
+    // deliberately one of each — an Issue (a chapter contradicting the book's own shape) and a Proposal (a
+    // structural change the Seed never promised) — and the Proposal is the CLOSED row, because the kind has to
+    // survive into the archive for the Author to see what the loop actually did with the claim.
+    //
+    // The chip also has to stay OUTSIDE `.find-tags`: the cost and the state are one unit ("major approved"),
+    // and a third word inside that span would read as a new state the engine never recorded.
+    it('labels the Findings folder’s rows with what each one claims, open and closed (T3)', () => {
+        const view = fixtureView();
+        const harness = fixtureActions();
+
+        render(<StoryView view={view} actions={harness.actions} now={NOW} selection={{ panel: 'findings' }} />);
+
+        const pane = screen.getByRole('region', { name: 'Findings' });
+        const openRow = pane.querySelector('li.find-row') as HTMLElement;
+
+        expect(openRow.querySelector('.sv-finding-kind')?.textContent).toBe('Issue');
+        expect(openRow.querySelector('.find-head')?.firstElementChild?.textContent).toBe('Issue');
+        expect(openRow.querySelector('.find-tags')?.textContent).toBe('majorapproved');
+
+        const closedRow = pane.querySelector('details.find-closed li.find-row') as HTMLElement;
+
+        expect(closedRow.querySelector('.sv-finding-kind')?.textContent).toBe('Proposal');
+        expect(closedRow.querySelector('.sv-finding-kind')?.className).toBe(
+            'sv-finding-kind sv-finding-kind--proposal'
+        );
+        expect(closedRow.querySelector('.find-head')?.firstElementChild?.textContent).toBe('Proposal');
+        expect(closedRow.querySelector('.find-tags')?.textContent).toBe('minorfixed');
     });
 
     it('narrows a phrase to the one entry the rail clicked', () => {
@@ -524,7 +556,7 @@ describe('StoryView — the Accept blocker is never invisible on the revision it
             />
         );
 
-        // 1. THE REVISION THE RAIL OPENED. The same row is listed here, so "No Reader findings on this
+        // 1. THE REVISION THE RAIL OPENED. The same row is listed here, so "No Critic findings on this
         //    revision yet" cannot sit beside the blocker (the reported contradiction) — and the phase gate
         //    is NOT printed on it (R2): a Revision shows its draft and its findings, nothing else.
         expect(document.querySelector('.sv-summary-focus-empty')).toBeNull();
@@ -564,7 +596,7 @@ describe('StoryView — the Accept blocker is never invisible on the revision it
 
         // The Revision keeps its own empty-findings line and carries no phase control (R2).
         expect(container.querySelector('.sv-summary-focus-empty')?.textContent).toBe(
-            'No Reader findings on this revision yet.'
+            'No Critic findings on this revision yet.'
         );
         expect(container.querySelector('.sv-phase-controls')).toBeNull();
 

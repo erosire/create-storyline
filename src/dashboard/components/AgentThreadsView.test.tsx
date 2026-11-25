@@ -344,7 +344,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
     it('lists running threads first and reveals the archived ones only when the tab is clicked (R7, R9)', () => {
         render(
             <AgentThreadsView
-                kind="reader"
+                kind="critic"
                 threads={[
                     thread({
                         thread_id: 't-run',
@@ -421,7 +421,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
             })
         ];
 
-        render(<AgentThreadsView kind="reader" threads={threads} now={NOW} />);
+        render(<AgentThreadsView kind="critic" threads={threads} now={NOW} />);
 
         const tabs = screen.getAllByRole('button', { name: /Archived/ });
         // R7 — neither Story is auto-selected; R9 — both tabs stay available as manual access.
@@ -558,7 +558,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
 
     it('never selects Archived on a rerender, and keeps the click across a same-Story refetch (R8, R9)', () => {
         const closed = [thread({ thread_id: 't-done', title: 'completed pass' })];
-        const { rerender } = render(<AgentThreadsView kind="reader" threads={closed} now={NOW} />);
+        const { rerender } = render(<AgentThreadsView kind="critic" threads={closed} now={NOW} />);
 
         // R7 — an archived-only Story still opens running-only; it does not fall back to Archived.
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('false');
@@ -567,7 +567,7 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
         expect(screen.getByText(/no thread is running now — 1 archived thread is hidden\./)).toBeTruthy();
 
         // R8 — a plain refetch (new array, same content) changes nothing on the Author's behalf.
-        rerender(<AgentThreadsView kind="reader" threads={[...closed]} now={NOW} />);
+        rerender(<AgentThreadsView kind="critic" threads={[...closed]} now={NOW} />);
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('false');
         expect(threadTitles()).toEqual([]);
 
@@ -584,26 +584,26 @@ describe('AgentThreadsView — one agent, every thread, grouped by the harness t
             started_at: '2026-11-22T12:00:07.000Z'
         });
 
-        rerender(<AgentThreadsView kind="reader" threads={[...closed, later]} now={NOW} />);
+        rerender(<AgentThreadsView kind="critic" threads={[...closed, later]} now={NOW} />);
 
         expect(screen.getByRole('button', { name: /Archived/ }).getAttribute('aria-pressed')).toBe('true');
         expect(threadTitles()).toEqual(['completed pass', 'newest pass']);
     });
 
     it('renders nothing when the agent has no threads, and still shows a legacy run’s retained answer', () => {
-        const { rerender } = render(<AgentThreadsView kind="checker" threads={[]} now={NOW} />);
+        const { rerender } = render(<AgentThreadsView kind="reader" threads={[]} now={NOW} />);
 
-        expect(screen.queryByText(/No checker thread has run yet/)).toBeNull();
+        expect(screen.queryByText(/No reader thread has run yet/)).toBeNull();
         expect(screen.queryByRole('button')).toBeNull();
 
         rerender(
             <AgentThreadsView
-                kind="checker"
+                kind="reader"
                 threads={[
                     thread({
                         thread_id: 'legacy',
-                        role: 'checker',
-                        role_name: 'checker',
+                        role: 'reader',
+                        role_name: 'reader',
                         title: 'wi_check_chapters_1',
                         answer: 'failed — provider fault',
                         retained: false,

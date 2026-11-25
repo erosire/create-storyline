@@ -46,7 +46,7 @@ export function resolveHarness(store: Store, item: WorkItem): ResolvedHarness {
         // permission row is what actually matters (T-1a refuses the writes the kind may not make).
         const kind: RoleKind = (ROLE_KINDS as readonly string[]).includes(item.roleName)
             ? (item.roleName as RoleKind)
-            : 'checker';
+            : 'reader';
 
         return {
             kind,
@@ -62,7 +62,7 @@ export function resolveHarness(store: Store, item: WorkItem): ResolvedHarness {
     if (role === undefined) {
         const kind: RoleKind = (ROLE_KINDS as readonly string[]).includes(item.roleName)
             ? (item.roleName as RoleKind)
-            : 'checker';
+            : 'reader';
 
         return {
             template,
@@ -86,8 +86,8 @@ export function permissionLine(kind: RoleKind): string {
             return 'You are the Writer: you are the only thing that writes story artifacts — the Summary in phase ①, the plotlines in ②, the chapters and prose in ③ (P10, D-17b) — and a locked artifact is read-only for you (P5, D-3, D-6). Never `updateDigest`: the engine derives it (D-12a). On a book written group by group the Summary is written one phrase GROUP at a time: your accepted answer becomes that group’s next revision, the text it replaces is archived, and the Summary fields are the mirror of those five groups rather than a second text (R2, R6).';
         case 'editor':
             return 'You are the Editor: you may select, merge and verify, and you may never write prose (L-19, T-3b). Your writes land through `selectRevision`, `requestMerge`, `rejectAll`, `verifyIdea` and `verifyFinding` only (D-33, D-22).';
-        case 'reader':
-            return 'You are a Reader: your output is `raiseFinding` and `submitVerdict`, plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
+        case 'critic':
+            return 'You are a Critic: your output is `raiseFinding` and `submitVerdict`, plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
         case 'researcher':
             // §7.2: the one kind whose WRITE is not a story artifact. The line names its tools and the
             // P10 route, so a researcher that cannot establish a fact files a task instead of reaching
@@ -95,7 +95,7 @@ export function permissionLine(kind: RoleKind): string {
             // by reporting instead of by saying nothing (S-4).
             return 'You are the Researcher: you search the web and record what you find — `writeKnowledge`, `readKnowledge`, `retireKnowledge` — and when the pass needs no fact from outside the book, `reportNoResearch` closes it, writing nothing (D-51). Any write to a story artifact is refused naming P10: file a task and let the Writer write it.';
         default:
-            return 'You are a checker: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b). Any write to a story artifact is refused naming P10: file the task and let the Writer write it.';
+            return 'You are a reader: you read and report — `submitVerdict`, `raiseFinding`, `createTask`, `editTask`, `requestAuthor` (T-1b). Any write to a story artifact is refused naming P10: file the task and let the Writer write it.';
     }
 }
 

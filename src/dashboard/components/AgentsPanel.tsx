@@ -1,4 +1,4 @@
-// The GLOBAL EMPLOYEE ROSTER — Writer, Editor, Reader, Checker and Researcher, in tile form.
+// The GLOBAL EMPLOYEE ROSTER — Writer, Editor, Critic, Reader and Researcher, in tile form.
 //
 // VOCABULARY (V-1): a tile is an EMPLOYEE, not an agent. The employee is the standing identity
 // (kind, rank, model) configured once and shared by every Story; it becomes an AGENT only while a
@@ -45,7 +45,7 @@ import { LoopLimitControl } from './LoopLimitControl';
  * would be DROPPED from the rail, not merely late, and the Author would never see the Researcher's
  * tile on a Story whose roster has not answered yet.
  */
-const AGENT_ORDER = ['checker', 'editor', 'reader', 'researcher', 'writer'] as const;
+const AGENT_ORDER = ['critic', 'editor', 'reader', 'researcher', 'writer'] as const;
 
 const ordered = (agents: AgentStatusRow[]): AgentStatusRow[] => {
     const byKind = new Map(agents.map((agent) => [agent.kind, agent]));

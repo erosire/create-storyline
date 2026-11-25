@@ -175,7 +175,7 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
 
         // The reason is a dot and a tooltip, not a paragraph of detail on the rail.
         expect(ideas.querySelector('.outline-attention')).toBeTruthy();
-        expect(ideas.textContent).not.toContain('Reader proposed');
+        expect(ideas.textContent).not.toContain('Critic proposed');
     });
 
     it('opens the phrase or the exact entry the Author clicked', () => {
@@ -563,6 +563,43 @@ describe('StoryOutline — the discarded mark is the struck name (R6)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// T3 — the rail's percentage has to behave as a COLUMN, not as a sentence.
+//
+// Nothing about the number is text-only: five digits in a 320px rail read top-to-bottom only if the value
+// cannot stretch (a flexing score pushes the group's title into an ellipsis, which is the row's identity) and
+// if its digits line up (proportional figures make `84%` and `100%` start at different x, and a column that
+// jitters cannot be compared). jsdom never applies `app.css`, so the stylesheet is read as source here, the
+// same way the strike test above proves what is visible. The badge's `margin-left: auto` is pinned too: it is
+// the ONE right-aligning element in the row, and a second auto margin would split the free space and move the
+// badge off the end of the column.
+// ---------------------------------------------------------------------------
+describe('StoryOutline — the score column is styled as a column (T3)', () => {
+    /** One rule's declarations from `app.css`: comments stripped, whitespace collapsed to one line. */
+    function cssRule(selector: string): string | null {
+        const css = readFileSync(`${import.meta.dirname}/../styles/app.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+        const rule = css.match(
+            new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`)
+        );
+
+        return rule === null ? null : (rule[1] ?? '').replace(/\s+/g, ' ').trim();
+    }
+
+    it('holds the score at its natural width with tabular figures, and keeps the badge the only auto margin', () => {
+        // `flex: none` is the load-bearing declaration; the rest is what makes five of them readable as a list.
+        expect(cssRule('.outline-score')).toBe(
+            'flex: none; min-width: 2.6em; text-align: right; color: var(--muted); font-size: 10px; ' +
+                'font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap;'
+        );
+        expect(cssRule('.outline-score')).not.toContain('margin-left');
+        // The header's average is the stronger of the two numbers on the rail, and it is the only one painted
+        // with `--text-strong`: the rows stay recede-able so the eye finds the title column first.
+        expect(cssRule('.outline-score--header')).toBe('color: var(--text-strong); font-size: 10.5px;');
+        // …and the badge still owns the one auto margin in the row.
+        expect(cssRule('.outline-badge')).toContain('margin-left: auto;');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // R8 — "this should be collapsible: clicking `Phrase 1` collapses it".
 //
 // The rail is four phrases plus a Revision 1…N list under each, and the list is the part that crowds it. The
@@ -725,9 +762,12 @@ describe('StoryOutline — the phrase header is a disclosure control (R8)', () =
         // The row's accessible name is its title, then the findings badge's own label (R6's rule for a row: the
         // name is composed from its text, never an `aria-label` that would swallow the badge). Premise is written
         // and holds nothing of its own, so the ONLY words after its title are the one blocking finding the
-        // Reviewer never scoped to a group — which by R3 stands against every group of this book.
+        // Reviewer never scoped to a group — which by R3 stands against every group of this book — and the score
+        // the latest pass gave it (T3, `84%` of `[84, 78]`, newest first on the wire).
         fireEvent.click(
-            screen.getByRole('button', { name: 'Premise 1 open Critical or Major finding open findings to answer' })
+            screen.getByRole('button', {
+                name: 'Premise 1 open Critical or Major finding open findings to answer Score 84%'
+            })
         );
 
         expect(selections).toEqual([{ panel: 'summary', ref: 'summary-group:grp-premise' }]);
@@ -761,7 +801,7 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         return fixtureView({ phrase: fixturePhrase() });
     }
 
-    /** The Summary phrase's rows as (title, state mark, badge) triples — the whole list, so a reorder fails. */
+    /** The Summary phrase's rows as (title, state mark, badge, score) — the whole list, so a reorder fails. */
     function rowsOfSummary(container: HTMLElement): Array<Array<string | null>> {
         const summary = Array.from(container.querySelectorAll<HTMLElement>('.outline-phase')).find((element) =>
             element.textContent?.includes('Summary')
@@ -770,7 +810,11 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         return Array.from(summary.querySelectorAll<HTMLElement>('.outline-child')).map((row) => [
             row.querySelector('.outline-name')?.textContent ?? null,
             row.querySelector('[data-testid="outline-group-state"]')?.textContent ?? null,
-            row.querySelector('.outline-badge')?.textContent ?? null
+            row.querySelector('.outline-badge')?.textContent ?? null,
+            // T3 — the percentage, and `null` for a group the pass never scored (Ending). Reading it out of
+            // the row rather than from the fixture is the point: a rail that printed the number in the wrong
+            // row would still pass a name-only check.
+            row.querySelector('[data-testid="outline-group-score"]')?.textContent ?? null
         ]);
     }
 
@@ -780,11 +824,11 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         );
 
         expect(rowsOfSummary(container)).toEqual([
-            ['Premise', null, '1'],
-            ['Promise', null, '2'],
-            ['Theme', 'writer', '2'],
-            ['Tone', null, '1'],
-            ['Ending', 'to write', '1']
+            ['Premise', null, '1', '84%'],
+            ['Promise', null, '2', '62%'],
+            ['Theme', 'writer', '2', '71%'],
+            ['Tone', null, '1', '58%'],
+            ['Ending', 'to write', '1', null]
         ]);
 
         // U2 — the sampling rail's shape is gone for a grouped book: no `Revision N` row, and no row carries the
@@ -812,17 +856,131 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         // says `to write`; a group the Writer is replacing says `writer`; a written group says NOTHING, because a
         // state word it has not earned would be decoration.
         // The full accessible name of each row, exactly: the group's TITLE, then one state word where the wire
-        // reports one, then the badge's own label, then the attention mark's direction. No id, no revision
-        // number, and no run-together words (the separators are pinned by the strings below — an accessible name
-        // is text, so flex `gap` cannot supply the boundary).
-        expect(screen.getByRole('button', { name: 'Premise 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
-        expect(screen.getByRole('button', { name: 'Promise 2 open Critical or Major findings open findings to answer' })).toBeTruthy();
-        expect(screen.getByRole('button', { name: 'Theme writer 2 open Critical or Major findings open findings to answer' })).toBeTruthy();
-        expect(screen.getByRole('button', { name: 'Tone 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
-        expect(screen.getByRole('button', { name: 'Ending to write 1 open Critical or Major finding open findings to answer' })).toBeTruthy();
+        // reports one, then the badge's own label, then the attention mark's direction, then the group's score
+        // (T3). No id, no revision number, and no run-together words (the separators are pinned by the strings
+        // below — an accessible name is text, so flex `gap` cannot supply the boundary).
+        //
+        // The scores come from `fixturePhrase()`: two passes per written group, latest first, so the rail prints
+        // 84 / 62 / 71 / 58 — and Ending, which has no `scores` key at all, prints NOTHING. That last row is the
+        // whole absence rule: an unscored group that rendered `0%` would claim a review that never ran, and it
+        // is also why this book's phrase header prints no overall average (one unscored group silences it).
+        expect(
+            screen.getByRole('button', {
+                name: 'Premise 1 open Critical or Major finding open findings to answer Score 84%'
+            })
+        ).toBeTruthy();
+        expect(
+            screen.getByRole('button', {
+                name: 'Promise 2 open Critical or Major findings open findings to answer Score 62%'
+            })
+        ).toBeTruthy();
+        expect(
+            screen.getByRole('button', {
+                name: 'Theme writer 2 open Critical or Major findings open findings to answer Score 71%'
+            })
+        ).toBeTruthy();
+        expect(
+            screen.getByRole('button', {
+                name: 'Tone 1 open Critical or Major finding open findings to answer Score 58%'
+            })
+        ).toBeTruthy();
+        expect(
+            screen.getByRole('button', {
+                name: 'Ending to write 1 open Critical or Major finding open findings to answer'
+            })
+        ).toBeTruthy();
 
         // The state word exists once, and nowhere else: no duplicate copy that a screen reader would say twice.
         expect(document.querySelectorAll('[data-testid="outline-group-state"]')).toHaveLength(2);
+        // T3 — and the score exists exactly where the wire scored: four numbers, and Ending has no node at all.
+        expect(document.querySelectorAll('[data-testid="outline-group-score"]')).toHaveLength(4);
+    });
+
+    // T3 — the rail's ONE number per row, and the movement it cannot fit. The row shows the percentage and
+    // nothing else (the column is 320px, and a column of digits is what the eye compares top to bottom); the
+    // direction of travel is the fact the request asks for that the row has no room for, so it rides the row's
+    // own `title`, the way the finding badge's sentence does. A first pass says so instead of implying a zero,
+    // and a rewrite that went backwards says `down`.
+    it('prints each group’s latest percentage and carries the movement in the row’s tooltip (T3)', () => {
+        const { container } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        const scores = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="outline-group-score"]'));
+
+        // The five rows' numbers, in composition order, exactly — including the row that is absent (Ending),
+        // which the length pins as much as the list below.
+        expect(scores.map((score) => [score.textContent, score.getAttribute('title')])).toEqual([
+            ['84%', 'Score 84% — up 6 from 78%'],
+            ['62%', 'Score 62% — up 7 from 55%'],
+            ['71%', 'Score 71% — the first pass over this group'],
+            ['58%', 'Score 58% — down 6 from 64%']
+        ]);
+
+        // The number is never bare: `84%` on its own is not a name a reader can act on, so the span labels
+        // itself with what it is, and the `title` adds the direction rather than replacing it.
+        expect(scores[0].getAttribute('aria-label')).toBe('Score 84%');
+        expect(scores[3].getAttribute('aria-label')).toBe('Score 58%');
+    });
+
+    // T3 — the phrase header's OVERALL score: the mean of every group's latest percentage. `fixturePhrase()`
+    // has one unscored group, so THIS book's header must stay silent; the five scored groups of
+    // `groupedPhraseView` (84/76/70/88/66) are what produces a number — 384 / 5 = 76.8 → `77%`. Averaging the
+    // four rows that happened to arrive would print a number the server never claimed.
+    it('averages the five groups onto the phrase header only when every group is scored (T3)', () => {
+        const { container: silent } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        expect(silent.querySelector('[data-testid="outline-phrase-score"]')).toBeNull();
+
+        const { container: scored } = render(
+            <StoryOutline
+                view={fixtureView({ phrase: groupedPhraseView('s1') })}
+                selection={DEFAULT_STORY_SELECTION}
+                onSelect={() => undefined}
+            />
+        );
+
+        const header = scored.querySelector<HTMLElement>('[data-testid="outline-phrase-score"]')!;
+
+        expect(header.textContent).toBe('77%');
+        expect(header.getAttribute('aria-label')).toBe('Overall score 77%');
+        // The header prints one number, so the breakdown behind it lives in the tooltip — in composition
+        // order, with the group titles the rail itself uses.
+        expect(header.getAttribute('title')).toBe(
+            'Overall score — the average of every group: Premise 84%, Promise 76%, Theme 70%, Tone 88%, Ending 66%'
+        );
+        // …and the five rows still show their own numbers beside it: the average replaces nothing.
+        expect(
+            Array.from(scored.querySelectorAll('[data-testid="outline-group-score"]')).map((row) => row.textContent)
+        ).toEqual(['84%', '76%', '70%', '88%', '66%']);
+    });
+
+    // T3 — the row is ONE control. The score and the movement had nowhere to go except inside a button that
+    // already navigates, and an interactive element inside a button (`<details>`, a nested `<button>`, a link)
+    // is a control a keyboard user cannot reach and a screen reader reports as a broken name. So the score is a
+    // plain SPAN whose tooltip carries the trail: the row stays a leaf.
+    it('keeps the score inside the row as text, never as a second control (T3)', () => {
+        const { container } = render(
+            <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
+
+        const rows = Array.from(container.querySelectorAll<HTMLElement>('#outline-children-summary .outline-child'));
+
+        expect(rows).toHaveLength(5);
+        expect(rows.map((row) => row.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON']);
+        // Nothing interactive hides inside any row — the four scored rows and the unscored one alike.
+        expect(
+            rows.map((row) =>
+                Array.from(row.querySelectorAll('button, a[href], input, select, textarea, summary, [role="button"]'))
+                    .map((element) => element.tagName)
+            )
+        ).toEqual([[], [], [], [], []]);
+        // …and the score itself is a span, so its `aria-label` adds to the row's name rather than splitting it.
+        expect(
+            Array.from(container.querySelectorAll('[data-testid="outline-group-score"]')).map((score) => score.tagName)
+        ).toEqual(['SPAN', 'SPAN', 'SPAN', 'SPAN']);
     });
 
     it('badges a group only with the findings that hold the sign-off (U6)', () => {
@@ -863,17 +1021,17 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         expect(container.querySelector('#outline-children-summary')).toBeNull();
         expect(rowsOfSummary(container)).toEqual([]);
 
-        // Re-expanding restores the same five rows, in the same order, with the same marks and badges: folding a
-        // phrase hides the groups, it never recomputes or drops them.
+        // Re-expanding restores the same five rows, in the same order, with the same marks, badges and
+        // percentages: folding a phrase hides the groups, it never recomputes or drops them.
         fireEvent.click(summary);
 
         expect(summary.getAttribute('aria-expanded')).toBe('true');
         expect(rowsOfSummary(container)).toEqual([
-            ['Premise', null, '1'],
-            ['Promise', null, '2'],
-            ['Theme', 'writer', '2'],
-            ['Tone', null, '1'],
-            ['Ending', 'to write', '1']
+            ['Premise', null, '1', '84%'],
+            ['Promise', null, '2', '62%'],
+            ['Theme', 'writer', '2', '71%'],
+            ['Tone', null, '1', '58%'],
+            ['Ending', 'to write', '1', null]
         ]);
     });
 });

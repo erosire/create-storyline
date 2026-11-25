@@ -2,7 +2,7 @@
 //
 // The rules pinned here are the ones the rail cannot guess:
 //   - revisions are numbered in creation order, not grouped by sampling attempt;
-//   - a Reader finding is filed against the revision it names in `related_refs`;
+//   - a Critic finding is filed against the revision it names in `related_refs`;
 //   - the selected revision is the one the Summary row carries;
 //   - the tick waits for the round to have a winner and for critical/major work to be gone.
 import { describe, expect, it } from 'vitest';
@@ -63,8 +63,8 @@ const VERDICT = (id: string, target: string, findingRef?: string): Verdict => ({
     story_id: 's1',
     target_ref: target,
     target_kind: 'revision',
-    run_ref: 'run_reader',
-    template_ref: 't-reader',
+    run_ref: 'run_critic',
+    template_ref: 't-critic',
     round: 1,
     criteria_passed: [
         {
@@ -157,7 +157,7 @@ describe('summaryRevisions — Phase ① is a flat Revision 1…N list', () => {
 // answer "does this finding speak about this revision?". While they each carried their own rule, a
 // whole-artifact finding (the legacy `target_ref`-only spelling, which the server still treats as
 // blocking) made the gate say "1 critical/major finding still open" while the opened revision said "No
-// Reader findings on this revision yet". Every case below pins BOTH answers of one pair.
+// Critic findings on this revision yet". Every case below pins BOTH answers of one pair.
 // ---------------------------------------------------------------------------
 
 /**
@@ -219,7 +219,7 @@ describe('summaryRevisions — the pane and the Accept gate decide the same thin
         });
 
         // The pane's list: a whole-artifact row is every revision of that unit's business, so the opened
-        // (and selected) Revision cannot read "No Reader findings on this revision yet".
+        // (and selected) Revision cannot read "No Critic findings on this revision yet".
         const listed = summaryRevisions(view).map((entry) => ({
             index: entry.index,
             revision: entry.revision.id,

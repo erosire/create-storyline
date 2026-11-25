@@ -138,7 +138,7 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
 
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 // The certificate is the mock's knob (see `CrewBehaviour.screenFixes`): the drafts are
                 // clean on their counts, so the ONLY thing rejecting them is the fix audit — which is
@@ -182,7 +182,7 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         await settleUntil(rig, () => rig.store.sampleReviews.list().some((review) => review.revision_ref === 'revision_1'));
 
         expect(revisionRows(rig)).toEqual(['revision_0:r1:sampled:selected', 'revision_1:r2:refined:drafted']);
-        // The review row carries BOTH halves of the certificate: the list the job handed the Reader and
+        // The review row carries BOTH halves of the certificate: the list the job handed the Critic and
         // the verdict it returned. That pairing is what makes the demand gradeable (§4, H1). Round 1's
         // row declares an empty list and carries no verdicts at all — the difference between "nothing
         // was asked" and "asked and refused", which is what the selector is allowed to tell apart.
@@ -293,7 +293,7 @@ describe('H1/R3/R4 — a stalled round climbs instead of installing the least-ba
         // gate is a floor on the round that owes a repair, not a new rule for every round.
         const rig = await createRig({
             summarySampling: 2,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 // The loop rig hands the screening pass the prompt, not a sample index, so the draft
                 // being read is what tells the mock which sibling it is judging (D-21).
@@ -345,7 +345,7 @@ describe('H1-C1/F1 — the demand counts only what is STILL owed, so the Author 
         // no winner, no escalation — the round-1 Summary sat under a drain that could never clear.
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 // Clean on their counts; refused on the certificate alone — the state that used to be
                 // resolved by installing the least-bad text.
@@ -473,7 +473,7 @@ describe('H1-C1/F2 — a refined round that cannot verify never replaces the inc
         // verification. The strict contract is "if it isn't verified, discard the draft and try again".
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { screenAnswer: () => 'not json' }
         });
 
@@ -488,7 +488,7 @@ describe('H1-C1/F2 — a refined round that cannot verify never replaces the inc
 
         const { finding, task } = armRefinementRound(rig);
 
-        // Four samples, and four SPENT screening families behind each one (readers 1 + the allowance):
+        // Four samples, and four SPENT screening families behind each one (critics 1 + the allowance):
         // the screening family dispatches one run per sweep, so this row needs room to breathe.
         await settleUntil(
             rig,
@@ -573,7 +573,7 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
 
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 screenAnswer: () =>
                     clean
@@ -770,7 +770,7 @@ describe('N-1 — the rejection escalation names the axis that actually failed',
 });
 
 describe('H1/R2 — the fix list a round is actually graded against (records.ts:sampleFixDemand)', () => {
-    // The demand decides everything downstream: it is what the Writer is handed, what each Reader must
+    // The demand decides everything downstream: it is what the Writer is handed, what each Critic must
     // certify, and what the selection commit may close. These rows pin the ladder the evidence reader
     // climbs — the list the Worker was handed, then the ids the verdicts echo, then the Story's own open
     // tasks — because the three answer different questions and only the first two are a promise the round
@@ -810,7 +810,7 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
             {
                 story_id: rig.storyId,
                 revision_ref: revisionId,
-                reader: 'reader-screening',
+                critic: 'critic-screening',
                 issues: [],
                 valid: true,
                 ...(row.fixRefs === undefined ? {} : { fix_refs: row.fixRefs }),
@@ -895,7 +895,7 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
         expect(sampleFixDemand(rig.store, rig.storyId, draft)).toEqual(['task_0', 'task_1']);
         expect(roundRequiresCertification(rig.store, rig.storyId, 2)).toBe(true);
         // H1-C1/F2 — ungradeable is INELIGIBLE, not clean. This row used to read `eligible: true` on the
-        // argument that silence from a Reader who never held a list cannot VETO; it cannot, but it also
+        // argument that silence from a Critic who never held a list cannot VETO; it cannot, but it also
         // certifies nothing, and a round that owes a repair does not get to install prose on that basis.
         // The engine's closure gate is the second lock: `fixesCleared` is empty, so both tasks and both
         // findings stay open and auditable whatever the round decides (R4).
@@ -1040,7 +1040,7 @@ describe('H1/R2 — the fix list a round is actually graded against (records.ts:
 // H2/R1 + H2/R2 — who a phase-① `fix` row belongs to, what the loop does about each owner, and what
 // the Story reads as when the loop has run out of ways to serve it. The live round this came from
 // (story_16) armed on `task_187 (unresolved on revision_102)`, a row `owner_role: 'researcher'`
-// naming a reference the crew could not resolve: every draft was graded against it, every Reader
+// naming a reference the crew could not resolve: every draft was graded against it, every Critic
 // answered `unknown` (the honest answer — no draft can ground an external fact), both drafts went
 // ineligible, the sampling cap was spent, the Author question that followed was reported as `ready`,
 // and the Story sat there claiming Working. Rows (a)-(e) are those four facts, in code.
@@ -1090,7 +1090,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
 
     // (a) the routing itself: one row per owner, and each set answers for exactly one of them.
     it('demands the Writer row, routes the Researcher row to real work, and hands the rest to the Author', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const { finding, writer, ground, odd } = mixedDemand(rig);
 
         // The demand a round is armed and graded against: the Writer's row, and only the Writer's.
@@ -1139,7 +1139,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
     // Writer, an unserviceable owner) off ONE finding, exactly the live shape (`finding_332` carried the
     // Researcher's `task_187` and the Writer's repair), and the prose repair is still owed.
     it('closes the prerequisite when a pass records the fact, and leaves a shared finding alone', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const { finding, ground, writer } = mixedDemand(rig);
 
         await settleUntil(
@@ -1172,7 +1172,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
         let certified = false;
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 screenFixes: ({ fixIds }) =>
                     certified
@@ -1245,7 +1245,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
     it('never settles a prerequisite on a run that recorded nothing, and stops at the existing cap', async () => {
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { researchCalls: 'report' }
         });
         const { finding, ground } = mixedDemand(rig);
@@ -1340,7 +1340,7 @@ describe('H2/R1-R2 — the fix owners phase ① has, the work each becomes, and 
     // (f) the owner phase ① cannot serve at all: it becomes its own question, and it is never a
     // demand, never a `fix_ref`, and never a draft's failure.
     it('asks the Author about a fix row no phase-① job can serve, and never puts it in front of a draft', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const { writer, ground, odd } = mixedDemand(rig);
 
         await settleUntil(rig, () => questionFor(rig, FIX_TASK_OWNER_PREFIX) !== undefined, 24);

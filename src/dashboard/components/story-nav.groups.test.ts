@@ -31,6 +31,10 @@ import {
 import { fixturePhrase, fixtureView } from './story-fixtures';
 import { groupedPhraseView } from '../testing/shell-fakes';
 import type { PhraseView } from '../api';
+// T3 — the entry type is pinned by NAME here, not inferred: the key-presence assertions below pass an entry
+// that may be `undefined` (a missing key must fail loudly, and `Object.keys(undefined)` would throw), so the
+// helper's signature is part of the contract being checked.
+import type { SummaryGroupEntry } from './story-nav';
 
 /** The mid-review grouped book the panes' suite uses, so both suites pin the same numbers. */
 function midReview() {
@@ -116,6 +120,39 @@ describe('story-nav — a group is addressed by its id string (U2)', () => {
             ['tone', 'summary-group:grp-tone', 1, 1, false, true],
             ['ending', 'summary-group:grp-ending', 1, 1, false, false]
         ]);
+    });
+
+    // T3 — the rail's percentage and the pane's `(was …)` line are BOTH read out of this entry, so the two
+    // surfaces cannot sort the trail or round it their own way. The values are `fixturePhrase()`'s two passes
+    // per written group (78→84, 55→62, 64→58) and its single pass for Theme. The load-bearing half is the
+    // ABSENCE: a group nobody scored carries no `score` KEY at all, which is what makes the rail row and the
+    // pane's block print nothing instead of a `0%` that claims a review that never ran.
+    it('carries each group’s latest and previous percentage, and no key at all for a group nobody scored (T3)', () => {
+        expect(
+            summaryGroupEntries(midReview()).map((entry) => [entry.group.key, entry.score, entry.previousScore])
+        ).toEqual([
+            ['premise', 84, 78],
+            ['promise', 62, 55],
+            ['theme', 71, undefined],
+            ['tone', 58, 64],
+            ['ending', undefined, undefined]
+        ]);
+
+        const byKey = (key: string) =>
+            summaryGroupEntries(midReview()).find((entry) => entry.group.key === key);
+
+        // Key SETS rather than truthiness: an `undefined`-valued key would spread into a rendered `0%` on a
+        // surface that tests `entry.score !== undefined` inconsistently, and the rail's row is such a surface.
+        // Listed by name, not by suffix matching — `score` and `previousScore` differ only in case, and a
+        // substring test would silently miss one of them.
+        const scoreKeys = (entry?: SummaryGroupEntry) =>
+            Object.keys(entry ?? {}).filter((name) => name === 'score' || name === 'previousScore');
+
+        expect(scoreKeys(byKey('ending'))).toEqual([]);
+        // …and a first pass carries the number with nothing to compare it to, which is what the rail's tooltip
+        // and the pane's missing delta line both say out loud.
+        expect(scoreKeys(byKey('theme'))).toEqual(['score']);
+        expect(scoreKeys(byKey('premise'))).toEqual(['score', 'previousScore']);
     });
 
     it('resolves the rail ref to the live row, and names no group for a sampling book or a header click', () => {

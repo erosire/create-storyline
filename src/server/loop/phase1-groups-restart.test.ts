@@ -24,7 +24,11 @@
  *      and the replacement's install resets the clock, so a crash costs a group one attempt and nothing
  *      else;
  *   5. S-4a/D-36 — a lease lapse releases EXACTLY the lapsed pass's groups: a sibling pass on a disjoint
- *      group is untouched, and the resumed batch is cut around it instead of over it.
+ *      group is untouched, and the lapse report names one Work Item key. What the release does NOT buy,
+ *      since D-66, is a pass over the freed group ALONE: a finding's group set is dispatched whole, so the
+ *      set waits for the sibling's sweep and then answers BOTH groups in one pass. This row used to pin the
+ *      opposite ("the resumed batch is cut around it"), which is the partial-fix bug D-66 removes — the
+ *      book spent a round with one of two named groups rewritten.
  *
  * THE CRASH IS WRITTEN BY HAND, like `restart.test.ts:orphanRun` does it: the mock crew finishes a run
  * inside `sweep()`, so no amount of sweeping leaves a group pass live to be orphaned. A row left `working`
@@ -142,9 +146,9 @@ describe('a group Writer pass survives a restart as a row, not as a lock (L-3, S
 
     it('reopens with the hold on disk, abandons the dead pass once, and resumes the batch under the next attempt', async () => {
         const store = await Store.load(root);
-        const first = await createRig({ store, summaryMode: 'groups', summarySampling: 5, summaryReaders: 1 });
+        const first = await createRig({ store, summaryMode: 'groups', summarySampling: 5, summaryCritics: 1 });
 
-        // Round 1 to quiescence: one pass wrote all five groups, the Reader seat and the deep review closed
+        // Round 1 to quiescence: one pass wrote all five groups, the Critic seat and the deep review closed
         // against that vector. This is the state an Author leaves their server in.
         await first.run();
 
@@ -240,7 +244,7 @@ describe('a group Writer pass survives a restart as a row, not as a lock (L-3, S
 });
 
 describe('a lapsed group lease releases exactly its own groups (S-4a, D-36, R4)', () => {
-    it('re-arms the lapsed batch around the pass that is still running, and buys exactly one replacement', async () => {
+    it('abandons the lapsed pass, holds the finding’s WHOLE set until the sibling reports, then answers it in one pass', async () => {
         // TWO threads, deliberately: R4 lets one Story run several group Writer passes at once, because a
         // pass holds GROUPS and not the Summary unit, so the two passes below are legal company. With the
         // loop's default single thread, the sibling would occupy it and the replacement would simply wait
@@ -248,7 +252,7 @@ describe('a lapsed group lease releases exactly its own groups (S-4a, D-36, R4)'
         const rig = await createRig({
             summaryMode: 'groups',
             summarySampling: 5,
-            summaryReaders: 1,
+            summaryCritics: 1,
             globalMaxConcurrent: 2,
             // A lease window wide enough that the sibling — written AFTER the wait, so its `updated_at` is
             // the freshest row in the book — cannot lapse, while the dead pass (untouched since before the
@@ -264,7 +268,7 @@ describe('a lapsed group lease releases exactly its own groups (S-4a, D-36, R4)'
         // The dead pass was writing premise; a SECOND pass, on a DISJOINT group, is writing tone. Together
         // they hold every group the approved finding names — which is why nothing is offered at all until
         // one of them stops reporting (R4's exclusion, not a scheduling accident).
-        seedGroupFix(rig, premise.id, tone.id);
+        const finding = seedGroupFix(rig, premise.id, tone.id);
 
         const dead = orphanGroupPass(rig.store, rig.storyId, [premise.id]);
 
@@ -307,43 +311,87 @@ describe('a lapsed group lease releases exactly its own groups (S-4a, D-36, R4)'
         expect(rig.store.runs.require(alive.id)).toMatchObject({ state: 'working', group_refs: [tone.id] });
         expect(liveGroupWriters(rig.store, rig.storyId, tone.id).map((run) => run.id)).toEqual([alive.id]);
 
-        // THE REPLACEMENT, in the same sweep the lapse freed a group for — and it is cut AROUND the live
-        // pass: the one group that just came free, never tone, whose text a live run has not finished with.
-        // That is the exact race R4 removes, decided by a row's `group_refs` rather than by a schedule.
-        expect(report.stories[0].started).toEqual([`${familyOf([premise.id])}_2`]);
+        // D-66 — WHERE THE REDESIGN CHANGES THE LEASE STORY. The lapse freed premise, and premise alone
+        // would have been a legal batch before: R4's exclusion reads groups, and premise has no holder now.
+        // But the defect names premise AND tone, and a pass over premise only would answer HALF of it. So
+        // the set is withheld WHOLE until tone's holder reports: nothing starts this sweep. The race R4
+        // removes is still decided by rows' `group_refs`, and D-66 adds that a finding's set is cut around
+        // a live pass only by WAITING for it, never by dropping a group.
+        expect(report.stories[0].started).toEqual([]);
 
-        const replacement = rig.store.runs.list().find((run) => run.work_item_ref === `${familyOf([premise.id])}_2`)!;
-
-        expect(replacement.group_refs).toEqual([premise.id]);
-
-        // THE LEDGER: the lapsed pass keeps its key, the replacement is the family's NEXT attempt, and the
-        // live sibling's family gained nothing — one lapse, one replacement, no doubled pass anywhere.
-        expect(familyLedger(rig, familyOf([premise.id]))).toEqual([
-            `${familyOf([premise.id])}_1:abandoned`,
-            `${familyOf([premise.id])}_2:torn_down`
-        ]);
+        // THE LEDGER at the lapse: the lapsed pass keeps its key and stays `abandoned`, the live sibling's
+        // family gained nothing, and the pair family the finding will actually be served by does not exist
+        // yet — so a replay of this sweep cannot double the pass either (L-3).
+        expect(familyLedger(rig, familyOf([premise.id]))).toEqual([`${familyOf([premise.id])}_1:abandoned`]);
         expect(familyLedger(rig, familyOf([tone.id]))).toEqual([`${familyOf([tone.id])}_1:working`]);
+        expect(familyLedger(rig, familyOf([premise.id, tone.id]))).toEqual([]);
 
-        // The resumed pass installed on premise ONLY: premise moves to 2 and its write clock restarts on
-        // the new text (F1), and tone keeps the round-1 text, because the pass that owns it is the one that
-        // is still reporting — a lapse releases a group, it never rewrites one.
+        // A lapse moves no number: premise still sits on the round-1 text. It is NOT a free pass either —
+        // the dead pass counts as an attempt against the current text (F1), which is what stops a crash from
+        // buying an endless line of rewrites.
         expect(groupsOf(rig).map((group) => [group.key, group.revision])).toEqual([
-            ['premise', 2],
+            ['premise', 1],
             ['promise', 1],
             ['theme', 1],
             ['tone', 1],
             ['ending', 1]
         ]);
+        expect(groupWriteAttempts(rig.store, rig.story(), premise)).toBe(1);
+        expect(groupWriteAttempts(rig.store, rig.story(), tone)).toBe(0);
+
+        // The sibling reports. A hand-seeded row has no in-flight handle to close it, so the test retires it
+        // the way `phase1-groups-drain.test.ts` does, and the moment tone is free the WHOLE set is on offer —
+        // under the PAIR's family key, one attempt, both groups.
+        const sibling = rig.store.runs.require(alive.id);
+
+        rig.store.runs.update(
+            alive.id,
+            { state: 'torn_down', ended_at: '2026-11-24T10:00:03.000Z' },
+            { run_ref: null, author: true, why: 'seed: the sibling pass reported and released tone (R4)' },
+            [{ id: sibling.id, rev: sibling.rev }]
+        );
+
+        const pair = familyOf([premise.id, tone.id]);
+
+        expect(draftJobs(rig)).toEqual([{ key: `${pair}_1`, refs: ['premise', 'tone'] }]);
+
+        const resumed = await rig.step();
+
+        expect(resumed.stories[0].started).toEqual([`${pair}_1`]);
+
+        const replacement = rig.store.runs.list().find((run) => run.work_item_ref === `${pair}_1`)!;
+
+        expect(replacement.group_refs).toEqual([premise.id, tone.id]);
+
+        // BOTH groups move on the same settle, and the two that no finding named keep their round-1 text
+        // (R2's independence is untouched). Each write clock restarts on the new text (F1): the crash cost
+        // premise one attempt and nothing else.
+        expect(groupsOf(rig).map((group) => [group.key, group.revision])).toEqual([
+            ['premise', 2],
+            ['promise', 1],
+            ['theme', 1],
+            ['tone', 2],
+            ['ending', 1]
+        ]);
         expect(groupWriteAttempts(rig.store, rig.story(), premise)).toBe(0);
         expect(groupWriteAttempts(rig.store, rig.story(), tone)).toBe(0);
 
-        // Premise is free again once its replacement closed; tone is not, and still has a live holder — so
-        // a hand edit refused on tone (F8) and accepted on premise are the SAME read the route gives.
-        expect(liveGroupWriters(rig.store, rig.storyId, premise.id)).toEqual([]);
-        expect(liveGroupWriters(rig.store, rig.storyId, tone.id).map((run) => run.id)).toEqual([alive.id]);
+        // THE POINT OF THE RULE: the defect is answered by the one pass, on the sweep it lands — there was
+        // never a sweep in which the Author's book showed this finding as half-fixed.
+        expect(rig.store.findings.require(finding.id).state).toBe('fixed');
 
-        // The pass that lapsed never wrote anything, and neither did the wait: only the replacement's
-        // install moved a number.
+        // THE LEDGER, finally: one lapse, one replacement, one closed sibling, no doubled pass, and the pair
+        // family carries the single pass that answered the defect.
+        expect(familyLedger(rig, familyOf([premise.id]))).toEqual([`${familyOf([premise.id])}_1:abandoned`]);
+        expect(familyLedger(rig, familyOf([tone.id]))).toEqual([`${familyOf([tone.id])}_1:torn_down`]);
+        expect(familyLedger(rig, pair)).toEqual([`${pair}_1:torn_down`]);
+
+        // And no group has a live holder, so a hand edit is accepted on both — the SAME read the route
+        // gives (F8), which the pair pass released together rather than one at a time.
+        expect(liveGroupWriters(rig.store, rig.storyId, premise.id)).toEqual([]);
+        expect(liveGroupWriters(rig.store, rig.storyId, tone.id)).toEqual([]);
+
+        // The two groups no finding named never moved at all.
         expect([promise, theme, ending].map((group) => rig.store.phraseGroups.require(group.id).revision)).toEqual([1, 1, 1]);
     });
 });

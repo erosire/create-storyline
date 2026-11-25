@@ -28,7 +28,7 @@ import type { RoleAggregation, UnitKind } from '../../shared/types';
  *     no sampling, §6.4 gate 1); the Seed itself is never written (P5).
  *   - `research` — the Researcher gathers Knowledge for the accepted Seed Brief (§6.4 gate 2).
  *   - `sample_unit` — the Writer's one-turn, NO-TOOL structured sample (`toolMode: 'none'`).
- *   - `screen_samples` — the screening Reader's one-turn, NO-TOOL structured IssueList.
+ *   - `screen_samples` — the screening Critic's one-turn, NO-TOOL structured IssueList.
  * `seed_review` was REPLACED by `structure_seed` (no backward compatibility: the sweep and the
  * brief are the only readers of this vocabulary and both moved in the same wave).
  */
@@ -40,7 +40,7 @@ import type { RoleAggregation, UnitKind } from '../../shared/types';
  *     MANY groups at once (`WorkItem.groupRefs`). An accepted answer is INSTALLED immediately
  *     (R5): there is no round, no competing set, and no selection to lose. It is the only kind that
  *     HOLDS a group, which is what makes R4's exclusion meaningful.
- *   - `review_groups` — the Reader's one-turn, NO-TOOL structured answer (`GroupReview`), reading
+ *   - `review_groups` — the Critic's one-turn, NO-TOOL structured answer (`GroupReview`), reading
  *     the INSTALLED Overview and naming, group by group, what is wrong with it (R3) and fix by fix
  *     whether the approved work is in it.
  *
@@ -55,6 +55,16 @@ export const WORK_ITEM_KINDS = [
     'screen_samples',
     'draft_groups',
     'review_groups',
+    // READER SCORING (D-65): the one-turn, NO-TOOL `SectionScores` pass over the installed Overview.
+    // It is the only kind whose whole product is a display row — it files no finding, no task and no
+    // verdict, and nothing in `loop/**` reads what it writes.
+    'score_sections',
+    // PHRASE GROUP LOCK (R-lock): the Editor's one-turn, NO-TOOL `GroupLockDecision` pass over ONE
+    // section of the clean Overview, offered only on a Story that enables `editor_group_locking`. Its
+    // product is a flag on the `phrase_groups` row (`phrase/locks.ts:lockPhraseGroup`, actor `editor`)
+    // or nothing at all — it writes no row of its own, holds no write allowance, and is never owed
+    // work, so an unscored or undecided section never holds the drain or the sign-off gate.
+    'group_lock',
     'write_unit',
     'check_unit',
     'select',
@@ -95,12 +105,12 @@ export interface WorkItem {
     /**
      * H1 (R1/R2) — the OPEN `fix` task ids this job's compiled prompt carries, captured when the job
      * was queued. Set on phase ①'s `sample_unit` (the Writer must see the fixes with their evidence,
-     * not just their titles) and `screen_samples` (the Reader grades the candidate against them).
+     * not just their titles) and `screen_samples` (the Critic grades the candidate against them).
      *
      * WHY THE JOB CARRIES THE LIST INSTEAD OF EVERY RUN READING THE STORE: two reasons, both load
      * -bearing. (1) §5's cache rule wants every sample of one round to send a byte-identical prompt,
      * and a list re-read at dispatch time can grow mid-round; (2) the screening verdict is only
-     * gradeable against the fixes the Reader was actually handed, so the engine persists this list
+     * gradeable against the fixes the Critic was actually handed, so the engine persists this list
      * onto the `sample_reviews` row (`fix_refs`) and a fix task that opened after the round's screens
      * were dispatched cannot retroactively disqualify the round.
      *
@@ -136,7 +146,7 @@ export interface WorkItem {
     /** D-19: the directive to propagate. */
     directiveRef?: string;
     /**
-     * §4.15's competing draft this job reads. A Reader review judges ONE Summary sample, and
+     * §4.15's competing draft this job reads. A Critic review judges ONE Summary sample, and
      * D-21 keeps the other samples out of its brief; the Editor's `select` carries none because
      * it is the one role that may see the whole set.
      */
@@ -198,7 +208,7 @@ export interface RunResult {
     /**
      * The validated JSON answer of a `toolMode: 'none'` run (a `SummarySample` or an
      * `IssueList`, validated against `item.responseSchema`), or undefined. The engine persists
-     * it from here — the Writer/Reader never calls a tool in this mode (§2 decision 2).
+     * it from here — the Writer/Critic never calls a tool in this mode (§2 decision 2).
      */
     structured?: unknown;
     /** Byte-stable prompt hash, copied onto the revision's `prompt_hash` (§3.5, §5's cache key). */

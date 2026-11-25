@@ -8,18 +8,26 @@ import { describe, expect, it } from 'vitest';
 import { Store } from '../store';
 import {
     compileGroupDraftPrompt,
+    compileGroupLockPrompt,
     compileGroupReviewPrompt,
     compileSamplePrompt,
     compileScreenPrompt,
+    compileSectionScorePrompt,
     hashPhase1Prompt,
     renderFixTask
 } from './phase1-prompt';
 import { AUTHOR_ATTR, seedFinding, seedStory, seedTask, seedTemplate } from './mock';
 import { ensurePhraseCatalog } from '../phrase/catalog';
-import { installGroupRevisions } from '../phrase/revisions';
+import { groupCheckSeatKey } from '../phrase/exclusion';
+// R-lock: the test fixtures lock groups through the DOMAIN operation, not by patching the row, so a
+// fixture cannot invent a lock state the write itself refuses to produce (`already_locked`, an unwritten
+// group, an Editor without the Setting).
+import { lockPhraseGroup } from '../phrase/locks';
+import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
+import { cleanSelectionOf, stampCleanRevisions } from '../phrase/reviewed';
 import { recordUidAt } from '../store/persist';
 import { phraseGroupDefinition } from '../../shared/phrase';
-import type { PhraseGroup } from '../../shared/types';
+import type { PhraseGroup, Story } from '../../shared/types';
 
 /**
  * The state a sampling round arrives at: a Story in phase ①, both Phase-1 templates, ONE accepted
@@ -49,12 +57,12 @@ function seedPhase1Store() {
     });
 
     seedTemplate(store, {
-        name: 'reader-screening',
+        name: 'critic-screening',
         roles: [
             {
-                name: 'reader',
-                kind: 'reader',
-                prompt: 'You are the screening Reader for phase ①. Report ONLY critical and high problems.'
+                name: 'critic',
+                kind: 'critic',
+                prompt: 'You are the screening Critic for phase ①. Report ONLY critical and high problems.'
             }
         ],
         serves_phase: ['summary']
@@ -270,7 +278,7 @@ const FIX_TASK_BLOCK = `[task_0 · priority 30 · finding_0] pay the promise
  * string, and both exist because a screening pass has no downstream pass to dispute it: its issues rank
  * the sample on the spot (§6.5).
  *
- * R6 killed the PHRASING complaint (`high` for a comma, then a resample, then another Reader who disliked
+ * R6 killed the PHRASING complaint (`high` for a comma, then a resample, then another Critic who disliked
  * the new wording — the hill with no top). T3 killed the ABSENCE complaint: the Author's two screenshots
  * were a refuge with no earlier planting in the Summary and a stake the Seed never stated, and the line
  * this replaces ("A high fails to deliver something the Seed Brief promises") read a general Seed as an
@@ -311,7 +319,7 @@ const FIX_VERIFY_CONTRACT =
 
 /**
  * HILL CLIMB — the mirror of `phase1-prompt.ts:ISSUE_ORIGIN_INSTRUCTION`, byte for byte. It rides the
- * COMPARISON (a screen that was handed the accepted draft), not the fix list: the Reader can classify a
+ * COMPARISON (a screen that was handed the accepted draft), not the fix list: the Critic can classify a
  * defect as inherited or introduced only when the accepted draft is in front of it, and a round-1 screen
  * has no accepted draft to be inherited FROM (R5). The fix certificate stays with the fix list, so the
  * two halves separate exactly when the queue empties out from under a round (H2/R2).
@@ -333,9 +341,9 @@ const REVISION_CONTRACT =
     '- A fix is answered by the draft’s CONTENT. Restating the same commitment in other words answers none of ' +
     'the tasks and will be marked `unresolved`.\n' +
     // HILL CLIMB — the mirror of the source's new line: the round is graded on what it KEEPS as much as on
-    // what it changes, because the screening Readers now compare the candidate with the accepted draft and
+    // what it changes, because the screening Critics now compare the candidate with the accepted draft and
     // one NEW critical/high rejects it however much else it fixed (`sample-select.ts:scoreSample`).
-    '- Breaking something the base draft got right is a NEW defect: the readers compare your draft with ' +
+    '- Breaking something the base draft got right is a NEW defect: the critics compare your draft with ' +
     'the base, and one new critical or high rejects the draft however much else it fixed.\n' +
     '- Nothing here is judged on style: wording and sentence shape are settled in phase ③, when the chapters ' +
     'are written.';
@@ -358,7 +366,7 @@ describe('phase1-prompt — the Writer sampler (§5)', () => {
         expect(compiled.user).not.toContain('## BASE REVISION');
         expect(compiled.user).not.toContain('## FIX TASKS');
 
-        // `normal`/`low` never enter the prefix — the deep-review Reader reads them via the tool.
+        // `normal`/`low` never enter the prefix — the deep-review Critic reads them via the tool.
         expect(compiled.user).not.toContain('K-ccc');
         expect(compiled.user).not.toContain('A shilling was twelve pence.');
     });
@@ -474,7 +482,7 @@ describe('phase1-prompt — the Writer sampler (§5)', () => {
 
 describe('phase1-prompt — a fix task says whether it repairs or proposes (T5)', () => {
     /**
-     * One fix task over three findings that differ ONLY in the claim type: a marked `improvement`, a
+     * One fix task over three findings that differ ONLY in the claim type: a marked `proposal`, a
      * row from before the field existed (no `kind` at all), and a row explicitly marked `issue`. The
      * header line prints the TASK's `finding_ref` (`finding_0`) in all three cases, so the compiled
      * blocks can differ by one thing only — the `kind:` line — which is what makes these exact pins.
@@ -490,7 +498,7 @@ describe('phase1-prompt — a fix task says whether it repairs or proposes (T5)'
             detail: 'opening on the lie gives chapter 2 its tension',
             evidence: 'sec_1: "he told them the truth"',
             cost: 'major',
-            kind: 'improvement',
+            kind: 'proposal',
             state: 'approved'
         });
 
@@ -533,12 +541,17 @@ describe('phase1-prompt — a fix task says whether it repairs or proposes (T5)'
 
         // The line sits AFTER `work:` and BEFORE `defect:` because the block's order is fixed (§5's
         // cache rule), and it has to be in front of the defect wording: that wording was copied from
-        // the Reader's complaint, and a sample that reads "nothing pays the promise" re-drafts the
+        // the Critic's complaint, and a sample that reads "nothing pays the promise" re-drafts the
         // paragraph instead of writing the better one that was proposed.
+        //
+        // D-33b renamed the KIND TOKEN only. The parenthetical stays plain English — "an improvement,
+        // not a defect" is the definition the Writer needs (`shared/types.ts` documents a proposal as
+        // an improvement the Seed never had to promise), whereas restating the token would teach the
+        // word without teaching the difference.
         expect(renderFixTask(task, proposal)).toBe(
             '[task_0 · priority 30 · finding_0] open on the lie\n' +
                 '  work: move the lie into the first paragraph\n' +
-                '  kind: improvement (a proposal, not a defect)\n' +
+                '  kind: proposal (an improvement, not a defect)\n' +
                 '  defect: opening on the lie gives chapter 2 its tension\n' +
                 '  evidence: sec_1: "he told them the truth"\n' +
                 '  criterion: C-14'
@@ -574,7 +587,7 @@ describe('phase1-prompt — a fix task says whether it repairs or proposes (T5)'
     });
 });
 
-describe('phase1-prompt — the screening Reader (§6.4 step 4)', () => {
+describe('phase1-prompt — the screening Critic (§6.4 step 4)', () => {
     it('carries the target draft’s fields and the critical/high-only screening contract', () => {
         const { store, story, base, target } = seedPhase1Store();
         // H2/R2 moved the verification sections onto the COMPARISON rather than the fix list, so the
@@ -600,7 +613,7 @@ describe('phase1-prompt — the screening Reader (§6.4 step 4)', () => {
         const compiled = compileScreenPrompt(store, story.id, firstDraft.id, { fixRefs: [] });
 
         expect(compiled.system).toBe(
-            'You are the screening Reader for phase ①. Report ONLY critical and high problems.\n\n' +
+            'You are the screening Critic for phase ①. Report ONLY critical and high problems.\n\n' +
                 'Answer with ONE JSON object matching the `IssueList` schema. You have no tools and exactly one turn. No prose outside the JSON.'
         );
 
@@ -617,7 +630,7 @@ describe('phase1-prompt — the screening Reader (§6.4 step 4)', () => {
         );
 
         // A round-1 screen is not a verification: no base draft, no fix list, no certificate asked,
-        // and no sibling sample or revision id (D-21 keeps the other drafts out of a Reader's view).
+        // and no sibling sample or revision id (D-21 keeps the other drafts out of a Critic's view).
         expect(compiled.user).not.toContain('## BASE REVISION');
         expect(compiled.user).not.toContain('## SELECTED DRAFT');
         expect(compiled.user).not.toContain(ISSUE_ORIGIN_INSTRUCTION);
@@ -637,7 +650,7 @@ describe('phase1-prompt — the screening Reader (§6.4 step 4)', () => {
         // the rows, or the only fix was a prerequisite that another role settled). The gate still
         // measures this candidate against the accepted Summary — `records.ts:roundSampleScores` hands
         // `scoreSample` the base whatever the fix list says, and an unclassified critical counts as
-        // introduced (fail closed) — so a Reader that was never shown the accepted draft would be
+        // introduced (fail closed) — so a Critic that was never shown the accepted draft would be
         // judging a comparison it cannot see. SELECTED DRAFT and the origin rule ride on the
         // COMPARISON; the fix certificate stays with the fix list.
         const compiled = compileScreenPrompt(store, story.id, target.id, { fixRefs: [] });
@@ -686,12 +699,12 @@ describe('phase1-prompt — the screening Reader (§6.4 step 4)', () => {
                 `${SCREEN_CONTRACT}\n\n${FIX_VERIFY_CONTRACT}\n\n${ISSUE_ORIGIN_INSTRUCTION}`
         );
 
-        // The rule is asked in the order the Reader needs it: fix verdicts first (they decide the
+        // The rule is asked in the order the Critic needs it: fix verdicts first (they decide the
         // certificate), then the origin of each issue it reports.
         expect(compiled.user.indexOf(FIX_VERIFY_CONTRACT)).toBeLessThan(compiled.user.indexOf(ISSUE_ORIGIN_INSTRUCTION));
         expect(compiled.user.indexOf(ISSUE_ORIGIN_INSTRUCTION)).toBeLessThan(compiled.user.length);
 
-        // This is the same one-turn pass that ranks the round: no second pipeline, no second Reader
+        // This is the same one-turn pass that ranks the round: no second pipeline, no second Critic
         // with a different brief to disagree with (`loop/sample-select.ts:scoreSample`).
         expect(compiled.user).not.toContain('## BASE REVISION');
         expect(compiled.user).not.toContain(target.id);
@@ -738,9 +751,9 @@ describe('phase1-prompt — T3: the Seed-silence rule reaches every model-facing
         const story = seedStory(store, { phase: 'summary', idea: 'A bird searches for what the fire took.' });
 
         seedTemplate(store, {
-            name: 'reader-screening',
+            name: 'critic-screening',
             serves_phase: ['summary'],
-            roles: [{ name: 'reader', kind: 'reader', prompt: 'You read this Author\u2019s shelf. Report what is wrong.' }]
+            roles: [{ name: 'critic', kind: 'critic', prompt: 'You read this Author\u2019s shelf. Report what is wrong.' }]
         });
 
         store.seedBriefs.create(
@@ -805,7 +818,7 @@ describe('phase1-prompt — T3: the Seed-silence rule reaches every model-facing
 
         // Overwrite the fixture's stated stakes with a brief whose Seed left them open — the shape the
         // structuring Editor is told to produce (`open_questions` carries the gap, the required field is
-        // empty). A bare `stakes: ` line is what a Reader read as "the Summary never says what is lost".
+        // empty). A bare `stakes: ` line is what a Critic read as "the Summary never says what is lost".
         const brief = store.seedBriefs
             .list()
             .find((candidate) => candidate.story_id === story.id && candidate.status === 'accepted');
@@ -850,11 +863,11 @@ describe('phase1-prompt — T3: the Seed-silence rule reaches every model-facing
 //   1. the group ids are PRINTED, in catalog order, in every heading — the answer contract carries
 //      `group_ref`, and a model can only copy what it can see (R2/R3). A prompt that named groups only by
 //      key would make every batch answer with a key the engine then has to guess an id for;
-//   2. ONLY the groups the job named are offered to the Writer, while the Reader is shown the WHOLE
+//   2. ONLY the groups the job named are offered to the Writer, while the Critic is shown the WHOLE
 //      Overview — a fix that rewrote a group nobody asked for would move four groups' neighbours under a
-//      review that judged one (R2), and an issue about a group the Reader never saw cannot be attributed;
+//      review that judged one (R2), and an issue about a group the Critic never saw cannot be attributed;
 //   3. the FIX TASKS section follows the JOB's refs, and vanishes when the batch has none — in the review
-//      its verification contract vanishes with it, because a Reader asked to certify fixes that were
+//      its verification contract vanishes with it, because a Critic asked to certify fixes that were
 //      never asked for invents them (H1/R2);
 //   4. both prompts stay a pure function of stored text (no clock, no run id, no revision id), which is
 //      what makes the hash an audit key and the provider's prefix cache work (R7);
@@ -900,12 +913,12 @@ function seedGroupStore() {
         serves_phase: ['summary']
     });
     seedTemplate(store, {
-        name: 'reader-screening',
+        name: 'critic-screening',
         roles: [
             {
-                name: 'reader',
-                kind: 'reader',
-                prompt: 'You are the screening Reader for phase ①. Report ONLY critical and high problems.'
+                name: 'critic',
+                kind: 'critic',
+                prompt: 'You are the screening Critic for phase ①. Report ONLY critical and high problems.'
             }
         ],
         serves_phase: ['summary']
@@ -1028,7 +1041,7 @@ const groupEntry = (group: PhraseGroup): string =>
     `${phraseGroupDefinition(group.key)?.description ?? group.description}\n` +
     `current text:\n${GROUP_TEXTS[group.key]}`;
 
-/** The whole Overview block, in catalog order, exactly as the Reader is shown it. */
+/** The whole Overview block, in catalog order, exactly as the Critic is shown it. */
 const overviewBlock = (groups: PhraseGroup[]): string => groups.map((group) => groupEntry(group)).join('\n\n');
 
 /** The C-14 `fix_hint` the fix block prints as the work's definition of done (G-2). */
@@ -1069,11 +1082,15 @@ const GROUP_DRAFT_INSTRUCTION =
     // Writer also does not certify its own cure (`phrase/revisions.ts:parseGroupDraftAnswer`,
     // `phrase/findings.ts:findingGroupScope`).
     '- The same group twice, or a `group_ref` this job never printed, fails the batch exactly as a missing one does: nothing is installed, and every group keeps the text it had.\n' +
-    '- Your own word that a defect is gone proves nothing: the next review decides, by quoting the installed group that shows the repair. Answer the whole defect in every group it names, or claim nothing.\n' +
+    '- Your own word that a defect is gone proves nothing: the next review decides, by quoting the installed group that shows the repair. Answer the whole defect in every group it names, or claim nothing — and every group a fix names is already in THIS batch, because the loop never sends half a defect: one pass answers it in all of them, or the defect survives in the group you left alone.\n' +
+    // T6b — mirrored from the source: a LOCKED group is fixed text, and the bullet is in the PROMPT because
+    // a batch that names one is refused WHOLE (`phrase/revisions.ts:installGroupRevisions`), so the Writer
+    // would otherwise lose a pass for a repair that was never available to it.
+    '- A group marked `LOCKED` — in the GROUPS block or in the LOCKED PEERS block above — is signed-off, FIXED text: never answer for one, never propose replacing a sentence of it, and treat the facts it states as facts your own groups must match. When a FIX TASK names a locked group, the repair belongs in the unlocked groups that can still move, because nothing can be rewritten there.\n' +
     '- Nothing here is judged on style: wording and sentence shape are settled in phase ③, when the chapters are ' +
     'written.';
 
-/** R3 — the group Reader's attribution rule, mirrored from `phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION`. */
+/** R3 — the group Critic's attribution rule, mirrored from `phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION`. */
 const GROUP_REVIEW_INSTRUCTION =
     'EVERY issue you report names its `group_refs`: the group ids shown in the OVERVIEW section above. Name the one ' +
     'group the defect is in; name several, or all five, when the defect is in how they fit together — a promise the ' +
@@ -1081,7 +1098,11 @@ const GROUP_REVIEW_INSTRUCTION =
     'pass may give: the loop routes work by group, and a defect with no group is work nobody can do.\n' +
     // T3 — mirrored from the source: one defect = one issue, the quote carries its address, a multi-group
     // fix certifies only when every named group carries it, and a review is a read (R3/R5).
-    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story’s rewrite allowance, so report what you find without rationing.';
+    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story’s rewrite allowance, so report what you find without rationing.\n' +
+    // T6b — mirrored from the source: a LOCKED section is still reviewable, but a complaint whose only
+    // possible repair is a rewrite of fixed text is unworkable work (`findingActionableScope` routes the
+    // claim to the groups that CAN move), so the reviewer is told to name the unlocked side.
+    'A group the OVERVIEW marks `LOCKED` is signed-off, FIXED text: the loop cannot rewrite it, and the Author alone unlocks it. Judge the Overview with that section as the baseline — its facts are the facts the other four must keep — and put the change where change is possible: name in `group_refs` the UNLOCKED group or groups that have to move so the Overview agrees with the locked one. A defect whose only home is a locked sentence is not work this book can do, so report it as what it is (a cost already paid) rather than as a repair the Writer owes.';
 
 /** The shared prefix both group prompts open with — identical to the sampling pipeline's. */
 const SEED_AND_KNOWLEDGE = `${SEED_BRIEF_BLOCK}\n\n${KNOWLEDGE_BLOCK}`;
@@ -1190,7 +1211,7 @@ describe('phase1-prompt — the group Writer batch (R2, R5, R7)', () => {
 });
 
 describe('phase1-prompt — the group review pass (R3, R5)', () => {
-    it('shows the Reader the WHOLE Overview — all five groups, ids, revision numbers and text', () => {
+    it('shows the Critic the WHOLE Overview — all five groups, ids, revision numbers and text', () => {
         const { store, story, groups } = seedGroupStore();
         const compiled = compileGroupReviewPrompt(store, story.id, {
             groupRefs: groups.map((group) => group.id),
@@ -1198,7 +1219,7 @@ describe('phase1-prompt — the group review pass (R3, R5)', () => {
         });
 
         expect(compiled.system).toBe(
-            'You are the screening Reader for phase ①. Report ONLY critical and high problems.\n\n' +
+            'You are the screening Critic for phase ①. Report ONLY critical and high problems.\n\n' +
                 'Answer with ONE JSON object matching the `GroupReview` schema. You have no tools and exactly one turn. No prose outside the JSON.'
         );
         expect(compiled.user).toBe(
@@ -1220,14 +1241,14 @@ describe('phase1-prompt — the group review pass (R3, R5)', () => {
         const { store, story, groups } = seedGroupStore();
 
         // An empty group set is the legacy "review the Overview" meaning, not "review nothing": every group
-        // is shown, so the Reader still attributes its issues by group.
+        // is shown, so the Critic still attributes its issues by group.
         const all = compileGroupReviewPrompt(store, story.id, { groupRefs: [], fixRefs: [] });
 
         expect(all.user).toContain(overviewBlock(groups));
         expect([...all.user.matchAll(/group_ref=/g)]).toHaveLength(5);
 
         // A seat aimed at two groups sees those two — and the prompt says which groups are IN SCOPE by
-        // showing only them, rather than letting the Reader raise a defect it was never shown.
+        // showing only them, rather than letting the Critic raise a defect it was never shown.
         const pair = compileGroupReviewPrompt(store, story.id, { groupRefs: [groups[1].id, groups[4].id], fixRefs: [] });
 
         expect(pair.user).toContain(overviewBlock([groups[1], groups[4]]));
@@ -1246,7 +1267,7 @@ describe('phase1-prompt — the group review pass (R3, R5)', () => {
         );
         expect(withFixes.user).toContain(FIX_VERIFY_CONTRACT);
 
-        // Without the fix list the certificate goes with it: a Reader asked for `fix_verifications` with no
+        // Without the fix list the certificate goes with it: a Critic asked for `fix_verifications` with no
         // FIX TASKS section above it answers by inventing a task to certify.
         const without = compileGroupReviewPrompt(store, story.id, { groupRefs: refs, fixRefs: [] });
 
@@ -1302,6 +1323,295 @@ describe('phase1-prompt — the group review pass (R3, R5)', () => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// D-65 / D-67 — the Reader's section score, compiled from the CLEAN SELECTION.
+//
+// THE ONE CLAIM THIS BLOCK PINS (§17.16): the bytes the Reader is shown are the bytes the score rows
+// get recorded under, and they are the CLEAN SELECTION — never the group's newest text. The executor
+// (`run/executor.ts:726-733`) hands the compiler the hash read back off the Work Item id and nothing
+// else, so a compiler that quietly fell back to `PhraseGroup.content` would still produce a plausible
+// prompt and would file a judgement under a book the Reader never saw. The hash-side of that property
+// (the claim key ⇄ the persisted `vector_hash`) is pinned in `loop/section-scores.test.ts`; what lives
+// here is the compiler itself.
+//
+// THE FIXTURE, in one sentence: five groups installed at number 1, a deep pass closing over that
+// vector (so number 1 is Clean), then the SAME five groups installed again at number 2 with different
+// prose nobody has reviewed. That is the smallest state in which "the selected text" and "the newest
+// text" differ — and a state that doesn't differ cannot tell the two implementations apart.
+// ---------------------------------------------------------------------------
+
+/** The second batch: each group's newest text, with no verdict on any of it (D-67's superseded case). */
+const LATER_TEXTS: Record<string, string> = {
+    premise: 'A return to a mapped valley that the water redrew every winter.',
+    promise: 'The map and the territory reconcile, at the price of the territory.',
+    theme: 'Measurement against inheritance.',
+    tone: 'Plain, warm, first person plural.',
+    ending: 'She burns the map and keeps the valley.'
+};
+
+/**
+ * The score seat's role prompt (`SCORE_TEMPLATE_SLUG` = `reader-consistency`, role `reader`). Any
+ * template with any sentence works — the point of seeding one is that the fallback sentence is NOT
+ * what the seat sends when the catalogue does hold the built-in.
+ */
+const READER_ROLE_PROMPT = 'You are the Reader for the section score. Judge only the sections printed below.';
+
+/** §17.16's rule sentence above the sections, mirrored verbatim from `compileSectionScorePrompt`. */
+const REVIEWED_SCORE_PREAMBLE =
+    'These are the sections the crew stands behind: the newest CLEAN revision of each group. A section may ' +
+    'not be the newest text its group has written — it is the newest one a cross-group review passed, and it ' +
+    'is the only text you are being asked to grade.';
+
+/**
+ * D-65's answer contract, mirrored verbatim from `phase1-prompt.ts:SECTION_SCORE_INSTRUCTION` (the
+ * same escape sequences, so the mirror is byte-identical rather than approximately so).
+ */
+const SECTION_SCORE_INSTRUCTION =
+    'SCORE EVERY SECTION ONCE. For each group printed above, give a whole number from 0 to 100 that answers one question: ' +
+    'how well does this section hold up as written \u2014 its OWN internal logic, its consistency with the OTHER four sections ' +
+    '(the Ending the Premise earns, the Theme the Promise carries, the Tone the facts support), and the plausibility of what it ' +
+    'asserts? Anchor the ends: 100 is a section nothing in the Overview contradicts, 70 is sound with a seam you can point at, ' +
+    '40 is a section that fights its neighbours, 10 is a section that contradicts itself. Deduct for a contradiction you can ' +
+    'name; do NOT deduct for detail the Seed never promised, for prose the chapters have not written yet, or for a change you ' +
+    'would personally prefer \u2014 that is a taste, not a fault, and a number that moves on taste is a number nobody can read. ' +
+    'Copy each section\u2019s `group_ref` from the heading above into `group_ref`, give ONE short `rationale` (the reason for the ' +
+    'number, in a sentence) and ONE `evidence` quote taken verbatim from that section \u2014 the line the judgement rests on, ' +
+    'which for a cross-section fault is the line that cannot be true alongside the section you scored. Name every group exactly ' +
+    'once and no group twice. This pass REPORTS a number: it files no finding, opens no task, grades no fix, edits nothing, and ' +
+    'answers nothing else.\n' +
+    // T6b — mirrored from the source: a LOCKED section has no future tense, so a deduction for "I would have
+    // written this differently" on text nothing may rewrite is a number the Author cannot act on.
+    ' A section the heading marks `LOCKED` is signed-off, fixed text: score it exactly as written, and do not deduct for a change you would personally have made there, because no pass may make that change without the Author.';
+
+/**
+ * One group's REVIEWED section — `renderGroupEntry`'s reviewed branch: the SELECTED row's number in the
+ * heading (not the group row's) and the SELECTED row's text under its own label.
+ */
+const reviewedEntry = (group: PhraseGroup, number: number, texts: Record<string, string>): string =>
+    `### ${phraseGroupDefinition(group.key)?.title ?? group.title} (group_ref=${group.id}, key=${group.key}, revision=${number})\n` +
+    `${phraseGroupDefinition(group.key)?.description ?? group.description}\n` +
+    `reviewed text, standing behind this section:\n${texts[group.key]}`;
+
+/** The whole reviewed block at one selection, catalog order — the sibling of `overviewBlock` above. */
+const reviewedBlock = (groups: PhraseGroup[], number: number, texts: Record<string, string>): string =>
+    groups.map((group) => reviewedEntry(group, number, texts)).join('\n\n');
+
+/**
+ * The hash a selection of five equal revision numbers claims under. The fixture keeps every group in
+ * step, so a vector is `{each group id -> number}` and `groupVectorHash` is the same function the seat
+ * and the settle both use — the expectation is derived, never copied out of a run.
+ */
+const selectionHashAt = (groups: PhraseGroup[], number: number): string =>
+    groupVectorHash(Object.fromEntries(groups.map((group) => [group.id, number])) as Record<string, number>);
+
+/** A batch installed through the real path (R2's numbering). Rows are re-read per call (T-4's CAS rule). */
+function installBatch(store: Store, story: Story, texts: Record<string, string>, runRef: string) {
+    return installGroupRevisions(
+        store,
+        story,
+        store.phraseGroups
+            .list()
+            .filter((group) => group.story_id === story.id)
+            // FRESH rows: an install CASes each group row, so a row captured before the previous install
+            // would trip the store's own guard rather than test anything.
+            .map((group) => ({ group: store.phraseGroups.require(group.id), content: texts[group.key] })),
+        { ...AUTHOR_ATTR, why: `seed: the ${runRef} group batch installed (R2)` },
+        { runRef, workItemRef: `wi_draft_groups_summary_0_${runRef}` }
+    );
+}
+
+/**
+ * A deep cross-group pass CLOSING over the current vector — the write `loop/engine.ts:settleJob` makes
+ * in the same commit that closes a `wi_group_check_<vectorHash>_<pass>` run (D-67). The seat key names
+ * the vector hash, so this stamps exactly the five rows that vector holds, or nothing if it moved.
+ */
+function stampCurrentVector(store: Store, story: Story, runRef: string) {
+    return stampCleanRevisions(
+        store,
+        story,
+        { seatKey: groupCheckSeatKey(groupVectorHash(groupRevisionVector(store, story.id)), 1), runRef },
+        AUTHOR_ATTR
+    );
+}
+
+/**
+ * The state a `score_sections` seat is dispatched into (D-67): the five groups installed at number 1,
+ * the fixture's premise-scoped finding CLOSED, and the `reader-consistency` template the system turn
+ * reads. Closing that finding is not decoration — `approved` is an OPEN state on D-33c's rule
+ * (`loop/records.ts:isOpenIssueFinding`), so while it stands nothing is selectable for premise and the
+ * whole selection is incomplete.
+ *
+ * `stamped` comes back so the tests state their own precondition rather than assume one.
+ */
+function seedScoreStore() {
+    const world = seedGroupStore();
+    const { store, story } = world;
+
+    const finding = store.findings.require('finding_0');
+
+    store.findings.update(
+        finding.id,
+        { state: 'fixed' },
+        { ...AUTHOR_ATTR, why: 'seed: the crew fixed the premise defect (D-33c)' },
+        [{ id: finding.id, rev: finding.rev }]
+    );
+
+    seedTemplate(store, {
+        name: 'reader-consistency',
+        roles: [{ name: 'reader', kind: 'reader', prompt: READER_ROLE_PROMPT }],
+        serves_phase: ['summary']
+    });
+
+    return { ...world, stamped: stampCurrentVector(store, story, 'run_check_1') };
+}
+
+describe('phase1-prompt — the section score reads the clean selection (D-65, D-67)', () => {
+    it('scores the CLEAN revision of every group and never shows the newer text the live rows hold', () => {
+        const { store, story, groups, stamped } = seedScoreStore();
+
+        // Precondition, stated: the deep pass certified number 1 of all five groups, in catalog order.
+        expect(stamped.stamped.map((revision) => `${revision.group_key}:${revision.number}`)).toEqual([
+            'premise:1',
+            'promise:1',
+            'theme:1',
+            'tone:1',
+            'ending:1'
+        ]);
+
+        // The book moves on; the selection does not. This is the only state that can tell "the text the
+        // crew stands behind" apart from "the text the group row happens to carry".
+        installBatch(store, story, LATER_TEXTS, 'run_2');
+
+        expect(store.phraseGroups.require(groups[0].id)).toMatchObject({ revision: 2, content: LATER_TEXTS.premise });
+
+        const selection = cleanSelectionOf(store, story);
+
+        expect({ complete: selection.complete, vector_hash: selection.vector_hash }).toEqual({
+            complete: true,
+            vector_hash: selectionHashAt(groups, 1)
+        });
+
+        // The hash the seat claims under (`phrase/exclusion.ts:sectionScoreVectorHashOf` off the Work
+        // Item id) is what the executor passes; the selection's own hash is the same value.
+        const compiled = compileSectionScorePrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            vectorHash: selection.vector_hash
+        });
+
+        // The system turn is the reader template plus the SectionScores contract: no group id, no
+        // revision number, no vector — so the cacheable prefix is shared across books (§5's rule).
+        expect(compiled.system).toBe(
+            `${READER_ROLE_PROMPT}\n\nAnswer with ONE JSON object matching the \`SectionScores\` schema. You have no tools and exactly one turn. No prose outside the JSON.`
+        );
+
+        // THE WHOLE USER TURN, exact: the Seed, the Knowledge, and the five SELECTED sections — no FIX
+        // TASKS section (a score is of the text, not of the queue), and the engine's own contract.
+        expect(compiled.user).toBe(
+            `${SEED_AND_KNOWLEDGE}\n\n` +
+                '## REVIEWED OVERVIEW — every section, scored (name each group_ref exactly once)\n' +
+                `${REVIEWED_SCORE_PREAMBLE}\n\n${reviewedBlock(groups, 1, GROUP_TEXTS)}\n\n${SECTION_SCORE_INSTRUCTION}`
+        );
+
+        // THE DECISIVE HALF: not one of the five live texts is on the wire, and every heading prints the
+        // SELECTED number. Were it the other way round, the score rows would be filed under vector
+        // {…:1} while the Reader had graded {…:2} — §17.16's `shown == scored == recorded` lie.
+        for (const text of Object.values(LATER_TEXTS)) expect(compiled.user).not.toContain(text);
+        expect(compiled.user.match(/revision=\d/g)).toEqual([
+            'revision=1',
+            'revision=1',
+            'revision=1',
+            'revision=1',
+            'revision=1'
+        ]);
+
+        // What a score pass must NOT carry, and the audit trail it must not leak: no fix list, no
+        // run id of the pass that stamped the text, no clock (§5's byte-stability rule, unchanged).
+        expect(compiled.user).not.toContain('## FIX TASKS');
+        expect(compiled.user).not.toContain('run_check_1');
+        expect(compiled.user).not.toContain('run_2');
+        expect(compiled.user).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+        expect(compiled.hash).toBe(hashPhase1Prompt(compiled.system, compiled.user));
+    });
+
+    it('refuses when the selection has gone — a stamped row is not selectable while a defect names its group', () => {
+        const { store, story, groups } = seedScoreStore();
+
+        // The Author DISPUTES the fix rather than accepting it. D-33c counts `disputed` as open, so the
+        // stamp on the row survives (D-67 never revokes a verdict) while the SELECTION goes — the
+        // open-issue half is a read, which is why there is no revocation machinery (L-3).
+        const finding = store.findings.require('finding_0');
+
+        store.findings.update(
+            finding.id,
+            { state: 'disputed' },
+            { ...AUTHOR_ATTR, why: 'seed: the Author disputes the fix (D-33c)' },
+            [{ id: finding.id, rev: finding.rev }]
+        );
+
+        expect(cleanSelectionOf(store, story).complete).toBe(false);
+
+        expect(() =>
+            compileSectionScorePrompt(store, story.id, {
+                groupRefs: groups.map((group) => group.id),
+                vectorHash: selectionHashAt(groups, 1)
+            })
+        ).toThrow(
+            `compileSectionScorePrompt: story ${story.id} has no reviewed Summary to score — premise (no_clean_revision) lacks a clean revision (D-67)`
+        );
+    });
+
+    it('refuses a hash whose selection has moved, and compiles the newer selection under its own hash', () => {
+        const { store, story, groups } = seedScoreStore();
+        const claimed = selectionHashAt(groups, 1);
+
+        // A second deep pass clears the newer batch between the seat's claim and its dispatch: the
+        // selection ADVANCES to number 2, so the bytes this seat claimed are no longer what the crew
+        // stands behind. Recording the old hash against the new text would be a silent lie; refusing
+        // costs one attempt and the seat re-arms on the new hash (`loop/work.ts` candidate 2b).
+        installBatch(store, story, LATER_TEXTS, 'run_2');
+
+        const advanced = stampCurrentVector(store, story, 'run_check_2');
+
+        expect(advanced.stamped.map((revision) => `${revision.group_key}:${revision.number}`)).toEqual([
+            'premise:2',
+            'promise:2',
+            'theme:2',
+            'tone:2',
+            'ending:2'
+        ]);
+        expect(cleanSelectionOf(store, story).vector_hash).toBe(selectionHashAt(groups, 2));
+
+        expect(() =>
+            compileSectionScorePrompt(store, story.id, {
+                groupRefs: groups.map((group) => group.id),
+                vectorHash: claimed
+            })
+        ).toThrow(
+            `compileSectionScorePrompt: story ${story.id}'s reviewed Summary moved from ${claimed} to ${selectionHashAt(
+                groups,
+                2
+            )} between the seat's claim and its dispatch (D-67)`
+        );
+
+        // The refusal is a re-arm, not a dead end: asked for the hash the moved selection now carries,
+        // the compiler shows the NEW clean text — it follows the selection, and never the live row.
+        const moved = compileSectionScorePrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            vectorHash: selectionHashAt(groups, 2)
+        });
+
+        expect(moved.user).toContain(reviewedBlock(groups, 2, LATER_TEXTS));
+        expect(moved.user).not.toContain(reviewedBlock(groups, 1, GROUP_TEXTS));
+        expect(moved.user.match(/revision=\d/g)).toEqual([
+            'revision=2',
+            'revision=2',
+            'revision=2',
+            'revision=2',
+            'revision=2'
+        ]);
+    });
+});
+
 describe('phase1-prompt — the group prompts stay the five groups (R1)', () => {
     it('never puts the deprecated world_rules field in front of a group run', () => {
         const { store, story, groups } = seedGroupStore();
@@ -1322,5 +1632,311 @@ describe('phase1-prompt — the group prompts stay the five groups (R1)', () => 
             expect(compiled.user).not.toContain('key=world_rules');
             expect(compiled.user.match(/world_rules/g)).toHaveLength(1);
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// PHRASE GROUP LOCK (R-lock, T6b) — two things this file is the only place that can prove:
+//
+//   1. THE MARKING REACHES EVERY CREW PROMPT, and reaches it identically. The whole point of a lock is
+//      that four sections become law for the fifth, which only holds if the Writer, the reviewer and the
+//      Reader all read the same sentence about the same section. A renderer branch that fired for one
+//      prompt and not another would keep the loop consistent while the MODELS disagreed — the failure
+//      mode R7 exists to prevent, and the failure mode a "contains LOCKED" sniff would not catch.
+//   2. THE LOCK SEAT'S OWN TURN says what a judgement is: the exact clean revision, the Reader's REASON
+//      (not the number as a gate), the live claims, the fixed point, and one answer. The boundary throws
+//      are part of the contract: between the seat's claim and its dispatch the Setting can go off or the
+//      reviewed Summary can advance, and a compiler that guessed would put a stale Overview in front of a
+//      pass being asked to freeze it.
+// ---------------------------------------------------------------------------
+
+/** One group's LOCKED marker, exactly as `renderGroupEntry` prints it (the row's own numbers). */
+const lockedMarker = (number: number, by: string): string =>
+    `LOCKED at revision ${number} by ${by} — signed-off, FIXED text: quote it as the evidence the other sections must match, and never propose replacing a sentence of it, because the engine refuses any rewrite of this section and the answer that tries one is refused whole.`;
+
+/** `joinSections`' output split back into its `## ` blocks, so ORDER can be asserted, not just presence. */
+const userSections = (user: string): Array<{ heading: string; body: string }> =>
+    user
+        .split('\n\n## ')
+        .map((part, index) => {
+            const [heading, ...rest] = part.split('\n');
+
+            return { heading: index === 0 ? heading : `## ${heading}`, body: rest.join('\n') };
+        });
+
+/**
+ * Four of five sections locked, the fifth still writable — the shape a locking book actually lives in,
+ * and the one that proves a lock never stops the loop: the unlocked section is still a full prompt.
+ */
+function seedMostlyLockedStore() {
+    const world = seedScoreStore();
+    const { store, story, groups } = world;
+
+    for (const group of groups.slice(0, 4)) {
+        // The Author's own lock: `locks.ts` keeps the unlock Author-only, and an editor lock would need the
+        // Setting, which the crew-prompt fixtures deliberately do not turn on. Rows are re-read per call.
+        lockPhraseGroup(
+            store,
+            store.stories.require(story.id),
+            group.id,
+            { ...AUTHOR_ATTR, why: `seed: the Author signed ${group.key} off as finished text (R-lock)` },
+            { actor: 'author' }
+        );
+    }
+
+    return { ...world, locked: groups.slice(0, 4), open: groups[4] };
+}
+
+describe('phase1-prompt — every crew prompt marks the locked sections (R-lock, T6b)', () => {
+    it('marks the four locked sections in the Writer, the reviewer and the Reader, and leaves the fifth answerable', () => {
+        const { store, story, groups, locked, open } = seedMostlyLockedStore();
+
+        // Precondition, stated rather than assumed: the lock is on four rows and the fifth is untouched.
+        expect(locked.map((group) => store.phraseGroups.require(group.id).locked)).toEqual([true, true, true, true]);
+        // An UNLOCKED row leaves the flag out entirely (`PhraseGroup.locked` is absent, not `false` — that
+        // is what `isPhraseGroupLocked` reads), so a fixture that wrote `false` would not be the same book.
+        expect(store.phraseGroups.require(open.id).locked).toBeUndefined();
+
+        const draft = compileGroupDraftPrompt(store, story.id, { groupRefs: [open.id], fixRefs: [] });
+        const draftSections = userSections(draft.user);
+
+        // THE WRITER: it is shown ONE answerable section — the locked four are not in its batch, and an
+        // answer that named one would have its whole batch refused (`installGroupRevisions` rejects locked
+        // groups), so a heading for a locked group here would be an invitation to lose the pass.
+        const groupsSection = draftSections.find((section) => section.heading.startsWith('## GROUPS '));
+
+        expect(groupsSection?.body.split('\n').filter((line) => line.startsWith('### '))).toEqual([
+            `### ${phraseGroupDefinition('ending')?.title} (group_ref=${open.id}, key=ending, revision=1)`
+        ]);
+        // The batch's own group is unlocked, so it carries no marker.
+        expect(groupsSection?.body).not.toContain('LOCKED at revision');
+
+        // THE FIXED POINT: exactly one block, and it comes AFTER `## GROUPS` — both halves of the answer are
+        // a question about the batch, and the note under the block points at groups the model has just read
+        // (it also keeps the prompt's first `group_ref=` an answerable one — `loop/mock.ts:groupJobOf`).
+        const peersSections = draftSections.filter((section) => section.heading.startsWith('## LOCKED PEERS'));
+
+        expect(peersSections).toHaveLength(1);
+        expect(draftSections.findIndex((s) => s.heading.startsWith('## GROUPS '))).toBeLessThan(
+            draftSections.findIndex((s) => s.heading.startsWith('## LOCKED PEERS'))
+        );
+        expect(peersSections[0].heading).toBe(
+            '## LOCKED PEERS (signed-off sections this pass may NOT rewrite — the facts your groups must match)'
+        );
+
+        // All four, in CATALOG ORDER, each with its own marker line and its own signed-off text.
+        const peerLines = peersSections[0].body.split('\n');
+
+        expect(peerLines.filter((line) => line.startsWith('### '))).toEqual(
+            locked.map(
+                (group) =>
+                    `### ${phraseGroupDefinition(group.key)?.title} (group_ref=${group.id}, key=${group.key}, revision=1)`
+            )
+        );
+        expect(peerLines.filter((line) => line.startsWith('LOCKED at revision'))).toEqual([
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author')
+        ]);
+        // The block ends with the engine-owned note, so the "what do I do with a locked section" rule is the
+        // same sentence in the Writer's, the reviewer's and the Editor's prompts.
+        expect(peerLines[peerLines.length - 1]).toBe(
+            'Every section above is LOCKED: the text is signed off, and neither this pass nor any later one can rewrite it (the engine refuses the whole batch that tries). Treat its facts as the facts your own sections have to agree with, and answer a FIX TASK that names one of these sections in the unlocked groups you are being shown, not in the locked text.'
+        );
+
+        // THE REVIEWER: it reads all five (a locked section is still reviewable — an unlocked one can
+        // contradict it), so all five headings print and four of them carry the marker.
+        const review = compileGroupReviewPrompt(store, story.id, { groupRefs: [], fixRefs: [] });
+        const reviewLines = review.user.split('\n');
+
+        expect(reviewLines.filter((line) => line.startsWith('### '))).toHaveLength(5);
+        expect(reviewLines.filter((line) => line.startsWith('LOCKED at revision'))).toEqual([
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author')
+        ]);
+        // Its own rule sentence, verbatim, after the attribution rules it qualifies.
+        expect(review.user).toContain(
+            'A group the OVERVIEW marks `LOCKED` is signed-off, FIXED text: the loop cannot rewrite it, and the Author alone unlocks it. Judge the Overview with that section as the baseline — its facts are the facts the other four must keep — and put the change where change is possible: name in `group_refs` the UNLOCKED group or groups that have to move so the Overview agrees with the locked one. A defect whose only home is a locked sentence is not work this book can do, so report it as what it is (a cost already paid) rather than as a repair the Writer owes.'
+        );
+
+        // THE READER: the score keeps counting the locked sections (the rail shows the trend), but a
+        // deduction for a change nothing may make is a number the Author cannot act on.
+        const score = compileSectionScorePrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            vectorHash: selectionHashAt(groups, 1)
+        });
+        const scoreLines = score.user.split('\n');
+
+        expect(scoreLines.filter((line) => line.startsWith('LOCKED at revision'))).toEqual([
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author'),
+            lockedMarker(1, 'author')
+        ]);
+        expect(score.user).toContain(
+            ' A section the heading marks `LOCKED` is signed-off, fixed text: score it exactly as written, and do not deduct for a change you would personally have made there, because no pass may make that change without the Author.'
+        );
+    });
+});
+
+describe('phase1-prompt — the Editor\u2019s lock seat compiles its judgement turn (R3, T6b)', () => {
+    const EDITOR_LOCK_ROLE_PROMPT = 'You are the Editor weighing whether one section is finished.';
+    const LOCK_ROLE_CONTRACT =
+        'Answer with ONE JSON object matching the `GroupLockDecision` schema. You have no tools and exactly one turn. No prose outside the JSON.';
+    const SCORE_RATIONALE = 'the ending pays the promise the premise makes, and nothing else in the Overview contradicts it';
+
+    /**
+     * A seat the Editor is actually entitled to take: the Setting on, the clean selection standing behind
+     * revision 1 of every group, a Reader row for THIS group at THIS vector with a rationale, and no Writer
+     * holding it. Every clause is a precondition the settle re-checks, so the fixture states them instead of
+     * trusting a helper to have produced them.
+     */
+    function seedLockStore() {
+        const world = seedScoreStore();
+        const { store, story, groups } = world;
+        const fresh = store.stories.require(story.id);
+
+        store.stories.update(
+            fresh.id,
+            { editor_group_locking: true },
+            { ...AUTHOR_ATTR, why: 'seed: the Author let the Editor freeze finished sections (R3)' },
+            [{ id: fresh.id, rev: fresh.rev }]
+        );
+        seedTemplate(store, {
+            name: 'editor-group-lock',
+            roles: [{ name: 'editor', kind: 'editor', prompt: EDITOR_LOCK_ROLE_PROMPT }],
+            serves_phase: ['summary']
+        });
+
+        const vector = selectionHashAt(groups, 1);
+        const phrase = store.phrases.require(recordUidAt(1));
+
+        store.summaryScores.create(
+            {
+                story_id: story.id,
+                phrase_id: phrase.id,
+                vector_hash: vector,
+                group_id: groups[4].id,
+                group_key: 'ending',
+                score: 76,
+                rationale: SCORE_RATIONALE,
+                evidence: GROUP_TEXTS.ending,
+                run_ref: 'run_score_1',
+                work_item_ref: `wi_score_sections_${vector}`
+            },
+            { ...AUTHOR_ATTR, why: 'seed: the Reader scored the clean Overview at this vector (D-65)' }
+        );
+
+        return { ...world, vector, candidate: groups[4] };
+    }
+
+    it('renders the candidate, the Reader\u2019s reason, the claims, the fixed point and one answer — in that order', () => {
+        const { store, story, groups, vector, candidate } = seedLockStore();
+        const compiled = compileGroupLockPrompt(store, story.id, { groupRef: candidate.id, vectorHash: vector });
+
+        // The system turn is the seat's OWN template plus the contract, with no per-book content in front of
+        // it (§5's cache rule; the slug is the seat's, so an Author editing the generic Editor copy cannot
+        // lose the freeze's rules).
+        expect(compiled.system).toBe(`${EDITOR_LOCK_ROLE_PROMPT}\n\n${LOCK_ROLE_CONTRACT}`);
+
+        expect(userSections(compiled.user).map((section) => section.heading)).toEqual([
+            '## SEED BRIEF',
+            '## KNOWLEDGE — critical and high only',
+            `## CANDIDATE SECTION — the one section this pass may lock (clean revision 1 of the reviewed Overview, vector ${vector})`,
+            '## THE READER’S READING (the number AND the reason for it — weigh the reason)',
+            '## OPEN CLAIMS (every unresolved issue and proposal against this section or the fixed point — this is what “no remaining issue” is judged against)',
+            '## CLAIMS THIS SECTION HAS ALREADY ANSWERED (closed rows, for context only — an answered claim is not a reason to keep rewriting)',
+            '## LOCKED PEERS (sections already signed off — the fixed point this section is finished RELATIVE to)',
+            '## LOCK DECISION (the only answer this pass may give)'
+        ]);
+
+        const sections = userSections(compiled.user);
+        const candidateSection = sections[2];
+
+        // THE CANDIDATE: exactly one section, named by the id the answer has to copy, at the clean revision
+        // the lock would fix, and its text quoted from the CLEAN row.
+        expect(candidateSection.body).toContain(`### ${phraseGroupDefinition('ending')?.title} (group_ref=${candidate.id}, key=ending, revision=1)`);
+        expect(candidateSection.body).toContain(GROUP_TEXTS.ending);
+        expect(candidateSection.body.split('\n').filter((line) => line.startsWith('### '))).toHaveLength(1);
+
+        // THE READER'S READING: the row in full — and the seat is told the number is not the decision.
+        expect(sections[3].body.split('\n').slice(0, 5)).toEqual([
+            'score: 76/100',
+            `rationale: ${SCORE_RATIONALE}`,
+            `evidence: ${GROUP_TEXTS.ending}`,
+            `vector: ${vector} (the same vector this seat is about)`,
+            'run: run_score_1'
+        ]);
+        expect(sections[3].body.split('\n').pop()).toBe(
+            'This is one Reader\'s reading of one section, not a rule and not a verdict. What you are being asked to weigh is the `rationale`: the Reader\'s own sentence about why the section holds or does not, and the line it quoted. A rationale that points at a seam you can find in the text above is a live claim; a rationale that names only something the Reader would personally have phrased differently is a taste, and a taste is not a defect at this phase.'
+        );
+
+        // THE CLAIMS: nothing open names this section (the fixture's one finding is premise-scoped and
+        // closed), and the empty state is stated in words rather than left as a blank block the model would
+        // read as "the prompt forgot to look".
+        expect(sections[4].body).toBe(
+            '(no unresolved claim names this section or any locked one — nothing is currently asking this text to change)'
+        );
+        expect(sections[5].body).toBe('(none — no closed claim names this section)');
+
+        // THE FIXED POINT: nothing is locked yet, so this seat would take the book's FIRST lock, and the four
+        // sections that stay writable are named by key — the Editor is allowed to leave one unlocked only
+        // while it can see that the loop still has somewhere to move.
+        expect(sections[6].body).toBe(
+            '(no other section is locked yet — locking this one would make it the first fixed point the rest of the Overview is revised against)\nthe sections still unlocked, which keep being rewritten whichever way you answer: premise, promise, theme, tone'
+        );
+
+        // THE ANSWER CONTRACT: engine-owned, so the two halves of the judgement and the refusal of a
+        // number-driven lock are the same sentences for every seat in every book (R7).
+        const decision = sections[7].body.split('\n');
+
+        expect(decision[0]).toBe(
+            'ANSWER FOR THE CANDIDATE SECTION ONLY, and decide one thing: is that section FINISHED? Copy its `group_ref` from the heading above into `group_ref`.'
+        );
+        expect(decision).toContain(
+            '- The Reader\u2019s number is not the decision, and no number locks a section by itself. Weigh its REASON, and do not restate the number: 92 whose rationale names a seam is a section that still owes work, and 70 whose rationale names only a preference the Reader would personally have changed is not, on its own, a reason to withhold the lock. An answer that only repeats the score back is not a decision and will be refused.'
+        );
+        expect(decision[decision.length - 1]).toBe(
+            '- This pass decides ONE section. It may not lock or comment out another group, propose a rewrite, edit anything or file a finding: it has no tools, and the other sections have their own seats.'
+        );
+        // No threshold anywhere: the Author chose judgement over a cutoff, so a number that could decide by
+        // itself must not appear as a rule. (`70`/`92` above are illustrations of a rationale, not gates.)
+        expect(compiled.user).not.toMatch(/lock at|threshold|at least \d+|score of \d+ (is|locks)/);
+    });
+
+    it('refuses a seat whose Setting went off between the claim and the dispatch, and writes nothing', () => {
+        const { store, story, vector, candidate } = seedLockStore();
+        const fresh = store.stories.require(story.id);
+
+        store.stories.update(
+            fresh.id,
+            { editor_group_locking: false },
+            { ...AUTHOR_ATTR, why: 'seed: the Author took the Editor\u2019s lock away again (R3)' },
+            [{ id: fresh.id, rev: fresh.rev }]
+        );
+
+        // The sentence names every precondition, because an Author reading the refusal has to be able to tell
+        // which one moved; `absent = disabled` is stated so the Setting cannot be guessed at.
+        expect(() => compileGroupLockPrompt(store, story.id, { groupRef: candidate.id, vectorHash: vector })).toThrow(
+            new Error(
+                `compileGroupLockPrompt: ${candidate.id} is not lockable by the Editor right now — story ${story.id} needs \`editor_group_locking\` on, a COMPLETE reviewed Summary whose entry for this group is its current text, a Reader score for this group at that exact vector, and no live Writer over it (R-lock)`
+            )
+        );
+    });
+
+    it('refuses a seat whose reviewed Summary advanced, rather than freezing a text nobody judged', () => {
+        const { store, story, vector, candidate } = seedLockStore();
+
+        // The seat was claimed against a vector that no longer exists — a Writer install, or a deep pass that
+        // cleared another section, moves the selection's hash. Freezing on the new rows under the old key
+        // would fix a revision the Editor never read.
+        expect(() => compileGroupLockPrompt(store, story.id, { groupRef: candidate.id, vectorHash: 'vec-gone' })).toThrow(
+            new Error(
+                `compileGroupLockPrompt: story ${story.id}'s reviewed Summary moved from vec-gone to ${vector} between the seat's claim and its dispatch (R-lock)`
+            )
+        );
     });
 });

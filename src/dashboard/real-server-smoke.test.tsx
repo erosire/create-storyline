@@ -163,7 +163,7 @@ describe('the dashboard over the real server', () => {
 
         // A screening pass that has landed is the Screening crew reading a sample: none is legitimate
         // (the sweep may have stopped after the first sample), and any row under a `wi_screen_…` claim
-        // that is NOT `reader-screening/reader` is the drift this pins.
-        expect(screening.filter((run) => samplerOf(run) !== 'reader-screening/reader')).toEqual([]);
+        // that is NOT `critic-screening/critic` is the drift this pins.
+        expect(screening.filter((run) => samplerOf(run) !== 'critic-screening/critic')).toEqual([]);
     });
 });

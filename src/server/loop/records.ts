@@ -20,7 +20,7 @@ import {
     type LoopDirective,
     type LoopStory
 } from './types';
-import { DEFAULT_SUMMARY_READERS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
+import { DEFAULT_SUMMARY_CRITICS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
 import { seedHashOf } from '../../shared/seed-hash';
 import type {
     Chapter,
@@ -182,7 +182,7 @@ export const WRITER_FIX_OWNERS: readonly string[] = ['', 'writer'];
 /**
  * The one non-Writer owner phase ① can EXECUTE. §6.4 step 2 already runs this role with the web tools
  * and `writeKnowledge`, so an external-fact prerequisite owned by it becomes a real Work Item instead
- * of a question a no-tool Reader is blamed for not answering.
+ * of a question a no-tool Critic is blamed for not answering.
  */
 export const RESEARCH_FIX_OWNER = 'researcher';
 
@@ -327,7 +327,7 @@ export function findingRevisionScope(store: Store, story: Story, finding: Findin
 
 /**
  * The findings that still block a Summary from being final: the blocking-cost findings on the
- * SELECTED draft. Findings on a discarded sibling are history, not work — the next Reader round
+ * SELECTED draft. Findings on a discarded sibling are history, not work — the next Critic round
  * reads the kept draft fresh. Which costs block is `records.ts:summaryBlockingCost`: critical and major
  * always, and minor only when the Story's dial makes minor authorised work — so a dial that EXCLUDES
  * minor lets the Summary be signed with minors sitting open, and a dial that INCLUDES minor does not.
@@ -340,8 +340,8 @@ export function summaryBlockingFindings(store: Store, story: Story, unitRef: str
 
     return storyFindings(store, story.id).filter((finding) => {
         if (finding.state !== 'confirmed' && finding.state !== 'approved') return false;
-        // NO `reader_confirmed` GATE (phase-1 research pipeline, §6.4 step 6): the tool-using deep
-        // review IS the Reader's read of the selected revision, and the Editor's verification of
+        // NO `critic_confirmed` GATE (phase-1 research pipeline, §6.4 step 6): the tool-using deep
+        // review IS the Critic's read of the selected revision, and the Editor's verification of
         // those findings is the acceptance that arms the next round. The classic pipeline's extra
         // per-finding confirmation thread was removed with it, so requiring the flag here would
         // make every finding invisible to the phase gate.
@@ -408,7 +408,7 @@ export function storyFindings(store: Store, storyId: string): Finding[] {
 export const findingsIn = (findings: Finding[], states: Finding['state'][]): Finding[] =>
     findings.filter((finding) => states.includes(finding.state));
 
-/** L-37's condition 2: every suspicion a Reader or checker raised must be confirmed or disputed. */
+/** L-37's condition 2: every suspicion a Critic or reader raised must be confirmed or disputed. */
 export const unconfirmedFindings = (store: Store, storyId: string): Finding[] =>
     storyFindings(store, storyId).filter((finding) => finding.state === 'unconfirmed');
 
@@ -449,9 +449,84 @@ export const isBlockingCost = (story: Story, cost: Cost): boolean =>
 export const summaryBlockingCost = (story: Story, cost: Cost): boolean =>
     cost === 'critical' || cost === 'major' || (cost === 'minor' && dialCovers(story, 'minor'));
 
+// ---------------------------------------------------------------------------
+// D-33c/D-33d — the one predicate for "does this Story still hold an unresolved defect?"
+// ---------------------------------------------------------------------------
+
+/**
+ * THE OPEN-DEFECT TEST FOR ONE ROW (D-33c, D-33d): `kind: 'issue'` — explicit or absent, the legacy
+ * reading `tools/reader.ts:kindOf` and `tools/utilities.ts:findingFingerprint` both give it — in a
+ * state that has NOT closed.
+ *
+ * WHY STATE, NOT COST, NOT CONFIRMATION. The question D-33c answers is "is there a defect this book
+ * still has to answer?", and that is a different question from every one already answered here:
+ *   * NOT `isBlockingCost` — a `minor`/`taste` issue is still an issue the crew named as a defect, and
+ *     the Author asked that proposals wait behind issues, not behind only the expensive ones;
+ *   * NOT `unconfirmedFindings` — a `confirmed` defect is closer to being fixed, not further, and
+ *     `disputed` counts as unresolved on purpose: the Editor saying "not a defect" is a DECISION the
+ *     Author can still overturn, and until the row is `fixed` or `discarded` the record still calls the
+ *     book defective. The Author's own discard route (`routes.ts`'s discard) lands in
+ *     `CLOSED_FINDING_STATES`, so the Author does have the release valve — it just has to be taken.
+ *
+ * So the closed set is EXACTLY `CLOSED_FINDING_STATES` (`fixed`, `discarded`) and `unconfirmed`,
+ * `confirmed`, `approved` and `disputed` all count as open. That keeps the release honest: a proposal
+ * becomes filable the moment every issue is genuinely resolved, which is also the condition a later
+ * "clean revision" feature will want, so nothing here has to be revisited for it.
+ */
+export const isOpenIssueFinding = (finding: Finding): boolean =>
+    (finding.kind ?? 'issue') === 'issue' && !CLOSED_FINDING_STATES.includes(finding.state);
+
+/**
+ * Every unresolved DEFECT this Story carries, in the store's stable finding order (D-33c, D-33d).
+ *
+ * THIS IS THE ONE PLACE that question gets answered, and all four funnels read it — the Critic's
+ * `raiseFinding` gate (`tools/reader.ts`), the Editor's `approveFinding` gate (`tools/editor.ts`), the
+ * dial's auto-approve sweep and `engine.approveFinding` (`loop/engine.ts`), and the Author's approve-all
+ * route (`api/routes.ts`). That singleness is the whole point, and it is the same reason this module
+ * exists at all: two copies of "is an issue still open" is how the Critic ends up allowed to file what
+ * the Editor refuses to approve, which is the exact divergence this rule set removes.
+ *
+ * It is STORY-scoped, never phase-scoped: a defect carried out of phase ① into phase ② is still
+ * unresolved, and D-33c says nothing about which phase raised it.
+ */
+export function openIssueFindings(store: Store, storyId: string): Finding[] {
+    return storyFindings(store, storyId).filter(isOpenIssueFinding);
+}
+
+/**
+ * The findings ONE RUN filed — attributed by RUN through the journal, the same mechanism
+ * `records.ts:revisionReviewFindings` and `researchPrerequisiteEvidence` use (D-33c's second rule).
+ *
+ * D-33c's no-mixing rule asks "did THIS pass already file a proposal?", and the answer is not on the
+ * row: §4.10 has no `run_ref` field, and `related_refs` says what a finding is ABOUT, not who filed it.
+ * The create event's `attribution.run_ref` is the fact (P11), so the journal is the only honest source.
+ *
+ * Only `create` counts. A D-16 re-sighting is a `seen_count` bump on a row an EARLIER pass filed, and
+ * that pass — not this one — is what the row is attributed to; crediting the bump would let a Critic be
+ * refused for filing an issue because it re-read a proposal some other round raised.
+ *
+ * An absent `runId` (an Author-invoked tool context with no run row, a direct test call) answers the
+ * question "no run, so no pass to conflict with", which is the safe reading: the rule cannot hold work
+ * the loop cannot attribute.
+ */
+export function findingsRaisedByRun(store: Store, storyId: string, runId: string | undefined): Finding[] {
+    if (runId === undefined || runId === '') return [];
+
+    return store.journal
+        .filter(
+            (event) =>
+                event.collection === 'findings' &&
+                event.op === 'create' &&
+                event.attribution?.run_ref === runId
+        )
+        .map((event) => store.findings.get(event.id))
+        .filter((finding): finding is Finding => finding !== undefined && finding.story_id === storyId)
+        .sort((left, right) => left.id.localeCompare(right.id));
+}
+
 /**
  * Phase ①'s bar is critical/major — plus `minor` when the Author's dial makes minor real work
- * (`records.ts:summaryBlockingCost`): a Reader may file clarity and description notes at `minor`/`taste`,
+ * (`records.ts:summaryBlockingCost`): a Critic may file clarity and description notes at `minor`/`taste`,
  * and the Editor records them, but they are not show-stoppers unless the dial authorises them. Those notes
  * must not hold the Editor's choice, the fix pass or the phase sign-off — only a suspicion that would
  * actually cost the Writer a pass does. Every other phase keeps D-33's all-costs rule, and keeps counting
@@ -562,7 +637,7 @@ export function findingsVerifyStalled(store: Store, story: Story): Finding[] {
 /**
  * D-34: `confirmed` findings the dial does NOT cover — the pile on the Author's desk.
  *
- * PHASE ①'S BAR IS CRITICAL/MAJOR. A Reader may file clarity and description notes at
+ * PHASE ①'S BAR IS CRITICAL/MAJOR. A Critic may file clarity and description notes at
  * `minor`/`taste`, and the Editor records them, but they are not show-stoppers and never ask
  * the Author for an approval decision. The Summary round only carries critical/major work.
  */
@@ -898,7 +973,7 @@ export function latestVerdictFor(store: Store, storyId: string, targetRef: strin
  * The verdicts the whole-Story pass filed (§5.2's `whole` level, C-10/C-11/C-13).
  *
  * The target ref alone cannot pick them out: the whole-level criteria are scoped to the STORY row
- * (criteria/engine.ts:scopeTargets), so an ordinary per-unit checker pass that files a Story-targeted
+ * (criteria/engine.ts:scopeTargets), so an ordinary per-unit reader pass that files a Story-targeted
  * verdict would look like a finished whole-Story pass. The run behind the verdict is the honest marker
  * — the pass owns the `wi_whole_check` claim prefix (work.ts:wholeStoryCandidate).
  */
@@ -949,9 +1024,9 @@ export function freshVerdictsFor(
 
 /**
  * Whether every competing draft of one unit has been judged — the gate before an Editor is dispatched
- * (§6.2a: checkers first, then the choice).
+ * (§6.2a: readers first, then the choice).
  *
- * Two target conventions are accepted on purpose: a checker that files against the REVISION id
+ * Two target conventions are accepted on purpose: a reader that files against the REVISION id
  * (per-draft verdicts, which §6.2a's "verdicts per revision" reads as) and one that files against the
  * UNIT (which is what `submitVerdict`'s `target_ref` does today, §8.3). The rule is a count: at least
  * one fresh verdict per competing draft, whichever target the tool layer chose.
@@ -1033,13 +1108,13 @@ export const FINDING_VERIFY_CAP = 1 + SAMPLING_RETRY_ALLOWANCE;
  */
 export const samplingCapOf = (story: Story): number => samplingSizeOf(story) + SAMPLING_RETRY_ALLOWANCE;
 
-/** Phase ①'s screening count (§6.4 step 4): how many screening Readers judge each sample. */
+/** Phase ①'s screening count (§6.4 step 4): how many screening Critics judge each sample. */
 export function screeningSizeOf(story: Story): number {
-    const raw = story.summary_readers;
+    const raw = story.summary_critics;
 
     if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
 
-    return DEFAULT_SUMMARY_READERS;
+    return DEFAULT_SUMMARY_CRITICS;
 }
 
 /**
@@ -1508,7 +1583,7 @@ export function roundRevisions(store: Store, storyId: string, round: number): Re
  *
  * S-RUNTIME: scoped to the Story that owns the draft (the review row carries `story_id`, and the draft
  * row says who owns it). `revision_1` exists in EVERY book, so in a book that holds several Stories an
- * unscoped read would let one Story's Reader reviews satisfy another Story's screening set — and
+ * unscoped read would let one Story's Critic reviews satisfy another Story's screening set — and
  * `isFullyScreened` selects a draft on a review set it never collected. One Story per book is what makes
  * the scope a no-op in production; the scope is what keeps the phase-① selection honest in a shared one.
  */
@@ -1633,7 +1708,7 @@ export function openFixTasksAll(store: Store, storyId: string): Task[] {
  * (`tools/editor.ts`), and an unowned row is the same D-34 shape, so blank/`writer` is the Writer's.
  * Anything else — the live story's `task_187`, an Editor's `createTask` naming `researcher` for
  * "source the public-housing pet rule this Summary asserts" — is a PREREQUISITE: no candidate Summary
- * can satisfy it, and a no-tool screening Reader, which has neither the web tools nor the Knowledge
+ * can satisfy it, and a no-tool screening Critic, which has neither the web tools nor the Knowledge
  * ledger in front of it, cannot grade it either. Grading it as if a draft could answer it made every
  * candidate ineligible (`unknown` is not a pass, `sample-select.ts:certifiesFix`) and the round
  * exhausted with nothing the Author could clear except discarding real work.
@@ -1697,7 +1772,7 @@ export function openResearchFixPrerequisites(store: Store, storyId: string): Tas
 
 /**
  * H2/R1 — the open `fix` rows phase ① has NO crew job for: an owner that is neither the Writer nor the
- * Researcher (an `editor`/`reader`/`checker` "fix" row in a phase with no Editor fix pass). They are
+ * Researcher (an `editor`/`critic`/`reader` "fix" row in a phase with no Editor fix pass). They are
  * neither Writer work nor researchable prerequisites, so the only honest move is the Author's
  * (`work.ts:openFixOwnershipTask`) — filtering them out of every set while nothing ran for them is the
  * silent ready-with-nothing-to-do state H2 exists to remove.
@@ -1779,7 +1854,7 @@ export function sampleFixDemand(store: Store, storyId: string, revision: Revisio
  * The ACCEPTED Summary text — the draft the Summary row currently carries, i.e. Revision N (§6.2a).
  *
  * Every refinement candidate is measured against THIS text: it is the base the Writer was handed, the
- * draft the screening Reader is shown next to the candidate, and the thing a new critical/major would
+ * draft the screening Critic is shown next to the candidate, and the thing a new critical/major would
  * be new IN. `undefined` means the Story has no accepted revision yet — round 1 — which is the one
  * state where nothing can regress and §6.5's initial-creation semantics still apply (R5).
  */
@@ -1822,7 +1897,7 @@ export function roundSampleScores(store: Store, storyId: string, round: number):
  * A round WITH an accepted base selects from the eligible set or from NOTHING. §6.5's least-bad path
  * was written for the First Revision, where there is no incumbent to protect; once the Author has
  * signed a text, installing the least bad of a round whose candidates all failed means accepting a
- * draft the round's own Readers rejected — and it used to close the very tasks it failed. That is the
+ * draft the round's own Critics rejected — and it used to close the very tasks it failed. That is the
  * ratchet this change removes, and the retry allowance (`samplingProgressOf`) is what bounds the
  * re-sampling instead.
  *
@@ -2063,7 +2138,7 @@ export function samplingBudgetSpent(store: Store, story: Story, round: number): 
 }
 
 /**
- * The claim key of one deep-review Reader pass over the SELECTED revision (§6.4 step 6).
+ * The claim key of one deep-review Critic pass over the SELECTED revision (§6.4 step 6).
  *
  * A separate family from `wi_screen_` on purpose: the screening passes are no-tool one-turn runs
  * that rank the samples, while these hold the tool catalogue and judge the winner. One ledger must
@@ -2085,10 +2160,10 @@ export const deepReviewRoundOf = (story: Story): number => story.sampling_round 
  * Is this revision the one the deep review is owed passes FOR? (T10/F7 — one condition, two readers)
  *
  * `work.ts` offers a `wi_review_*` pass only for the current round's selection, and the reason is not
- * cosmetic: the deep review is the review of the text the pipeline just chose, and a Reader pass bought
+ * cosmetic: the deep review is the review of the text the pipeline just chose, and a Critic pass bought
  * for a draft the loop has moved past answers nothing. So the SAME condition has to answer the ledger
  * question "what is still owed?" — otherwise an Author who selects an OLDER-round revision (the Summary
- * pane can select any draft of the Story) owes `summary_readers` passes that generation will never
+ * pane can select any draft of the Story) owes `summary_critics` passes that generation will never
  * offer, the drain names them as unmet work, and the sign-off waits on passes the loop cannot dispatch.
  * One predicate, read by the queue, the drain probe and the sign-off, so an older-round selection is
  * simply not the review target rather than a debt nobody can pay.
@@ -2318,7 +2393,7 @@ export const revisionReviewPlateau = (store: Store, story: Story): boolean =>
  *   * its deep review has FULLY closed (`deepReviewComplete`) — a half-read draft has not been judged
  *     yet, and counting it would put a pass that has not run on the record as a clean revision;
  *   * no blocking suspicion is still `unconfirmed` (`unconfirmedBlockingFindings`) — requirement 5's
- *     reconciliation. The Readers file UNCONFIRMED findings and the Editor's verification decides them
+ *     reconciliation. The Critics file UNCONFIRMED findings and the Editor's verification decides them
  *     (D-33); counting a suspicion before that decision is over, then having the Editor dispute it or
  *     re-cost it below the bar, would leave a permanent blocking regression in the audit for a defect
  *     nobody believes. This is also not a stall: those same unconfirmed rows already refuse the sampler
@@ -2350,7 +2425,7 @@ export function pendingRevisionReviewEntry(
  *
  * WHY A TASK AND NOT A STATUS: §4.1's `pending_kind` enum has no "question" member (L-36's comment
  * in ./status says the same), and P7's channel for "only the Author can decide this" is the queue.
- * `owner_role: 'author'` is the same shape `requestAuthor` writes (tools/checker.ts), and
+ * `owner_role: 'author'` is the same shape `requestAuthor` writes (tools/reader.ts), and
  * `reusePrefix` makes the call idempotent across sweeps: re-escalating every sweep would bury the
  * Author in identical rows.
  */
@@ -2365,7 +2440,7 @@ export function openEscalationTask(
         priority?: number;
         /**
          * The row's state. `open` (the default, and what every existing escalation writes) keeps the
-         * row in the queue as a hold on the drain; `blocked` is the shape `checker.ts:requestAuthor`
+         * row in the queue as a hold on the drain; `blocked` is the shape `reader.ts:requestAuthor`
          * uses for a question, and it is what `status.ts:decideStory` step 4 turns into the "the crew
          * asked you" Author wait — a `blocked` row is NOT dispatchable work, so the loop stops instead
          * of reading `ready` with nothing to run.
@@ -2437,7 +2512,7 @@ export function liveRuns(store: Store, storyId?: string): Run[] {
  * The lease itself is the run row's `updated_at`, checked by `lapsedRuns`.
  *
  * S-RUNTIME: `storyId` scopes the read to one Story, because some claim families carry no local id at
- * all (`wi_verify_ideas`, `wi_whole_check`, `wi_probe_reader_chapters_1`) and are therefore the SAME
+ * all (`wi_verify_ideas`, `wi_whole_check`, `wi_probe_critic_chapters_1`) and are therefore the SAME
  * string in two books. Under the per-Story layout a store holds one Story and the scope is a no-op;
  * in a book holding several, an unscoped read lets one Story's live run claim another Story's job, and
  * the second Story never gets the work it owes. Omitted means "any Story", which is what a caller that

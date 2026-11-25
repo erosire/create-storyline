@@ -5,7 +5,14 @@
 // broken, what the engine sees, how the machine is allowed to act). Putting them in the rail keeps
 // the content area to the one question the Author is asking.
 import { CostDistributionPanel } from './story-cost-distribution';
-import { isOpenFinding } from './story-contract';
+import {
+    EDITOR_GROUP_LOCKING_LABEL,
+    EDITOR_GROUP_LOCKING_NOTE,
+    findingKindLabel,
+    findingKindToken,
+    isEditorGroupLockingEnabled,
+    isOpenFinding
+} from './story-contract';
 import { FINDING_COSTS } from '../../shared/types';
 import type { Cost, LedgerEntry } from '../../shared/types';
 import type { StoryActions, StoryViewData } from './story-contract';
@@ -44,8 +51,11 @@ export interface SettingsPaneProps {
 }
 
 /**
- * D-35 / D-35b — the auto-approve dial. It is one decision with two jobs (which findings skip the
- * approval gate, and where the drain threshold sits), so it is one control on its own pane.
+ * The Settings folder: D-35 / D-35b's auto-approve dial, and R2's Editor-locking switch.
+ *
+ * Both are one decision each — which findings skip the approval gate (and where the drain threshold sits, since
+ * D-35b fused them), and whether the Editor may commit one Summary group — and both are the Author's to make, so
+ * they live on the one pane that answers "how may the machine act on my behalf?".
  */
 export function SettingsPane({ view, actions }: SettingsPaneProps) {
     const { story } = view;
@@ -54,8 +64,11 @@ export function SettingsPane({ view, actions }: SettingsPaneProps) {
         <section className="sv-pane sv-settings" aria-label="Settings">
             <header className="sv-pane-head">
                 <h3 className="sv-pane-title">Settings — how the machine may act</h3>
+                {/* The two dials named in one line, so the pane's own header says what is switchable here before
+                    the Author scrolls it. R2 added the second: the auto-approve dial still sets the gate AND the
+                    drain threshold, and the new switch says who may lock a phrase group. */}
                 <span className="sv-pane-badge">
-                    one dial sets the approval gate and the drain threshold (D-35, D-35b)
+                    the approval gate and the drain threshold (D-35, D-35b) · who may lock a phrase group (R2)
                 </span>
             </header>
 
@@ -96,6 +109,52 @@ export function SettingsPane({ view, actions }: SettingsPaneProps) {
                         );
                     })}
                 </ul>
+            </div>
+
+            <div className="sv-setting" data-testid="setting-editor-group-locking">
+                {/* R2 — THE EDITOR-LOCKING DIAL, and it is off until the Author says otherwise.
+  
+                    WHY IT SITS ON THIS PANE. Everything else here answers "how may the machine act on my
+                    behalf?" (D-35's dial is the same shape for the same reason): this one answers whether the
+                    Editor may commit ONE group of the Summary — a smaller decision than locking a phase, and a
+                    bigger one than approving a finding, because a locked group stops being editable and rewrites
+                    what the other four groups have to live with. Absent means OFF (`story-contract.
+                    isEditorGroupLockingEnabled`), so a Story written before the Setting exists — or a `PATCH` body
+                    that never mentioned it — keeps the rule the Author has always had.
+  
+                    THE SENTENCE IS THE DECISION. An Editor locking a group on its own judgement is easy to
+                    under-read from a label, so the note under the control says what the Editor weighs (the Critic
+                    findings open on that group NOW, and the Reader's score and rationale beside them — the same
+                    two facts this pane prints, which is why the Author can audit a lock after the fact) and who
+                    can undo it (only the Author — the Editor never lifts its own lock).
+  
+                    `checked` is the Setting's state rather than local state, and the write is an explicit boolean,
+                    so the box shows what the server echoed after `mutate` re-read the Story — not what was
+                    clicked (P1: the durable store is the only memory). With no verb bound, the box is disabled and
+                    says so (U-16), and the pane still tells the Author which way the Story currently stands. */}
+                <label className="sv-setting-row" data-testid="setting-editor-group-locking-row">
+                    <input
+                        type="checkbox"
+                        checked={isEditorGroupLockingEnabled(story)}
+                        disabled={!actions.setEditorGroupLocking}
+                        aria-label={EDITOR_GROUP_LOCKING_LABEL}
+                        data-testid="editor-group-locking"
+                        title={
+                            actions.setEditorGroupLocking
+                                ? isEditorGroupLockingEnabled(story)
+                                    ? 'Stop letting the Editor lock phrase groups: only you would commit a group again.'
+                                    : 'Let the Editor lock a phrase group in, on its own judgement over the Critic findings and the Reader score for it. Only you can unlock one.'
+                                : 'The Story settings route is not available in this shell, so the Setting cannot be changed.'
+                        }
+                        onChange={(event) =>
+                            void actions.setEditorGroupLocking?.(story.id, event.currentTarget.checked)
+                        }
+                    />
+                    <span className="sv-setting-name">{EDITOR_GROUP_LOCKING_LABEL}</span>
+                </label>
+                <p className="sv-setting-note" data-testid="editor-group-locking-note">
+                    {EDITOR_GROUP_LOCKING_NOTE}
+                </p>
             </div>
 
             <CostDistributionPanel distribution={view.cost_distribution} />
@@ -150,6 +209,18 @@ export function FindingsPane({ view }: { view: StoryViewData }) {
                     {open.map((finding) => (
                         <li className={`find-row find-row--${finding.cost}`} key={finding.id}>
                             <div className="find-head">
+                                {/* T3 — WHAT the row claims, ahead of what it costs. This folder is the desk's whole
+                                    findings list, so it is where the two types are read side by side: an Issue is a
+                                    contradiction the text has to repair, a Proposal is a change worth weighing. The
+                                    heading already says "what is broken, and what was fixed", and until now an
+                                    improvement was indistinguishable from a defect in here. */}
+                                <span
+                                    className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                                    data-testid={`finding-${finding.id}-kind`}
+                                >
+                                    {findingKindLabel(finding.kind)}
+                                </span>
+                                {' '}
                                 <span className="find-tags">
                                     <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
                                     <span className={`find-state find-state--${finding.state}`}>{finding.state}</span>
@@ -176,6 +247,16 @@ export function FindingsPane({ view }: { view: StoryViewData }) {
                         {closed.map((finding) => (
                             <li className={`find-row find-row--closed`} key={finding.id}>
                                 <div className="find-head">
+                                    {/* T3 — the closed list keeps its kind too: "fixed proposal" and "discarded
+                                        issue" are the two readings that tell the Author what the loop actually
+                                        did with the claim. */}
+                                    <span
+                                        className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                                        data-testid={`finding-${finding.id}-kind`}
+                                    >
+                                        {findingKindLabel(finding.kind)}
+                                    </span>
+                                    {' '}
                                     <span className="find-tags">
                                         <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
                                         <span className={`find-state find-state--${finding.state}`}>{finding.state}</span>

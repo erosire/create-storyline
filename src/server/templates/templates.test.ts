@@ -80,13 +80,14 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'writer-plotlines',
             'writer-chapters',
             'editor-general',
-            'reader-screening',
-            'reader-genre',
-            'reader-plausibility',
-            'reader-audience',
-            'reader-mystery',
-            'checker-consistency',
-            'checker-prose'
+            'critic-screening',
+            'editor-group-lock',
+            'critic-genre',
+            'critic-plausibility',
+            'critic-audience',
+            'critic-mystery',
+            'reader-consistency',
+            'reader-prose'
         ]);
 
         for (const template of BUILT_IN_TEMPLATES) {
@@ -98,17 +99,23 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(byName('writer-plotlines').serves_phase).toEqual(['plotlines']);
         expect(byName('writer-chapters').serves_phase).toEqual(['chapters']);
 
-        // The Seed-structuring Editor, the four deep-review Reader angles and the screening
-        // Reader, plus the two checkers.
+        // The Seed-structuring Editor, the group-lock Editor, the four deep-review Critic angles and the
+        // screening Critic, plus the two readers.
         expect(byName('editor-seed-structure').roles.map((role) => role.kind)).toEqual(['editor']);
         expect(byName('editor-general').roles.map((role) => role.kind)).toEqual(['editor']);
+        // R-lock: the lock review is an EDITOR seat (`loop/work.ts` candidate 2c dispatches it with
+        // roleKind `editor`), and the slug is the one `run/phase1-prompt.ts:GROUP_LOCK_TEMPLATE_SLUG`
+        // compiles its system turn from. The catalogue carrying the row is what replaces the
+        // `fallbackRolePrompt` stand-in, so the slug must be pinned here rather than only in the prompt
+        // tests — a rename on either side silently changes which copy the seat runs on.
+        expect(byName('editor-group-lock').roles.map((role) => role.kind)).toEqual(['editor']);
         expect(
-            ['reader-screening', 'reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery'].map(
+            ['critic-screening', 'critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery'].map(
                 (name) => byName(name).roles[0].kind
             )
-        ).toEqual(['reader', 'reader', 'reader', 'reader', 'reader']);
-        expect(byName('checker-consistency').roles[0].kind).toBe('checker');
-        expect(byName('checker-prose').roles[0].kind).toBe('checker');
+        ).toEqual(['critic', 'critic', 'critic', 'critic', 'critic']);
+        expect(byName('reader-consistency').roles[0].kind).toBe('reader');
+        expect(byName('reader-prose').roles[0].kind).toBe('reader');
     });
 
     it('the old tool-writing Summary Writer is gone: the Sampler is the only Phase-1 Writer', () => {
@@ -212,8 +219,8 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // A tool-less run holds nothing that could escalate, so no escalation rule is claimed.
         expect(sampler.escalation_rule).toBeUndefined();
 
-        // `reader-screening` — no tools, one turn, one `IssueList` of critical/high only.
-        const screening = byName('reader-screening');
+        // `critic-screening` — no tools, one turn, one `IssueList` of critical/high only.
+        const screening = byName('critic-screening');
 
         expect([
             screening.title,
@@ -221,9 +228,9 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             screening.attempts,
             screening.delegation,
             screening.max_concurrent
-        ]).toEqual(['Reader (screening)', ['summary'], 1, [], 6]);
+        ]).toEqual(['Critic (screening)', ['summary'], 1, [], 6]);
         expect(screening.roles.map((role) => [role.name, role.kind, role.web, role.agents])).toEqual([
-            ['reader', 'reader', false, 1]
+            ['critic', 'critic', false, 1]
         ]);
         expect(screening.roles[0].prompt).toContain('IssueList');
         expect(screening.roles[0].prompt).toContain('{"issues":[]}');
@@ -245,11 +252,11 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
     });
 
     it('H1/R6 — the calibration is Summary-only: the deep review keeps the minor/taste ladder', () => {
-        // The screening Reader is phase ①'s one-turn judge. The tool-using Readers rate artifacts in
+        // The screening Critic is phase ①'s one-turn judge. The tool-using Critics rate artifacts in
         // every phase (§6.4 step 6, phase ② and ③), and there minor and taste notes ARE part of the
         // answer — re-calibrating them would silently stop the prose review from reporting prose
         // problems, which is the opposite of what H1 asked for.
-        for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
+        for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery']) {
             // Each of the four states its own minor/taste line in its own words; what the assertion
             // pins is that the ladder is still there, and that phase ①'s wording rule did not leak
             // into a template that serves the prose phases.
@@ -257,16 +264,16 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             expect(byName(name).roles[0].prompt).not.toContain('are NOT issues at this phase');
         }
 
-        // Phase ③'s prose checker is the other half: wording is somebody's job, and it is not the
+        // Phase ③'s prose reader is the other half: wording is somebody's job, and it is not the
         // screening pass's (C-13).
-        expect(byName('checker-prose').roles[0].prompt).not.toContain('are NOT issues at this phase');
+        expect(byName('reader-prose').roles[0].prompt).not.toContain('are NOT issues at this phase');
     });
 
     it('T3 — the Writer is licensed to invent compatible specifics, not merely implications', () => {
         // The Author's rule: "Writer has liberty to fill in details not in the Seed. That is fine, and it
         // is not an issue." The sampler's prompt used to say the opposite — "an implication is legitimate,
         // a new setting rule or technology is not" — which is narrower than the licence and reads as a
-        // warning against exactly the invention the Readers then complained about.
+        // warning against exactly the invention the Critics then complained about.
         const sampler = byName('writer-summary-sampler').roles[0];
 
         expect(sampler.prompt).not.toContain('an implication is legitimate');
@@ -282,8 +289,8 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(sampler.prompt).toContain('The Seed itself is Author truth and is never edited (P5)');
     });
 
-    it('T3 — the screening Reader may not report Seed silence, and keeps every contradiction gate', () => {
-        const screening = byName('reader-screening').roles[0];
+    it('T3 — the screening Critic may not report Seed silence, and keeps every contradiction gate', () => {
+        const screening = byName('critic-screening').roles[0];
 
         // The two absence classes from the Author's screenshots, named in the words the role would use.
         expect(screening.prompt).toContain('stakes or consequences the Seed never stated');
@@ -312,42 +319,45 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // while its test still passed. If one of these sentences moves, the edit below has to move with
         // it deliberately — that is the point of the pin.
         const scoping: Record<string, { silence: string; laterPhases: string; improvement: string }> = {
-            'reader-genre': {
+            'critic-genre': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460): the Seed is general, not an outline, and the Writer may invent any detail it does not contradict \u2014 so an added detail, a Seed question left open, stakes the Seed never stated, and a payoff that arrives without earlier planting are not genre defects at this phase.',
                 laterPhases:
                     'The same setup-and-payoff checks stay in force in phases \u2461 and \u2462, where the plotlines and chapters do make those commitments.',
                 // D-33b: the angle's own improvement outlet. Convention can be satisfied AND outdone, and
-                // the second half is a proposal, not the defect this prompt spends its standing on.
+                // the second half is a proposal, not the defect this prompt spends its standing on. The
+                // cost clause is part of the pin: D-33b's ladder gives a proposal `major`/`minor`/`taste`
+                // and refuses `critical`, so an angle that names the kind without naming the ladder sends
+                // the Critic to a cost the tool will reject (`tools/reader.ts:raiseFinding`).
                 improvement:
-                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, file that with raiseFinding as `kind: improvement` (title it as a proposal, quote the passage it would improve, and say what changes and why the pass is worth it), because it is a proposal about a book that breaks nothing, not a defect.'
+                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, file that with raiseFinding as `kind: proposal` at cost `major` or `minor` (title it as a proposal, quote the passage it would improve, and say what changes and why the pass is worth it), because it is a proposal about a book that breaks nothing, not a defect.'
             },
-            'reader-plausibility': {
+            'critic-plausibility': {
                 silence:
                     'This is a plotline and chapter check: when the artifact under review is a SUMMARY (phase \u2460) there is no ledger and no earlier chapter yet, so "nothing established it" is not a factual doubt there, and the Writer is free to establish a fact the Seed never named as long as it contradicts nothing.',
                 laterPhases:
                     'Phases \u2461 and \u2462 keep every check above unchanged: there the ledger and the earlier chapters DO make those promises, and a setup that never arrives is a defect again.',
                 // D-33b: this angle is the one carrying a source, so its proposal is worth citing.
                 improvement:
-                    'And when the fact checks out but you can cite a better one, the truer detail the book could carry instead, say so with raiseFinding as `kind: improvement`: quote the passage it would improve, name the source that supports the better version, and keep it a proposal rather than a defect, because a text that is merely improvable has broken nothing.'
+                    'And when the fact checks out but you can cite a better one, the truer detail the book could carry instead, say so with raiseFinding as `kind: proposal`: quote the passage it would improve, name the source that supports the better version, and keep it a proposal rather than a defect, because a text that is merely improvable has broken nothing.'
             },
-            'reader-audience': {
+            'critic-audience': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460), none of those complaints has a page to stand on unless the Summary itself promises the setup and then breaks it: the Seed is general, the Writer may invent any detail the Seed does not rule out, and an unpaid setup, an unstated stake or a consequence the Seed left open is not a reader complaint at this phase.',
                 laterPhases: 'Phases \u2461 and \u2462 keep the full list \u2014 there the book has made the promise and owes the payoff.',
                 // D-33b: this angle's signature complaint IS an absence ("the payoff arrived without the
                 // setup"). Stood down at phase ① it had nowhere to go; it now routes to the proposal kind.
                 improvement:
-                    'file it with raiseFinding as `kind: improvement`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.'
+                    'file it with raiseFinding as `kind: proposal`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.'
             },
-            'reader-mystery': {
+            'critic-mystery': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460): there is no ledger and no chapter order yet, so do not file "it was never planted" or "the answer arrives without its setup" against one \u2014 the Writer is allowed to bring in what the Seed never stated, and the Summary\u2019s own ending is not owed an earlier hint.',
                 laterPhases: 'Phases \u2461 and \u2462 keep every setup-and-payoff check in this prompt unchanged.',
                 // D-33b: "this came too early" was the SUSPICION framing; at phase ① there is no planting
                 // to jump, so the sentence is really a reorder request.
                 improvement:
-                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: file it with raiseFinding as `kind: improvement`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.'
+                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: file it with raiseFinding as `kind: proposal`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.'
             }
         };
 
@@ -355,7 +365,7 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             const prompt = byName(name).roles[0].prompt;
 
             // The scoping marker itself: the rule is phase-①-only, written as a condition, not a
-            // blanket "absences are free" that would travel into the chapter phases. `reader-plausibility`
+            // blanket "absences are free" that would travel into the chapter phases. `critic-plausibility`
             // spells it mid-sentence after a colon, so the marker is matched case-insensitively — the
             // role's FULL sentence is pinned exactly below, which is where the wording is actually held.
             expect(prompt).toMatch(/when the artifact under review is a summary/i);
@@ -373,9 +383,84 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         }
 
         // The ledger machinery this angle is built on is still there for the phases that have a ledger.
-        expect(byName('reader-mystery').roles[0].prompt).toContain('Read the ledger');
-        expect(byName('reader-plausibility').roles[0].prompt).toContain('C-5, C-6');
-        expect(byName('reader-audience').roles[0].prompt).toContain('payoff that arrived without the setup');
+        expect(byName('critic-mystery').roles[0].prompt).toContain('Read the ledger');
+        expect(byName('critic-plausibility').roles[0].prompt).toContain('C-5, C-6');
+        expect(byName('critic-audience').roles[0].prompt).toContain('payoff that arrived without the setup');
+    });
+
+    it('D-33c/D-33d — every role that is invited to propose is told, in its own words, that issues come first', () => {
+        // WHY THIS IS PINNED PER ROLE, IN FULL SENTENCES, AND NOT ONCE GLOBALLY: the filing rule and the
+        // approval rule are enforced in CODE (`tools/reader.ts:raiseFinding`, `tools/editor.ts:approveFinding`)
+        // and stated in the engine-owned brief (`run/brief.ts`), and neither of those is Author-editable.
+        // What IS editable is the role prompt — and the sentence that invites each angle to file a
+        // proposal is the sentence the model actually acts on. An angle whose invitation says "file the
+        // improvement" and nothing else sends the Critic into a refusal it has to spend a turn decoding,
+        // which is the same failure T3 pinned for the absence rule. So the gating note is pinned for each
+        // angle that has an outlet, in that angle's own wording: deleting one is a regression in one
+        // angle's behaviour, and a regex would let three of the four silently disappear.
+        const gating: Record<string, { outlet: string; review: string }> = {
+            'critic-genre': {
+                outlet:
+                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring the genre move in a pass that has none left.',
+                review:
+                    'This is a review pass unless the job says otherwise: report defects, and file a genuine improvement as a `kind: proposal` finding rather than an Idea — do not restock the Ideas tray. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file genre moves with proposeIdea and read the decided Ideas first (readIdeas, D-28, D-32).'
+            },
+            'critic-plausibility': {
+                outlet:
+                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring the sourced improvement in a pass that has none left.',
+                review:
+                    'This is a review pass unless the job says otherwise: report findings, and file a genuine improvement as a `kind: proposal` finding rather than an Idea. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file the sourced possibility with proposeIdea (D-26, D-27).'
+            },
+            'critic-audience': {
+                outlet:
+                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring what readers deserve in a pass that has none left.',
+                review:
+                    'This is a review pass unless the job says otherwise: report findings only — a genuine improvement is filed as a `kind: proposal` finding, not restocked in the Ideas tray. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, propose the fix as an Idea (proposeIdea) — you are expected to be wrong often, and that is what makes proposing cheap (D-28); consult the decided Ideas first (readIdeas, D-32).'
+            },
+            'critic-mystery': {
+                outlet:
+                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the pacing defect in this pass and bring the reorder in a pass that has none left.',
+                review:
+                    'This is a review pass unless the job says otherwise: report findings, and file a genuine improvement as a `kind: proposal` finding rather than an Idea. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file reorderings, withheld reveals and moved plantings with their reasoning (proposeIdea), checking what is already decided first (readIdeas, D-32). Never write the book, and never propose removing the mystery altogether — the Author kept it for a reason you can read in the Seed (P5).'
+            }
+        };
+
+        for (const [name, clauses] of Object.entries(gating)) {
+            const prompt = byName(name).roles[0].prompt;
+
+            // The outlet sentence: the invitation and its gate, in the same breath.
+            expect(prompt).toContain(clauses.outlet);
+            // The standing "this is a review pass" line, which is the sentence a pass with no Summary
+            // defect still reads — and the one that used to end at "do not restock the Ideas tray".
+            expect(prompt).toContain(clauses.review);
+        }
+
+        // The Consistency reader files Proposals too (D-33b moved its "preference" there), so the same
+        // gate is written where its cost ladder is written.
+        expect(byName('reader-consistency').roles[0].prompt).toContain(
+            'A Proposal is also the LAST thing you file, not a side order: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call, and an issue and a Proposal never share a pass (D-33c) — report the contradictions and bring the preference once the book has no defect left to answer.'
+        );
+
+        // The Editor is the OTHER half: a Critic told not to file is a saved round, an Editor not told is
+        // a turn spent calling a tool that refuses. This paragraph is the Author-editable twin of the
+        // engine-owned `run/brief.ts:jobStatement('verify_findings')` sentence, and the convention that
+        // rules appearing in both places stay in sync (`knowledge.md`) is what this pin holds.
+        expect(byName('editor-general').roles[0].prompt).toContain(
+            'ISSUES IN FOCUS (D-33d). Issues before anything else: while this Story has an unresolved issue — `fixed` or `discarded` is what closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold it open — `approveFinding` REFUSES a row marked `proposal`, and the auto-approve dial skips it too. Nothing else outranks a defect the crew has already agreed to: verify and decide the issues first, and the proposals queue behind them. A proposal you cannot approve yet stays `confirmed` rather than being forced through, and discarding a proposal is always allowed, because declining a change is not an approval. An ISSUE row is never held by this rule — working the defects is exactly what releases the proposals.'
+        );
+
+        // D-17c/P12: `selection_rules` is the Author's own rulebook — the one prompt they are invited to
+        // rewrite — so the priority order the rule encodes lives here as well. An Author who strips rule
+        // 10 loses the INTENT while the code still refuses, which is exactly the drift a pin catches.
+        expect(byName('editor-general').selection_rules ?? '').toContain(
+            '10. Issues before proposals: while the book has an unresolved defect, the round belongs to the defects (D-33d). Approve and route the issues first, and let a Proposal wait its pass — approving a suggestion over an open break spends the Writer round on the wrong question. Discarding a Proposal you will not take is always the right move; holding an issue open to block one is not.'
+        );
+
+        // And the one phase-① pass that gets NO note: the screening pass runs with no tools at all, so it
+        // cannot file a Proposal and has nothing to sequence. Pinning its absence keeps a future edit from
+        // pasting a tool sentence into a tool-less prompt (D-30's no-tools contract).
+        expect(byName('critic-screening').roles[0].prompt).not.toContain('D-33c');
+        expect(byName('critic-screening').roles[0].prompt).not.toContain('raiseFinding');
     });
 
     it('T3 — the Editor disputes an omission-only finding instead of confirming the absence', () => {
@@ -397,14 +482,14 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // same two modes). Without it an Author reading only the template still believes every absence is
         // a dispute, and the copy the loop runs on is the one the Author edits.
         expect(editor.prompt).toContain(
-            'A finding marked `improvement` is the one claim this test does NOT judge: the Reader is proposing a change the Seed never had to promise, so weigh it on merit \u2014 `confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, never merely because the Seed never promised it.'
+            'A finding marked `proposal` is the one claim this test does NOT judge: the Critic is proposing a change the Seed never had to promise, so weigh it on merit \u2014 `confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, never merely because the Seed never promised it.'
         );
     });
 
     it('T3 — the Seed-structuring Editor records a silent field as open, not as an invented blank', () => {
         // A required scalar the Seed says nothing about has to be recorded as open (empty string +
         // `open_questions`), because the prompts now render an empty field as an open choice. Left unsaid,
-        // the Editor invents a stake to fill the box — and a Reader later reports the invented absence.
+        // the Editor invents a stake to fill the box — and a Critic later reports the invented absence.
         const structure = byName('editor-seed-structure').roles[0];
 
         expect(structure.prompt).toContain('a field the Seed leaves silent goes to open_questions');
@@ -413,7 +498,7 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // Seed leaving the choice OPEN, and this sentence is what tells the Editor that downstream
         // reading is intended rather than a promise the Summary is expected to pay.
         expect(structure.prompt).toContain(
-            'the prompts render an empty field as the Seed leaving it OPEN, which is what tells the Writer and the Readers that filling it compatibly is allowed and not a broken promise'
+            'the prompts render an empty field as the Seed leaving it OPEN, which is what tells the Writer and the Critics that filling it compatibly is allowed and not a broken promise'
         );
 
         expect(byName('editor-seed-structure').selection_rules).toContain(
@@ -428,14 +513,14 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(byName('writer-plotlines').attempts).toBe(2);
         expect(byName('writer-chapters').attempts).toBe(2);
 
-        // A checker or Editor that reported once per unit; `attempts` is the divergence dial, and
+        // A reader or Editor that reported once per unit; `attempts` is the divergence dial, and
         // on these two it is the Author's setting rather than an engine constant (D-38a).
         expect(byName('editor-general').attempts).toBe(1);
-        expect(byName('checker-consistency').attempts).toBe(1);
+        expect(byName('reader-consistency').attempts).toBe(1);
     });
 
-    it('D-30 / T-6b: the deep-review Readers are defined by their instructions and hold web research', () => {
-        for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
+    it('D-30 / T-6b: the deep-review Critics are defined by their instructions and hold web research', () => {
+        for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery']) {
             const role = byName(name).roles[0];
 
             expect(role.web).toBe(true);
@@ -447,13 +532,13 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
 
         // The plausibility angle is the one whose value IS research, so it is told to fetch the
         // source it cites rather than trusting a snippet (D-27, T-10).
-        expect(byName('reader-plausibility').roles[0].prompt).toContain('fetchPage');
+        expect(byName('critic-plausibility').roles[0].prompt).toContain('fetchPage');
     });
 
-    it('the screening Reader is the exception: no tools, one turn, defects only', () => {
+    it('the screening Critic is the exception: no tools, one turn, defects only', () => {
         // `toolMode: 'none'` (§6.2): a screening pass holds no `proposeIdea` and no web, because
         // its answer is one schema-validated JSON object and its issues are ranked, not debated.
-        const screening = byName('reader-screening').roles[0];
+        const screening = byName('critic-screening').roles[0];
 
         expect(screening.web).toBe(false);
         expect(screening.prompt).not.toContain('proposeIdea');
@@ -467,15 +552,15 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // the Author can rewrite — the marker is the product's core tuning affordance.
         expect(rules.length).toBeGreaterThan(200);
         expect(rules).toContain('Edit me');
-        expect(byName('checker-prose').roles[0].prompt).toContain('selection_rules');
+        expect(byName('reader-prose').roles[0].prompt).toContain('selection_rules');
     });
 
-    it('G-3a: the prose checker\u2019s whole standard is inside the book, so it does not browse', () => {
-        expect(byName('checker-prose').serves_phase).toEqual(['chapters']);
-        expect(byName('checker-prose').roles[0].web).toBe(false);
+    it('G-3a: the prose reader\u2019s whole standard is inside the book, so it does not browse', () => {
+        expect(byName('reader-prose').serves_phase).toEqual(['chapters']);
+        expect(byName('reader-prose').roles[0].web).toBe(false);
 
-        // The consistency checker reads the whole chain at every phase (C-2…C-9, L-8a).
-        expect(byName('checker-consistency').serves_phase).toEqual(['summary', 'plotlines', 'chapters']);
+        // The consistency reader reads the whole chain at every phase (C-2…C-9, L-8a).
+        expect(byName('reader-consistency').serves_phase).toEqual(['summary', 'plotlines', 'chapters']);
     });
 
     it('D-17e: only the Writer and the selection Editor templates declare in-run delegation, and every target is a role', () => {
@@ -487,17 +572,102 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'editor-seed-structure': [],
             'researcher-story': [],
             'writer-summary-sampler': [],
-            'writer-plotlines': ['checker'],
-            'writer-chapters': ['checker'],
-            'editor-general': ['reader', 'checker'],
-            'reader-screening': [],
-            'reader-genre': [],
-            'reader-plausibility': [],
-            'reader-audience': [],
-            'reader-mystery': [],
-            'checker-consistency': [],
-            'checker-prose': []
+            'writer-plotlines': ['reader'],
+            'writer-chapters': ['reader'],
+            'editor-general': ['critic', 'reader'],
+            'critic-screening': [],
+            'editor-group-lock': [],
+            'critic-genre': [],
+            'critic-plausibility': [],
+            'critic-audience': [],
+            'critic-mystery': [],
+            'reader-consistency': [],
+            'reader-prose': []
         });
+    });
+
+    // R-LOCK — the Editor's lock review (`Story.editor_group_locking`). The seat itself is
+    // `loop/work.ts` candidate 2c and its contract lives in `loop/editor-lock.ts`; what the CATALOGUE
+    // owes the feature is a row whose slug the seat names and whose copy states the judgement. Before
+    // this row existed the seat ran on `run/phase1-prompt.ts:fallbackRolePrompt`, which is a stated
+    // absence (§8) rather than a crew the Author can read, duplicate and rewrite (D-17).
+    it('R-lock — the catalogue carries the Editor\'s lock review, and its copy states a judgement rather than a cutoff', () => {
+        const lock = byName('editor-group-lock');
+        const role = lock.roles[0];
+
+        // The row's shape mirrors `critic-screening`: a tool-less, one-turn, structured-answer seat at
+        // phase ①. `attempts: 1` because there is nothing to diverge (one section, one answer), and
+        // `max_concurrent: 1` because the vector's five seats share the sweep's ceiling and five locks
+        // racing five reviews buys nothing (`work.ts:candidate` reads this for the S-5 ceiling).
+        expect([lock.title, lock.serves_phase, lock.attempts, lock.delegation, lock.max_concurrent]).toEqual([
+            'Editor — group lock review',
+            ['summary'],
+            1,
+            [],
+            1
+        ]);
+        expect(lock.roles.map((entry) => [entry.name, entry.kind, entry.web, entry.agents])).toEqual([
+            ['editor', 'editor', false, 1]
+        ]);
+        // A tool-less run cannot ask the Author anything, so there is no escalation rule — the
+        // escalation IS the section staying unlocked (`loop/editor-lock.ts` re-arms on the next clean
+        // selection, and the settle's refusals all write nothing).
+        expect(lock.next_phase).toBe('');
+        expect(lock.escalation_rule).toBeUndefined();
+
+        // D-17c: every Editor template owes the Author's taste in their own words. This seat selects
+        // nothing, so the field carries the taste the LOCK is measured against — and it is the only
+        // place in the row an Author is invited to rewrite the standard.
+        expect((lock.selection_rules ?? '').trim().length).toBeGreaterThan(0);
+        expect(lock.selection_rules ?? '').toContain('Settled means the section carries its own commitments in its own words, not that it reads well.');
+        expect(lock.selection_rules ?? '').toContain(
+            "A lock is the Author's to undo and the crew's to respect: never lock a section to end an argument you have not settled."
+        );
+
+        // The evidence the seat is actually shown (`loop/editor-lock.ts:editorLockEvidenceOf`), named in
+        // the copy so an Editor reading the brief weighs the right blocks: the Critic's open claims and
+        // Proposals, and the Reader's number WITH its reason (a bare number is exactly the input the
+        // Author refused to make a rule out of — D-65's exception stops at display).
+        expect(role.prompt).toContain(
+            "the open Critic claims and Proposals that name it, the claims about it that already closed, and the neighbouring sections that already stand LOCKED beside it"
+        );
+        expect(role.prompt).toContain("the Reader's reading of that text (the number AND its reason and the line it quotes)");
+        expect(role.prompt).toContain('Weigh the Reader\'s REASON.');
+
+        // THE ABSENCE THAT MATTERS MOST (D-69 amends the D-65 boundary, it does not move it): this seat
+        // must carry no NUMBER anywhere, because a number in the copy of a seat that decides a lock is a
+        // score cutoff arriving through prose an Author edits. Pinning "no digit at all" is the exact,
+        // checkable form of "there is no threshold here" — `0–100`, a percentage, `88`, a `C-14` criterion
+        // id would all fail it, and the engine-owned `GROUP_LOCK_INSTRUCTION` is where the two halves of
+        // `lock: true` are actually binding.
+        for (const prose of [role.prompt, lock.selection_rules ?? '', lock.done_definition, lock.description ?? '']) {
+            expect(prose).not.toMatch(/\d/);
+        }
+
+        // A NEGATIVE decision is a first-class answer, not a shrug: it must be permitted, it must be
+        // described as ordinary (the seat re-arms on the next clean vector, so refusing costs one pass),
+        // and it must carry a reason like every other verdict in this product (D-15).
+        expect(role.prompt).toContain('`lock: false` is the ordinary answer, and it is a complete one.');
+        expect(role.prompt).toContain('There is no quota of locks this round has to produce');
+        expect(role.prompt).toContain('Whichever way you answer, `rationale` must be non-blank');
+
+        // What the flag COSTS, because a seat that feels weightless locks things by accident: the crew
+        // stops rewriting the section, the claims against it stop being work, and only the Author can
+        // undo it (`phrase/locks.ts:unlockPhraseGroup` refuses any other actor).
+        expect(role.prompt).toContain(
+            "no Writer pass may rewrite it again, every claim still open against it stops being work, and every other section is then revised to agree with it"
+        );
+        expect(role.prompt).toContain('Only the Author can undo it.');
+
+        // One section per seat, five seats per clean vector: a pass that graded the whole Overview would
+        // spend five seats on one judgement and collapse five decisions into one.
+        expect(role.prompt).toContain('This pass decides ONE section.');
+
+        // And the tool-less contract, held the same way `critic-screening` holds it: nothing in this copy
+        // may tell the seat to call a tool it does not have.
+        expect(role.prompt).toContain('You have NO tools in this run and exactly one turn');
+        expect(role.prompt).not.toContain('raiseFinding');
+        expect(role.prompt).not.toContain('approveFinding');
     });
 });
 
@@ -510,7 +680,7 @@ describe('W8 — T-0 structural assignment rules', () => {
         }
 
         // §6.4's four Phase-1 pipeline crews, the two later-phase Writers, §14 item 10's four
-        // deep-review angles and the one selection Editor are all in it; the prose checker is the
+        // deep-review angles and the one selection Editor are all in it; the prose reader is the
         // opt-in crew, which is why U-8 (not the default) assigns it.
         //
         // `editor-general` leads the Editor pair on purpose: an unbound Editor job (`verify_findings`,
@@ -522,14 +692,18 @@ describe('W8 — T-0 structural assignment rules', () => {
             'editor-seed-structure',
             'researcher-story',
             'writer-summary-sampler',
-            'reader-screening',
+            'critic-screening',
+            // R-lock: the lock review rides along so the Author can see and duplicate the crew (its
+            // position is free — the seat binds its slug explicitly and the prompt resolves from the
+            // catalogue), and it sits after `editor-general` so the unbound-Editor pick is unchanged.
+            'editor-group-lock',
             'writer-plotlines',
             'writer-chapters',
-            'reader-genre',
-            'reader-plausibility',
-            'reader-audience',
-            'reader-mystery',
-            'checker-consistency'
+            'critic-genre',
+            'critic-plausibility',
+            'critic-audience',
+            'critic-mystery',
+            'reader-consistency'
         ]);
     });
 
@@ -558,27 +732,27 @@ describe('W8 — T-0 structural assignment rules', () => {
         ]);
     });
 
-    it('T-0 / D-33: a Reader or checker assigned without an Editor is refused', () => {
+    it('T-0 / D-33: a Critic or reader assigned without an Editor is refused', () => {
         // Someone is about to file findings the loop would act on unverified.
-        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'reader-genre'])).toEqual([
-            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Reader or checker finding must be verified before the loop acts on it (D-33, T-0)'
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'critic-genre'])).toEqual([
+            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Critic or reader finding must be verified before the loop acts on it (D-33, T-0)'
         ]);
 
-        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'checker-consistency'])).toHaveLength(
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'reader-consistency'])).toHaveLength(
             1
         );
 
-        // The screening Reader is a Reader too — its issues rank samples, but the rule that a
-        // non-Writer crew needs an Editor does not care which Reader flavour it is.
-        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'reader-screening'])).toEqual([
-            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Reader or checker finding must be verified before the loop acts on it (D-33, T-0)'
+        // The screening Critic is a Critic too — its issues rank samples, but the rule that a
+        // non-Writer crew needs an Editor does not care which Critic flavour it is.
+        expect(validateAssignment(storyAt('summary'), ['writer-summary-sampler', 'critic-screening'])).toEqual([
+            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Critic or reader finding must be verified before the loop acts on it (D-33, T-0)'
         ]);
     });
 
     it('T-0 / D-23: attempts > 1 without an Editor is refused — nobody would choose between the drafts', () => {
         // `writer-chapters` alone: attempts 2, and no Editor anywhere.
         expect(validateAssignment(storyAt('chapters'), ['writer-chapters'])).toEqual([
-            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Reader or checker finding must be verified before the loop acts on it (D-33, T-0)'
+            'assignment needs an Editor template: drafts compete once attempts > 1 (D-23) and every Critic or reader finding must be verified before the loop acts on it (D-33, T-0)'
         ]);
 
         // The same crew with the Editor present is legal (D-38a: the count is the Author's call).
@@ -637,7 +811,7 @@ describe('D-17 — built-ins are duplicated, never edited in place', () => {
 
         expect(source.roles[0].prompt).not.toBe('edited into the Author\u2019s voice');
         expect(source.serves_phase).toEqual(['summary', 'plotlines', 'chapters']);
-        expect(source.delegation).toEqual(['reader', 'checker']);
+        expect(source.delegation).toEqual(['critic', 'reader']);
     });
 
     it('a duplicate whose name is not a slug is refused rather than written into the catalogue', () => {
@@ -719,12 +893,12 @@ describe('W8 — validateTemplate refuses the harnesses that cannot run', () => 
 
         ghostDelegate.delegation = ['poet'];
         expect(validateTemplate(ghostDelegate)).toEqual([
-            'template editor-ghost.delegation names "poet", which is neither a role kind (writer, editor, reader, checker, researcher) nor one of this template\u2019s roles (D-17e)'
+            'template editor-ghost.delegation names "poet", which is neither a role kind (writer, editor, critic, reader, researcher) nor one of this template\u2019s roles (D-17e)'
         ]);
     });
 
     it('a duplicate of a duplicated crew keeps being editable (D-17 chains, and the copy stays independent)', () => {
-        const first = duplicateTemplate(byName('checker-prose'), 'prose-cold');
+        const first = duplicateTemplate(byName('reader-prose'), 'prose-cold');
         const second = duplicateTemplate(first, 'prose-colder');
 
         expect([second.builtin, second.editable]).toEqual([false, true]);
@@ -732,7 +906,7 @@ describe('W8 — validateTemplate refuses the harnesses that cannot run', () => 
 
         second.roles[0].prompt = 'third voice';
 
-        expect(byName('checker-prose').roles[0].prompt).not.toBe('third voice');
+        expect(byName('reader-prose').roles[0].prompt).not.toBe('third voice');
         expect(first.roles[0].prompt).not.toBe('third voice');
     });
 });
@@ -774,9 +948,9 @@ describe('SUMMARY PHRASE — the built-in crews are taught the five-group contra
     });
 
     it('the screening Reviewer is taught both modes, the scope it owes, and the closure join', () => {
-        const prompt = promptOf('reader-screening');
+        const prompt = promptOf('critic-screening');
 
-        // One row serves both phase-① Reader modes (`compileGroupReviewPrompt` / `compileScreenPrompt`).
+        // One row serves both phase-① Critic modes (`compileGroupReviewPrompt` / `compileScreenPrompt`).
         expect(prompt).toContain('`GroupReview` on a group-managed book');
         expect(prompt).toContain('`IssueList` on a book still sampled whole');
         expect(prompt).toContain('the OVERVIEW: the five Summary groups as the book now holds them');
@@ -799,9 +973,9 @@ describe('SUMMARY PHRASE — the built-in crews are taught the five-group contra
     });
 
     it('every tool-carrying review angle scopes a Summary defect to its groups (R3)', () => {
-        // The refusal is the reason: `tools/checker.ts:raiseFinding` refuses an unscoped Summary finding
+        // The refusal is the reason: `tools/reader.ts:raiseFinding` refuses an unscoped Summary finding
         // on a group-managed book, so a role that is not told this burns the pass on a refusal.
-        for (const name of ['reader-genre', 'reader-plausibility', 'reader-audience', 'reader-mystery']) {
+        for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery']) {
             const prompt = promptOf(name);
 
             expect(prompt).toContain('raiseFinding');
@@ -810,15 +984,15 @@ describe('SUMMARY PHRASE — the built-in crews are taught the five-group contra
         }
 
         // Each angle states the one-finding rule in its own terms (and the mystery angle in BOTH groups').
-        expect(promptOf('reader-genre')).toContain('ONE finding naming three groups');
-        expect(promptOf('reader-genre')).toContain('judge the groups AGAINST EACH OTHER');
-        expect(promptOf('reader-plausibility')).toContain('ONE finding naming three groups, never three findings');
-        expect(promptOf('reader-audience')).toContain('keep it ONE finding however many groups it names');
-        expect(promptOf('reader-mystery')).toContain('never name one you have not quoted from');
+        expect(promptOf('critic-genre')).toContain('ONE finding naming three groups');
+        expect(promptOf('critic-genre')).toContain('judge the groups AGAINST EACH OTHER');
+        expect(promptOf('critic-plausibility')).toContain('ONE finding naming three groups, never three findings');
+        expect(promptOf('critic-audience')).toContain('keep it ONE finding however many groups it names');
+        expect(promptOf('critic-mystery')).toContain('never name one you have not quoted from');
 
-        // The Consistency checker scopes a Summary defect by group and every later defect by its artifact.
-        expect(promptOf('checker-consistency')).toContain('group_refs');
-        expect(promptOf('checker-consistency')).toContain('needs no group ids');
+        // The Consistency reader scopes a Summary defect by group and every later defect by its artifact.
+        expect(promptOf('reader-consistency')).toContain('group_refs');
+        expect(promptOf('reader-consistency')).toContain('needs no group ids');
     });
 
     it('the Researcher feeds whichever phase-① prompt exists, so it is not taught "the sampler"', () => {

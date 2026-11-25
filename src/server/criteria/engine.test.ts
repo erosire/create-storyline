@@ -33,7 +33,7 @@ import { CriteriaEngine, type CriterionResult } from './engine';
 // model: the fixtures are writes, and the engine under test only reads them.
 const AUTHOR: Attribution = { run_ref: null, author: true, why: 'author seeds the story' };
 const WRITER: Attribution = { run_ref: 'run_0', why: 'writer produces the artifact' };
-const CHECKER: Attribution = { run_ref: 'run_1', why: 'checker submits the verdict' };
+const READER: Attribution = { run_ref: 'run_1', why: 'reader submits the verdict' };
 
 // ---------------------------------------------------------------------------
 // Fixtures — only the fields §4 marks required, so a test cannot invent a field and pass on it
@@ -129,14 +129,14 @@ function createVerdict(
             story_id: storyId,
             target_ref: targetRef,
             target_kind: targetKind,
-            run_ref: CHECKER.run_ref ?? undefined,
+            run_ref: READER.run_ref ?? undefined,
             round: 1,
             criteria_passed: lines,
             hard_pass: lines.every((line) => line.result),
             soft_count: lines.filter((line) => line.result).length,
             recommendation: 'fix'
         },
-        CHECKER
+        READER
     );
 }
 
@@ -791,7 +791,7 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
     it('is not answered by a verdict against a competing DRAFT — the Goal reads artifact targets only (§6.2a, D-21, D-22)', () => {
         const chapter = createChapter(store, story.id, 1);
 
-        // The unit-level report says the chapter fails C-7. A checker pointed at one draft (§6.2a's loop
+        // The unit-level report says the chapter fails C-7. A reader pointed at one draft (§6.2a's loop
         // B) files against `revision_N`, and that judgement is about a PROSE ALTERNATIVE, not the stored
         // artifact. If a draft verdict could satisfy the criterion, the loop would read the Goal as
         // passing off the strength of a draft that D-22 deletes one commit later.
@@ -852,7 +852,7 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
     });
 
     it('reads the SELECTED Summary draft’s verdict as the Summary’s own — the phase-① book that never named the Summary (C-14, §6.4 step 6, CS-VERDICT-1b)', () => {
-        // The state a real phase-① run leaves behind: the Reader rated the draft the brief showed it
+        // The state a real phase-① run leaves behind: the Critic rated the draft the brief showed it
         // (every `revision_N` row the round produced), and nothing was ever filed at the Summary row.
         // C-14's scope is still the Summary record (`engine.ts:scopeTargets`); what changed is that a
         // verdict on the draft that Summary row CURRENTLY carries is read as that row's evidence
@@ -1030,7 +1030,7 @@ describe('CriteriaEngine — judge criteria aggregate from verdicts (D-15)', () 
                 state: 'confirmed',
                 seen_count: 1
             },
-            CHECKER
+            READER
         );
         createVerdict(store, story.id, plotline.id, 'plotline', [line('C-3', false, '', 'finding_0')]);
 
@@ -1400,7 +1400,7 @@ function selectedIdea(
         phase: 'summary',
         body: 'The 1953 flood was real; the valley was flooded on purpose.',
         kind: 'fact',
-        author: 'reader_distant',
+        author: 'critic_distant',
         sources: [
             {
                 url_or_title: 'County Water Board, p. 41',

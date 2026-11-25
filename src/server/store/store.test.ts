@@ -441,7 +441,7 @@ describe('Store.commit — one decision, one group (D-22)', () => {
             phase,
             body,
             kind: 'possibility' as const,
-            author: 'reader-genre',
+            author: 'critic-genre',
             sources: [],
             fingerprint: `fp_${body}`,
             seen_count: 1,
@@ -536,7 +536,10 @@ describe('Store persistence — the two files (P1, L-3, D-12a)', () => {
             // `close()` flushed, so the store file is the current memory (P1).
             const snapshot = JSON.parse(await readFile(path.join(root, 'store.json'), 'utf-8'));
 
-            expect(snapshot.version).toBe(2);
+            // v4: the Reviewed Summary's persisted state (`group_revisions[].state: 'discarded'`, the Clean
+            // stamp and the Phrase row's choice record) is the wire break this build writes
+            // (persist.ts `SNAPSHOT_VERSION`).
+            expect(snapshot.version).toBe(4);
             // v2 counters are the NEXT id to mint, and ids are zero-based: one story (`story_0`)
             // means the next create is `story_1`, so the file says 1.
             expect(snapshot.counters.stories).toBe(1);
@@ -594,7 +597,9 @@ describe('Store persistence — the two files (P1, L-3, D-12a)', () => {
 
             await writeFile(
                 path.join(root, 'store.json'),
-                // version 2: the format this build writes (persist.ts `SNAPSHOT_VERSION`).
+                // version 2: the format a PREVIOUS build wrote. `SNAPSHOT_VERSION` is now 4
+                // (v3 renamed the Checker kind to Reader, v4 added the Reviewed Summary's persisted state),
+                // and the loader still reads this book as-is.
                 JSON.stringify({ version: 2, counters: {}, records: {}, journal: events })
             );
 
@@ -770,7 +775,9 @@ describe('Story-bound Store — one Store is one story', () => {
 
             const snapshot = JSON.parse(await readFile(path.join(dir, 'store.json'), 'utf-8'));
 
-            expect(snapshot.version).toBe(2);
+            // v4: the Reviewed Summary's persisted state (persist.ts `SNAPSHOT_VERSION`) is the wire break
+            // this build writes, and a story-bound book carries its `story_id` alongside it.
+            expect(snapshot.version).toBe(4);
             expect(snapshot.story_id).toBe(STORY_A);
 
             // The same folder reopens as the same story, journal and all.

@@ -59,6 +59,8 @@ function Shell() {
         storyViews,
         phrases,
         phraseErrors,
+        reviewedErrors,
+        groupLockErrors,
         templates,
         agents,
         selectedAgent,
@@ -93,8 +95,23 @@ function Shell() {
     // cannot answer that: an absent entry means both. The failure is the phrase read's own, so the Story
     // payload, the folders and the rest of the desk keep rendering exactly as they did.
     const phraseError = activeStoryId ? phraseErrors[activeStoryId] : undefined;
+    // D-68 — the choose's cached refusal travels with the frame for the same reason, so the Summary tab can
+    // print the 409's own sentence beside the Choose button that raised it (and keep printing it through the
+    // refresh the refusal triggers). It is per-Story, so a refusal from another book never follows the Author.
+    const reviewedError = activeStoryId ? reviewedErrors[activeStoryId] : undefined;
+    // R1 — the group lock/unlock refusals travel as the store's whole record for the same reason, keyed
+    // `<storyId>:<groupId>`. No filtering happens here because the key already names the Story: the group pane
+    // looks its own row up (`story-contract.groupLockError`), so a refusal made on another book, or on another
+    // group of this one, can never be the sentence this pane prints.
     const storyData = view
-        ? (storyViewData(view, templates, phrase, phraseError) as unknown as StoryViewData)
+        ? (storyViewData(
+              view,
+              templates,
+              phrase,
+              phraseError,
+              reviewedError,
+              groupLockErrors
+          ) as unknown as StoryViewData)
         : undefined;
     const now = new Date().toISOString();
     const selectedAgentRow = selectedAgent ? agents.find((row) => row.kind === selectedAgent) : undefined;

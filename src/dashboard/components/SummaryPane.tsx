@@ -1,7 +1,7 @@
 // U-4 / U-16 — the Summary pane (phase ①'s artifact).
 //
 // PHASE ① IS A FLAT REVISION HISTORY. The Writer writes `summary_sampling` (three) complete
-// Summaries per round. The Readers critique every draft, and the round settles by the engine's
+// Summaries per round. The Critics critique every draft, and the round settles by the engine's
 // DETERMINISTIC selection — fewest critical, then fewest high, then fewest total, then earliest
 // (§6.5, §16.6, D-47) — not by an Editor picking a column. The drafts it did not keep are parked as
 // `discarded` history, never deleted. The next round writes more from the kept text, so the rail
@@ -17,7 +17,7 @@
 import { useEffect, useState } from 'react';
 import { ConfirmButton } from './story-phase-controls';
 import {
-    DEFAULT_SUMMARY_READERS,
+    DEFAULT_SUMMARY_CRITICS,
     DEFAULT_SUMMARY_SAMPLING,
     SUMMARY_REVIEW_LIMIT,
     type Finding,
@@ -27,7 +27,13 @@ import {
     type StoryPhase,
     type Summary
 } from '../../shared/types';
-import { isReviewableRevision, type BacktrackTarget, type FindingRevisionScope } from './story-contract';
+import {
+    findingKindLabel,
+    findingKindToken,
+    isReviewableRevision,
+    type BacktrackTarget,
+    type FindingRevisionScope
+} from './story-contract';
 import type { SummaryRevisionEntry } from './story-nav';
 
 /** §4.2's prose fields, in the order the Writer fills them. `chapter_count` is excluded: D-3b makes it Author truth, never prose. */
@@ -97,11 +103,11 @@ export interface SummaryPaneProps {
     onSelectRevision?: (unitRef: string, revisionId: string) => void;
     /** U-4 — the Summary's round is finished and the Author may sign it. */
     readyForReview?: boolean;
-    /** Phase ①'s two counts (the Author's settings): Writer samples per round and Readers per sample. */
+    /** Phase ①'s two counts (the Author's settings): Writer samples per round and Critics per sample. */
     sampling?: number;
-    readers?: number;
+    critics?: number;
     /** Saves both counts in one Author write; absent means the control states the gap. */
-    onSetSummaryReview?: (sampling: number, readers: number) => void;
+    onSetSummaryReview?: (sampling: number, critics: number) => void;
     onBacktrack?: (phase: BacktrackTarget) => void;
     backtrackNote?: string;
 }
@@ -179,7 +185,7 @@ const recommendationLabel = (phase: StoryPhase): string =>
 /** The findings filed against ONE revision — never the story-wide Findings folder. */
 function RevisionFindingList({ entry }: { entry: SummaryRevisionEntry }) {
     if (entry.findings.length === 0) {
-        return <p className="sv-summary-focus-empty">No Reader findings on this revision yet.</p>;
+        return <p className="sv-summary-focus-empty">No Critic findings on this revision yet.</p>;
     }
 
     return (
@@ -187,6 +193,18 @@ function RevisionFindingList({ entry }: { entry: SummaryRevisionEntry }) {
             {entry.findings.map((finding) => (
                 <li className={`find-row find-row--${finding.cost}`} key={finding.id}>
                     <div className="find-head">
+                        {/* T3 — WHAT the row claims, in front of what it costs. A revision card is where the Author
+                            reads one draft's review, and the two claim types ask for different answers: an Issue has
+                            to be repaired before the draft can stand, a Proposal is weighed against the book the
+                            Seed promises. Printed as a word, not a colour, so it survives greyscale and the
+                            stylesheet being off — and it stays OUTSIDE `.find-tags`, which is the cost+state unit. */}
+                        <span
+                            className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                            data-testid={`finding-${finding.id}-kind`}
+                        >
+                            {findingKindLabel(finding.kind)}
+                        </span>
+                        {' '}
                         {/* The cost and where the finding stands read as one unit: the badge says what
                             it costs, the state says what has happened to it (D-33/D-34). */}
                         <span className="find-tags">
@@ -433,16 +451,16 @@ export function SummaryPane({
     onSelectRevision,
     readyForReview,
     sampling,
-    readers,
+    critics,
     onSetSummaryReview,
     onBacktrack,
     backtrackNote
 }: SummaryPaneProps) {
     const locked = story.summary_locked;
     const standardSampling = sampling ?? story.summary_sampling ?? DEFAULT_SUMMARY_SAMPLING;
-    const standardReaders = readers ?? story.summary_readers ?? DEFAULT_SUMMARY_READERS;
+    const standardCritics = critics ?? story.summary_critics ?? DEFAULT_SUMMARY_CRITICS;
     const [samplingDraft, setSamplingDraft] = useState(String(standardSampling));
-    const [readersDraft, setReadersDraft] = useState(String(standardReaders));
+    const [criticsDraft, setCriticsDraft] = useState(String(standardCritics));
 
     // The pane is reused when the rail moves between Stories, and a save/refetch moves the props:
     // the inputs follow the record rather than keeping a dead story's draft in the field.
@@ -450,8 +468,8 @@ export function SummaryPane({
         setSamplingDraft(String(standardSampling));
     }, [story.id, standardSampling]);
     useEffect(() => {
-        setReadersDraft(String(standardReaders));
-    }, [story.id, standardReaders]);
+        setCriticsDraft(String(standardCritics));
+    }, [story.id, standardCritics]);
 
     // The rail's one-revision view short-circuits the overview, and it is NOT filtered: a `discarded`
     // draft is still selectable in the rail, and opening it here must keep rendering its fields and its
@@ -524,7 +542,7 @@ export function SummaryPane({
             {!locked ? (
                 <section className="sv-summary-review-dials" aria-label="Summary review dials">
                     <p className="sv-summary-review-dials-hint">
-                        Phase ① writes {DEFAULT_SUMMARY_SAMPLING} complete Summaries per round. The Readers critique
+                        Phase ① writes {DEFAULT_SUMMARY_SAMPLING} complete Summaries per round. The Critics critique
                         each draft, and the round settles by itself: the engine keeps the draft with the fewest
                         findings — fewest critical, then fewest high, then fewest total, then the earliest sample
                         (§6.5, §16.6) — and parks the rest as discarded history. No Editor picks a column in phase ①.
@@ -541,13 +559,13 @@ export function SummaryPane({
                         />
                     </label>
                     <label className="sv-summary-review-count">
-                        <span>Readers per revision</span>
+                        <span>Critics per revision</span>
                         <input
                             type="number"
                             min={1}
                             max={SUMMARY_REVIEW_LIMIT}
-                            value={readersDraft}
-                            onChange={(event) => setReadersDraft(event.target.value)}
+                            value={criticsDraft}
+                            onChange={(event) => setCriticsDraft(event.target.value)}
                         />
                     </label>
                     <button
@@ -556,13 +574,13 @@ export function SummaryPane({
                         disabled={!onSetSummaryReview}
                         title={
                             onSetSummaryReview
-                                ? 'Set how many complete Summaries each round writes and how many Readers critique each one (D-17d, D-38a).'
+                                ? 'Set how many complete Summaries each round writes and how many Critics critique each one (D-17d, D-38a).'
                                 : 'The Story patch route is not available in this shell.'
                         }
                         onClick={() =>
                             onSetSummaryReview?.(
                                 countValue(samplingDraft, standardSampling),
-                                countValue(readersDraft, standardReaders)
+                                countValue(criticsDraft, standardCritics)
                             )
                         }
                     >

@@ -153,7 +153,7 @@ describe('the newest-first ordering the row readers promise (D-3d, D-21, D-38a, 
     it('falls back to code units for an id the store did not mint, so the order is locale-independent', () => {
         // `revision_1a` has no numeric suffix, so `mintedSuffix` declines to answer and the pair is
         // ordered by UTF-16 CODE UNITS, descending. `localeCompare` is collation- and ICU-version
-        // dependent, so the fallback cannot be one: the row order a Reader sees must not move with the
+        // dependent, so the fallback cannot be one: the row order a Critic sees must not move with the
         // host's locale. A `revision_0`-vs-`revision_1a` pair is where a numeric-only comparator would
         // have thrown or guessed instead of answering deterministically.
         const rows = [row('revision_1a', SAME_MS), row('revision_0', SAME_MS), row('revision_2', SAME_MS)];
@@ -166,9 +166,9 @@ describe('the newest-first ordering the row readers promise (D-3d, D-21, D-38a, 
     });
 
     it('answers `revisionRows` newest-first across the tenth draft, not in insertion order', () => {
-        // THE READER-LEVEL HALF. Eleven drafts written in one synchronous burst: whether the clock ticks
+        // THE CRITIC-LEVEL HALF. Eleven drafts written in one synchronous burst: whether the clock ticks
         // over inside the loop is irrelevant, because creation order, minted-suffix order and
-        // `created_at` order all agree. So this pins the READER rather than racing the clock — and under
+        // `created_at` order all agree. So this pins the CRITIC rather than racing the clock — and under
         // the shipped comparator, whose tie-break compared a row's id with ITSELF and therefore always
         // answered 0, the list came back in the store's insertion order: the OLDEST draft first.
         const store = Store.empty();

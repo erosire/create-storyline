@@ -1,7 +1,7 @@
 // The Summary Phrase's catalog layer: the ensure (R1), the legacy import (R6) and the composed
 // Overview. Unit-level on purpose — the store is real, the loop is not.
 //
-// WHY EXACT VALUES: three of the four things this file pins are things a READER quotes. The group
+// WHY EXACT VALUES: three of the four things this file pins are things a CRITIC quotes. The group
 // rows' titles and order are what the Author's rail shows and what the Writer's prompt heading
 // prints; the composed Overview is the artifact the deep review judges and the string the API
 // returns; the import's seeded rows are the audit line an Author reads before trusting a group
@@ -12,6 +12,10 @@
 // prose fields and `world_rules` are the legacy prose the import test reads. `summary_mode` is left
 // ABSENT on purpose: that absence is the legacy book R6 talks about, and `isGroupManagedStory` must
 // answer false for it until an explicit import flips it.
+//
+// THE LOCK READS: the last describe pins `isPhraseGroupLocked` and `lockedPhraseGroupIds`, because the
+// install, the batch, the finding routing and the clean selection all ask them and none of them owns the
+// answer — the flag on the group row does. The lock's WRITES are pinned in `locks.test.ts`.
 import { describe, expect, it } from 'vitest';
 import { Store } from '../store';
 import { AUTHOR_ATTR, seedStory } from '../run/mock';
@@ -21,6 +25,8 @@ import {
     ensurePhraseCatalog,
     importLegacySummary,
     isGroupManagedStory,
+    isPhraseGroupLocked,
+    lockedPhraseGroupIds,
     phraseGroupsOf,
     storyPhrase
 } from './catalog';
@@ -416,5 +422,69 @@ describe('the legacy Summary imports into groups by one explicit step (R6)', () 
         expect(store.phrases.require(imported.phrase.id).revision).toBe(0);
         // An unwritten Overview composes to the empty string, not to five empty headings.
         expect(composeGroupContent(store, story.id, imported.phrase.id)).toBe('');
+    });
+});
+
+// THE LOCK READS (the group lock). Every module that refuses a write, drops a work target or selects a
+// frozen row asks THIS module the question, so the reading of the fields is pinned here as data rather
+// than inferred from its call sites. The WRITES are pinned in `locks.test.ts`.
+describe('a locked group is a flag on the row, not a number on it (the group lock)', () => {
+    /** The five catalog groups, none of them locked, with the ids `recordUidAt` pins. */
+    const book = () => {
+        const { store, story, options } = seedCatalog();
+        const ensured = ensurePhraseCatalog(store, story, AUTHOR_ATTR, options)!;
+
+        return { store, story, groups: ensured.groups };
+    };
+
+    /** A lock-shaped write, applied by hand so the test pins the READ, not the write that made it. */
+    const rowPatch = (store: Store, groupId: string, patch: Partial<PhraseGroup>) => {
+        const row = store.phraseGroups.require(groupId);
+
+        return store.phraseGroups.update(groupId, patch, AUTHOR_ATTR, [{ id: row.id, rev: row.rev }]);
+    };
+
+    it('answers the flag alone, and reads a Story’s locks as one set', () => {
+        const { store, story, groups } = book();
+        const premise = groups.find((group) => group.key === 'premise')!;
+        const tone = groups.find((group) => group.key === 'tone')!;
+
+        // A fresh catalog — and a legacy book's rows — carry NEITHER field. Absent is not locked.
+        expect(premise.locked).toBeUndefined();
+        expect(isPhraseGroupLocked(premise)).toBe(false);
+        // The signature takes `undefined` because every caller finds its groups by lookup, and a Story
+        // whose catalog was never ensured has none.
+        expect(isPhraseGroupLocked(undefined)).toBe(false);
+        expect(lockedPhraseGroupIds(store, story.id)).toEqual(new Set());
+
+        rowPatch(store, premise.id, {
+            locked: true,
+            locked_revision: 1,
+            locked_by: 'author',
+            locked_at: '2026-11-25T10:00:00.000Z'
+        });
+
+        expect(isPhraseGroupLocked(store.phraseGroups.require(premise.id))).toBe(true);
+        expect(lockedPhraseGroupIds(store, story.id)).toEqual(new Set([premise.id]));
+
+        // THE FLAG IS THE WHOLE ANSWER: a row carrying the lock's RECORD without the flag is a row nobody
+        // locked. Nothing in the product writes that shape — `phrase/locks.ts`'s unlock, `engine.ts`'s Seed
+        // reset and `loop/invalidation.ts:scrapPhasesAfter`'s D-69 clear all null the four fields together
+        // — so it reaches the read only as a hydration of a pre-D-69 or hand-patched store, and the read
+        // still has to call it unlocked rather than trust a dangling `locked_revision`. A row nobody ever
+        // froze reads the same way, which is the case the store shape actually guarantees.
+        rowPatch(store, tone.id, { locked_revision: 4, locked_by: 'editor' });
+
+        expect(isPhraseGroupLocked(store.phraseGroups.require(tone.id))).toBe(false);
+        expect(lockedPhraseGroupIds(store, story.id)).toEqual(new Set([premise.id]));
+
+        // An explicit `locked: false` beside cleared metadata reads unlocked too — the unlock writes the
+        // nulls (`locks.ts`), and this is the row a reader sees afterwards.
+        rowPatch(store, tone.id, { locked: false, locked_revision: null, locked_by: null, locked_at: null });
+
+        expect(isPhraseGroupLocked(store.phraseGroups.require(tone.id))).toBe(false);
+        expect(lockedPhraseGroupIds(store, story.id)).toEqual(new Set([premise.id]));
+        // The set is the STORY's: one book's locks never leak into another's read.
+        expect(lockedPhraseGroupIds(store, 'story_other')).toEqual(new Set());
     });
 });

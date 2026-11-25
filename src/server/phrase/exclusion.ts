@@ -1,11 +1,19 @@
 // SUMMARY PHRASE — the Writer exclusion (R4).
 //
-// THE RULE, exactly: at most ONE live Writer operation per group. Two Writer batches whose group
-// sets are DISJOINT run at the same time (that is the parallelism the redesign buys: Premise and
-// Tone can be revised in one sweep without waiting on each other); a batch whose set OVERLAPS a
-// live one is deferred, because two live writers on one group would race the compare-and-swap on
+// THE RULE THIS MODULE ENFORCES, stated exactly: at most ONE live Writer operation per group. Two Writer
+// batches whose group sets are DISJOINT run at the same time (that is the parallelism the redesign buys:
+// Premise and Tone can be revised in one sweep without waiting on each other); a batch whose set OVERLAPS
+// a live one is deferred, because two live writers on one group would race the compare-and-swap on
 // the group row and — worse — would each install a revision on top of the other's, silently
 // archiving text that the second writer never saw.
+//
+// D-66 (R12) ADDED ONE CLAUSE to that sentence, and it belongs in this file's header because the module
+// that cuts the batch (`planGroupDraftBatch` below) is the module that holds the exclusion: the batch is
+// not a bag of groups, it is a set of FINDING-SETS, and a set is deferred WHOLE. "Shrink the overlapping
+// batch and dispatch the rest" is what used to split one defect across passes — installing `tone` while
+// `premise` still said what the Author objected to banks a partial fix under a `finding_refs` claim — so
+// the shrink survives as a primitive for refs and rows (`partitionGroupRefs`/`partitionGroups`, which the
+// rail and the tests read) but no longer sizes a Writer batch.
 //
 // WHY IT IS DERIVED FROM THE BOOK AND NOT FROM A SEMAPHORE (R4): the loop is amnesiac by design
 // (L-3: "the rows are the state"), so an in-memory set of held groups would be wrong in both
@@ -15,13 +23,29 @@
 // and the group set from `Run.group_refs`, which `run/executor.ts` copies off the Work Item when the
 // row is created. A lease expiry, a kill, and a restart all change the answer here with no
 // bookkeeping of ours, because the run row IS the bookkeeping.
-import type { Run, PhraseGroup, Story } from '../../shared/types';
+import type { Finding, Run, PhraseGroup, Story } from '../../shared/types';
 import type { Store } from '../store';
 // HARDENING (drain/sign-off parity): the group pipeline's write-allowance, target set and review
 // seats now READ from here rather than duplicating — the counters below need the same run reads the
 // exclusion makes (`createdAfter`/`isLiveRun`/`runsForItem`) and the same Author dials.
-import { createdAfterSeq, creationSeq, isLiveRun, liveRuns, runsForItem, screeningSizeOf, storyFindings } from '../loop/records';
-import { phraseGroupsOf } from './catalog';
+// `samplingSizeOf` joins those reads for D-66: the batch dial (`stories.summary_sampling`) is one of
+// the two inputs of the cut below, and the number must keep ONE definition — `loop/records.ts` owns
+// it, `loop/work.ts:summarySamplingOf` is only a named alias of it, and importing the alias here would
+// put a cycle between this module and the planner that dispatches with it.
+import {
+    createdAfterSeq,
+    creationSeq,
+    isLiveRun,
+    liveRuns,
+    runsForItem,
+    samplingSizeOf,
+    screeningSizeOf,
+    storyFindings
+} from '../loop/records';
+// The catalog order the atomic batch is cut and re-sorted in (D-66): the same rank every group list in
+// this package is written in, read from its owner rather than re-derived here.
+import { phraseGroupRank } from '../../shared/phrase';
+import { isPhraseGroupLocked, phraseGroupsOf } from './catalog';
 // The vector identity the review seats are keyed by, and the history the write-allowance counts
 // against — both owned by `phrase/revisions.ts`, both read here rather than re-derived.
 import { groupRevisionHistory, groupRevisionVector, groupVectorHash } from './revisions';
@@ -70,7 +94,7 @@ export const GROUP_DRAFT_ITEM_PREFIX = groupItemPrefixOf('draft_groups');
  * a group" that both the exclusion and the retry allowance share.
  *
  * Exported because the retry counter (`loop/work.ts:groupWriteAttempts`) must count the SAME rows this
- * predicate recognises: a `review_groups` or deep-review run carries `group_refs` (its Reader judged all
+ * predicate recognises: a `review_groups` or deep-review run carries `group_refs` (its Critic judged all
  * five groups) but wrote none of them, and counting it as a write spends the group's Writer allowance on
  * reading. Two definitions of "a write" would drift the first time a third kind learns to carry refs.
  */
@@ -145,6 +169,13 @@ export function heldGroupRefs(store: Store, storyId: string, groupRefs: readonly
  * empty `free`, which is the caller's signal to offer nothing (a Writer with no group to write has
  * no job to dispatch, and a claim key for it would spend an attempt on an empty answer).
  *
+ * D-66 CHANGED WHO CALLS THIS for the Writer batch: `planGroupDraftBatch` defers a finding-set WHOLE
+ * rather than shrinking it, because a shrunk multi-group batch is a partial fix. The split stays
+ * exactly as it was for its other readers — the group rail's `writer_busy`/`deferred` read,
+ * `phrase/exclusion.test.ts`, and any caller that has a BAG of groups rather than a finding — and the
+ * two readings are kept apart by this note rather than by a second function, because the primitive is
+ * the same and a near-copy is how the two would drift.
+ *
  * Deterministic and clock-free by construction: the answer is a function of the run rows, so a
  * restart reproduces it exactly (L-3), and two engines asking in the same instant agree (L-5).
  */
@@ -200,7 +231,7 @@ export function partitionGroups(
  *      group never spends Premise's allowance (R2), and a group that was rewritten successfully but
  *      is criticised again gets a fresh pair of attempts against the NEW text; and
  *   2. the count is a count of WRITES. A `review_groups` seat and the deep review carry `group_refs`
- *      (their Reader judged all five groups) yet install nothing, so they are excluded by the same
+ *      (their Critic judged all five groups) yet install nothing, so they are excluded by the same
  *      `isGroupHoldingRun` predicate R4 holds groups with. Reading the review runs as writes would
  *      spend the allowance on reading: after one draft plus its two seats, every group would sit at
  *      the cap and an approved finding could never schedule its Writer fix (F1).
@@ -299,6 +330,30 @@ export function groupWriteAttempts(store: Store, story: Story, group: PhraseGrou
 }
 
 /**
+ * One group's owed work, as the batch generator consumes it: the row, and the findings that named it.
+ *
+ * It is an exported type because the atomic cut below ({@link findingGroupSets} /
+ * {@link planGroupDraftBatch}) takes these rows as input and returns a subset of them, so the
+ * generator, the drain probe and the planner all speak one shape rather than three near-copies of it.
+ */
+export interface GroupWorkTarget {
+    group: PhraseGroup;
+    /** The open/approved findings that still owe this group a rewrite, in finding order. */
+    findingRefs: string[];
+}
+
+/**
+ * Which findings can drive group work — D-33's ladder plus D-34's authorised rows.
+ *
+ * THE ONE PREDICATE, in one place, because two reads have to agree exactly: {@link groupWorkTargets}
+ * cuts the batch off these rows, and {@link planGroupDraftBatch} asks the SAME rows "does this finding
+ * still owe a group that is not in the set?" to decide whether a set is whole. A finding admitted by
+ * one and refused by the other would make a partial fix read as a complete one (D-66).
+ */
+const drivesGroupWork = (finding: Finding): boolean =>
+    finding.state === 'unconfirmed' || finding.state === 'confirmed' || finding.state === 'approved';
+
+/**
  * The groups that still owe the Overview text — the batch this sweep may write, in catalog order.
  *
  * Two reasons to write a group, and both are RECORDS rather than engine memory (L-3):
@@ -311,10 +366,23 @@ export function groupWriteAttempts(store: Store, story: Story, group: PhraseGrou
  *
  * A finding with NO `group_refs` targets every group (the legacy whole-Overview meaning), so an
  * old-style complaint still routes work; it just routes more of it. The set is then cut by R4's
- * exclusion, the per-group attempt cap above, and the Author's batch size — none of which removes a
- * group from THIS list except the cap, which parks (see `GROUP_WRITE_ATTEMPT_CAP`'s note).
+ * exclusion, the per-group attempt cap above, and D-66's atomic finding-set rule — none of which
+ * removes a group from THIS list except the cap, which parks (see
+ * `GROUP_WRITE_ATTEMPT_CAP`'s note). What this list says is OWED; what the sweep dispatches is
+ * {@link planGroupDraftBatch}, which may hold a whole finding-set back because one of its groups is
+ * parked or held.
+ *
+ * THE GROUP LOCK REMOVES A GROUP FROM THIS LIST ALTOGETHER (R-LOCK), and both halves of that matter:
+ *   - a locked group is never a draft target — its text is the fixed point, and the install would
+ *     refuse the write anyway (`revisions.ts:installGroupRevisions`), so offering it would spend an
+ *     attempt on a batch that cannot land; and
+ *   - a finding that crosses a locked group and an unlocked one still appears, with the UNLOCKED half as
+ *     its whole set (`findings.ts:findingGroupsStillOwed` subtracts the locked groups), so the cross-group
+ *     defect is dispatched and answered rather than parking forever on the group nobody may rewrite. A
+ *     finding whose every group is locked drops out with no target at all: it drives no work, and the
+ *     drain probe reads the same list, so "owed" and "done" cannot disagree about it.
  */
-export function groupWorkTargets(store: Store, story: Story): { group: PhraseGroup; findingRefs: string[] }[] {
+export function groupWorkTargets(store: Store, story: Story): GroupWorkTarget[] {
     const groups = phraseGroupsOf(store, story.id);
 
     if (groups.length === 0) return [];
@@ -322,13 +390,11 @@ export function groupWorkTargets(store: Store, story: Story): { group: PhraseGro
     // The findings that can drive work: OPEN rows (D-33's ladder, any cost — a minor note is still a
     // group the Author says is wrong) and D-34's `approved` rows, which are authorised fixes. A
     // `disputed`/`discarded`/`fixed` row drives nothing.
-    const findings = storyFindings(store, story.id).filter(
-        (finding) =>
-            finding.state === 'unconfirmed' || finding.state === 'confirmed' || finding.state === 'approved'
-    );
+    const findings = storyFindings(store, story.id).filter(drivesGroupWork);
 
-    // group id -> the findings it owes, in finding order. An unscoped finding lists every group, so
-    // it lands on all five and the batch cap is what keeps the pass affordable.
+    // group id -> the findings it owes, in finding order. An unscoped finding lists every group, so it
+    // lands on all five — and D-66 is what keeps those five in ONE pass instead of spreading them over
+    // `summary_sampling` sweeps.
     const owed = new Map<string, string[]>();
 
     for (const finding of findings) {
@@ -338,14 +404,186 @@ export function groupWorkTargets(store: Store, story: Story): { group: PhraseGro
     }
 
     return groups
+        // R-LOCK first: a locked group is not writable, whatever the findings say about it.
+        .filter((group) => !isPhraseGroupLocked(group))
         .filter((group) => group.revision === 0 || owed.has(group.id))
         .filter((group) => groupWriteAttempts(store, story, group) < GROUP_WRITE_ATTEMPT_CAP)
         .map((group) => ({ group, findingRefs: owed.get(group.id) ?? [] }));
 }
 
+/**
+ * D-66 — the indivisible group sets inside an owed list (R12: one defect, one pass).
+ *
+ * A finding that names several groups is ONE defect, and §4.10 has no "partly fixed" state, so the
+ * groups it names may never be split across passes. That turns the owed list into a list of ATOMIC
+ * GROUP SETS rather than a queue of groups: two targets are in the same set whenever one finding names
+ * both, which is transitive — so a batch is a connected component, and overlapping findings merge
+ * ({premise, promise} ∪ {promise, ending} is one set of three). A target no finding named — first-draft
+ * work — is a set of ONE.
+ *
+ * WHY THE TARGETS' OWN REF LIST IS ENOUGH, with no extra read: `groupWorkTargets` stamps a finding id
+ * onto EVERY group that finding still owes (it walks `findingGroupsStillOwed`), so a finding's whole
+ * still-owed group set is exactly the set of targets carrying that id. Unioning targets that share an
+ * id therefore unions findings, groups and overlapping findings in one pass.
+ *
+ * The sets come out ordered by their FIRST group, which is what makes the cut below deterministic: two
+ * engines over the same rows take the same set first, and a restart reproduces it (L-3, L-5).
+ */
+export function findingGroupSets(targets: readonly GroupWorkTarget[]): GroupWorkTarget[][] {
+    // Index-based union-find with path halving: the merge rule is "these two rows share a finding id",
+    // and the row order (the CATALOG order `groupWorkTargets` returns) has to survive the merge.
+    const parent = targets.map((_, index) => index);
+    const rootOf = (index: number): number => {
+        let cursor = index;
+
+        while (parent[cursor] !== cursor) {
+            parent[cursor] = parent[parent[cursor]];
+            cursor = parent[cursor];
+        }
+
+        return cursor;
+    };
+    const merge = (left: number, right: number): void => {
+        const leftRoot = rootOf(left);
+        const rightRoot = rootOf(right);
+
+        if (leftRoot === rightRoot) return;
+
+        // The LOWER index keeps the root, so a merged set sits where its EARLIEST group sits rather
+        // than hopping to wherever the later finding happened to be listed.
+        if (leftRoot < rightRoot) parent[rightRoot] = leftRoot;
+        else parent[leftRoot] = rightRoot;
+    };
+
+    // finding id -> the first target that named it; anything naming the same finding joins that set.
+    const namedBy = new Map<string, number>();
+
+    targets.forEach((target, index) => {
+        for (const findingId of target.findingRefs) {
+            const first = namedBy.get(findingId);
+
+            if (first === undefined) namedBy.set(findingId, index);
+            else merge(first, index);
+        }
+    });
+
+    const sets = new Map<number, GroupWorkTarget[]>();
+
+    targets.forEach((target, index) => {
+        const root = rootOf(index);
+        const bucket = sets.get(root);
+
+        if (bucket === undefined) sets.set(root, [target]);
+        else bucket.push(target);
+    });
+
+    return [...sets.values()];
+}
+
+/**
+ * D-66 — the one `draft_groups` batch this sweep dispatches, as whole finding-sets.
+ *
+ * THE ORDER OF THE THREE RULES IS THE RULE. Each answers a different question, and D-66 sits between
+ * the other two:
+ *
+ *   1. **R4's exclusion** — is any group of the set already held by a live Writer? Then the WHOLE set
+ *      waits this sweep. §17.6 used to shrink a partially held batch (`{premise, tone}` with premise
+ *      live offered `{tone}`), and that shrink IS the partial fix R12 forbids: the installed `tone`
+ *      revision claims the finding while `premise` still says what the Author objected to. The deferral
+ *      costs one sweep — a closed run or a lapsed lease releases the hold with no bookkeeping of ours —
+ *      and a set whose groups are all free is untouched, so disjoint work still runs concurrently;
+ *   2. **D-66's completeness** — does every group the set's findings still owe appear in the set? A
+ *      group parked at `GROUP_WRITE_ATTEMPT_CAP` was dropped from `groupWorkTargets` before this cut,
+ *      so a set missing one is a defect the loop can no longer answer WHOLE, and installing the rest
+ *      would bank a partial fix under a `finding_refs` claim. The set is held back and the finding stays
+ *      open with its attempts visible, which is the allowance's designed escalation (§17.6), not a new
+ *      one;
+ *   3. **the Author's batch dial** (`stories.summary_sampling`) — a cap BETWEEN finding-sets that
+ *      YIELDS within one. Sets are taken whole, in order, while they fit; the FIRST set is taken even
+ *      when it is larger than the dial, because a dial that could split a finding would put a knob
+ *      above the rule that knob exists to serve. Independent sets are still rationed exactly as before,
+ *      so a five-group first draft under a dial of 2 remains three passes.
+ *
+ * The result is re-sorted into CATALOG order (the set order is by first group, so a merged set can put
+ * `ending` before a later set's `promise`). The group-set hash, the prompt's GROUPS block and the
+ * install all key off that order, so it is asserted here rather than assumed.
+ *
+ * An empty answer means "offer nothing": every set is held, parked, incomplete, or does not fit under a
+ * dial the first set already filled — and a claim key spent on an empty answer would burn an attempt
+ * (`runsForItem` counts it against the family).
+ *
+ * A LOCKED GROUP IS OUT BEFORE THE CUT (R-LOCK): it joins no set, and the sets its findings still owe
+ * are computed from the unlocked side (`findings.ts:findingGroupsStillOwed`), so rule 2's completeness
+ * check is answered against the work that can actually land. That is what stops a lock from parking a
+ * cross-group defect forever — the D-66 set shrinks to the groups that remain writable instead of
+ * waiting on one that cannot move.
+ */
+export function planGroupDraftBatch(store: Store, story: Story, targets: readonly GroupWorkTarget[]): GroupWorkTarget[] {
+    // R-LOCK — a locked group cannot be written, so it belongs to no set this sweep dispatches, even when
+    // the caller's list still names it (a target list cut before the lock landed, or a caller that read the
+    // rows mid-commit). `findingGroupsStillOwed` already keeps locked groups out of the sets this cuts, so
+    // the only thing this filter can remove is a set whose install would come back refused — and a set that
+    // installs nothing still spends a claim key and an attempt.
+    //
+    // THE CHECK IS AGAINST THE ROW, NOT THE CALLER'S COPY: `targets` is a snapshot the queue may have cut a
+    // commit or two ago, and a stale snapshot is exactly the case this filter exists for — an unlocked row
+    // that has since been locked. It is the same reason `installGroupRevisions` re-reads before it writes
+    // (`revisions.ts`): the answer has to be about the book as it is, not as the caller saw it. A group row
+    // that has vanished from the store falls back to the caller's copy, where the install's own re-read is
+    // what refuses it.
+    const current = new Map(phraseGroupsOf(store, story.id).map((group) => [group.id, group] as const));
+    const writable = targets.filter(
+        (target) => !isPhraseGroupLocked(current.get(target.group.id) ?? target.group)
+    );
+
+    if (writable.length === 0) return [];
+
+    const held = liveGroupRefs(store, story.id);
+    const batchSize = Math.max(1, samplingSizeOf(story));
+
+    // finding id -> the groups it STILL owes. Read from the FINDINGS, not from `targets`: the question
+    // D-66 asks is about the defect ("does anything it names remain unwritten?"), while `targets` is
+    // this sweep's trimmed candidate list, with parked groups already removed.
+    const stillOwed = new Map<string, string[]>();
+
+    for (const finding of storyFindings(store, story.id)) {
+        if (!drivesGroupWork(finding)) continue;
+
+        stillOwed.set(
+            finding.id,
+            findingGroupsStillOwed(store, story, finding).map((group) => group.id)
+        );
+    }
+
+    const batch: GroupWorkTarget[] = [];
+
+    for (const set of findingGroupSets(writable)) {
+        const ids = new Set(set.map((target) => target.group.id));
+
+        // 1. R4 — a live Writer holds one of the set's groups: the set waits, whole.
+        if (set.some((target) => held.has(target.group.id))) continue;
+
+        // 2. D-66 — the set must be the WHOLE still-owed group set of every finding it answers.
+        const incomplete = set.some((target) =>
+            target.findingRefs.some((findingId) =>
+                (stillOwed.get(findingId) ?? []).some((groupId) => !ids.has(groupId))
+            )
+        );
+
+        if (incomplete) continue;
+
+        // 3. The dial — a cap BETWEEN sets, never WITHIN one (so the first set fits whatever its size).
+        if (batch.length > 0 && batch.length + set.length > batchSize) break;
+
+        batch.push(...set);
+    }
+
+    return batch.sort((left, right) => phraseGroupRank(left.group.key) - phraseGroupRank(right.group.key));
+}
+
 /** Whether every structured review seat of one vector has already produced a run row. */
-export function allReviewSeatsRun(store: Store, vectorHash: string, readers: number): boolean {
-    for (let pass = 1; pass <= readers; pass += 1) {
+export function allReviewSeatsRun(store: Store, vectorHash: string, critics: number): boolean {
+    for (let pass = 1; pass <= critics; pass += 1) {
         if (runsForItem(store, groupReviewSeatKey(vectorHash, pass)).length === 0) return false;
     }
 
@@ -366,18 +604,81 @@ export function allReviewSeatsRun(store: Store, vectorHash: string, readers: num
 export const groupReviewSeatKey = (vectorHash: string, pass: number): string =>
     `wi_review_groups_${vectorHash}_${pass}`;
 
+/** The deep cross-group review seat's claim-key family — §6.4 step 6, the tool-carrying pass (R5). */
+export const GROUP_CHECK_ITEM_PREFIX = 'wi_group_check';
+
 /** The deep cross-group review seat's claim key — §6.4 step 6, the tool-carrying pass (R5). */
 export const groupCheckSeatKey = (vectorHash: string, pass: number): string =>
-    `wi_group_check_${vectorHash}_${pass}`;
+    `${GROUP_CHECK_ITEM_PREFIX}_${vectorHash}_${pass}`;
+
+/**
+ * The group vector a deep-review seat was claimed against, read back off the claim key (D-67).
+ *
+ * `wi_group_check_<vectorHash>_<pass>` carries the pass number at the END, so the hash is everything
+ * between the family prefix and the LAST underscore — not the first one. A 16-hex vector hash never
+ * contains an underscore, so the last separator is unambiguous, and anchoring on the family prefix
+ * keeps a legacy deep-review key (`wi_review_<revision>_a<pass>`, §16) out of the group reading: an
+ * unrecognised key answers `''`, which every caller treats as "this run reviewed no vector" and
+ * therefore stamps nothing.
+ *
+ * This is the read the Clean stamp hangs on (`phrase/reviewed.ts:stampCleanRevisions`): the verdict
+ * belongs to the COMBINATION the Critic was shown, and the claim key is the only record of that
+ * combination once the run has closed.
+ */
+export const groupCheckVectorHashOf = (claimKey: string): string => {
+    if (!claimKey.startsWith(`${GROUP_CHECK_ITEM_PREFIX}_`)) return '';
+
+    const rest = claimKey.slice(GROUP_CHECK_ITEM_PREFIX.length + 1);
+    const split = rest.lastIndexOf('_');
+
+    return split <= 0 ? rest : rest.slice(0, split);
+};
+
+/**
+ * The Reader's section-score seat's claim key (D-65) — ONE seat per group vector, not one per pass.
+ *
+ * Same re-arm rule as its two siblings above: the key names the GROUP VECTOR, so an install moves the
+ * vector and the scoring run becomes owed again by itself, and a restart re-derives the key from the
+ * rows with no bookkeeping of ours (L-3). It takes no `pass` argument because the Author's Critic dial
+ * does not size it — one Reader reads the whole Overview and scores all five sections in one answer.
+ * Owned here for the usual reason: the generator (`loop/work.ts`), the projection
+ * (`api/projections.ts`) and this module's own owed-count all name the same family, and a literal
+ * spelled three ways is the bug this file already exists to prevent.
+ */
+/** The scoring seat's claim-key family — the prefix `status.ts` recognises a live scoring run by. */
+export const SECTION_SCORE_ITEM_PREFIX = 'wi_summary_score';
+
+export const sectionScoreClaimKey = (vectorHash: string): string => `${SECTION_SCORE_ITEM_PREFIX}_${vectorHash}`;
+
+/**
+ * The group vector a scoring seat was claimed against, read back off the claim key (D-65).
+ *
+ * WHY READ FROM THE KEY AND NOT RE-DERIVED AT SETTLEMENT: the score is a judgement of the text that
+ * was in front of the Reader, and a Writer install can move the vector WHILE the pass runs. Stamping
+ * the settled vector onto that answer would file an old judgement under a new book, so the engine
+ * settles against the hash the job was claimed under — which is the same reason
+ * `parseGroupDraftAnswer` validates against `item.groupRefs` rather than against the current rows.
+ */
+export const sectionScoreVectorHashOf = (claimKey: string): string =>
+    claimKey.startsWith(`${SECTION_SCORE_ITEM_PREFIX}_`)
+        ? claimKey.slice(SECTION_SCORE_ITEM_PREFIX.length + 1)
+        : claimKey;
 
 /**
  * The claim-key prefixes of every group-pipeline job. The drain probe counts in-flight runs with
  * this; the trailing `_` is the same family anchor the draft-key reader above insists on.
+ *
+ * `wi_summary_score_` joins the list: a scoring run IS in-flight group-pipeline work (it reads the
+ * installed Overview), so a drain that ignored it would report a settled book while a Reader thread
+ * is still open. It does NOT join `GROUP_HOLDING_KINDS` — a score writes no group — and it does not
+ * join `groupPipelineOwed`'s owed counts, which answer "does the BOOK still owe work?" for the
+ * sign-off gate; a scoring pass never holds sign-off (D-65: display-only).
  */
 export const GROUP_PIPELINE_RUN_PREFIXES = [
     `${GROUP_DRAFT_ITEM_PREFIX}_`,
     'wi_review_groups_',
-    'wi_group_check_'
+    `${GROUP_CHECK_ITEM_PREFIX}_`,
+    `${SECTION_SCORE_ITEM_PREFIX}_`
 ] as const;
 
 /** Whether a run row belongs to the group pipeline (draft batch, structured seat, or deep review). */
@@ -391,7 +692,7 @@ export const isGroupPipelineRun = (run: Run): boolean => {
 export interface GroupPipelineOwed {
     /** Groups with first-draft or finding-driven work inside the attempt cap (parked groups: no). */
     drafts: number;
-    /** Structured Reader seats at the CURRENT vector without a CLOSED run yet. */
+    /** Structured Critic seats at the CURRENT vector without a CLOSED run yet. */
     structuredReviews: number;
     /** Deep-review seats at the current vector, owed only once every structured seat has reported. */
     deepReviews: number;
@@ -423,13 +724,13 @@ export function groupPipelineOwed(store: Store, story: Story): GroupPipelineOwed
     // (`hasText` in the generator), and the drafts line above already says what is owed.
     if (!groups.some((group) => group.revision > 0)) return { drafts, structuredReviews: 0, deepReviews: 0 };
 
-    const readers = screeningSizeOf(story);
+    const critics = screeningSizeOf(story);
     const vectorHash = groupVectorHash(groupRevisionVector(store, story.id));
     const closedOn = (key: string): boolean => runsForItem(store, key).some((run) => !isLiveRun(run));
 
     let structuredReviews = 0;
 
-    for (let pass = 1; pass <= readers; pass += 1) {
+    for (let pass = 1; pass <= critics; pass += 1) {
         if (!closedOn(groupReviewSeatKey(vectorHash, pass))) structuredReviews += 1;
     }
 
@@ -437,7 +738,7 @@ export function groupPipelineOwed(store: Store, story: Story): GroupPipelineOwed
 
     let deepReviews = 0;
 
-    for (let pass = 1; pass <= readers; pass += 1) {
+    for (let pass = 1; pass <= critics; pass += 1) {
         if (!closedOn(groupCheckSeatKey(vectorHash, pass))) deepReviews += 1;
     }
 

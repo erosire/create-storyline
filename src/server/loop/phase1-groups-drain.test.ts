@@ -6,7 +6,7 @@
  *
  *   1. `drainPreconditions` (§6.7, L-37's condition 3) enumerated sample drafts, screening passes and
  *      the round's arm. A grouped book has none of them, so the probe answered "nothing owed" while
- *      five groups still had no text and its Reader seats had never reported — the Author saw
+ *      five groups still had no text and its Critic seats had never reported — the Author saw
  *      `drained` ("out of authorised work", L-37a) on a Summary that was not written yet;
  *   2. the sign-off gate held on `deepReviewPassesOwed(selectedSummaryRevision)`, and a grouped book
  *      has NO selected Summary revision, so that read returned 0 and the sweep offered the LOCK over an
@@ -19,6 +19,10 @@
  *   * stage by stage, the exact sentences the Author reads, in the order §6.4's steps run;
  *   * the seat claim keys the probe counts are the keys the GENERATOR dispatches (the drift this defect
  *     hides — the probe and the queue spelling one key two ways);
+ *   * D-65's scoring seat takes the FIRST dispatch slot of a new vector (`loop/work.ts` candidate 2b,
+ *     `rank: -1`), and it is in the in-flight sentence while it runs yet in no owed count — so the
+ *     sign-off test below counts the score row and the seat row across two sweeps, and the lock is still
+ *     held by the engine rather than handed to the Author early;
  *   * the sign-off waits for the seats and still opens once they have reported (the gate got TIGHTER to
  *     match the rail, never looser);
  *   * a legacy sampling book is untouched: no group line ever appears in its drain, and the grouped read
@@ -37,7 +41,8 @@ import {
     GROUP_DRAFT_ITEM_PREFIX,
     groupCheckSeatKey,
     groupPipelineOwed,
-    groupReviewSeatKey
+    groupReviewSeatKey,
+    sectionScoreClaimKey
 } from '../phrase/exclusion';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
 import { AUTHOR_ATTR } from '../run/mock';
@@ -52,7 +57,7 @@ const IN_FLIGHT = (n: number) => `${n} group-pipeline run${n === 1 ? '' : 's'} s
 // grouped one names the pipeline, this one names the artifact that is mid-write.
 const WRITING = (n: number) => `${n} Writer${n === 1 ? '' : 's'} still running (§4.15: no draft has been filed yet)`;
 const STRUCTURED = (n: number) =>
-    `${n} Reader pass${n === 1 ? '' : 'es'} still owed on the installed group Overview (R3, R5, §6.4 step 4)`;
+    `${n} Critic pass${n === 1 ? '' : 'es'} still owed on the installed group Overview (R3, R5, §6.4 step 4)`;
 const DEEP = (n: number) =>
     `${n} deep-review pass${n === 1 ? '' : 'es'} still owed for the installed group Overview (§6.4 step 6, R5)`;
 
@@ -61,9 +66,9 @@ async function rigged(): Promise<Rig> {
     return createRig({
         summaryMode: 'groups',
         summarySampling: 5,
-        // One Reader seat per pass: `summary_readers` IS `screeningSizeOf`, so the seat counts stay small
+        // One Critic seat per pass: `summary_critics` IS `screeningSizeOf`, so the seat counts stay small
         // and every owed-count below is a literal.
-        summaryReaders: 1,
+        summaryCritics: 1,
         // D-51 waiver: the brief asks no research, so §6.4 step 2 never enters these lists.
         crew: { researchQuestions: [] }
     });
@@ -83,7 +88,7 @@ function seedRun(rig: Rig, key: string, state: RunState, groupRefs?: string[]): 
         {
             story_id: rig.storyId,
             work_item_ref: key,
-            role: groupRefs === undefined ? 'reader' : 'writer',
+            role: groupRefs === undefined ? 'critic' : 'writer',
             state,
             started_at: '2026-11-24T10:00:00.000Z',
             ended_at: state === 'torn_down' ? '2026-11-24T10:00:01.000Z' : null,
@@ -224,16 +229,31 @@ describe('the drain probe names the group pipeline stage by stage (§6.7, R2/R3/
 
         // THE FIX: the Goal passes and the book has no competing drafts (a grouped book has none — each
         // group installs its own revision), so before this pass the sweep handed the Author the lock with
-        // every Reader seat still unpaid. It now holds and dispatches the seat instead.
+        // every Critic seat still unpaid. It now holds and dispatches the seat instead.
         const swept = await rig.step();
 
         expect({ status: swept.stories[0]?.status, pending: swept.stories[0]?.pending_kind }).toEqual({
             status: 'ready',
             pending: 'none'
         });
-        expect(rig.store.runs.list().map((run) => run.work_item_ref)).toContain(
+
+        // D-67 changed WHICH job takes the first slot. The scoring seat is armed by the CLEAN selection
+        // (`phrase/reviewed.ts:cleanSelectionOf`), and this book has five installed revisions and no
+        // cross-group verdict yet, so nothing here is scoreable — the first sweep dispatches the review seat
+        // this test is about, and the guarantee below is unchanged. (The scoring seat's `rank: -1`
+        // precedence is pinned where the fixture stamps a vector clean: `loop/section-scores.test.ts`.)
+        expect(rig.store.runs.list().map((run) => run.work_item_ref)).toEqual([
             groupReviewSeatKey(vectorHashOf(rig), 1)
+        ]);
+
+        await rig.step();
+
+        // Still no score seat after two sweeps: the deep pass has not CLOSED over this vector, so no group
+        // carries a Clean stamp, and the queue goes on paying the review seats the phase actually owes.
+        expect(rig.store.runs.list().map((run) => run.work_item_ref)).not.toContain(
+            sectionScoreClaimKey(vectorHashOf(rig))
         );
+        expect(rig.store.runs.list()).toHaveLength(2);
 
         // The rest of the pipeline runs to idle, and THEN the lock is offered: the gate opened on the
         // phase's evidence, exactly as the rail counts it.
@@ -249,7 +269,7 @@ describe('the drain probe names the group pipeline stage by stage (§6.7, R2/R3/
 
 describe('a legacy sampling book keeps its own drain clauses', () => {
     it('never sees a group line, and the grouped read answers zero there', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { researchQuestions: [] } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { researchQuestions: [] } });
 
         const state = drainPreconditions(rig.store, rig.story());
 

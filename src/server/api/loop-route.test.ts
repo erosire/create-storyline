@@ -28,7 +28,7 @@ const liveRun = (store: Store, index: number): Run =>
         {
             story_id: 'story_1',
             work_item_ref: `wi_review_summary_a${index}`,
-            role: 'reader',
+            role: 'critic',
             state: 'working',
             started_at: '2026-11-24T10:00:00.000Z',
             tokens: 1000 * index,
@@ -96,7 +96,7 @@ describe('GET /loop', () => {
             {
                 story_id: 'story_1',
                 work_item_ref: 'wi_check_chapters_1',
-                role: 'checker',
+                role: 'reader',
                 state: 'torn_down',
                 started_at: '2026-11-24T09:00:00.000Z',
                 ended_at: '2026-11-24T09:00:02.000Z',

@@ -14,15 +14,15 @@ const ENV = {
 /**
  * The roster exactly as `GET /agents` answers it: ALPHABETICAL by employee kind (T12/F1).
  *
- * The harness projects in catalogue order (writer, editor, reader, checker, researcher), but U-8 and
+ * The harness projects in catalogue order (writer, editor, critic, reader, researcher), but U-8 and
  * documents/phase-1-research-pipeline.md §7.3 say the roster lists alphabetically, so the route sorts
  * a copy. This fixture is therefore the ROUTE's order, not the catalogue's — the distinction is the
  * point of the first test below.
  */
 const idleRows = (model: string) => [
     {
-        kind: 'checker',
-        title: 'Checker',
+        kind: 'critic',
+        title: 'Critic',
         status: 'idle',
         rank: 'A',
         model,
@@ -42,6 +42,8 @@ const idleRows = (model: string) => [
         working: [],
         recent: []
     },
+    // The Reader used to be the Checker, which sorted FIRST. Renamed, it sorts third: after
+    // Editor, before Researcher. The route's alphabetical sort is what moves it, not the harness.
     {
         kind: 'reader',
         title: 'Reader',
@@ -54,7 +56,7 @@ const idleRows = (model: string) => [
         recent: []
     },
     // §7.3 of documents/phase-1-research-pipeline.md: the fifth employee. The catalogue appends it
-    // after the original four; alphabetically it sits fourth, between Reader and Writer.
+    // after the original four; alphabetically it sits fourth, between the Reader and the Writer.
     {
         kind: 'researcher',
         title: 'Researcher',
@@ -103,7 +105,7 @@ describe('GET /agents', () => {
             }>
         ).map((row) => row.kind);
 
-        expect(kinds).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
+        expect(kinds).toEqual(['critic', 'editor', 'reader', 'researcher', 'writer']);
     });
 
     it('keeps a torn-down run and its reason visible on the idle agent’s tile (S-3)', async () => {
@@ -113,7 +115,7 @@ describe('GET /agents', () => {
             {
                 story_id: 'story_0',
                 work_item_ref: 'wi_check_chapters_1',
-                role: 'checker',
+                role: 'reader',
                 state: 'failed',
                 started_at: '2026-11-22T10:00:00.000Z',
                 ended_at: '2026-11-22T10:00:01.000Z',
@@ -139,17 +141,17 @@ describe('GET /agents', () => {
             status: string;
             recent: Array<Record<string, unknown>>;
         }>;
-        const checker = rows.find((row) => row.kind === 'checker');
+        const reader = rows.find((row) => row.kind === 'reader');
 
-        expect(checker?.status).toBe('idle');
-        expect(checker?.recent).toHaveLength(1);
-        expect(checker?.recent[0]).toMatchObject({
+        expect(reader?.status).toBe('idle');
+        expect(reader?.recent).toHaveLength(1);
+        expect(reader?.recent[0]).toMatchObject({
             run_id: 'run_0',
             work_item: 'wi_check_chapters_1',
             state: 'failed',
             no_op: true
         });
-        expect(String(checker?.recent[0]?.end_reason)).toContain('Field required');
+        expect(String(reader?.recent[0]?.end_reason)).toContain('Field required');
     });
 });
 
@@ -243,7 +245,7 @@ describe('GET /agents/:kind/threads', () => {
 
         expect(response.status).toBe(404);
         expect(await response.json()).toEqual({
-            error: 'no agent named "explorer" — the global roster is writer, editor, checker, reader and researcher (U-8).'
+            error: 'no agent named "explorer" — the global roster is writer, editor, reader, critic and researcher (U-8).'
         });
     });
 });
@@ -376,6 +378,9 @@ describe('PATCH /agents/:kind', () => {
         });
 
         expect(cleared.status).toBe(200);
+        // Row 2 of the ALPHABETICAL roster projection (Critic, Editor, Reader, Researcher, Writer):
+        // the Editor used to sit at [2], behind the Checker; the Reader sorts after it, so the
+        // Editor's row is [1] now. The PATCH targets `/agents/editor`, so this is the row it changed.
         expect((await cleared.json())[1]).toMatchObject({
             kind: 'editor',
             model: 'scripted',
@@ -398,7 +403,7 @@ describe('PATCH /agents/:kind', () => {
         });
 
         expect(set.status).toBe(200);
-        // Row 4 of the ALPHABETICAL roster projection (Checker, Editor, Reader, Researcher, Writer):
+        // Row 4 of the ALPHABETICAL roster projection (Critic, Editor, Reader, Researcher, Writer):
         // the same object every other kind answers, with the Author's choice on it and its source
         // recorded (T-6b).
         const rows = (await set.json()) as Array<Record<string, unknown>>;
@@ -439,7 +444,7 @@ describe('PATCH /agents/:kind', () => {
 
         expect(response.status).toBe(404);
         expect(await response.json()).toEqual({
-            error: 'no agent named "explorer" — the global roster is writer, editor, checker, reader and researcher (U-8).'
+            error: 'no agent named "explorer" — the global roster is writer, editor, reader, critic and researcher (U-8).'
         });
     });
 

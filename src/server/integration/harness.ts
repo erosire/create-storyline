@@ -48,8 +48,14 @@ import { MockChatClient, type MockHandler, calls, msg } from '../llm/mock';
 import type { ChatRequest, ChatResponse, ToolCall } from '../llm/client';
 import { Store } from '../store/store';
 import { seedHashOf } from '../../shared/seed-hash';
-import { ISSUE_LIST_SCHEMA_NAME, SUMMARY_SAMPLE_SCHEMA_NAME, GROUP_DRAFT_SCHEMA_NAME, GROUP_REVIEW_SCHEMA_NAME } from '../../shared/schemas';
-import type { GroupDraft, GroupReview, IssueList, SummarySample } from '../../shared/schemas';
+import {
+    ISSUE_LIST_SCHEMA_NAME,
+    SUMMARY_SAMPLE_SCHEMA_NAME,
+    GROUP_DRAFT_SCHEMA_NAME,
+    GROUP_REVIEW_SCHEMA_NAME,
+    SECTION_SCORES_SCHEMA_NAME
+} from '../../shared/schemas';
+import type { GroupDraft, GroupReview, IssueList, SectionScores, SummarySample } from '../../shared/schemas';
 import type { Chapter, Cost, Idea, Plotline, Revision, SampledFixVerification, Story, Summary, Verdict } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -101,12 +107,12 @@ export interface CrewContext {
     refusals: Array<Record<string, unknown>>;
     /** The criteria the brief actually briefed this crew on, in brief order. */
     criteria: string[];
-    /** The phase the brief's PHASE section names — where a Reader's Idea belongs. */
+    /** The phase the brief's PHASE section names — where a Critic's Idea belongs. */
     phase: string;
     unitTarget?: string;
     /** The competing draft a review job names (`revision_id=` in the brief), if any. */
     draftIds: string[];
-    /** True for phase ①'s per-draft deep review (the job note carries `Reader pass N of M`). */
+    /** True for phase ①'s per-draft deep review (the job note carries `Critic pass N of M`). */
     reviewPass: boolean;
     /** The Story's Summary row id, which is where `chapter_count` lives (D-3b: Author truth). */
     summary?: Summary;
@@ -127,20 +133,20 @@ export interface CrewOptions {
     failCriteria?: string[];
     /** Criteria left out of `criteria_passed[]` entirely — "not checked at all". */
     omitCriteria?: string[];
-    /** Cost of a finding the Checker files on each chapter unit it judges (§15 step 3a). */
+    /** Cost of a finding the Reader files on each chapter unit it judges (§15 step 3a). */
     raiseFindings?: Cost;
-    /** How many Ideas each Reader run files; the shipped default of 1 matches §6.7's probe round. */
-    readerIdeas?: number;
+    /** How many Ideas each Critic run files; the shipped default of 1 matches §6.7's probe round. */
+    criticIdeas?: number;
     /**
-     * A deep-review Reader pass files one defect at this cost (§6.4 step 6). The function form
+     * A deep-review Critic pass files one defect at this cost (§6.4 step 6). The function form
      * decides per pass, so a test can make the flaw a one-round event (the selected draft's id is
      * in `ctx.draftIds`).
      */
-    readerFinds?: Cost | ((ctx: CrewContext) => Cost | undefined);
+    criticFinds?: Cost | ((ctx: CrewContext) => Cost | undefined);
     /** Verify Ideas as `refuted` instead of `confirmed`, so the tray gets a real rejection (D-27). */
     refuteIdeas?: boolean;
-    /** Extra tool calls a Checker run makes on a chapter unit before reporting (U-3's drill). */
-    checkerDrill?: boolean;
+    /** Extra tool calls a Reader run makes on a chapter unit before reporting (U-3's drill). */
+    readerDrill?: boolean;
     /** The assistant run's final answer line (A-1: plain text to the Author, no writes). */
     assistantNote?: string;
     /**
@@ -188,14 +194,33 @@ export interface CrewOptions {
      */
     groupFixes?: (turn: GroupReviewTurn) => SampledFixVerification[];
     /**
-     * SUMMARY PHRASE R3 — the `group_refs` the deep-review Reader files its finding with. The default
-     * names every group of the Story: on a group-managed book the Checker REFUSES a phase-① Summary
-     * defect that names none (`tools/checker.ts`), and "the whole Overview" is the honest reading of a
+     * SUMMARY PHRASE R3 — the `group_refs` the deep-review Critic files its finding with. The default
+     * names every group of the Story: on a group-managed book the Reader REFUSES a phase-① Summary
+     * defect that names none (`tools/reader.ts`), and "the whole Overview" is the honest reading of a
      * crew that reports a defect without scoping it. A slice that wants the work routed to ONE group
      * resolves that id from `ctx.store.phraseGroups` and returns it; returning `[]` opts back into the
      * legacy meaning on a legacy book.
      */
-    readerGroupRefs?: (ctx: CrewContext) => string[] | undefined;
+    criticGroupRefs?: (ctx: CrewContext) => string[] | undefined;
+    /**
+     * READER SCORING (D-65) — the JSON a `score_sections` run answers. The default scores EVERY group
+     * the prompt printed, one deterministic number per group, so a slice can pin the five
+     * `summary_scores` rows exactly rather than read whatever the mock invented. Return a STRING to
+     * answer raw text (the schema-repair rows), or an answer that skips a group / names an id outside
+     * the Overview: that is a refusal the whole run pays for
+     * (`phrase/section-scores.ts:parseSectionScoreAnswer`), which is how a slice drives D-65's
+     * completeness gate.
+     */
+    sectionScores?: (turn: SectionScoreTurn) => SectionScores | string;
+}
+
+/** The compiled prompt a `score_sections` run receives (D-65): the whole Overview, no fix list. */
+export interface SectionScoreTurn {
+    /** The sections the prompt printed, parsed from its own headings — the ids the answer must carry. */
+    groups: GroupPromptEntry[];
+    system: string;
+    user: string;
+    prompt: string;
 }
 
 /** The compiled prompt a no-tool sampling run receives (§5); no brief exists in this mode. */
@@ -310,6 +335,28 @@ export const defaultGroupDraftAnswer = (
 ): GroupDraft => ({
     groups: groups.map((group) => ({ group_ref: group.ref, content: `${group.key}: ${logline}` })),
     knowledge_used: knowledgeUsed
+});
+
+/**
+ * READER SCORING (D-65) — the default `SectionScores` answer, one entry per section the prompt printed.
+ *
+ * THE NUMBERS ARE A PURE FUNCTION OF THE PROMPT, which is what makes them assertable: `60 + 8 × position`
+ * (premise 60, promise 68, theme 76, tone 84, ending 92), so a slice pins all five scores exactly and a
+ * second run over the same Overview answers identically. The evidence line is the group's OWN current
+ * text, quoted from the prompt the engine compiled — the same guarantee `defaultGroupDraftAnswer` gives
+ * the Writer: a stored row provably came from the bytes that asked for it, and a parse that requires a
+ * non-empty quote (D-15) never sees a mock invent one.
+ */
+export const SECTION_SCORE_BASE = 60;
+export const SECTION_SCORE_STEP = 8;
+
+export const defaultSectionScoreAnswer = (groups: readonly GroupPromptEntry[]): SectionScores => ({
+    sections: groups.map((group, index) => ({
+        group_ref: group.ref,
+        score: SECTION_SCORE_BASE + index * SECTION_SCORE_STEP,
+        rationale: `${group.key} holds together as written and is contradicted by none of the other sections (revision ${group.revision})`,
+        evidence: (group.currentText.trim().split('\n')[0] ?? '').trim() || `${group.key}: (no current text)`
+    }))
 });
 
 /**
@@ -474,23 +521,23 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
         ideaIds: [...brief.matchAll(/^- (idea_\d+) \[/gm)].map((match) => match[1]),
         taskIds: [...brief.matchAll(/^- (task_\d+) \[/gm)].map((match) => match[1]),
         // TWO job-note shapes mean "this is phase ①'s deep review": the sampling pipeline's
-        // `Reader pass N of M` (§6.4 step 6) and the group pipeline's `Reader pass N/M on the installed
+        // `Critic pass N of M` (§6.4 step 6) and the group pipeline's `Critic pass N/M on the installed
         // group Overview` (`loop/work.ts`'s group deep review, R3/R5). Missing the second one is how a
         // group book ends up with a review run that submitted no verdict and filed no finding: the crew
-        // falls through to the chapter-Checker branch and the Summary level sits failing forever.
-        reviewPass: /Reader pass \d+ of \d+/.test(brief) || /Reader pass \d+\/\d+ on the installed group Overview/.test(brief),
+        // falls through to the chapter-Reader branch and the Summary level sits failing forever.
+        reviewPass: /Critic pass \d+ of \d+/.test(brief) || /Critic pass \d+\/\d+ on the installed group Overview/.test(brief),
         phase: /Phase: (\w+)\./.exec(brief)?.[1] ?? story?.phase ?? 'summary'
     };
 }
 // ---------------------------------------------------------------------------
-// The Checker's report
+// The Reader's report
 // ---------------------------------------------------------------------------
 
 /**
  * One verdict line per briefed criterion, filed at the scope the engine aggregates over. `submitVerdict`
  * takes one `target_ref` (§8.3) and `criteria/engine.ts:passingFor` counts a line only when its
  * target equals the scope the criterion needs — so a double that filed everything at the artifact
- * could never complete a level, which is the bug §15 exists to catch (see also tools/checker.ts).
+ * could never complete a level, which is the bug §15 exists to catch (see also tools/reader.ts).
  */
 function verdictCalls(ctx: CrewContext, evidence: string): CrewCall[] {
     const { criteria, unitTarget, story, options } = ctx;
@@ -507,7 +554,7 @@ function verdictCalls(ctx: CrewContext, evidence: string): CrewCall[] {
 
     const out: CrewCall[] = [];
 
-    // `recommendation` is a `z.enum` over `advance | fix | stuck` (tools/checker.ts) — never `done`.
+    // `recommendation` is a `z.enum` over `advance | fix | stuck` (tools/reader.ts) — never `done`.
     const failing = criteria.filter((id) => options.failCriteria?.includes(id)).length;
 
     if (unitLines.length || storyLines.length === 0)
@@ -802,7 +849,7 @@ const editorScript: CrewScript = (ctx) => {
     for (const id of findingIds) {
         specs.push({
             name: 'verifyFinding',
-            // D-33 quick check: mark it valid and give the reason; the Reader's cost stands unless
+            // D-33 quick check: mark it valid and give the reason; the Critic's cost stands unless
             // the Editor deliberately corrects it.
             args: {
                 finding_id: id,
@@ -810,7 +857,7 @@ const editorScript: CrewScript = (ctx) => {
                 why: 'D-33 verification: the cited passage shows the defect.'
             }
         });
-        // Phase ①'s approval, in the same granular thread. The deep review's tool-using Reader is
+        // Phase ①'s approval, in the same granular thread. The deep review's tool-using Critic is
         // already the independent read, so the Editor's verification is what arms the next sampling
         // round (§6.4 step 6). Phase ① approves only critical/major; a minor/taste note is recorded,
         // never turned into work.
@@ -827,7 +874,7 @@ const editorScript: CrewScript = (ctx) => {
                     args: {
                         finding_id: id,
                         decision: 'auto',
-                        why: 'The Story dial covers the confirmed finding; the Reader confirms it independently.'
+                        why: 'The Story dial covers the confirmed finding; the Critic confirms it independently.'
                     }
                 });
             }
@@ -907,13 +954,13 @@ const researcherScript: CrewScript = (ctx) => {
     };
 };
 
-/** The Checker crew: verdict lines for the briefed criteria, plus the optional finding and drill. */
-const checkerScript: CrewScript = (ctx) => {
+/** The Reader crew: verdict lines for the briefed criteria, plus the optional finding and drill. */
+const readerScript: CrewScript = (ctx) => {
     const unit = String(ctx.unitTarget ?? '');
     const specs: CrewCall[] = [];
 
     // D-35's point made visible: an unfamiliar shape is looked up with `describeTool`, not guessed.
-    if (ctx.options.checkerDrill && ctx.results.length === 0)
+    if (ctx.options.readerDrill && ctx.results.length === 0)
         specs.push({ name: 'describeTool', args: { name: 'submitVerdict' } });
 
     if (!ctx.results.some((result) => result.id || result.verdict))
@@ -945,16 +992,16 @@ const checkerScript: CrewScript = (ctx) => {
     return specs.length ? { toolCalls: specs } : { content: `Reported (${ctx.template}).` };
 };
 
-/** The Reader crew: the deep review (§6.4 step 6), probe Ideas (§6.7), Explorer research (D-25). */
-const readerScript: CrewScript = (ctx) => {
+/** The Critic crew: the deep review (§6.4 step 6), probe Ideas (§6.7), Explorer research (D-25). */
+const criticScript: CrewScript = (ctx) => {
     // The scripted crew files its Ideas ONCE per Story. A probe round on a Story whose tray was
     // just decided must not silently restock it and turn a Goal test into a tray test.
     const alreadyFiled = ctx.store.ideas.list().filter((idea) => idea.story_id === ctx.story?.id).length;
-    const ideas = Math.max(0, (ctx.options.readerIdeas ?? 1) - alreadyFiled);
+    const ideas = Math.max(0, (ctx.options.criticIdeas ?? 1) - alreadyFiled);
 
     if (ctx.results.length > 0) return { content: `Reported (${ctx.template}).` };
 
-    // §6.4 step 6 — phase ①'s DEEP REVIEW: a tool-using Reader judges the selected draft against
+    // §6.4 step 6 — phase ①'s DEEP REVIEW: a tool-using Critic judges the selected draft against
     // the Seed, rates the Summary (the criteria engine scopes C-14 to the Summary row, not the
     // draft), and files a defect when the story's seat finds one. It proposes no Ideas — an Idea
     // is the probe round's output (D-26/D-30), and a review that also restocks the tray never closes.
@@ -963,18 +1010,18 @@ const readerScript: CrewScript = (ctx) => {
         // briefed on a draft (`revision_id=` in its note) and D-33 makes it cite that draft; the GROUP
         // pass is briefed on the composed Overview and the Summary row, and there is NO draft row in that
         // model (`loop/work.ts`'s group deep review says so in as many words). Treating the missing draft
-        // as an error is what sent the group pass down the chapter-Checker branch and left the Summary
+        // as an error is what sent the group pass down the chapter-Reader branch and left the Summary
         // level failing with no verdict and no finding at all.
         const revisionId = ctx.draftIds[0] ?? '';
         const target = ctx.unitTarget ?? revisionId;
 
-        if (target === undefined || target === '') return { content: `No artifact named in the Reader brief (${ctx.template}).` };
+        if (target === undefined || target === '') return { content: `No artifact named in the Critic brief (${ctx.template}).` };
 
         const lines = ctx.criteria.map((id) => ({
             criterion: id,
             result: !ctx.options.failCriteria?.includes(id),
             evidence: ctx.options.failCriteria?.includes(id)
-                ? `the Reader pass saw the Seed element missing — ${id} fails here.`
+                ? `the Critic pass saw the Seed element missing — ${id} fails here.`
                 : 'the draft delivers this criterion against the Seed.'
         }));
 
@@ -997,17 +1044,17 @@ const readerScript: CrewScript = (ctx) => {
         ];
 
         const cost =
-            typeof ctx.options.readerFinds === 'function' ? ctx.options.readerFinds(ctx) : ctx.options.readerFinds;
+            typeof ctx.options.criticFinds === 'function' ? ctx.options.criticFinds(ctx) : ctx.options.criticFinds;
 
         if (cost !== undefined) {
-            // SUMMARY PHRASE R3 — on a GROUP-managed book the Checker refuses a phase-① Summary defect
+            // SUMMARY PHRASE R3 — on a GROUP-managed book the Reader refuses a phase-① Summary defect
             // that names no group, because R3's closure is a join on those ids. The default copies every
             // group of the Story, which is the honest reading of a fixture that simply says "this Overview
             // has a defect" — a cross-cutting defect names them all. A slice that wants the work routed to
             // ONE group resolves that group's id from `ctx.store.phraseGroups` and returns it.
             const groupRefs =
-                ctx.options.readerGroupRefs !== undefined
-                    ? ctx.options.readerGroupRefs(ctx)
+                ctx.options.criticGroupRefs !== undefined
+                    ? ctx.options.criticGroupRefs(ctx)
                     : ctx.store.phraseGroups.list().filter((group) => group.story_id === ctx.story?.id).map((group) => group.id);
 
             specs.push({
@@ -1015,18 +1062,18 @@ const readerScript: CrewScript = (ctx) => {
                 args: {
                     target_ref: target,
                     criterion_ref: lines.find((line) => !line.result)?.criterion ?? 'C-14',
-                    title: `Reader: the draft drifts from the Seed (${ctx.template})`,
+                    title: `Critic: the draft drifts from the Seed (${ctx.template})`,
                     // D-30: the Editor needs the what-and-where line, not just the proof. In the group
                     // model the artifact named is the Overview itself, because there is no draft row.
                     detail: `The draft's promise leaves the Seed's central obligation unpaid — see the promise field of ${revisionId === '' ? 'the installed group Overview' : revisionId}.`,
-                    evidence: `the Reader pass read ${revisionId === '' ? target : revisionId} against the Seed and found the promise unpaid`,
+                    evidence: `the Critic pass read ${revisionId === '' ? target : revisionId} against the Seed and found the promise unpaid`,
                     cost,
                     // D-33 makes a phase-① Summary finding cite the draft it describes; the group model
                     // has no draft row, so the citation is simply absent and R3's `group_refs` below are
                     // what make the defect addressable instead.
                     ...(revisionId === '' ? {} : { related_refs: [revisionId] }),
                     ...(groupRefs === undefined || groupRefs.length === 0 ? {} : { group_refs: groupRefs }),
-                    why: 'The Reader angle: what a reader of this Author would object to (D-30).'
+                    why: 'The Critic angle: what a reader of this Author would object to (D-30).'
                 }
             });
         }
@@ -1034,7 +1081,7 @@ const readerScript: CrewScript = (ctx) => {
         return { toolCalls: specs };
     }
 
-    if (ctx.template === 'reader-explorer') {
+    if (ctx.template === 'critic-explorer') {
         return {
             toolCalls: [{ name: 'searchWeb', args: { query: 'lighthouse keepers who chose their own successor' } }]
         };
@@ -1048,7 +1095,7 @@ const readerScript: CrewScript = (ctx) => {
             args: {
                 phase: ctx.phase,
                 body: `Probe Idea ${index + 1}: the ${index + 1}${index === 0 ? 'st' : 'th'} crossing should cost the keeper her sister, not a name.`,
-                // §4.17's kinds; a probe round is a reader angle, so `possibility` (D-26).
+                // §4.17's kinds; a probe round is a critic angle, so `possibility` (D-26).
                 kind: 'possibility',
                 // T-10: a citation is {url_or_title, claim}, never a bare string.
                 sources: [
@@ -1057,7 +1104,7 @@ const readerScript: CrewScript = (ctx) => {
                         claim: 'the sea collects one memory per safe crossing'
                     }
                 ],
-                why: 'The reader angle: what would make this land harder.'
+                why: 'The critic angle: what would make this land harder.'
             }
         });
     }
@@ -1095,13 +1142,13 @@ export const CREW_SCRIPTS: Record<string, CrewScript> = {
     'editor-seed-structure': editorScript,
     'editor-general': editorScript,
     'researcher-story': researcherScript,
-    'checker-consistency': checkerScript,
-    'checker-prose': checkerScript,
-    // The four built-in Readers of §8.1 (`templates.ts`), all of which answer a probe round.
-    'reader-genre': readerScript,
-    'reader-plausibility': readerScript,
-    'reader-audience': readerScript,
-    'reader-mystery': readerScript,
+    'reader-consistency': readerScript,
+    'reader-prose': readerScript,
+    // The four built-in Critics of §8.1 (`templates.ts`), all of which answer a probe round.
+    'critic-genre': criticScript,
+    'critic-plausibility': criticScript,
+    'critic-audience': criticScript,
+    'critic-mystery': criticScript,
     assistant: assistantScript
 };
 
@@ -1163,8 +1210,8 @@ export function createCrewClient(
             writer: writerScript,
             editor: editorScript,
             researcher: researcherScript,
-            checker: checkerScript,
             reader: readerScript,
+            critic: criticScript,
             assistant: assistantScript
         };
         const script = scripts[template] ?? byKind[parsed.kind];
@@ -1335,6 +1382,18 @@ function structuredAnswer(request: ChatRequest, store: Store, options: CrewOptio
                 : { ...answer, fix_verifications: certificate };
 
         return typeof certified === 'string' ? certified : JSON.stringify(certified);
+    }
+
+    // READER SCORING D-65 — a `score_sections` job. The sections are PARSED from the compiled prompt's
+    // own headings (`groupEntriesOf`), so the default answer names exactly the ids the engine printed and
+    // quotes exactly the text it carried; a slice that wants a refused run scripts its own
+    // `sectionScores` (an incomplete answer, a score out of range) and watches the settle write nothing.
+    if (name === SECTION_SCORES_SCHEMA_NAME) {
+        const turn: SectionScoreTurn = { groups: groupEntriesOf(prompt), system, user, prompt };
+        const answer =
+            options.sectionScores !== undefined ? options.sectionScores(turn) : defaultSectionScoreAnswer(turn.groups);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
     }
 
     // An unknown schema is answered with `{}` on purpose: it fails validation the same way a real
@@ -1678,18 +1737,18 @@ export async function createSliceStory(
     fixture: StorylineFixture,
     chapterCount = 3,
     /**
-     * Phase ①'s counts for the walk. The tests use a small sample/reader set so a deterministic
+     * Phase ①'s counts for the walk. The tests use a small sample/critic set so a deterministic
      * scripted crew can finish the pipeline inside a bounded number of sweeps; the product's
-     * standard (five Writers, five Readers per draft) is the default the route applies when these
+     * standard (five Writers, five Critics per draft) is the default the route applies when these
      * are omitted, and is pinned separately.
      */
-    review: { sampling?: number; readers?: number; mode?: 'groups' | 'sampling' } = {}
+    review: { sampling?: number; critics?: number; mode?: 'groups' | 'sampling' } = {}
 ): Promise<string> {
     const { status, body } = await fixture.api<{ id: string }>('POST', '/stories', {
         idea: SLICE_SEED,
         chapter_count: chapterCount,
         summary_sampling: review.sampling ?? 3,
-        summary_readers: review.readers ?? 1,
+        summary_critics: review.critics ?? 1,
         // SUMMARY PHRASE R6: the slices walk the pipeline the scripted crews are written for — the
         // whole-Summary sampler (N drafts, screening, one selection). The route's default is now the
         // group pipeline, so the harness names the legacy mode EXPLICITLY rather than inheriting it;

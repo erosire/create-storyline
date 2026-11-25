@@ -10,6 +10,7 @@ import { render } from '@testing-library/react';
 import { StalledReview } from './story-stalled-review';
 import { click, type } from '../testing/shell-fakes';
 import { fixtureActions, fixtureView } from './story-fixtures';
+import type { Finding } from '../../shared/types';
 
 function renderPane(options: { withActions?: boolean; noHistory?: boolean } = {}) {
     const { actions, calls } = fixtureActions();
@@ -78,17 +79,66 @@ describe('StalledReview — the review surface and the four exits (U-1a, L-23)',
         ]);
 
         // `f2` is `fixed`, so it is not an OPEN finding; `f1` is the only row the screen owes.
+        // T3 — the kind leads the row: on this screen the Author decides whether to backtrack or wait, and a
+        // stall whose open rows are all Proposals (a finished book being polished) is a different decision from
+        // one whose rows are all Issues (a book that contradicts its Seed). Cost alone cannot tell them apart.
         expect(
             Array.from(document.querySelectorAll<HTMLElement>('.sv-stalled-finding')).map((row) => [
+                row.querySelector('.sv-finding-kind')!.textContent,
                 row.querySelector('.sv-finding-cost')!.textContent,
                 row.querySelector('.sv-stalled-finding-title')!.textContent,
                 row.querySelector('.sv-stalled-finding-state')!.textContent
             ])
-        ).toEqual([['major', 'Act two changes nothing', 'approved']]);
+        ).toEqual([['Issue', 'major', 'Act two changes nothing', 'approved']]);
 
         // L-11a: the chapters involved come from `target_ref` AND `related_refs`, named by order and title.
         expect(document.querySelector('.sv-stalled-chapters')!.textContent).toBe(
             'Chapters involved: ch. 4 — Act Two, Drowned'
+        );
+    });
+
+    // T3 — the other half of the same row: a stall whose open rows are all Proposals reads as a finished book
+    // being polished, and one whose rows mix the two reads differently again. `fixtureFindings()` ships `f2` as
+    // the Proposal, closed; reopening it (its real state is a wire fact, not a UI fact) puts BOTH claim types on
+    // this screen at once, oldest first — which is also where the ordering of the list is pinned.
+    it('leads every open row by its claim type, on a screen whose rows mix Issues and Proposals (T3)', () => {
+        const { actions } = fixtureActions();
+        const view = fixtureView();
+
+        // `f2` was `fixed`, so the default render drops it. Make it open and the list is two rows: `f2`
+        // (created ago(150)) is OLDER than `f1` (ago(60)), so it leads.
+        view.findings = view.findings.map((finding): Finding =>
+            finding.id === 'f2' ? { ...finding, state: 'confirmed' } : finding
+        );
+
+        render(<StalledReview view={view} actions={actions} />);
+
+        expect(
+            Array.from(document.querySelectorAll<HTMLElement>('.sv-stalled-finding')).map((row) => [
+                row.querySelector('.sv-finding-kind')!.textContent,
+                row.querySelector('.sv-finding-kind')!.className,
+                // The chip is the row's FIRST element, so it is the first word a reader hears.
+                row.firstElementChild!.textContent,
+                row.querySelector('.sv-finding-cost')!.textContent,
+                row.querySelector('.sv-stalled-finding-title')!.textContent,
+                row.querySelector('.sv-stalled-finding-state')!.textContent
+            ])
+        ).toEqual([
+            [
+                'Proposal',
+                'sv-finding-kind sv-finding-kind--proposal',
+                'Proposal',
+                'minor',
+                'No scene break at the door',
+                'confirmed'
+            ],
+            ['Issue', 'sv-finding-kind sv-finding-kind--issue', 'Issue', 'major', 'Act two changes nothing', 'approved']
+        ]);
+
+        // The count in the heading follows the same list, so the sentence the Author reads before the rows
+        // cannot disagree with them.
+        expect(document.querySelector('.sv-stalled-findings .sv-stalled-sub')!.textContent).toBe(
+            'Oldest open findings (2)'
         );
     });
 

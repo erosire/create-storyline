@@ -1,6 +1,6 @@
 /**
  * Acceptance for the drain boundary and the U-13 read surface — decisions D-27, D-21, U-13, L-29,
- * L-36, L-37, C-15, and §6.2a's "Checker runs ×M → verdicts per revision".
+ * L-36, L-37, C-15, and §6.2a's "Reader runs ×M → verdicts per revision".
  *
  * Two halves, one per direction of the same rule:
  *
@@ -11,7 +11,7 @@
  *      Author's own pick depends on. The unsourced control proves the predicate is `sources`, not
  *      "an idea exists" — an unsourced Idea is judged on guidelines, not fact-checked (C-15).
  *
- *   2. §6.2a / D-21 / U-13 — a checker pointed at one draft files its verdict against THAT draft, and
+ *   2. §6.2a / D-21 / U-13 — a reader pointed at one draft files its verdict against THAT draft, and
  *      the Author's side-by-side pane reads those rows. The `GET /stories/:id` view is the pinned wire
  *      (W9), so the §4.9 rows ride with it; without them the pane can only print refs.
  *
@@ -43,7 +43,7 @@ function verifyRuns(rig: Rig): string[] {
         .map((run) => `${run.work_item_ref ?? ''}:${run.state}`);
 }
 
-/** A draft-verdict row reduced to the fields U-13 renders (§4.9's whole shape is pinned in tools/checker). */
+/** A draft-verdict row reduced to the fields U-13 renders (§4.9's whole shape is pinned in tools/reader). */
 function draftVerdictRows(rows: Verdict[]): string[] {
     return rows
         .filter((verdict) => /^revision_\d+$/.test(verdict.target_ref))
@@ -54,7 +54,7 @@ function draftVerdictRows(rows: Verdict[]): string[] {
         .sort((left, right) => left.localeCompare(right));
 }
 
-/** The sourced Idea §15 step 1's Readers would file (D-27's precondition: `sources` non-empty). */
+/** The sourced Idea §15 step 1's Critics would file (D-27's precondition: `sources` non-empty). */
 const SOURCED = {
     body: 'the reservoir was drawn from a 1911 survey that no longer matches the valley floor',
     kind: 'fact' as const,
@@ -179,13 +179,15 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         // The two probe jobs the sweep DOES want are held back by that same wait — the crew is stopped
         // while the Author has the desk, which is exactly what D-27 lifts for a fact-check and only for it.
         expect(report.stories[0]?.started).toEqual([]);
+        // The Reader's probe key sorts AFTER the Critic's now: `wi_probe_checker_*` used to sort
+        // first, and `wi_probe_reader_*` sorts after `wi_probe_critic_*` (the sweep orders by key).
         expect(report.stories[0]?.wanted.map((candidate) => candidate.key)).toEqual([
-            'wi_probe_checker_summary_1',
+            'wi_probe_critic_summary_1',
             'wi_probe_reader_summary_1'
         ]);
         expect(report.stories[0]?.deferred).toEqual({
-            wi_probe_checker_summary_1: 'not dispatched: idea_selection',
-            wi_probe_reader_summary_1: 'not dispatched: idea_selection'
+            wi_probe_reader_summary_1: 'not dispatched: idea_selection',
+            wi_probe_critic_summary_1: 'not dispatched: idea_selection'
         });
         expect({ status: story.status, pending: story.pending_kind }).toEqual({
             status: 'pending',
@@ -199,7 +201,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
     });
 
     it('dispatches at the drained boundary too, once, and the Idea lands verified (D-27, D-35b, L-37)', async () => {
-        // In the built-in flow the Readers only file Ideas from the drain probe rounds, so the drained
+        // In the built-in flow the Critics only file Ideas from the drain probe rounds, so the drained
         // Story is where D-27 actually bites. D-35b stops dispatch while the Author has the desk; this
         // is the one job that must survive that gate.
         const rig = await walkToDrain(await createRig({ story: { chapter_count: 2 } }), 2);
@@ -279,7 +281,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
         // The dial phrase is `dialPhrase` over D-35's shipped default (critical + major + minor), so the
         // drained reason lists three costs — `status.ts:276-284` joins all but the last with `, `.
         expect(rig.story().status_reason).toBe(
-            'no critical, major or minor left to work on (D-35b) · a fresh round of Readers and checkers found nothing at that threshold (L-37) · completion not proposed: the phase Goal is 1/2 · failing: C-15'
+            'no critical, major or minor left to work on (D-35b) · a fresh round of Critics and readers found nothing at that threshold (L-37) · completion not proposed: the phase Goal is 1/2 · failing: C-15'
         );
         expect(
             new CriteriaEngine().evaluateCode(rig.store, rig.storyId).find((result) => result.criterion === 'C-15')
@@ -295,7 +297,7 @@ describe('D-27 — an unverified sourced Idea is loop work, not an Author action
 
 describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read it', () => {
     it('files one verdict per competing draft against the DRAFT, and the pinned view carries every row', async () => {
-        // Three attempts per chapter (D-17d) is the state §6.2a describes: N drafts, a checker per draft.
+        // Three attempts per chapter (D-17d) is the state §6.2a describes: N drafts, a reader per draft.
         const rig = await createRig({ story: { chapter_count: 2 }, attempts: 3 });
 
         await walkToChapters(rig, 2);
@@ -303,10 +305,10 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
 
         // Six drafts, six draft-targeted verdicts. Before the rig's draft-id regex was fixed, `rev_\w+`
         // never matched a stored `revision_N`, so per-draft verdicts silently never landed and every
-        // checker report was filed against the unit alone (which is what starved U-13).
+        // reader report was filed against the unit alone (which is what starved U-13).
         //
         // The `revision_N` targets are the six chapter drafts AND phase ①'s selected Summary revision:
-        // the deep-review Reader rates the draft it read, which is the same per-draft rule (§6.2a).
+        // the deep-review Critic rates the draft it read, which is the same per-draft rule (§6.2a).
         const rows = rig.store.verdicts.list().filter((verdict) => verdict.story_id === rig.storyId);
 
         expect(draftVerdictRows(rows)).toEqual([
@@ -343,7 +345,7 @@ describe('§6.2a / D-21 / U-13 — a verdict per draft, and the Author can read 
 
         // The selected drafts each carry their own verdict — the fact the pane renders as the draft's
         // judgement rather than the unit's. The Summary's winner is the third one (phase ①'s
-        // deep-review Reader), and the chapter drafts are the two §6.2a picks.
+        // deep-review Critic), and the chapter drafts are the two §6.2a picks.
         expect(
             rig.store.revisions.list().map(
                 (revision) =>

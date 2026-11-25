@@ -66,7 +66,7 @@ describe('T12/B — scrapping a Summary revision leaves no orphaned sample revie
         // Two samples, two screening passes each: the selection truncates the loser AND its reviews,
         // so after round 1 the store holds exactly the winner's two reviews — the rows a Seed edit
         // would orphan if the backtrack only deleted the revisions.
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 2 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 2 });
 
         await rig.run();
 
@@ -88,7 +88,7 @@ describe('T12/B — scrapping a Summary revision leaves no orphaned sample revie
     it('a backtrack to `summary` deletes the reviews too, and a backtrack that deletes no revision deletes no review', async () => {
         // A backtrack to `chapters` scraps only LATER phases, so the Summary revision (and therefore
         // its reviews) survives: the fix is scoped to the revisions a commit actually deletes.
-        const kept = await createRig({ summarySampling: 1, summaryReaders: 2 });
+        const kept = await createRig({ summarySampling: 1, summaryCritics: 2 });
 
         await kept.run();
 
@@ -123,13 +123,13 @@ describe('T12/C — a round whose screening attempts are spent selects on the pa
         // sample itself is valid, so the round has a draft to select — the case that used to stall.
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 2,
+            summaryCritics: 2,
             crew: { screenAnswer: () => 'not json' }
         });
 
         await rig.run(24);
 
-        // The cap is `summary_readers + 3` failed runs; the round then degrades instead of waiting.
+        // The cap is `summary_critics + 3` failed runs; the round then degrades instead of waiting.
         expect(screeningCapOf(rig.story())).toBe(5);
         expect(runs(rig, 'wi_screen_revision_0')).toEqual([
             'wi_screen_revision_0_1:failed',
@@ -219,7 +219,7 @@ describe('T12/D — a round selects only when its sample set exists or sampling 
         const rig = await createRig({
             globalMaxConcurrent: 2,
             summarySampling: 3,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { sampleAnswer: ({ sampleIndex }) => (sampleIndex === 2 ? 'not json' : sampleOf(sampleIndex)) }
         });
 
@@ -302,7 +302,7 @@ describe('T12/E — clearing the sampling-failure escalation re-arms the round a
 
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { sampleAnswer: () => (repaired ? sampleOf(1) : 'not json') }
         });
 
@@ -362,7 +362,7 @@ describe('T12/E — clearing the sampling-failure escalation re-arms the round a
 
 describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed blocking finding (R8, D-49)', () => {
     it('refuses the round with no fix task and with an unconfirmed blocking finding, and arms on approved work', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -447,7 +447,7 @@ describe('T12/H6 — round 2 arms only on an open fix task with no unconfirmed b
         // the loop does not spend a sampling round on a clarity note the Author said is not work.
         const rig = await createRig({
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             story: { auto_approve: ['critical', 'major'] }
         });
 

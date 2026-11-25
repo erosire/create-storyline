@@ -43,13 +43,16 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { duplicateTemplate, validateTemplate } from '../templates/templates';
-import { authorAttr, competingRevisions, liveRuns, requireStory, undecidedIdeas } from '../loop/records';
+// D-33d: the approve-all route asks the loop's own "does this Story still hold an unresolved defect?"
+// before it approves anything, so a bulk approve cannot approve a `proposal` over open issues while
+// the single-approve route (engine.approveFinding) refuses the very same call.
+import { authorAttr, competingRevisions, liveRuns, openIssueFindings, requireStory, undecidedIdeas } from '../loop/records';
 import { rememberGlobalMaxConcurrent } from '../loop/ceiling';
 import { isAgentKind, setAgentModel } from '../run/agent-models';
 import { listProviderModels } from '../run/provider-models';
 // U-13's two routes install and queue drafts, so they use the tool layer's own §4.15 body codec and
 // its task opener: the Editor's `selectRevision`/`requestMerge` read the SAME functions, so an
-// Author's choice and a Checker's choice cannot disagree about what a stored draft says (D-22, D-23).
+// Author's choice and a Reader's choice cannot disagree about what a stored draft says (D-22, D-23).
 import { openTask, revisionBodyFields, revisionBodySections } from '../tools/artifacts';
 // SUMMARY PHRASE (R2/R5/R6) — the group domain, for the three routes that expose it and for the two
 // legacy routes that must REFUSE a group-managed book. The refusal matters: `revisions/:id/select` and
@@ -57,6 +60,9 @@ import { openTask, revisionBodyFields, revisionBodySections } from '../tools/art
 // accepted result installs immediately — R5). Answering them with 409 keeps the dashboard from
 // silently installing a `revisions` row the group loop never created.
 import {
+    // D-68 — the Author's choose: the reviewed Overview becomes the book, in one commit.
+    chooseReviewedSummary,
+    cleanSelectionOf,
     importLegacySummary,
     installGroupRevisions,
     isGroupManagedStory,
@@ -65,8 +71,17 @@ import {
     // server's answer to a request the UI already tried to prevent, not a surprise.
     liveGroupWriters,
     phraseGroupById,
+    phraseGroupsOf,
+    // GROUP LOCK (R1) — the Author's two writes on one group's current text, and the result shapes the
+    // route answers with. The refusals come back as thrown `PhraseLockRefusal`s, which `refusal()` already
+    // renders as the 409 the rail prints; the route never re-implements a lock rule.
+    lockPhraseGroup,
+    unlockPhraseGroup,
     type GroupInstallResult,
-    type PhraseImportResult
+    type PhraseImportResult,
+    type PhraseLockResult,
+    type PhraseUnlockResult,
+    type ReviewedChooseResult
 } from '../phrase';
 import type { Store } from '../store';
 import type { Context } from 'hono';
@@ -229,8 +244,8 @@ interface StoryCreateBody {
     chapter_count?: unknown;
     /** Phase ①'s sampling size (defaults to the standard five). */
     summary_sampling?: unknown;
-    /** Phase ①'s Reader passes per sample (defaults to the standard five). */
-    summary_readers?: unknown;
+    /** Phase ①'s Critic passes per sample (defaults to the standard five). */
+    summary_critics?: unknown;
     /**
      * SUMMARY PHRASE R1/R6 — `'groups'` (the default for a NEW Story: five catalog groups, one Writer
      * batch at a time, an accepted result installed immediately) or `'sampling'` (the pre-redesign
@@ -249,8 +264,18 @@ interface StoryPatchBody {
     auto_approve?: unknown;
     /** Phase ①'s sampling size (Writer expansions of the Seed). */
     summary_sampling?: unknown;
-    /** Phase ①'s Reader passes per sample. */
-    summary_readers?: unknown;
+    /** Phase ①'s Critic passes per sample. */
+    summary_critics?: unknown;
+    /**
+     * GROUP LOCK R1 — may the EDITOR lock a phrase group on this Story?
+     *
+     * An OPTIONAL BOOLEAN, and ABSENT MEANS LEAVE IT ALONE (the same discipline every other field here
+     * uses): a body that omits the key cannot flip a Setting the Author set weeks ago. Explicit `false`
+     * DOES write, because taking the Editor's power back is itself a decision the rail sends. The rule
+     * itself lives in `phrase/locks.ts:editorGroupLockingEnabled` (absent = disabled); this route only
+     * validates the shape and stores the boolean.
+     */
+    editor_group_locking?: unknown;
 }
 
 interface WhyBody {
@@ -321,7 +346,7 @@ interface RevisionSelectBody {
 
 /**
  * U-13a — the Author's merge request. The same four fields §8.2's `requestMerge` takes, because the
- * Author's desk asks for the same thing a Checker does: "take this half of this draft and that half
+ * Author's desk asks for the same thing a Reader does: "take this half of this draft and that half
  * of that one" (D-23). `why` is optional here and defaults to the Author's own sentence.
  */
 interface RevisionMergeBody {
@@ -591,7 +616,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         if (!parsed.ok) return parsed.response;
 
-        const { title, idea, chapter_count, summary_sampling, summary_readers, summary_mode } = parsed.body;
+        const { title, idea, chapter_count, summary_sampling, summary_critics, summary_mode } = parsed.body;
 
         if (typeof idea !== 'string' || idea.trim().length === 0) {
             return errorResponse(
@@ -614,7 +639,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         for (const [field, value] of [
             ['summary_sampling', summary_sampling],
-            ['summary_readers', summary_readers]
+            ['summary_critics', summary_critics]
         ] as const) {
             if (
                 value !== undefined &&
@@ -651,7 +676,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 idea,
                 ...(chapter_count === undefined ? {} : { chapter_count }),
                 ...(summary_sampling === undefined ? {} : { summary_sampling: summary_sampling as number }),
-                ...(summary_readers === undefined ? {} : { summary_readers: summary_readers as number }),
+                ...(summary_critics === undefined ? {} : { summary_critics: summary_critics as number }),
                 ...(summary_mode === undefined ? {} : { summary_mode: summary_mode as 'groups' | 'sampling' })
             });
 
@@ -904,6 +929,347 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     });
 
     /**
+     * R1 — the Author locks ONE group in: its current text becomes settled content.
+     *
+     * WHAT THE ROUTE OWNS vs WHAT THE DOMAIN OWNS: this handler decides the ADDRESSING and the RACE — the
+     * Story exists, the book is group-managed, the group is one of THIS Story's, no Writer is inside that
+     * group — and then hands the decision to `phrase/locks.ts:lockPhraseGroup`, which owns every lock rule
+     * (written text, not already locked, who may act) and the two writes (the group's four lock fields, and
+     * the findings whose whole scope just became un-writable). Nothing is duplicated here on purpose: a
+     * second copy of "is it lockable" is how the rail and the loop start disagreeing about what is settled.
+     *
+     * WHY THE LIVE-WRITER REFUSAL COMES BEFORE THE DOMAIN CALL: a lock fixes the revision that stands, and
+     * a `draft_groups` pass in flight is about to replace it. Locking under that pass would freeze a text
+     * nobody has read (and `installGroupRevisions` would then refuse the install, so the Writer's work would
+     * be lost rather than deferred). The message names the run ids — the Author's next action is "wait for
+     * that pass", not "guess" — and it is the SAME read the rail disables the button off
+     * (`projections.ts:writer_busy`, F8/R4), so a greyed control and this 409 cannot disagree.
+     *
+     * THE ANSWER IS THE REVISE ROUTE'S ENVELOPE (R2/D-68): the fresh phrase `view` rides with the verdict, so
+     * the rail's badge moves with the write rather than with a later poll. `voided_findings` is reported
+     * because the lock just shortened the Author's queue, and an unexplained silence there reads as a bug.
+     *
+     * NO BODY: the verdict is "this text stands", and WHO made it is this route's own attribution (the
+     * Author — the Editor's leg is the crew's tool surface, not the dashboard's), so a client has nothing
+     * to assert about itself. A body that arrives is simply not read.
+     */
+    app.post('/stories/:id/phrases/groups/:groupId/lock', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        // A `sampling` book has no group rows at all, so there is no group to lock; importing is the
+        // Author's opt-in (R6), and the 409 names that door rather than answering 404 about a group id
+        // that could never exist here (the same shape the revise and choose routes use).
+        if (!isGroupManagedStory(story)) {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R1, R6).`
+            );
+        }
+
+        const groupId = c.req.param('groupId');
+        const group = phraseGroupById(store, story.id, groupId);
+
+        // 404 for an address this book never minted, checked before any verb (the revise route's rule): a
+        // typo must not reach a commit and come back as a 409 that reads like a refusal about real content.
+        if (group === undefined) return missing(c, 'phrase group', groupId);
+
+        const holders = liveGroupWriters(store, story.id, groupId);
+
+        if (holders.length > 0) {
+            return errorResponse(
+                c,
+                409,
+                `the Writer is rewriting ${group.key} right now (${holders
+                    .map((run) => run.id)
+                    .join(', ')}), so a lock would fix text that has not finished moving — the same lock lands once that run closes (R1, R4).`
+            );
+        }
+
+        try {
+            // Captured in the closure because `Store.commit` answers "did it happen", and the lock's report
+            // (the revision it fixed, who set it, the findings it voided) is what the rail prints. A throw
+            // inside the commit rolls everything back, so `locked === undefined` is the only honest reading
+            // of "nothing moved" — the route never claims a lock it did not write.
+            let locked: PhraseLockResult | undefined;
+
+            await store.commit('phrase_group_lock', () => {
+                locked = lockPhraseGroup(
+                    store,
+                    requireStory(store, story.id),
+                    groupId,
+                    authorAttr(
+                        authorWhy(
+                            'POST /stories/:id/phrases/groups/:groupId/lock',
+                            story.id,
+                            `${group.key} revision ${group.revision} was locked in as settled content (R1)`
+                        )
+                    ),
+                    // The Author's route, so the Author is the actor. The Editor's power
+                    // (`Story.editor_group_locking`) is reached from the crew's own surface, never claimed
+                    // by the dashboard's verb.
+                    { actor: 'author' }
+                );
+            });
+
+            if (locked === undefined) return refusal(c, new Error('the group lock produced no result'));
+
+            const view = phraseView(store, requireStory(store, story.id));
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    ...(view.phrase_id === null ? {} : { phrase_id: view.phrase_id }),
+                    group_id: groupId,
+                    locked: true,
+                    locked_revision: locked.locked_revision,
+                    locked_by: locked.locked_by,
+                    locked_at: locked.locked_at,
+                    // The claims the lock made un-workable, with the state each one had before: the queue
+                    // getting shorter without this list is the Author wondering whether the rail ate a finding.
+                    voided_findings: locked.voided_findings,
+                    view
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
+     * R1 — the Author lifts a group's lock. Author-only, whatever hand set the lock.
+     *
+     * WHY NO EDITOR PATH IS OFFERED HERE: `phrase/locks.ts:unlockPhraseGroup` refuses one outright
+     * (`editor_unlock`) — a crew that just closed a defect must not sign the book back out — so the route
+     * passing `'author'` is not a shortcut, it is the only actor this verb has. A client that calls this
+     * route from the crew's leg is still refused by the domain when it goes through the tool surface.
+     *
+     * THE LIVE-WRITER GUARD IS NOT DEPTH FOR ITS OWN SAKE: the lock may be holding off an install that was
+     * dispatched before the lock and is still in flight. Unlocking under that pass lets a text nobody has
+     * reviewed land on the group the Author just reopened, in the same window — so the lock comes off once
+     * the pass is done, which is also when the loop can offer the group again.
+     *
+     * An unlock writes no timestamp of its own (§4's row carries the LOCK's stamp), so the response answers
+     * with the three metadata fields at `null`: the state the route left the group in, stated as the row
+     * states it. Same `view` envelope as the lock and the revise routes.
+     */
+    app.post('/stories/:id/phrases/groups/:groupId/unlock', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        if (!isGroupManagedStory(story)) {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R1, R6).`
+            );
+        }
+
+        const groupId = c.req.param('groupId');
+        const group = phraseGroupById(store, story.id, groupId);
+
+        if (group === undefined) return missing(c, 'phrase group', groupId);
+
+        const holders = liveGroupWriters(store, story.id, groupId);
+
+        if (holders.length > 0) {
+            return errorResponse(
+                c,
+                409,
+                `the Writer is rewriting ${group.key} right now (${holders
+                    .map((run) => run.id)
+                    .join(', ')}), so unlocking would open the group under a pass that has not installed its text — the lock comes off once that run closes (R1, R4).`
+            );
+        }
+
+        try {
+            let opened: PhraseUnlockResult | undefined;
+
+            await store.commit('phrase_group_unlock', () => {
+                opened = unlockPhraseGroup(
+                    store,
+                    requireStory(store, story.id),
+                    groupId,
+                    authorAttr(
+                        authorWhy(
+                            'POST /stories/:id/phrases/groups/:groupId/unlock',
+                            story.id,
+                            `${group.key} stopped being settled content and rejoined the loop (R1)`
+                        )
+                    ),
+                    { actor: 'author' }
+                );
+            });
+
+            if (opened === undefined) return refusal(c, new Error('the group unlock produced no result'));
+
+            const view = phraseView(store, requireStory(store, story.id));
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    ...(view.phrase_id === null ? {} : { phrase_id: view.phrase_id }),
+                    group_id: groupId,
+                    locked: false,
+                    // `null`, not absent: the route is saying "no live lock stands on this group", and the
+                    // row itself carries nulls for exactly that reason (`locks.ts:unlockPhraseGroup`).
+                    locked_revision: null,
+                    locked_by: null,
+                    locked_at: null,
+                    view
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
+     * D-68 — the Author chooses the Reviewed Summary.
+     *
+     * WHAT IT DOES, in ONE commit (`phrase/reviewed.ts:chooseReviewedSummary`): installs the selected
+     * text of every group as its next `latest` — the same install the loop and the hand-edit route use,
+     * so the Overview recomposes from the rows and R6's legacy mirror is rewritten in the same commit —
+     * marks every revision the choice passed over `discarded`, and records the chosen vector on the
+     * Phrase row so the rail keeps showing the text the Author took after the pipeline moves on.
+     *
+     * WHAT IT DELIBERATELY DOES NOT DO: it does not lock the phase (choosing is not locking — the loop
+     * keeps running and the next cross-group pass may yet find a defect in the chosen text), and it
+     * claims to resolve nothing: the new rows carry no `finding_refs` and no `task_refs`, so R3's
+     * closure rule is untouched, exactly as on the hand-edit route above. A choice is a decision about
+     * the Summary, not evidence that a defect was fixed.
+     *
+     * THE REFUSALS are all 409s, because every one is a STATE of the book rather than a malformed body:
+     *   - a `'sampling'` book has no group catalog, so there is nothing to choose (the import route is
+     *     the Author's opt-in, R6);
+     *   - no Reviewed Summary exists — some group has no clean revision, so the crew stands behind no
+     *     text for it. The message names each group and the reason, which is the difference between the
+     *     rail saying "not yet" and the Author knowing what to wait for; and
+     *   - a live Writer holds any group. The choose reads the clean selection and installs under the
+     *     Writer's feet, which is the R4 race the hand-edit route refuses one group at a time; here the
+     *     choice writes five texts at once, so one live Writer anywhere is enough to refuse.
+     */
+    app.post('/stories/:id/phrases/reviewed/choose', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        if (!isGroupManagedStory(story)) {
+            return errorResponse(
+                c,
+                409,
+                `this Story's Summary is still written as one text (no group catalog); POST /stories/${story.id}/phrases/import turns the flat Summary into groups first (R6, D-68).`
+            );
+        }
+
+        const parsed = await readBody<{ note?: unknown }>(c);
+
+        if (!parsed.ok) return parsed.response;
+
+        const note = typeof parsed.body.note === 'string' ? parsed.body.note.trim() : '';
+
+        // THE GATE, read from the ONE function the scoring seat also arms on
+        // (`phrase/reviewed.ts:cleanSelectionOf`). Checking it here instead of letting the domain call
+        // throw keeps the refusal Author-shaped: the response lists the groups and says whether each one
+        // is unwritten, has no clean revision, or is being held open by an unresolved issue. The domain
+        // call still throws — the guard is for every other caller — but a route should not answer a 409
+        // by formatting an exception.
+        const selection = cleanSelectionOf(store, story);
+
+        if (!selection.complete) {
+            return errorResponse(
+                c,
+                409,
+                `this Story has no Reviewed Summary to choose: ${selection.gaps
+                    .map((gap) => `${gap.group_key} (${gap.issues_open ? 'an unresolved issue names it' : gap.reason})`)
+                    .join(', ')} — a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).`
+            );
+        }
+
+        // R4, across the whole choice: the run ids travel in the message because the Author's next action
+        // is "wait for that run", and the read is the one the rail's disabled button uses
+        // (`projections.ts:reviewed.writer_busy`), so a greyed-out control and this 409 agree.
+        const holders = new Set<string>();
+
+        for (const group of phraseGroupsOf(store, story.id)) {
+            for (const run of liveGroupWriters(store, story.id, group.id)) holders.add(run.id);
+        }
+
+        if (holders.size > 0) {
+            return errorResponse(
+                c,
+                409,
+                `the Writer is rewriting part of this Summary right now (${[...holders].join(', ')}), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).`
+            );
+        }
+
+        try {
+            // Captured in the closure because `Store.commit` returns nothing and the choose's report is
+            // what the rail shows: which five rows are current now, which rows the choice set aside, and
+            // whether the legacy mirror moved (R6).
+            let chosen: ReviewedChooseResult | undefined;
+
+            await store.commit('phrase_reviewed_choose', () => {
+                chosen = chooseReviewedSummary(
+                    store,
+                    requireStory(store, story.id),
+                    authorAttr(
+                        authorWhy(
+                            'POST /stories/:id/phrases/reviewed/choose',
+                            story.id,
+                            `the reviewed Overview at vector ${selection.vector_hash} was chosen${note === '' ? '' : `: ${note}`} (D-68)`
+                        )
+                    )
+                );
+            });
+
+            if (chosen === undefined) return refusal(c, new Error('the reviewed-Summary choose produced no result'));
+
+            return c.json(
+                {
+                    story_id: story.id,
+                    phrase_id: chosen.phrase.id,
+                    revision: chosen.phrase.revision,
+                    vector: chosen.chosen.vector,
+                    vector_hash: chosen.chosen.vector_hash,
+                    at: chosen.chosen.at,
+                    overview: chosen.chosen.overview,
+                    installed: chosen.installed.map((row) => ({
+                        group_id: row.group_id,
+                        group_key: row.group_key,
+                        revision_id: row.id,
+                        number: row.number
+                    })),
+                    // The rows the choice set aside. They are RETAINED (a finding they closed stays
+                    // `fixed`), which is why the response reports them rather than the commit silently
+                    // deleting them — the Author's rail lists what was passed over, and R3's join can
+                    // still walk it.
+                    discarded: chosen.discarded.map((row) => ({
+                        group_id: row.group_id,
+                        group_key: row.group_key,
+                        revision_id: row.id,
+                        number: row.number
+                    })),
+                    sources: chosen.chosen.sources,
+                    mirror: chosen.mirror,
+                    view: phraseView(store, requireStory(store, story.id))
+                },
+                200
+            );
+        } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
      * U-10a/U-16/U-4 — the four Author edits that live on the Story row. Each keeps its own engine verb
      * where one exists: the Seed is a backtrack (`editSeed`, D-25a) and the count is a growth/shrink
      * decision (`changeChapterCount`, D-3c); the title and the dial are plain row edits.
@@ -926,13 +1292,18 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             body.chapter_count !== undefined ||
             body.auto_approve !== undefined ||
             body.summary_sampling !== undefined ||
-            body.summary_readers !== undefined;
+            body.summary_critics !== undefined ||
+            // R1 — the Editor-locking Setting is a field this verb knows. The refusal sentence below is
+            // deliberately NOT widened to name it: that copy is pinned verbatim (L-13, the Author reads it
+            // as the list of verbs), and a body that carries THIS field with the wrong type gets the
+            // field's own 400 one line later, which is the accurate sentence for that mistake.
+            body.editor_group_locking !== undefined;
 
         if (!hasEdit)
             return errorResponse(
                 c,
                 400,
-                'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_readers (D-35, D-17d).'
+                'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_critics (D-35, D-17d).'
             );
 
         if (body.title !== undefined && (typeof body.title !== 'string' || body.title.trim().length === 0)) {
@@ -963,7 +1334,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
 
         for (const [field, value] of [
             ['summary_sampling', body.summary_sampling],
-            ['summary_readers', body.summary_readers]
+            ['summary_critics', body.summary_critics]
         ] as const) {
             if (
                 value !== undefined &&
@@ -977,12 +1348,25 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             }
         }
 
+        // R1 — the Editor-locking Setting is a BOOLEAN, not a truthy blob: the Setting's whole effect is a
+        // yes/no permission (`phrase/locks.ts:editorGroupLockingEnabled` reads `=== true`), so a string
+        // `"false"` arriving here would otherwise store a value the domain reads as ON. Absent is handled
+        // by the `hasEdit` gate and the spread below (leave it alone), so only a PRESENT value is checked.
+        if (body.editor_group_locking !== undefined && typeof body.editor_group_locking !== 'boolean') {
+            return errorResponse(
+                c,
+                400,
+                '`editor_group_locking` must be a boolean: true lets the Editor lock a phrase group, false takes that power back, and omitting it leaves the Story as it is (R1).'
+            );
+        }
+
         return verb(c, story.id, async () => {
             if (
                 body.title !== undefined ||
                 body.auto_approve !== undefined ||
                 body.summary_sampling !== undefined ||
-                body.summary_readers !== undefined
+                body.summary_critics !== undefined ||
+                body.editor_group_locking !== undefined
             ) {
                 await store.commit('patch_story', () => {
                     const fresh = requireStory(store, story.id);
@@ -995,9 +1379,16 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                             ...(body.summary_sampling === undefined
                                 ? {}
                                 : { summary_sampling: body.summary_sampling as number }),
-                            ...(body.summary_readers === undefined
+                            ...(body.summary_critics === undefined
                                 ? {}
-                                : { summary_readers: body.summary_readers as number })
+                                : { summary_critics: body.summary_critics as number }),
+                            // R1 — the Setting travels as the boolean the route validated. `false` is a
+                            // WRITE, not an absence: the store's patch merges through JSON, so `false` lands
+                            // and disables (the Editor's lock power is `=== true`), while an absent key never
+                            // reaches this object at all.
+                            ...(body.editor_group_locking === undefined
+                                ? {}
+                                : { editor_group_locking: body.editor_group_locking as boolean })
                         },
                         authorAttr(
                             authorWhy(
@@ -1007,7 +1398,12 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                                     ? `the dial is now [${(body.auto_approve as string[]).join(', ')}] (D-35)`
                                     : body.title !== undefined
                                       ? 'title'
-                                      : `phase ① now samples ${body.summary_sampling ?? 'the existing'} Writers with ${body.summary_readers ?? 'the existing'} Readers per draft`
+                                      : // R1 — its own journal line, because "the Editor may lock a group"
+                                        // is a permission the Author granted or took back, and a future read
+                                        // of the journal has to say which.
+                                        body.editor_group_locking !== undefined
+                                        ? `the Editor may${body.editor_group_locking === true ? '' : ' not'} lock a phrase group (R1)`
+                                        : `phase ① now samples ${body.summary_sampling ?? 'the existing'} Writers with ${body.summary_critics ?? 'the existing'} Critics per draft`
                             )
                         ),
                         [{ id: fresh.id, rev: fresh.rev }]
@@ -1273,8 +1669,27 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                     (candidate.target_ref === chapter.id || (candidate.related_refs ?? []).includes(chapter.id))
             );
 
+        // D-33d — the bulk approve passes through the same issues-first rule the single approve does
+        // (`engine.approveFinding` throws it, `tools/editor.ts:approveFinding` refuses it, the dial
+        // skips it, and `raiseFinding` will not file over an open issue — D-33c). Here it is a SKIP
+        // rather than a refusal on purpose: U-10b's whole point is that the Author clears a stalled
+        // chapter in one click, and a 409 raised by the first proposal in the batch would abort the
+        // ISSUES the rule wants approved first.
+        //
+        // `approved` is NOT `resolved` — an approved issue still has a Writer in front of it — so the
+        // issues this same batch approves do not unlock the proposals in it. The proposal stays
+        // `confirmed`, still in the Author's queue, and the next click (or the next sweep) takes it
+        // once every issue reaches `fixed` or `discarded`.
+        //
+        // The route's shape is unchanged: the journal shows one approve per finding approved and none
+        // for a skipped row, and the projected Story row still lists the proposal as awaiting
+        // approval, which IS the report.
+        const batchIssues = openIssueFindings(store, story.id);
+        const approved =
+            batchIssues.length === 0 ? targets : targets.filter((candidate) => candidate.kind !== 'proposal');
+
         try {
-            for (const finding of targets) await engine.approveFinding(finding.id, { by: 'author', note: why });
+            for (const finding of approved) await engine.approveFinding(finding.id, { by: 'author', note: why });
         } catch (error) {
             return refusal(c, error);
         }
@@ -1551,7 +1966,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * surviving draft by recency. This one is the choice itself: the Author names the draft, and the
      * draft's stored body is what installs (§4.15's `body` codec is `revisionBodySections`/
      * `revisionBodyFields` in ../tools/artifacts — the same pair the Editor's `selectRevision` reads,
-     * so an Author's choice and a Checker's choice cannot render two different texts).
+     * so an Author's choice and a Reader's choice cannot render two different texts).
      *
      * D-22's commit discipline holds: install, mark `selected`, delete every sibling draft in ONE
      * commit, so no fresh run can see two texts for one unit. No §7 row is consulted — this is a
@@ -1787,7 +2202,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                     {
                         kind: 'merge',
                         // The tool's exact title shape, so `findOpenTask` dedupes the Author's request
-                        // and a Checker's into one row (T-24's no-progress signal counts once).
+                        // and a Reader's into one row (T-24's no-progress signal counts once).
                         title: `Merge ${requested.length} drafts for ${unitRef}`,
                         detail: `${parts}\nDrafts: ${requested.join(', ')}\nWhy: ${why}`,
                         owner_role: 'writer'
@@ -2157,10 +2572,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
     /** U-8 — the template catalogue, as rows (§4.12 as-is). */
     /**
      * U-8's roster as the Author sees it: the harness projection, sorted ALPHABETICALLY by employee
-     * kind — Checker, Editor, Reader, Researcher, Writer.
+     * kind — Critic, Editor, Reader, Researcher, Writer.
      *
      * WHY THE SORT LIVES HERE (T12/F1): the harness projects the roster in CATALOGUE order (Writer,
-     * Editor, Reader, Checker, Researcher), which is a registration order and carries no meaning for
+     * Editor, Critic, Reader, Researcher), which is a registration order and carries no meaning for
      * the Author. U-8 and the design document say the roster lists alphabetically, and the order is a
      * presentation question, so the route sorts a copy of the projection — the harness keeps its own
      * order for every other caller (`GET /agents/:kind/threads`, the run catalogue).
@@ -2207,7 +2622,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return errorResponse(
                 c,
                 404,
-                `no agent named "${kind}" — the global roster is writer, editor, checker, reader and researcher (U-8).`
+                `no agent named "${kind}" — the global roster is writer, editor, reader, critic and researcher (U-8).`
             );
         }
 
@@ -2270,7 +2685,7 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             return errorResponse(
                 c,
                 404,
-                `no agent named "${kind}" — the global roster is writer, editor, checker, reader and researcher (U-8).`
+                `no agent named "${kind}" — the global roster is writer, editor, reader, critic and researcher (U-8).`
             );
         }
 

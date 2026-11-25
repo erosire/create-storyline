@@ -1,7 +1,7 @@
 /**
  * The §8 catalogue as one flat list (T-6a).
  *
- * §8 groups the tools by who asks for them — §8.1 Writer, §8.2 Editor, §8.3 checker, §8.4 shared,
+ * §8 groups the tools by who asks for them — §8.1 Writer, §8.2 Editor, §8.3 reader, §8.4 shared,
  * §8.5 research — and the grouping is documentation about the BRIEF, not about registration:
  * T-6a says every session gets §8.1 + §8.2 + §8.3 + §8.4 + §8.5, and "kind selects the brief and
  * the permission row, not the tool list". The Phase-1 research surface (§7.1 of
@@ -15,7 +15,7 @@
  *    looks like a permission bug at runtime and is a transcription bug here.
  */
 import { PERMISSION_ROWS } from './permissions';
-import { checkerTools } from './checker';
+import { readerTools } from './reader';
 import { editorTools } from './editor';
 // The Phase-1 pipeline's five tools (documents/phase-1-research-pipeline.md §7.1). They live in
 // their own module and their own group because they belong to NO §8 section: §8.1-§8.5 are the
@@ -39,12 +39,12 @@ import type { ToolDefinition } from './types';
  * it. The group is registered like every other (T-6a: the whole catalogue on every session).
  */
 export const TOOL_GROUPS: Record<
-    'writer' | 'editor' | 'checker' | 'plumbing' | 'research' | 'knowledge',
+    'writer' | 'editor' | 'reader' | 'plumbing' | 'research' | 'knowledge',
     ToolDefinition[]
 > = {
     writer: writerTools,
     editor: editorTools,
-    checker: checkerTools,
+    reader: readerTools,
     plumbing: plumbingTools,
     research: researchTools,
     knowledge: knowledgeTools
@@ -122,7 +122,7 @@ export const SPEC_TOOL_NAMES: readonly string[] = [
     'approveFinding',
     'listIdeas',
     'delegate',
-    // §8.3 — the checker surface
+    // §8.3 — the reader surface
     'submitVerdict',
     'raiseFinding',
     'confirmFinding',

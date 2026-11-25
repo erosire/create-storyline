@@ -35,6 +35,15 @@ import type { Finding, Run } from '../../shared/types';
 
 const AUTHOR: Attribution = { run_ref: null, author: true, why: 'the Author writes in the book' };
 
+/**
+ * The id the app book mints for the first row an AUTHOR adds. `Collection.create` mints `template_0 …`
+ * in catalogue order and ignores a built-in's slug-shaped `id`, so an app book seeded with N built-ins
+ * hands its next row `template_${N}`. R-lock (D-69) added the `editor-group-lock` crew, which moved that
+ * literal from `template_13` to `template_14`; it is derived here so the next built-in costs this suite
+ * no edit (the count itself is pinned where it belongs — by `templates.test.ts`'s roster list).
+ */
+const FIRST_AUTHOR_MINTED_ID = `template_${BUILT_IN_TEMPLATES.length}`;
+
 const IDEA_A = 'A lighthouse keeper starts answering letters written by a ship that sank in her bay.';
 const IDEA_B = 'A cartographer returns to the valley she mapped as a girl and finds it redrawn by a reservoir.';
 
@@ -62,7 +71,7 @@ function liveRun(storyId: string, startedAt: string): Omit<Run, 'id' | 'rev' | '
     return {
         story_id: storyId,
         work_item_ref: `wi_review_summary_${startedAt}`,
-        role: 'reader',
+        role: 'critic',
         state: 'working',
         started_at: startedAt,
         tokens: 1000,
@@ -437,14 +446,14 @@ describe('A configuration write lands in the app book and in every Story’s cop
                 duplicated.body.name,
                 duplicated.body.builtin,
                 duplicated.body.editable
-            ]).toEqual(['template_13', `${builtIn}-copy`, false, true]);
+            ]).toEqual([FIRST_AUTHOR_MINTED_ID, `${builtIn}-copy`, false, true]);
 
             // The row is app configuration, so it is journaled in the app book — and mirrored, because each
             // Story briefs its harness from its OWN copy of the catalogue.
             for (const storyId of [a, b]) {
-                const copy = (opened.runtimes.storeFor(storyId) as Store).templates.get('template_13');
+                const copy = (opened.runtimes.storeFor(storyId) as Store).templates.get(FIRST_AUTHOR_MINTED_ID);
 
-                expect([copy?.id, copy?.name, copy?.rev]).toEqual(['template_13', `${builtIn}-copy`, 1]);
+                expect([copy?.id, copy?.name, copy?.rev]).toEqual([FIRST_AUTHOR_MINTED_ID, `${builtIn}-copy`, 1]);
             }
 
             // A Story book's journal never sees the config copy: the Digest reads a `template_*` event as
@@ -457,13 +466,13 @@ describe('A configuration write lands in the app book and in every Story’s cop
                 ).toBe(false);
             }
 
-            const edited = await call(opened, 'PATCH', '/templates/template_13', { title: 'The Surveyors' });
+            const edited = await call(opened, 'PATCH', `/templates/${FIRST_AUTHOR_MINTED_ID}`, { title: 'The Surveyors' });
 
             expect(edited.status).toBe(200);
             expect([edited.body.rev, edited.body.title]).toEqual([2, 'The Surveyors']);
 
             for (const storyId of [a, b]) {
-                const copy = (opened.runtimes.storeFor(storyId) as Store).templates.get('template_13');
+                const copy = (opened.runtimes.storeFor(storyId) as Store).templates.get(FIRST_AUTHOR_MINTED_ID);
 
                 expect([copy?.title, copy?.rev]).toEqual(['The Surveyors', 2]);
             }
@@ -506,7 +515,7 @@ describe('A configuration write lands in the app book and in every Story’s cop
 
             expect(unknownAgent.status).toBe(404);
             expect(errorOf(unknownAgent)).toBe(
-                'no agent named "cartographer" — the global roster is writer, editor, checker, reader and researcher (U-8).'
+                'no agent named "cartographer" — the global roster is writer, editor, reader, critic and researcher (U-8).'
             );
 
             // The ceiling: refused, then moved once, then seen by every book — and counted across them.

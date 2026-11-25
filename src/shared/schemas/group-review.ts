@@ -6,13 +6,13 @@
 //
 // WHAT THIS CONTRACT IS FOR: in the group model an accepted Writer result is installed
 // IMMEDIATELY (R5) — there is no competing round and no selection to rank — so the structured
-// Reader pass that used to screen candidates before a winner was chosen now reads the INSTALLED
+// Critic pass that used to screen candidates before a winner was chosen now reads the INSTALLED
 // text instead, and its job changes from "rank these drafts" to "name what is wrong with this
 // Overview, group by group, and say fix by fix whether the approved work is in it".
 //
 // WHY IT IS NOT SIMPLY `IssueList` REUSED: R3's closure rule needs attribution the legacy answer
 // cannot carry. A finding is closed when EVERY group it names has a revision that resolves it, and
-// that is only decidable if the Reader's complaint says which groups it is about. An answer whose
+// that is only decidable if the Critic's complaint says which groups it is about. An answer whose
 // issues named no group would put a defect in the book with nothing for the loop to target, which
 // is how the redesign would end up rewriting all five groups forever (R2's whole point lost).
 //
@@ -30,7 +30,7 @@ export const GROUP_REVIEW_SCHEMA_NAME = 'GroupReview';
  *
  * `group_refs` holds `phrase_groups.id` values (the same UUIDs the job was dispatched with), not
  * catalog keys — the engine validates them against the story's groups before persisting, so a
- * Reader that invents an id is a refusal rather than a dangling attribution.
+ * Critic that invents an id is a refusal rather than a dangling attribution.
  */
 export type GroupReviewIssue = SampledIssue & { group_refs: string[] };
 

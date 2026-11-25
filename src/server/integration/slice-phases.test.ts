@@ -45,7 +45,7 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
     beforeAll(async () => {
         // A clean tray for the walk: the Ideas path is a suite of its own below, because §6.7's probe
         // round only runs while a phase still has work, which a passing phase ① does not.
-        fixture = await bootStoryline({ readerIdeas: 0 });
+        fixture = await bootStoryline({ criticIdeas: 0 });
         storyId = await createSliceStory(fixture, 3);
         await openDial(fixture, storyId);
     });
@@ -189,9 +189,9 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
             'wi_sample_summary_0_1_3[writer-summary-sampler]'
         ]);
         expect(refs.filter((ref) => ref.startsWith('wi_screen_')).sort()).toEqual([
-            'wi_screen_revision_0_1[reader-screening]',
-            'wi_screen_revision_1_1[reader-screening]',
-            'wi_screen_revision_2_1[reader-screening]'
+            'wi_screen_revision_0_1[critic-screening]',
+            'wi_screen_revision_1_1[critic-screening]',
+            'wi_screen_revision_2_1[critic-screening]'
         ]);
         // There is no Editor `select` in phase ① any more: the selector is deterministic (§6.5).
         expect(refs.filter((ref) => ref.startsWith('wi_select_'))).toEqual([]);
@@ -261,7 +261,7 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
     });
 
     it('step 1①: the deep review rates the selected revision, and a passing Goal stops the Story at the signoff (D-1, L-29)', async () => {
-        // The selected revision gets the tool-using Reader pass (§6.4 step 6); its verdict is the
+        // The selected revision gets the tool-using Critic pass (§6.4 step 6); its verdict is the
         // C-14 line, and the phase then stops at the Author's lock.
         await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 8);
 
@@ -272,11 +272,11 @@ describe('§15 steps 0→2: the Summary phase and the Plotlines phase, end to en
             'wi_research_1[researcher-story/researcher]=torn_down',
             'wi_sample_summary_0_1_1[writer-summary-sampler/writer]=torn_down',
             'wi_sample_summary_0_1_2[writer-summary-sampler/writer]=torn_down',
-            'wi_screen_revision_0_1[reader-screening/reader]=torn_down',
+            'wi_screen_revision_0_1[critic-screening/critic]=torn_down',
             'wi_sample_summary_0_1_3[writer-summary-sampler/writer]=torn_down',
-            'wi_screen_revision_1_1[reader-screening/reader]=torn_down',
-            'wi_screen_revision_2_1[reader-screening/reader]=torn_down',
-            'wi_review_revision_0_a1[reader-genre/reader]=torn_down'
+            'wi_screen_revision_1_1[critic-screening/critic]=torn_down',
+            'wi_screen_revision_2_1[critic-screening/critic]=torn_down',
+            'wi_review_revision_0_a1[critic-genre/critic]=torn_down'
         ]);
 
         // The deep review rates the Summary row, which is where the criteria engine aggregates C-14.
@@ -431,8 +431,8 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
     beforeAll(async () => {
         // The Goal must stay open long enough for a drain round to run at all: §6.7 probes a phase that
         // is still working, and phase ① stops the crew the moment its Goal passes (L-29). Withholding
-        // C-14 is what makes step 1's "the Reader files Ideas during ①" reachable.
-        fixture = await bootStoryline({ failCriteria: ['C-14'], readerIdeas: 2 });
+        // C-14 is what makes step 1's "the Critic files Ideas during ①" reachable.
+        fixture = await bootStoryline({ failCriteria: ['C-14'], criticIdeas: 2 });
         storyId = await createSliceStory(fixture, 3);
         await openDial(fixture, storyId);
 
@@ -611,7 +611,7 @@ describe("§15 step 1: the Ideas tray is the Author's, and it gates the lock (L-
             'C-15'
         ]);
 
-        // Phase ① now has Reader passes and an Editor choice in front of the sign-off, so the
+        // Phase ① now has Critic passes and an Editor choice in front of the sign-off, so the
         // walk to the stop needs more sweeps than the Writer-to-Editor shortcut did.
         await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 20);
 

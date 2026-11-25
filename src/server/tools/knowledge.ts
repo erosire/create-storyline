@@ -85,7 +85,7 @@ const IMPORTANCE_RANK: Record<KnowledgeImportance, number> = {
 
 /**
  * T-7's bounded-payload cap for `readKnowledge`: the tool is a lookup, not an export. 40 rows
- * covers what a deep-review Reader or the Editor reads in one turn; anything longer is a filter
+ * covers what a deep-review Critic or the Editor reads in one turn; anything longer is a filter
  * the caller should have used (`importance`, `kind`, `phase`, `topic`).
  */
 const KNOWLEDGE_READ_LIMIT = 40;
@@ -247,7 +247,7 @@ const structureSeed: ToolDefinition = {
             // `stakes` is a required arg (the row shape §4 has), so "the Seed never said" has to be a
             // legal value rather than a fabricated stake; an empty string already is one (the tool trims
             // and stores it), and the prompts render an empty field as the Seed leaving the choice open.
-            // Saying so here is what stops an Editor inventing a stake to fill the box — and a Reader
+            // Saying so here is what stops an Editor inventing a stake to fill the box — and a Critic
             // later filing that invented absence as a C-14 defect.
             stakes: str(
                 'What is lost if the protagonist fails. When the Seed does not say, pass an empty string and put the gap in open_questions: the Writer chooses it compatibly, and a stake the Seed never stated is not a promise the Summary owes.'
@@ -701,7 +701,7 @@ const writeKnowledge: ToolDefinition = {
 
 /**
  * `readKnowledge` — the bounded lookup every kind holds (§7.1: "the tool is for the deep-review
- * Reader and the Editor"; the prompt compiler uses the same filter server-side).
+ * Critic and the Editor"; the prompt compiler uses the same filter server-side).
  *
  * Ordering is deterministic so two runs read the same list: importance first (critical → low),
  * then newest (`created_at` desc), then id — no clock, no run id (T-7's bounded payload plus the

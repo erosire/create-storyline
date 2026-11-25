@@ -309,7 +309,7 @@ export function normalizeForFingerprint(text: string): string {
 /**
  * The finding fingerprint (D-16): same criterion, same target, same claim → one finding.
  *
- * T5 adds the KIND as a component — an `improvement` and an `issue` about the same passage with the
+ * T5 adds the KIND as a component — a `proposal` and an `issue` about the same passage with the
  * same title are two different claims (one says the text is broken, one proposes a better text), and
  * the Editor evaluates them by opposite rules, so they must not collapse into one row.
  *
@@ -327,8 +327,21 @@ export function findingFingerprint(
 ): string {
     const claim = normalizeForFingerprint(title);
 
-    return kind === 'improvement'
-        ? computeFingerprint(`${targetRef}|${criterionRef}|improvement|${claim}`)
+    // L-16a: the `issue` branch is the PRE-T5 three-part input, byte for byte, and may never change —
+    // every stored row raised before `kind` existed was hashed from exactly this string, and a re-worded
+    // literal would split every open finding into two rows and break the "no progress" ledger (D-16).
+    // The proposal branch carries the kind token IN the hashed string, so the token is load-bearing on
+    // that branch alone. History, as shipped: the branch landed at HEAD hashing the literal
+    // `'improvement'` (`FINDING_KINDS` was then `['issue', 'improvement']`); this change renames the
+    // finding-kind token to `'proposal'` and the hash literal with it, while the `issue` branch's
+    // three-part input stays exactly as L-16a / D-16 require.
+    // Consequence, plainly: a row persisted BEFORE the rename — one stored with `kind: 'improvement'` —
+    // no longer reproduces its four-part hash against a new raise of the same claim, and
+    // `reader.ts:kindOf('improvement')` now reads `'issue'`. That is unreachable in practice: a
+    // pre-rename store already fails the renamed RoleKind validation at `Store.load`, the clean break
+    // this session accepted rather than carrying an `'improvement'` alias forward.
+    return kind === 'proposal'
+        ? computeFingerprint(`${targetRef}|${criterionRef}|proposal|${claim}`)
         : computeFingerprint(`${targetRef}|${criterionRef}|${claim}`);
 }
 

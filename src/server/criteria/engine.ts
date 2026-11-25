@@ -9,7 +9,7 @@
 // TYPES, which erase at runtime). That is a testable property, not a claim — see engine.test.ts.
 //
 // THE JUDGE SIDE IS AGGREGATION, NOT JUDGMENT (P6, D-15): this engine never asks whether prose is
-// good. A `judge` criterion is answered by a fresh checker run through `submitVerdict` (§8.3) and
+// good. A `judge` criterion is answered by a fresh reader run through `submitVerdict` (§8.3) and
 // lands in `verdicts.criteria_passed`; here those answers are COLLECTED per target and collapsed by
 // the rule W3 states — a criterion passes only when every in-scope target's LATEST verdict passes
 // it. An older pass cannot outvote a newer fail, because every reviewer is amnesiac (P2) and the
@@ -54,7 +54,7 @@ export interface CriterionResult {
     evidence?: string;
     /** The finding this failure is tracked by, when the verdict named one (D-16). */
     finding_ref?: string;
-    /** 'code' = decided here, server-side; 'verdict' = collected from a checker run's report. */
+    /** 'code' = decided here, server-side; 'verdict' = collected from a reader run's report. */
     source: 'code' | 'verdict';
 }
 
@@ -276,7 +276,7 @@ function selectedSummaryDraftId(store: Store, storyId: string, summaryId: string
  * `undefined` for everything this must not touch.
  *
  * WHY IT EXISTS AT ALL: phase ①'s deep review reads ONE record — the Selected Summary revision
- * (§6.4 step 6) — and a Reader that filed its rating there, instead of at the Summary row, produced
+ * (§6.4 step 6) — and a Critic that filed its rating there, instead of at the Summary row, produced
  * a verdict the Goal could not see. The book then reports `summary_17: no verdict yet` forever while
  * the crew panel shows twenty finished reviews, and the phase lock stays shut on an artifact that
  * HAS been judged. Reading the selected draft's verdict as the Summary's is the honest reading of
@@ -328,7 +328,7 @@ function summaryDraftEvidenceRefs(
 
 /**
  * C-0 — "the Story has exactly `chapter_count` plotlines and chapters — no more, no fewer"
- * (§5.2, L-6a, D-3b). The count is AUTHOR truth: the Writer does not choose it and no checker may
+ * (§5.2, L-6a, D-3b). The count is AUTHOR truth: the Writer does not choose it and no reader may
  * file a finding that implies a different one.
  *
  * BOTH HALVES ARE CHECKED, in the order the phases create the artifacts (§5.3: a criterion is
@@ -742,7 +742,7 @@ export class CriteriaEngine {
     // -- the judge half (aggregation, §4.9/D-15) -------------------------------------------------
 
     /**
-     * Collects a checker run's answers for the given criterion ids (W3: "judge criteria collected
+     * Collects a reader run's answers for the given criterion ids (W3: "judge criteria collected
      * from verdicts"). A criterion passes when EVERY in-scope target's latest verdict passes it:
      *
      * - no verdict for a target at all → not passed, evidence names that (a criterion nobody has
@@ -849,7 +849,7 @@ export class CriteriaEngine {
             passed: false,
             source: 'verdict',
             // U-6 renders this verbatim, so it is clamped: the panel shows the failures, not a stack
-            // of every checker's prose (§10.2 U-1a's "stuck criteria" must read in one pass).
+            // of every reader's prose (§10.2 U-1a's "stuck criteria" must read in one pass).
             evidence: `${failing
                 .slice(0, 3)
                 .map((failure) => clampLine(failure))
@@ -1079,7 +1079,7 @@ function phaseCriteria(goal: Goal, phase: StoryPhase): Criterion[] {
  * §5.1's pass rule + G-2's render, applied to one evaluated set.
  *
  * `passed` deliberately requires EVERY HARD criterion to pass (not "every criterion": a soft
- * shortfall blocks the Goal through the threshold, and L-28 says a Reader holding a `taste` finding
+ * shortfall blocks the Goal through the threshold, and L-28 says a Critic holding a `taste` finding
  * open does not block completion — that nuance is the soft count's job, not the hard line's).
  *
  * THE ONE RECONCILIATION (reported to the orchestrator): §5.1 states `soft passes ≥ threshold_soft`

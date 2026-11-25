@@ -31,13 +31,36 @@ import path from 'node:path';
 /**
  * Snapshot format version — bump it with a migration, do not change the layout silently.
  *
- * v2 (this build): id counters are ZERO-BASED (`finding_0` is the first finding, and the
- * persisted counter is the NEXT id to mint rather than the last one handed out), and a story
- * Store records its `story_id` in the snapshot so a folder can never be opened as another
- * story. The Author's answer on upgrade is explicit — no migration, no backward compatibility:
- * `probeFlatLayout` refuses a pre-per-story book rather than silently adopting it.
+ * v2: id counters are ZERO-BASED (`finding_0` is the first finding, and the persisted counter
+ * is the NEXT id to mint rather than the last one handed out), and a story Store records its
+ * `story_id` in the snapshot so a folder can never be opened as another story. The Author's
+ * answer on upgrade is explicit — no migration, no backward compatibility: `probeFlatLayout`
+ * refuses a pre-per-story book rather than silently adopting it.
+ *
+ * v3: the Checker employee KIND is renamed to Reader. The kind is a persisted wire value, not
+ * just a label, so a v2 book carries rows a v3 build reads as another story's crew:
+ * `templates.name` (`checker-consistency`/`checker-prose`), `templates.roles[].kind`,
+ * `crew_runs.role`/`template_ref`, `work_items.key` (`wi_probe_checker_*`), and a loop's
+ * `probe.checker_item_id`. Nothing here migrates those strings, so the version moves to mark
+ * the format break rather than let a v2 book load as if it were current.
+ *
+ * v4 (this build): the Reviewed Summary (D-67/D-68) adds persisted STATE, not just fields:
+ *   - `group_revisions[].state` gains `'discarded'` — the terminal position the Author's choose
+ *     gives every revision its choice passed over, and a v3 build has no reading for it: its
+ *     projection filters on nothing, so those rows would come back as live members of the group's
+ *     line and a Summary the Author already rejected would be offered as current text;
+ *   - `group_revisions[].clean` / `.clean_run_ref` — the Clean stamp a cross-group Critic pass
+ *     leaves on the text it read with no unresolved defect on the group; and
+ *   - `phrases[].reviewed_vector` / `.reviewed_vector_hash` / `.reviewed_at` — the choice record
+ *     the rail and the score join read back.
+ *
+ * The migration is ONE-DIRECTIONAL and that is the whole reason the number moves: a v4 build reads
+ * a v3 book as if the feature had never run (absent `clean` = "never earned a clean pass", absent
+ * `reviewed_vector` = "the Author has never chosen", and no v3 book can hold a `discarded` row), so
+ * NOTHING is rewritten on load. A v3 build reading a v4 book is the unsafe direction, and the
+ * version mismatch is what refuses it loudly instead of displaying rejected prose as the Summary.
  */
-export const SNAPSHOT_VERSION = 2;
+export const SNAPSHOT_VERSION = 4;
 
 /** The current-state file (P1: the only memory), written atomically. */
 export const STORE_FILE = 'store.json';

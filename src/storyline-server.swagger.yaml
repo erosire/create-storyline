@@ -82,7 +82,7 @@ info:
     acceptance, or a stall. The route table exposes those decisions as explicit verbs, so the
     UI cannot accidentally take one by editing a record.
 
-    THE EMPLOYEES. Writer, Editor, Reader and Checker are global standing identities. They are
+    THE EMPLOYEES. Writer, Editor, Critic and Reader are global standing identities. They are
     NOT agents until a thread executes under one; `GET /agents` is the roster and
     `GET /agents/{kind}/threads` is the retained history the tile opens. `PATCH /agents/{kind}`
     is the single roster write, and it changes only the model that kind asks for.
@@ -218,6 +218,17 @@ paths:
         least one field must be present. Editing the Seed is a backtrack to phase ① (D-25a);
         changing the count grows or shrinks the chapter set through the engine (D-3c). A title or
         dial edit is attributed to the Author in one commit. The answer is the refreshed row.
+        The dial is a COST dial and never a kind override (D-33d): while the Story carries an
+        unresolved issue, the auto-approve sweep skips a `kind: proposal` row whatever its cost,
+        and the row stays on the desk for the pass that has no issue left.
+        `editor_group_locking` is the R-lock permission switch: a BOOLEAN, never a truthy blob,
+        because the Setting's whole effect is a yes/no the domain reads as `=== true`. `true` hands the
+        Editor one judgement seat per Summary section per clean vector, in which it may declare a
+        section finished and lock it; `false` takes that power back at once, and omitting the key leaves
+        the Story exactly as it was. Turning it off does NOT lift a lock an Editor already set — the flag
+        lives on the group row, and only this contract's unlock verb, called by the Author, clears it.
+        The refreshed row this PATCH answers is the row-shaped read, which does not carry the Setting;
+        read it back from `GET /stories/{id}`'s `story` record.
       requestBody:
         required: true
         content:
@@ -302,7 +313,7 @@ paths:
         The Summary Phrase view (R6): the catalog groups with their current text, revision numbers and
         retained history, the composed Overview, every finding with its group scope and R3's resolution
         (which targeted groups already have a revision written to answer it), the open group tasks, and
-        the review state — which groups are still unwritten, the current group vector, how many Reader
+        the review state — which groups are still unwritten, the current group vector, how many Critic
         seats have reported on THAT text, and whether the legacy `summaries` prose still agrees with the
         groups it mirrors. A pure read: nothing here migrates or rewrites a book. A Story written before
         the redesign answers `mode: sampling` with empty groups rather than 404, because an absent
@@ -368,7 +379,11 @@ paths:
         rule that belongs to a dispatched pass (R3). A `summary_mode: sampling` book is 409: it has no
         group rows, and importing is an explicit decision. A group a LIVE Writer pass is rewriting is 409
         as well, naming the run that holds it: this route is one Writer operation on that group, and R4
-        allows only one at a time — the edit lands unchanged once that run closes.
+        allows only one at a time — the edit lands unchanged once that run closes. A group that is LOCKED is
+        409 for the same reason the loop is refused: the install refuses the whole batch before its first
+        write, because settled text is the fixed point the other groups are revised against (R-lock) — the
+        Author's unlock is the move that makes a hand edit possible, and this route never overrules a lock
+        the Author made by hand or the crew made from a judgement seat.
       requestBody:
         required: true
         content:
@@ -384,6 +399,136 @@ paths:
                 $ref: '#/components/schemas/PhraseGroupReviseResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/groups/{groupId}/lock:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - name: groupId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The `phrase_groups.id` (a UUID the `GET …/phrases` view reports), exactly as on the revise
+          route. An id this Story does not own is 404 before any verb runs.
+    post:
+      tags: [Stories]
+      operationId: lockPhraseGroup
+      summary: The Author locks one Summary group's current text in as settled content
+      description: >-
+        R-lock — the Author's declaration that THIS group's current text is finished. A lock is a flag on
+        the group row, never an edit: it writes the four lock fields (`locked`, `locked_revision`,
+        `locked_by`, `locked_at`) and NOTHING else — no `group_revisions` row, no `content`, no Overview
+        recomposition, no mirror write — so the text is byte-for-byte what it was and `locked_revision`
+        names the revision a person committed to. From here the group is the fixed point: `installGroupRevisions`
+        refuses any batch that rewrites it, the work generator never offers it, and every unlocked group is
+        revised to agree with it rather than the other way round. Findings are voided rather than resolved:
+        a claim whose EVERY named group is now locked becomes `discarded` (the established void state), and
+        a claim that also names an unlocked group stays open for the groups that can still move.
+        WHO ACTS: this route always acts as the AUTHOR, whoever set the lock before. The Editor's leg is a
+        judgement SEAT, not a verb — on a Story with `editor_group_locking` on, the loop arms one seat per
+        section per clean vector (`wi_group_lock_<cleanVectorHash>_<groupId>`), the Editor weighs the
+        Critic's open claims and the Reader's rationale for that ONE section, and a `lock: true` answer
+        performs this same write with `locked_by: editor` inside the settle commit. That seat never UNLOCKS,
+        and no tool path reaches this flag from a run: the flag has exactly one Author surface, this route.
+        REFUSALS, each a 409 with its own sentence: the group has no written text, so there is no revision
+        for a lock to fix; it is ALREADY locked, and the move that reopens it is the unlock — a second lock
+        refuses rather than re-dating the decision the book already carries; or a LIVE Writer pass holds the
+        group, naming the run ids, because a lock fixes a revision and freezing text a pass is about to
+        replace would fix words nobody has read. A `groupId` this book never minted is 404 before any verb,
+        and a `summary_mode: sampling` book is 409 naming `POST …/phrases/import`.
+      responses:
+        '200':
+          description: The lock report (the revision it fixed, who set it, the claims it voided) plus the fresh group view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseGroupLockResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/groups/{groupId}/unlock:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - name: groupId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: >-
+          The `phrase_groups.id` of a LOCKED group. The verb is the Author's alone whoever set the lock,
+          so a lock the Editor committed on a Story that enables it is lifted here, by the Author.
+    post:
+      tags: [Stories]
+      operationId: unlockPhraseGroup
+      summary: The Author lifts a group's lock and hands the text back to the loop
+      description: >-
+        R-lock — the one move that reopens settled text, and the Author's alone: a crew that just closed a
+        defect may not sign the book back out. Like the lock it writes no revision and touches no `content`
+        — the signed-off text is byte-for-byte what it was — and it clears the three metadata fields to
+        `null` (`locked: false` is the effective state, and the row says so). It does NOT resurrect the
+        findings the lock voided: `discarded` is terminal in §4.10, and a defect the crew still believes in
+        is filed again by the next Critic pass against the now-writable text. The group is offered to the
+        work generator again on the next sweep, and a claim that still names it becomes actionable for it
+        again as a READ — nothing is rewritten to make the queue move.
+        REFUSALS, each a 409 with its own sentence: the group is NOT locked, so there is nothing to lift; a
+        LIVE Writer pass holds the group, naming the run ids — the lock may be holding off an install
+        dispatched before it, and opening the group under that pass would land text nobody reviewed on the
+        section the Author just reopened. A `groupId` this book never minted is 404 before any verb, and a
+        `summary_mode: sampling` book is 409 naming `POST …/phrases/import`. Turning
+        `editor_group_locking` off is NOT an unlock and lifts nothing: the Setting governs whether the
+        Editor's seat is armed, never whether a flag on a group row stands.
+      responses:
+        '200':
+          description: The unlock report (the revision that stops being fixed text) plus the fresh group view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseGroupUnlockResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/reviewed/choose:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+    post:
+      tags: [Stories]
+      operationId: chooseReviewedSummary
+      summary: The Author chooses the Reviewed Summary (D-68)
+      description: >-
+        The decision the phase exists for: the reviewed Overview — the newest CLEAN revision of every
+        group, the text a cross-group Critic pass read with no unresolved defect on it — becomes the
+        book. ONE commit does four things: installs each selected text as its group's next `latest`
+        (the same install the loop and the hand-edit route use, so the Overview recomposes from the rows
+        and the legacy `summaries` prose is rewritten in the same commit — R2, R6), marks every revision
+        the choice passed over `discarded`, records the chosen vector on the Phrase row, and writes the
+        journal. It does NOT lock the phase — choosing is not locking, the loop keeps running and the
+        next cross-group pass may still find a defect in the chosen text — and it claims to resolve
+        nothing: the new rows carry no `finding_refs`, so a choice never closes a finding on R3's
+        evidence rule, exactly as on the hand-edit route.
+
+        The rows the choice set aside PERSIST rather than being deleted, and that is load-bearing: R3's
+        closure join walks the whole history with no state filter, so a finding that a discarded revision
+        closed stays `fixed`. They are terminal, though — hidden from every current read and never
+        selected again.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhraseReviewedChooseRequest'
+      responses:
+        '200':
+          description: The choose report plus the fresh group view (the live Overview now IS the reviewed one).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhraseReviewedChooseResult'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -551,7 +696,11 @@ paths:
       description: >-
         D-34/D-35's approval. The `why` is mandatory and auditable (D-8/T-5); the engine files
         the fix work, and the answer is the refreshed Story row. An unknown finding, or one that
-        belongs to another Story, is 404 before the engine runs.
+        belongs to another Story, is 404 before the engine runs. A `kind: proposal` row is 409
+        while the Story still holds an unresolved issue (D-33d): the error text names the open
+        issues and says that issues are in focus first, and `fixed`/`discarded` are the only
+        states that release it — `approved` does not. Approving an ISSUE and DISCARDING a proposal
+        are never refused by that rule.
       requestBody:
         required: true
         content:
@@ -582,7 +731,10 @@ paths:
       description: >-
         D-34's discard. The `why` is mandatory; the row moves to `discarded` with Author
         attribution, and a Story parked on finding approval is re-armed when its desk becomes
-        empty (L-36). The answer is the refreshed Story row.
+        empty (L-36). The answer is the refreshed Story row. Discarding is never refused by
+        D-33d, even for a `kind: proposal` row with issues open: declining a change is not an
+        approval and opens no Writer work, and closing the row is what the drain and the
+        leftover counts read.
       requestBody:
         required: true
         content:
@@ -615,6 +767,12 @@ paths:
         `target_ref` OR L-11a `related_refs` name the chapter, then approves each one through
         its own engine commit, so the audit still records one decision per finding. The `why` is
         required and is carried by every approval. The answer is the refreshed Story row.
+        D-33d applies to the batch the same way it applies to a single click, with the shape a
+        batch needs: the row list is computed BEFORE any approval runs, a `kind: proposal` row is
+        SKIPPED — not failed, and not journaled — while the Story has an unresolved issue, and it
+        stays `confirmed` for the pass after the issues close. Approving a chapter's issues in one
+        batch therefore does not approve its proposals in the same batch: `approved` is work
+        promised, not work resolved.
       requestBody:
         required: true
         content:
@@ -883,7 +1041,7 @@ paths:
       summary: Ask for named drafts to be merged
       description: >-
         U-13a/D-23. The route validates the unit and at least two drafts, then opens the same
-        `merge` task a Checker's `requestMerge` opens, so the desk shows one entry whoever asked.
+        `merge` task a Reader's `requestMerge` opens, so the desk shows one entry whoever asked.
         The drafts stay `competing` until merged prose exists. The answer is the refreshed Story
         row.
       requestBody:
@@ -1085,7 +1243,7 @@ paths:
       operationId: listAgents
       summary: Read the global employee roster
       description: >-
-        One row per employee kind (checker, editor, reader, researcher, writer), ALPHABETICALLY by
+        One row per employee kind (critic, editor, reader, researcher, writer), ALPHABETICALLY by
         kind, whether or not any Story is selected. A row carries the model the employee asks for, where that
         model came from, the template roles that name their own model for the kind, every live
         thread across every Story, and the newest closed runs so a provider fault stays visible
@@ -1631,6 +1789,16 @@ components:
     Cost:
       type: string
       enum: [critical, major, minor, taste]
+      description: >-
+        §4.10's triage ladder, order significant (D-35b: the same order is the auto-approve dial and
+        the drain threshold). All four values remain on the wire — persisted rows carry `taste`, and
+        `cost_distribution` keys every one of them. D-33b narrows WHO may file at each end rather than
+        removing a rung: `raiseFinding` refuses a `proposal` at `critical` and an `issue` at `taste`
+        (`tools/reader.ts`), so a `taste` row is a Proposal and a `critical` row is an Issue, while
+        the Editor's own re-cost stays unrestricted (D-34a). D-33c/D-33d add a SECOND, independent
+        axis: the ladder says what a row may cost, and the Story's open-issue list says when it may
+        move — a `proposal` is refused at filing and at approval while an `issue` is unresolved, and
+        no cost, dial setting or batch frees it (see `Finding.kind` and the finding approve routes).
     KnowledgeImportance:
       type: string
       description: >-
@@ -1653,7 +1821,7 @@ components:
         The dispatched employee kinds (§4.12). `researcher` is the Phase-1 addition
         (documents/phase-1-research-pipeline.md §3.1): it reads the book and writes only
         `knowledge`, plus the tasks it files for work it cannot do itself (D-11).
-      enum: [writer, editor, reader, checker, researcher]
+      enum: [writer, editor, critic, reader, researcher]
     FindingState:
       type: string
       enum: [unconfirmed, confirmed, approved, fixed, disputed, discarded]
@@ -1764,6 +1932,20 @@ components:
               type: boolean
             plotlines_locked:
               type: boolean
+            editor_group_locking:
+              type: boolean
+              description: >-
+                R-lock — the Author's permission switch for the Editor's lock judgement. ABSENT means OFF:
+                the crew gets no lock seat at all, no lock run is dispatched, and no Editor can lock a
+                group (the same read gates the prompt and the settlement, so a Setting can never be on for
+                one and off for the other). `true` arms one judgement seat per Summary section per clean
+                vector, keyed `wi_group_lock_<cleanVectorHash>_<groupId>`, in which the Editor weighs the
+                Critic's open claims and the Reader's rationale for that ONE section and answers whether
+                its text is finished — see the `…/phrases/groups/{groupId}/lock` verb for what a lock
+                does. It is not a threshold and it grants no unlock: the Editor may never lift a lock, and
+                turning this off leaves a lock that already stands exactly where it was, until the Author
+                unlocks it. Not the same flag as `summary_locked`, which is L-7a's whole-Summary sign-off
+                on a different record.
             pending_kind:
               $ref: '#/components/schemas/PendingKind'
             status:
@@ -2080,7 +2262,19 @@ components:
               $ref: '#/components/schemas/Cost'
             kind:
               type: string
-              enum: [issue, improvement]
+              enum: [issue, proposal]
+              description: >-
+                D-33b — the claim type: `issue` (the default, and the reading of any row raised before
+                the field existed) is a defect that breaks the story's logic or contradicts a
+                commitment, rated `critical` / `major` / `minor`; `proposal` is an improvement the Seed
+                never promised (a word change, a new element, a twist linked earlier), rated `major` /
+                `minor` / `taste`. The two off-ladder pairings are refused by `raiseFinding`, never
+                re-triaged silently. D-33c/D-33d sequence the two kinds on one Story: an `issue` and a
+                `proposal` never share a review pass, a `proposal` may not be FILED while any issue is
+                unresolved (`tools/reader.ts:raiseFinding`, `D-33c`) nor APPROVED over one
+                (`tools/editor.ts:approveFinding`, the engine's approval, the auto-approve sweep and the
+                chapter approve-all, `D-33d`), and only `fixed` or `discarded` closes an issue —
+                `unconfirmed`, `confirmed`, `approved` and `disputed` are all still open.
             fingerprint:
               type: string
             state:
@@ -2491,7 +2685,7 @@ components:
     SampledIssue:
       type: object
       description: >-
-        §3.4 — one screening Reader complaint about one sample. Not a Finding: it never enters the
+        §3.4 — one screening Critic complaint about one sample. Not a Finding: it never enters the
         D-33/D-34 ladder and cannot block a Writer.
       required: [severity, criterion, location, quote, detail]
       additionalProperties: false
@@ -2515,15 +2709,15 @@ components:
         - $ref: '#/components/schemas/StoredRecord'
         - type: object
           description: >-
-            §3.4 — the screening Reader's one-turn answer, persisted by the engine from the run's
+            §3.4 — the screening Critic's one-turn answer, persisted by the engine from the run's
             validated structured output. Engine-written: no kind holds a write on it (§7.2).
-          required: [story_id, revision_ref, reader, issues, valid]
+          required: [story_id, revision_ref, critic, issues, valid]
           properties:
             story_id:
               type: string
             revision_ref:
               type: string
-            reader:
+            critic:
               type: string
             issues:
               type: array
@@ -2884,7 +3078,7 @@ components:
           type: array
           description: >-
             The STILL-OPEN fix task ids this candidate did not clear — its blocking screening issues
-            plus the demanded fixes a Reader marked `unresolved`/`unknown` or never answered. Present on
+            plus the demanded fixes a Critic marked `unresolved`/`unknown` or never answered. Present on
             EVERY line, including the winner's and including a row written before the field existed
             (normalised to `[]`, `api/projections.ts:samplingView`), so a consumer reads one shape and
             never branches on which build wrote the row. `[]` means "this candidate owed nothing, or
@@ -3050,13 +3244,13 @@ components:
           type: string
         finding_kind:
           type: string
-          enum: [issue, improvement]
+          enum: [issue, proposal]
           description: >-
             D-33b — the CLAIM TYPE of the finding, present on `kind: finding` rows and on no others
             (`api/projections.ts:queueItems` emits it with every finding row). It carries a different
             name because this row's own `kind` is already the queue discriminator; the finding's kind
             would otherwise be shadowed by it. `issue` claims a defect the artifact must answer by
-            quotation; `improvement` is a proposal the Seed never promised, which the Editor weighs on
+            quotation; `proposal` is a proposal the Seed never promised, which the Editor weighs on
             merit and never disputes for resting on an absence. A row raised before the field existed is
             reported as `issue`, so the desk reads one shape for both eras of row.
         detail:
@@ -3360,7 +3554,7 @@ components:
     PhraseView:
       type: object
       additionalProperties: false
-      required: [story_id, mode, phrase_id, revision, overview, groups, findings, tasks, review]
+      required: [story_id, mode, phrase_id, revision, overview, groups, findings, tasks, review, reviewed]
       properties:
         story_id:
           type: string
@@ -3398,10 +3592,173 @@ components:
             $ref: '#/components/schemas/PhraseTaskRow'
         review:
           $ref: '#/components/schemas/PhraseReviewState'
+        reviewed:
+          $ref: '#/components/schemas/PhraseReviewedSummary'
+    PhraseReviewedSummary:
+      type: object
+      additionalProperties: false
+      required: [state, complete, vector, vector_hash, overview, groups, chosen, stale, blocking_issues, writer_busy]
+      description: >-
+        D-67/D-68 — the Reviewed Summary: the newest CLEAN revision of every group composed into one
+        Overview, the Reader scores that judged exactly that text, and the Author's recorded choice.
+        Always present, so a client never branches on absence; a book with no groups simply reports
+        `state: pending` with no groups. Every number in here is a READ of rows — the selection is the
+        newest Clean revision per group whose group carries no unresolved issue, the choice is the
+        Phrase row's recorded vector re-validated against the rows, and the scores join on `vector_hash`
+        — so a restart changes nothing and two reads in one instant cannot disagree.
+      properties:
+        state:
+          type: string
+          enum: [pending, ready, chosen]
+          description: >-
+            `pending` — no complete clean selection and no valid choice; `ready` — a complete reviewed
+            Overview the Author has not chosen (including the case where they chose earlier and the
+            pipeline has since reviewed a different combination, which is also `stale: true`); `chosen`
+            — the Author's choice stands and there is nothing newer to take. Immediately after a choose
+            this is `chosen` even though the selection looks empty: the chosen rows are the live
+            `latest` rows, they carry no Clean stamp (nobody has re-read them), and the choice record is
+            the only reviewed Summary the book has.
+        complete:
+          type: boolean
+          description: >-
+            Every group has a selectable Clean revision. This is the gate a choose hangs on, and the
+            gate the Reader's scoring seat arms on (D-67) — half a reviewed Summary is neither.
+        vector:
+          type: object
+          additionalProperties:
+            type: integer
+          description: '`{group_id: revision_number}` for the groups that HAVE a selection; partial when `complete` is false.'
+        vector_hash:
+          type: string
+          description: >-
+            `groupVectorHash(vector)` — the identity the Reader's score rows and the scoring seat's claim
+            key are both keyed by, so the text shown, the text scored and the recorded hash agree.
+        overview:
+          type: string
+          description: >-
+            The composed reviewed Overview — the five selected texts, joined exactly as the live Overview
+            is. Empty while the selection is partial. After a choose it equals `overview`, because the
+            choice installed exactly these bytes.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseReviewedGroup'
+        chosen:
+          nullable: true
+          description: >-
+            The Author's choice, or null when they never chose — or when the chosen history is gone,
+            which is what a Seed reset or a scrap does to a recorded choice (the read re-validates every
+            named row and refuses to report a text the book no longer holds).
+          allOf:
+            - $ref: '#/components/schemas/PhraseChosenSummary'
+        stale:
+          type: boolean
+          description: >-
+            True when the clean selection has moved PAST what the Author chose — there is newer reviewed
+            text to take.
+        blocking_issues:
+          type: array
+          description: >-
+            The unresolved ISSUE rows holding a clean verdict back, each naming the group KEYS it scopes
+            to (an unscoped finding names all five, which is R3's reading and why it blocks all five).
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, title, cost, group_keys]
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              cost:
+                type: string
+                enum: [critical, major, minor, taste]
+              group_keys:
+                type: array
+                items:
+                  type: string
+        writer_busy:
+          type: boolean
+          description: >-
+            A live Writer pass holds at least one group, so `POST …/phrases/reviewed/choose` would
+            refuse. The same read the route refuses with, so a disabled control and a 409 agree (R4).
+    PhraseReviewedGroup:
+      type: object
+      additionalProperties: false
+      required: [id, key, selected_revision, selected_id, clean_run_ref, latest_revision, superseded, issues_open, gap, scores]
+      description: >-
+        One section of the Reviewed Summary. It exists because the live group row and the reviewed
+        section legitimately differ: the newest Ending may carry an open defect while the Ending the
+        crew stands behind is an earlier revision, and the rail has to be able to say so.
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        selected_revision:
+          type: integer
+          nullable: true
+          description: The Clean revision this section stands behind, or null while the group has none.
+        selected_id:
+          type: string
+          nullable: true
+          description: The `group_revisions` row behind `selected_revision`, so the rail can open the text.
+        clean_run_ref:
+          type: string
+          nullable: true
+          description: The deep-review run whose clean pass earned the stamp (P11's audit of the verdict).
+        latest_revision:
+          type: integer
+          description: The group's newest revision number (0 when unwritten) — the number the selection fell back past.
+        superseded:
+          type: boolean
+          description: True when the newest text is NOT the reviewed one, which is the state the Author acts on.
+        issues_open:
+          type: boolean
+          description: An unresolved issue names this group, which blocks its clean verdicts from being selected.
+        gap:
+          type: string
+          nullable: true
+          enum: [unwritten, no_clean_revision, null]
+          description: Why there is no selection — null when there is one.
+        scores:
+          type: array
+          description: >-
+            The Reader scores judged against THIS reviewed vector, newest first. The join is the row's
+            `vector_hash` and nothing else: a number describes the text it was shown. The same rows are
+            also on `groups[].scores` with their hashes (D-65's trend), so the rail reconciles nothing.
+          items:
+            $ref: '#/components/schemas/PhraseGroupScoreRow'
+    PhraseChosenSummary:
+      type: object
+      additionalProperties: false
+      required: [vector, vector_hash, at, overview, scores]
+      description: What the Author chose, read back off the Phrase row (D-68).
+      properties:
+        vector:
+          type: object
+          additionalProperties:
+            type: integer
+          description: '`{group_id: revision_number}` — the vector the choice adopted (its rows are now `latest`).'
+        vector_hash:
+          type: string
+        at:
+          type: string
+          description: When the choose committed (the Phrase row's `reviewed_at`).
+        overview:
+          type: string
+          description: The composed text that was chosen, recomposed from the rows the vector names.
+        scores:
+          type: object
+          description: '`{group_id: scores}` — the numbers that judged THAT text, newest first per group.'
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/PhraseGroupScoreRow'
     PhraseGroupRow:
       type: object
       additionalProperties: false
-      required: [id, key, title, description, order, content, revision, updated_by, previous_content, history, owed_by_findings, writer_busy]
+      required: [id, key, title, description, order, content, revision, updated_by, previous_content, history, owed_by_findings, writer_busy, scores]
       properties:
         id:
           type: string
@@ -3457,10 +3814,87 @@ components:
             refuses a hand edit with — the dashboard disables its edit button off this flag and cannot
             disagree with the route. A live holding run that named no `group_refs` counts as holding every
             group of the Story.
+        scores:
+          type: array
+          description: >-
+            The Reader's judgements of THIS section (D-65), NEWEST FIRST, one entry per scoring run that
+            covered the group. An EMPTY list means nobody has scored this text — it is not a zero and not
+            a failure. `scores[0]` is the current number because the read sorts the stored rows by
+            `created_at` descending with the row id as the tie-break (one scoring commit stamps all five
+            rows with the same instant, so time alone cannot order them). The pass is DISPLAY work: no
+            score value, and no scoring seat in any owed count, enters the criteria engine, drain
+            threshold, hill-climb, sign-off gate or goal math — an IN-FLIGHT scoring run still counts as
+            in-flight group-pipeline work (the run, never the number) — and what the loop DOES read back
+            is a section's `rationale`, as evidence for the group-lock seat (R-lock, §17.18): the number
+            is never compared to a threshold, and no score value gates anything.
+          items:
+            $ref: '#/components/schemas/PhraseGroupScoreRow'
+        locked:
+          type: boolean
+          description: >-
+            R-lock — TRUE while this group's CURRENT text is signed off. A lock is a flag on the row that
+            already holds the text, never an edit: it writes no revision, touches no `content`, and
+            recomposes nothing, so the words are byte-for-byte what they were and `locked_revision` names
+            the revision a person committed to. While it stands, no install may rewrite the group (the
+            batch that tries is refused WHOLE), the work generator never offers it, a finding whose EVERY
+            named group is locked is `discarded`, and the other groups are the side revised for
+            consistency. ABSENT means unlocked — the reading of every book written before the flag
+            existed, and of a group whose lock the Author lifted — and the projection emits the field ONLY
+            while a live lock stands, so a client must never cache it across reads.
+        locked_revision:
+          type: integer
+          description: >-
+            The revision number the CURRENT lock fixed — the group's `revision` at the instant of locking,
+            so an audit can tell a lock from a later text that happens to carry the flag. Present only
+            while a lock stands (the row stores `null` once unlocked, and `null` on the wire would be a
+            number-shaped lie rather than an absence).
+        locked_by:
+          $ref: '#/components/schemas/PhraseGroupLockActor'
+        locked_at:
+          type: string
+          format: date-time
+          description: >-
+            The lock commit's own stamp — when the decision was made, not when the text was written — in
+            UTC: ISO-8601 with millisecond precision and a `Z` offset (e.g.
+            `2026-11-25T09:00:00.000Z` — `server/tools/utilities.ts:nowIso`, the same stamp the lock result
+            answers with, since the row and the report record one commit). The unlock writes no timestamp
+            of its own, so this field disappears rather than moving.
+    PhraseGroupScoreRow:
+      type: object
+      additionalProperties: false
+      required: [value, vector_hash, at, run_ref]
+      properties:
+        value:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >-
+            Out of 100, exactly as the Reader answered it. The projection never re-scales, averages or
+            re-ranks a score; the range and the integer-ness are enforced at parse time
+            (`phrase/section-scores.ts`), not recomputed here.
+        vector_hash:
+          type: string
+          description: >-
+            The group revision vector this score judged, read off the Work Item's claim key rather than
+            re-derived at settlement — so a Writer install DURING the pass cannot re-stamp an old
+            judgement onto a new book. Compare it with `review.vector_hash` to tell whether the number
+            describes the text on the record.
+        at:
+          type: string
+          description: When the row was written (the stored record's `created_at`).
+        run_ref:
+          type: string
+          description: The run that answered — the thread the Author can open to read the Reader's work.
+        rationale:
+          type: string
+          description: >-
+            The Reader's one-line reason for the number, WHEN IT GAVE ONE: the field is omitted rather
+            than shipped as an empty string. The quoted `evidence` line stays server-side (the rail draws
+            a percentage); it is in the run's thread behind `run_ref`.
     PhraseRevisionRow:
       type: object
       additionalProperties: false
-      required: [id, number, state, at, run_ref, finding_refs, task_refs, chars]
+      required: [id, number, state, at, run_ref, finding_refs, task_refs, chars, clean, clean_run_ref]
       properties:
         id:
           type: string
@@ -3470,6 +3904,12 @@ components:
         state:
           type: string
           enum: [latest, archived]
+          description: >-
+            The two positions a row in this list can hold. D-68 adds a THIRD stored state, `discarded`
+            (the texts the Author's Reviewed-Summary choice passed over), and the view EXCLUDES those
+            rows: they are retained for R3's closure join, not offered as candidates, so a history rail
+            that listed them beside the live line would read as "these are still on the table". The
+            choice itself is reported on `reviewed`, not here.
         at:
           type: string
         run_ref:
@@ -3487,6 +3927,18 @@ components:
         chars:
           type: integer
           description: The text's length; the body itself is not repeated per historical row.
+        clean:
+          type: boolean
+          description: >-
+            D-67 — the Clean stamp: this text was the group's text in a cross-group Critic pass that
+            closed with no unresolved defect on the group. It is a verdict about THAT pass, so it never
+            moves when a later finding is raised or discarded; what a later event moves is the
+            SELECTION (see `reviewed`), which is why a row can be clean and still not be what the
+            reviewed Overview stands behind.
+        clean_run_ref:
+          type: string
+          nullable: true
+          description: The deep-review run whose clean pass earned the stamp — P11's audit of the verdict.
     PhraseFindingRow:
       type: object
       additionalProperties: false
@@ -3501,11 +3953,11 @@ components:
           enum: [critical, major, minor, taste]
         kind:
           type: string
-          enum: [issue, improvement]
+          enum: [issue, proposal]
           description: >-
             D-33b — which of the two claims this row is, so the rail can tell a defect from a proposal
             without guessing at the title. `issue` claims a break the artifact must answer by quotation;
-            `improvement` proposes a change the Seed never promised, which the Editor weighs on merit
+            `proposal` proposes a change the Seed never promised, which the Editor weighs on merit
             (worth a Writer pass? does it contradict the installed text?) and never for resting on an
             absence. Defaulted on the way out by `api/projections.ts:phraseView`: a row raised before
             the field existed reads as `issue`, so a client never interprets absence. The rail's layout
@@ -3606,7 +4058,7 @@ components:
           type: string
         review_seats:
           type: integer
-          description: The Reader seats the Author's dial asks for on the current text.
+          description: The Critic seats the Author's dial asks for on the current text.
         reviews_on_current_vector:
           type: integer
           description: Closed structured review passes over THIS vector (counted from the run ledger, L-3).
@@ -3748,6 +4200,263 @@ components:
                 the Author's hands.
         view:
           $ref: '#/components/schemas/PhraseView'
+    PhraseGroupLockActor:
+      type: string
+      enum: [author, editor]
+      description: >-
+        Who put a group into the locked state (R-lock). The AUTHOR owns the lock outright and is the only
+        actor that may lift it, whoever set it. The EDITOR may lock only on a Story that turns
+        `editor_group_locking` on, and only through its own judgement seat — the Author-facing routes in
+        this contract always act as `author`, because a dashboard verb cannot report an Editor lock it did
+        not take, and an Editor unlock is refused outright (`editor_unlock`) rather than offered here.
+    PhraseGroupVoidedFinding:
+      type: object
+      additionalProperties: false
+      required: [finding_id, previous_state, scope]
+      description: >-
+        One claim the LOCK retired, in the shape the lock report returns it. A finding is retired only when
+        EVERY group it names is now locked — the effective scope is the read that decides it
+        (`findingGroupScope`, which treats an UNSCOPED finding as naming the whole Overview, so a
+        whole-Overview claim goes void exactly when the last group locks and not earlier). A claim that
+        also names an unlocked group stays open and stays work, for those groups only.
+      properties:
+        finding_id:
+          type: string
+          description: The finding that stopped being work.
+        previous_state:
+          type: string
+          enum: [unconfirmed, confirmed, approved, disputed]
+          description: >-
+            The state the row held before the lock moved it to `discarded`. Only these four can appear:
+            `fixed` and `discarded` are terminal and are never rewritten, and `disputed` counts as OPEN,
+            which is a live claim about text that just stopped being writable.
+        scope:
+          type: array
+          items:
+            type: string
+          description: >-
+            The group ids the claim names — the whole scope that just became un-writable, in the order the
+            scope read them. This is what lets the rail say WHY the row closed instead of leaving a
+            finding that quietly stopped being work.
+    PhraseGroupLockResult:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          story_id,
+          group_id,
+          locked,
+          locked_revision,
+          locked_by,
+          locked_at,
+          voided_findings,
+          view,
+        ]
+      description: >-
+        What a lock did (R-lock). The lock writes ONE row — the group's four lock fields — plus the
+        findings that lost their last writable group; nothing else moves, because the judgement is a flag,
+        not an edit.
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+          description: >-
+            The Summary Phrase the group composes into, omitted exactly as on the revise and choose
+            results: a book that has no Phrase row yet sends no key rather than a null one.
+        group_id:
+          type: string
+          description: The group that is now locked (the path's `phrase_groups.id`, echoed).
+        locked:
+          type: boolean
+          description: Always true on a successful lock — the flag the verb exists to set.
+        locked_revision:
+          type: integer
+          description: >-
+            The revision the lock fixed. The seat that judges a lock is armed on a CLEAN revision and
+            re-checks it at settlement, so this number names the exact text the judgement was made about.
+        locked_by:
+          $ref: '#/components/schemas/PhraseGroupLockActor'
+        locked_at:
+          type: string
+          format: date-time
+          description: >-
+            The lock commit's own stamp, in UTC: ISO-8601 with millisecond precision and a `Z` offset
+            (e.g. `2026-11-25T09:00:00.000Z` — `server/tools/utilities.ts:nowIso`, which is what both the
+            lock route and the Editor seat's settle write). There is no clock for the seat's decision of
+            its own: this is the moment the flag landed, which is what the audit reads.
+        voided_findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhraseGroupVoidedFinding'
+          description: >-
+            The claims the lock retired, empty when none had their whole scope inside the group. Reported
+            because the lock just shortened the Author's queue, and silence there reads as a bug rather
+            than as a decision.
+        view:
+          $ref: '#/components/schemas/PhraseView'
+          description: >-
+            The fresh phrase read, so the rail's lock badge moves with the write rather than with a later
+            poll (the revise route's envelope, R2/D-68).
+    PhraseGroupUnlockResult:
+      type: object
+      additionalProperties: false
+      required: [story_id, group_id, locked, locked_revision, locked_by, locked_at, view]
+      description: >-
+        What an unlock did (R-lock): the flag is off and NOTHING else is rewritten. It does not touch
+        `content` or `revision`, writes no revision row, and does not resurrect the findings the lock
+        retired — `discarded` is terminal, and a defect the crew still believes in is filed again by the
+        next Critic pass against the now-writable text.
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+          description: Omitted on a book with no Phrase row, exactly as on the lock result.
+        group_id:
+          type: string
+          description: The group whose lock came off.
+        locked:
+          type: boolean
+          description: Always false — the group is writable again and the loop may offer it again.
+        locked_revision:
+          type: integer
+          nullable: true
+          description: >-
+            `null`, not absent: the response states the state the route LEFT the row in, and the row itself
+            clears the field to null (a store patch merges through JSON and cannot delete a key). The
+            PROJECTION, which reports what the book looks like rather than what a verb did, drops the key
+            entirely while the group is unlocked.
+        locked_by:
+          type: string
+          nullable: true
+          description: Always null after a successful unlock.
+        locked_at:
+          type: string
+          nullable: true
+          description: >-
+            Always null: an unlock mints no timestamp of its own. The journal line the write makes is the
+            record of when the flag came off.
+        view:
+          $ref: '#/components/schemas/PhraseView'
+          description: The fresh phrase read, with the group's lock keys gone.
+    PhraseReviewedChooseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          description: >-
+            Why the Author took THIS reviewed Overview. It rides onto every journal line the choose
+            writes — the five installs, each discard, and the Phrase row's choice record (P11) — so the
+            book can say later what the decision was, not only what it was.
+    PhraseReviewedChooseResult:
+      type: object
+      additionalProperties: false
+      required: [story_id, phrase_id, revision, vector, vector_hash, at, overview, installed, discarded, sources, mirror, view]
+      properties:
+        story_id:
+          type: string
+        phrase_id:
+          type: string
+        revision:
+          type: integer
+          description: >-
+            The phrase row's revision number after the choose's install (R2 — one install, one bump).
+        vector:
+          type: object
+          additionalProperties:
+            type: integer
+          description: '`{group_id: revision_number}` — the vector that was chosen (the selected rows, not the new ones).'
+        vector_hash:
+          type: string
+          description: >-
+            The chosen vector's hash — the key the Reader's score rows carry, so the rail can show the
+            number the choice was made under beside the choice itself.
+        at:
+          type: string
+        overview:
+          type: string
+          description: The reviewed Overview that was chosen, composed from the rows the vector names.
+        installed:
+          type: array
+          description: >-
+            The five NEW `latest` rows, one per group, holding the chosen text (catalog order). The
+            choose installs rather than adopting in place because §4.19/R2 pins a group's line as
+            "created in order, the highest number is `latest`" — adopting r4 under a discarded r5 would
+            break that and let the next install mint number 5 a second time.
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_key, revision_id, number]
+            properties:
+              group_id:
+                type: string
+              group_key:
+                type: string
+              revision_id:
+                type: string
+              number:
+                type: integer
+        discarded:
+          type: array
+          description: >-
+            Every revision row this choose flipped to `discarded`, in group-then-number order. Retained,
+            terminal, and hidden from the group rows' `history` — the Author's rail lists them as what
+            was passed over, and R3's join still reads them, so a `fixed` finding stays fixed.
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_key, revision_id, number]
+            properties:
+              group_id:
+                type: string
+              group_key:
+                type: string
+              revision_id:
+                type: string
+              number:
+                type: integer
+        sources:
+          type: array
+          description: Where each chosen text came from — the selected row and the row that now holds it.
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_key, source_revision, source_id, installed_revision]
+            properties:
+              group_id:
+                type: string
+              group_key:
+                type: string
+              source_revision:
+                type: integer
+              source_id:
+                type: string
+              installed_revision:
+                type: integer
+        mirror:
+          type: object
+          additionalProperties: false
+          required: [summary_id, fields, written]
+          properties:
+            summary_id:
+              type: string
+              nullable: true
+            fields:
+              type: array
+              items:
+                type: string
+            written:
+              type: boolean
+            reason:
+              type: string
+              enum: [locked, no_summary]
+              description: >-
+                Why the legacy mirror was skipped, when it was — L-7a: a locked Summary is not rewritten
+                under the Author's hands, and a choose is no exception.
+        view:
+          $ref: '#/components/schemas/PhraseView'
     PatchStoryRequest:
       type: object
       minProperties: 1
@@ -3766,6 +4475,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Cost'
+        editor_group_locking:
+          type: boolean
+          description: >-
+            R-lock — grant or revoke the Editor's power to lock a Summary group. A strict BOOLEAN: `false`
+            is a WRITE that turns the permission off, and an OMITTED key changes nothing (the Setting is
+            read as `=== true`, so a string `"false"` or a `0` would otherwise store a value the domain
+            reads as ON — the route refuses them with that sentence). Turning it off never lifts a lock
+            that already stands: locks are lifted by `POST …/phrases/groups/{groupId}/unlock`, by the
+            Author alone.
     BacktrackRequest:
       type: object
       required: [phase]

@@ -9,3 +9,10 @@ export * from './issue-list';
 // contracts stay for a `'sampling'` Story's existing run rows.
 export * from './group-draft';
 export * from './group-review';
+// READER SCORING (D-65): the five-section score answer. Same no-tool contract shape as the two
+// above, and consumed by `WorkItem.responseSchema` for the `score_sections` job.
+export * from './section-scores';
+// PHRASE GROUP LOCK (R-lock, `Story.editor_group_locking`): the Editor's per-group lock judgement.
+// Same no-tool contract shape again, and the only structured answer whose product is a flag on an
+// existing row (the `phrase_groups` lock) rather than a row of its own.
+export * from './group-lock';

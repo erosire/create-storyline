@@ -57,6 +57,7 @@ import {
     type Story,
     type StoredRecord,
     type Summary,
+    type SummaryScore,
     type Task,
     type Template,
     type Verdict,
@@ -677,7 +678,7 @@ export class Store {
     readonly knowledge: Collection<KnowledgeEntry>;
     /** §3.3 — the Editor's derived, machine-readable projection of the Seed (never the Seed). */
     readonly seedBriefs: Collection<SeedBrief>;
-    /** §3.4 — the screening Reader's one-turn issue list per sample; feeds the selector. */
+    /** §3.4 — the screening Critic's one-turn issue list per sample; feeds the selector. */
     readonly sampleReviews: Collection<SampleReview>;
     // The Summary Phrase collections (R1/R2). `phrases` and `phrase_groups` are created with
     // `createWithId` (a uid ADDRESS, because a group id is named by routes, findings and run rows);
@@ -685,6 +686,9 @@ export class Store {
     readonly phrases: Collection<Phrase>;
     readonly phraseGroups: Collection<PhraseGroup>;
     readonly groupRevisions: Collection<GroupRevision>;
+    // READER SCORING (D-65) — one Reader run per group vector, five rows per run, accumulating
+    // across revisions. Display-only: no loop predicate reads it (see `SummaryScore`).
+    readonly summaryScores: Collection<SummaryScore>;
 
     /** The single registry every generic path (snapshot, CAS resolution, rollback) walks. */
     private readonly collections: Record<CollectionName, Collection<AnyRecord>>;
@@ -771,6 +775,7 @@ export class Store {
         this.phrases = this.collections.phrases as unknown as Collection<Phrase>;
         this.phraseGroups = this.collections.phrase_groups as unknown as Collection<PhraseGroup>;
         this.groupRevisions = this.collections.group_revisions as unknown as Collection<GroupRevision>;
+        this.summaryScores = this.collections.summary_scores as unknown as Collection<SummaryScore>;
     }
 
     // -- construction -------------------------------------------------------------------

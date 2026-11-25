@@ -181,7 +181,7 @@ export const BUILT_IN_CRITERIA: Criterion[] = [
         // THE SEED IS GENERAL ON PURPOSE, so C-14 is a CONTRADICTION test, not a checklist. The
         // Author's Seed states a few things firmly and leaves the rest open; the Writer's job is to
         // fill the open part with compatible specifics. An older wording ("nothing central … is
-        // missing from it") turned every silence into an unmet promise, and Readers spent rounds on
+        // missing from it") turned every silence into an unmet promise, and Critics spent rounds on
         // details the Seed never stated (stakes it left open, a refuge that appears only in the
         // ending). So the three fields below state the admissible grounds — contradiction, a broken
         // explicit commitment, a broken promise of the Summary's own — and say in words that

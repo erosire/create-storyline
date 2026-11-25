@@ -11,16 +11,23 @@
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
 import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
-import type { PhraseGroupRow } from './story-contract';
+import type { PhraseGroupRow, PhraseLockActor } from './story-contract';
 import {
     buildRevisionUnits,
     findingAppliesToRevision,
     findingGroups,
     findingRevisionScope,
     groupBlockingFindings,
+    // R1 — the lock selectors, shared with the group pane's badge (`SummaryGroupPane`) so the rail's mark and
+    // the pane's badge are two readings of one rule rather than two rules.
+    groupLockActor,
+    groupLockRevision,
     groupOpenFindings,
     groupOpenTasks,
+    groupPreviousScorePercent,
+    groupScorePercent,
     isDecidedIdea,
+    isGroupLocked,
     isGroupSummary,
     isGroupWriterBusy,
     isGroupWritten,
@@ -247,7 +254,7 @@ export interface SummaryRevisionEntry {
     revision: Revision;
     /** The rail's 1-based label, in creation order. */
     index: number;
-    /** Findings the Readers filed against THIS revision. */
+    /** Findings the Critics filed against THIS revision. */
     findings: Finding[];
     /**
      * How each listed finding is scoped, keyed by finding id (T11/F6). The pane needs it because the
@@ -459,6 +466,32 @@ export interface SummaryGroupEntry {
     writerBusy: boolean;
     /** Written at least once: `revision > 0` is the loop's "never written" line (R1). */
     written: boolean;
+    /**
+     * T3 — the group's LATEST score as an integer percentage, the number the rail row prints at its right
+     * end. OPTIONAL rather than `undefined`-valued so an unscored group carries no key at all (a rail row
+     * renders this entry's absence as nothing, and a test can pin the shape without a phantom).
+     */
+    score?: number;
+    /**
+     * T3 — the percentage the latest score moved from, the second-newest pass. Absent on a group scored
+     * once: the rail's tooltip and the pane's `(was …)` line both say nothing rather than `was 0%`, because
+     * "never scored" and "scored zero" are different claims.
+     */
+    previousScore?: number;
+    /**
+     * R1 — the group's text is locked in: settled content, no revision, void findings. OPTIONAL AND PRESENT ONLY
+     * WHEN TRUE, on the rail's own rule for a mark: a row that renders `entry.locked` prints nothing at all when
+     * the key is absent, so a book whose payload predates the lock keeps the rail it had — no padlock, and no
+     * word in the row's accessible name.
+     */
+    locked?: boolean;
+    /** R1 — who made the lock (`'author'` | `'editor'`), absent when the row names none. Tooltip words only. */
+    lockedBy?: PhraseLockActor;
+    /**
+     * R1 — the revision the lock stands on, the number the rail's tooltip repeats from the pane's badge. Absent
+     * when the group is open, for the same reason the two keys above are.
+     */
+    lockedRevision?: number;
 }
 
 export function summaryGroupEntries(view: StoryViewData): SummaryGroupEntry[] {
@@ -468,7 +501,27 @@ export function summaryGroupEntries(view: StoryViewData): SummaryGroupEntry[] {
         blockingFindings: groupBlockingFindings(view, group.id).length,
         openFindings: groupOpenFindings(view, group.id).length,
         writerBusy: isGroupWriterBusy(group),
-        written: isGroupWritten(group)
+        written: isGroupWritten(group),
+        // T3 — read through the contract's selectors, so the rail's number is the SAME read the group pane
+        // prints and neither sorts `scores` or rounds it its own way.
+        ...(groupScorePercent(group) === undefined
+            ? {}
+            : { score: groupScorePercent(group) as number }),
+        ...(groupPreviousScorePercent(group) === undefined
+            ? {}
+            : { previousScore: groupPreviousScorePercent(group) as number }),
+        // R1 — the lock, read through the same selectors the pane's badge uses (`story-contract`), so the rail
+        // and the pane cannot disagree about which text is settled or who settled it. Keys are added only for a
+        // locked row: the rail renders absence as no mark, exactly as it renders an unscored group as no number.
+        ...(isGroupLocked(group)
+            ? {
+                  locked: true as const,
+                  ...(groupLockActor(group) === undefined ? {} : { lockedBy: groupLockActor(group) as PhraseLockActor }),
+                  ...(groupLockRevision(group) === undefined
+                      ? {}
+                      : { lockedRevision: groupLockRevision(group) as number })
+              }
+            : {})
     }));
 }
 

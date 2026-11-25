@@ -3,7 +3,7 @@
  *
  * WHY THIS FILE EXISTS: the comparison pane rendered a "Select this draft" button whose comment said
  * the Author override "lands with the API" — and it never had. §6.2a gives the Author the move, D-24
- * ranks it above a Checker's selection, and D-23 gives the merge a task row; none of it was reachable
+ * ranks it above a Reader's selection, and D-23 gives the merge a task row; none of it was reachable
  * from `/v1/storyline`. These tests pin the two routes the fix adds, in the same harness
  * `routes.test.ts` uses (real store, real engine, real Hono request), because the 400s and 404s are
  * product copy (L-13) and are asserted verbatim.
@@ -180,7 +180,7 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         expect(world.store.chapters.require('chapter_0').current_revision).toBe('revision_1');
 
         // P11/D-20a: an Author write, so `author: true` with no run behind it — the audit has to tell
-        // this apart from the Checker's `selectRevision`, which carries a `run_ref`.
+        // this apart from the Reader's `selectRevision`, which carries a `run_ref`.
         const group = world.store.journal.slice(journalBefore);
         const labels = [...new Set(group.map((event) => event.commit_label))];
 
@@ -241,7 +241,7 @@ describe('the Author revision routes (U-13, D-24, D-22, D-23)', () => {
         expect(world.store.chapters.require('chapter_0').current_revision).toBeUndefined();
 
         // The task is the one §8.2's `requestMerge` would open: same kind, same dedupe title, same
-        // owner, so the Author's desk and the Checker's request land as ONE entry (T-24, L-11a).
+        // owner, so the Author's desk and the Reader's request land as ONE entry (T-24, L-11a).
         expect(world.store.tasks.list().length).toBe(1);
         expect(world.store.tasks.require('task_0')).toMatchObject({
             story_id: 'story_0',

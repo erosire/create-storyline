@@ -4,7 +4,7 @@
 //
 //   * PHASES ②/③ are §6.2a's classic divergence, per unit:
 //
-//       writers ×`attempts`  →  competing revisions  →  checkers ×M  →  an Editor selects  →  losers deleted
+//       writers ×`attempts`  →  competing revisions  →  readers ×M  →  an Editor selects  →  losers deleted
 //
 //   * PHASE ① is the research pipeline (documents/phase-1-research-pipeline.md §6.4), and it has NO
 //     Editor choice and NO `write_unit` at all — the engine persists each sample from the run's
@@ -15,7 +15,7 @@
 //         → N no-tool one-turn samples  (sample_unit, wi_sample_<summaryRef>_<round>_<attempt>)
 //         → M no-tool screens per sample(screen_samples, wi_screen_<revisionId>_<attempt>)
 //         → the ENGINE selects the least-issue sample (sample-select.ts, §6.5) and truncates the rest
-//         → deep review by tool-using Readers             (check_unit, wi_review_<revisionId>_a<pass>)
+//         → deep review by tool-using Critics             (check_unit, wi_review_<revisionId>_a<pass>)
 //         → Editor verification (verify_findings/verify_ideas) → an approval queues a `fix` task
 //         → that open `fix` task arms round N+1, whose compiled prompt carries base revision + tasks.
 //
@@ -28,7 +28,7 @@
 //     re-brief L-18's `rejectAll` creates, the directive D-19 propagates, the Idea D-29 selected;
 //   * the chapter carries `needs_recheck` (L-12: a `needs_recheck` chapter is re-entered automatically,
 //     which is the rule that stops approved chapters rotting silently);
-//   * a checker turned up nothing to fix but the unit has no verdict at all, so nobody has judged it.
+//   * a reader turned up nothing to fix but the unit has no verdict at all, so nobody has judged it.
 //
 // A claim key is DETERMINISTIC and carries a generation counter derived from the run rows
 // (`wi_write_ch4_2_a1`), which is what makes L-2's "two sweeps must never spawn two crews for one job"
@@ -139,14 +139,23 @@ import {
     GroupReviewSchema,
     ISSUE_LIST_SCHEMA_NAME,
     IssueListSchema,
+    SECTION_SCORES_SCHEMA_NAME,
+    SectionScoresSchema,
+    // PHRASE GROUP LOCK (R3/T6b): the Editor's judgement contract. Its seat writes no artifact of its
+    // own — the product is the lock flag on the section's row — so the schema is the only thing this job
+    // carries that a provider could get wrong.
+    GROUP_LOCK_SCHEMA_NAME,
+    GroupLockDecisionSchema,
     SUMMARY_SAMPLE_SCHEMA_NAME,
     SummarySampleSchema
 } from '../../shared/schemas';
 // SUMMARY PHRASE (R1-R5) — the group domain, imported from its ONE surface (`../phrase/index`).
 // `isGroupManagedStory` is the switch (`story.summary_mode`, NOT the presence of rows),
 // `phraseGroupsOf`/`storyPhrase` are the book's catalog rows, `findingGroupsStillOwed` routes an
-// open finding into the groups it still needs rewritten (R3), `partitionGroups` is R4's deferral, and
-// the vector hash is what makes a review pass re-arm on an install rather than on a clock.
+// open finding into the groups it still needs rewritten (R3), and `planGroupDraftBatch` is the cut
+// that turns those owed rows into ONE pass per finding — R4's deferral, the allowance and the Author's
+// dial in one ordered rule (D-66). The vector hash is what makes a review pass re-arm on an install
+// rather than on a clock.
 import {
     allReviewSeatsRun,
     findingGroupsStillOwed,
@@ -162,14 +171,37 @@ import {
     groupVectorHash,
     isGroupHoldingRun,
     isGroupManagedStory,
-    partitionGroups,
+    // READER SCORING (D-65, gated by D-67): the seat's claim key and the attempt cap live in the phrase
+    // domain so the generator, the projection and the drain probe read one definition of each. D-67
+    // replaced the completeness gate with the CLEAN SELECTION (`cleanSelectionOf`) and the one-run-per-
+    // vector rule with "no score rows for this hash, and fewer than the cap's worth of closed runs",
+    // so a refusal re-arms the seat without letting a broken provider buy a Reader forever.
+    cleanSelectionOf,
+    groupCheckSeatKey,
+    planGroupDraftBatch,
     phraseGroupsOf,
+    scoredVectorHashes,
+    SECTION_SCORE_ATTEMPT_CAP,
+    sectionScoreClaimKey,
     storyPhrase
 } from '../phrase';
 // F1: the allowance read and its cap are Author-facing and were exported from THIS module; the
 // re-export keeps `loop/phase1-groups*.test.ts` and any rail-side import site resolving while the
 // definition lives with the rest of the group-pipeline reads.
 export { GROUP_WRITE_ATTEMPT_CAP, groupWriteAttempts } from '../phrase/exclusion';
+// PHRASE GROUP LOCK (R3/T6b) — the Editor's judgement seat. The three reads below are ALL this
+// generator needs: which sections may be offered at all (`editorLockSeatTargets`, which folds the
+// Setting, the clean selection, the Reader's row and the Writer hold into one pass), the seat's key
+// (`groupLockSeatKey`, the same builder the settle reads the vector back from), and whether that seat is
+// already spent. The RULES are not here: `loop/editor-lock.ts` owns them so the prompt compiler and the
+// settle answer with the same read, and `phrase/locks.ts` still owns the write.
+import { editorLockSeatTargets, groupLockSeatKey, groupLockSeatSpent } from './editor-lock';
+// The slug above is a VALUE of the prompt compiler that owns it, not a string copied here: the seat's
+// `templateRef` and the copy `compileGroupLockPrompt` renders come from one constant, so renaming the
+// slug cannot leave a Work Item pointing at a template that no prompt is compiled from. (The edge is
+// one-way — `run/phase1-prompt.ts` depends on `loop/editor-lock.ts` and `loop/records.ts`, never on this
+// module — so importing it here cannot form a cycle.)
+import { GROUP_LOCK_TEMPLATE_SLUG } from '../run/phase1-prompt';
 import { seedHashOf } from '../../shared/seed-hash';
 import type { WorkItem, WorkUnitRef } from '../run/types';
 import type { Store } from '../store';
@@ -214,7 +246,7 @@ function dispatchCountFor(store: Store, prefix: string, unitRef: string): number
 /**
  * Rotates an offer list by `generation % length` so successive sweeps lead with different entries.
  *
- * Used for the checker offers above: the generation is already store-derived, so the rotation is a pure
+ * Used for the reader offers above: the generation is already store-derived, so the rotation is a pure
  * function of records rather than of anything the engine remembers between sweeps.
  */
 function rotateByGeneration<T>(items: T[], generation: number): T[] {
@@ -267,7 +299,7 @@ function draftedBefore(store: Store, unitRef: string): boolean {
  * `draftedBefore` alone cannot tell "the Writer is writing it right now" from "the Summary was
  * written in place": the live Writer's run is already a `wi_write_*` row, and the row it will fill
  * carries only `chapter_count`. Phase ①'s in-place review path must wait for that run to close —
- * Readers read a finished artifact, never the empty row a live Writer has not reached yet (§4.15).
+ * Critics read a finished artifact, never the empty row a live Writer has not reached yet (§4.15).
  */
 function writerIsLiveOn(store: Store, storyId: string, unitRef: string): boolean {
     return liveRuns(store, storyId).some(
@@ -281,7 +313,7 @@ function writerIsLiveOn(store: Store, storyId: string, unitRef: string): boolean
  * The set-level unit (ref '' — phase ② while the chapter count does not yet match the plotline set,
  * C-0/D-3b) has no row of its own to be filed against, and the set's consistency is judged AT THE STORY
  * ROW (criteria/engine.ts:scopeTargets). Reading an empty ref literally would ask a question no verdict
- * can answer, and the sweep would buy a fresh checker pass for the set on every sweep forever.
+ * can answer, and the sweep would buy a fresh reader pass for the set on every sweep forever.
  */
 const judgedBefore = (store: Store, storyId: string, unitRef: string): boolean =>
     verdictsTargeting(store, storyId, unitRef === '' ? storyId : unitRef).length > 0;
@@ -313,7 +345,7 @@ function divergenceGap(store: Store, story: Story, unitRef: string, attempts: nu
     if (attempts <= 1) return 0;
 
     // A unit the Editor has already chosen for is being REVISED, not re-sampled. Phase ①'s loop is
-    // Writer → Reader → Editor, and the Editor's valid critique sends back ONE corrected draft (the
+    // Writer → Critic → Editor, and the Editor's valid critique sends back ONE corrected draft (the
     // `wi_fix_*` job); re-expanding it into the Author's whole sampling set every round would make
     // a revision cost N drafts and turn a single critique into a new search.
     if (selectedPasses(store, unitRef) > 0) return 0;
@@ -343,15 +375,15 @@ const divergenceGeneration = (store: Store, unitRef: string): number => selected
  */
 export const summarySamplingOf = (story: Story): number => samplingSizeOf(story);
 
-/** Phase ①'s screening count: how many Readers judge each sample (§6.4 step 4). */
-const summaryReadersOf = (story: Story): number => screeningSizeOf(story);
+/** Phase ①'s screening count: how many Critics judge each sample (§6.4 step 4). */
+const summaryCriticsOf = (story: Story): number => screeningSizeOf(story);
 
 /**
  * Does this unit need a Writer, and on which trigger?
  *
  * The competing-revision guard is L-16's discipline seen from the other side: while drafts are
  * competing, a new Writer would be a fourth draft nobody asked for, and the unit's next step is a
- * checker or an Editor, not another draft.
+ * reader or an Editor, not another draft.
  */
 export function writeTrigger(
     store: Store,
@@ -365,7 +397,7 @@ export function writeTrigger(
     // `phase1PipelineCandidates`), so the gate that used to hold a Writer behind the Seed review
     // lives there now: nothing is sampled until an accepted brief exists and its research closed.
 
-    // While drafts are competing the unit's next step is normally a checker or an Editor, not a fourth
+    // While drafts are competing the unit's next step is normally a reader or an Editor, not a fourth
     // draft nobody asked for. The exception is D-17d: the Author asked for N blind attempts, and the
     // first one landing must not cancel the ones still owed (L-16's drafts are siblings).
     if (competingRevisions(store, story.id, unitRef).length > 0 && owing <= 0) return undefined;
@@ -416,14 +448,14 @@ function findingTouchesUnit(store: Store, findingId: string, unitRef: string): b
 }
 
 /**
- * Does this unit need a checker?
+ * Does this unit need a reader?
  *
- * Two cases. A unit with competing drafts needs one per draft (§6.2a's "Checker runs ×M → verdicts per
+ * Two cases. A unit with competing drafts needs one per draft (§6.2a's "Reader runs ×M → verdicts per
  * revision"), and a unit whose newest draft has not been judged needs one against the stored artifact.
  * Freshness is a journal-order question, not an id comparison — verdict ids and revision ids come from
  * different counters (records.ts:createdAfter).
  */
-export function needsChecker(store: Store, story: Story, unitRef: string): boolean {
+export function needsReader(store: Store, story: Story, unitRef: string): boolean {
     const competing = competingRevisions(store, story.id, unitRef);
     const newestDraft = last(competing);
     const verdicts = verdictsTargeting(store, story.id, unitRef);
@@ -489,7 +521,7 @@ function candidate(
     why: string,
     priority: number,
     extra: Partial<WorkItem> = {},
-    /** For a reader: which assigned angle this pass takes (so N passes are N different seats). */
+    /** For a critic: which assigned angle this pass takes (so N passes are N different seats). */
     rotation?: number
 ): WorkCandidate | undefined {
     if (isClaimed(store, key)) return undefined;
@@ -499,9 +531,9 @@ function candidate(
     if (pool.length === 0) return undefined;
 
     // S-5: each template's own ceiling is checked at dispatch time; here we bind ONE template so the
-    // Work Item's `templateRef` is deterministic. Reader roles rotate across the assigned reader
+    // Work Item's `templateRef` is deterministic. Critic roles rotate across the assigned critic
     // templates (D-30's four angles); every other kind takes the first assigned match.
-    const template = roleKind === 'reader' ? pool[(rotation ?? dispatchCount(store, key)) % pool.length] : pool[0];
+    const template = roleKind === 'critic' ? pool[(rotation ?? dispatchCount(store, key)) % pool.length] : pool[0];
 
     return {
         key,
@@ -540,15 +572,15 @@ export const SAMPLING_FAILURE_PREFIX = 'Phase ① sampling failed after';
 export { SAMPLING_RETRY_ALLOWANCE };
 
 /**
- * The four deep-review Reader angles (§14 item 10, D-30). The screening Reader is deliberately NOT
+ * The four deep-review Critic angles (§14 item 10, D-30). The screening Critic is deliberately NOT
  * in this list: it is the one-turn, no-tool screening mode, and a deep-review pass that reused it
  * would rate the selected draft on a prompt that never opens with the whole book (T-11).
  */
 export const DEEP_REVIEW_TEMPLATES = [
-    'reader-genre',
-    'reader-plausibility',
-    'reader-audience',
-    'reader-mystery'
+    'critic-genre',
+    'critic-plausibility',
+    'critic-audience',
+    'critic-mystery'
 ] as const;
 
 /**
@@ -559,7 +591,7 @@ export const DEEP_REVIEW_TEMPLATES = [
  *       nothing to screen and nothing to select; or
  *   (b) H1/R3 — samples exist, but the round CANNOT select one: it was armed with fix tasks and every
  *       draft failed certification (its fixes unresolved, or a blocking screening issue). Selecting
- *       the least-bad of those would install text the round's own Readers rejected and close the fix
+ *       the least-bad of those would install text the round's own Critics rejected and close the fix
  *       tasks on the strength of that installation, which is the loop running backwards.
  *
  * Both shapes are bounded by the SAME attempt cap and recover the SAME way: the Author clears the
@@ -625,7 +657,7 @@ export function openSamplingFailureTask(store: Store, story: Story): Task {
         // BOTH are clean, so an exhausted certifying round is exactly "no draft was clean on both", and
         // each candidate's score says which one it failed:
         //
-        //   * the FIX axis — `fixesUnresolved` (a demanded task the Readers marked unresolved, or a
+        //   * the FIX axis — `fixesUnresolved` (a demanded task the Critics marked unresolved, or a
         //     draft whose screening leg produced no verdict at all); or
         //   * the SCREENING axis — a `critical`/`high` issue count (minors are taste and never appear
         //     here: the schema closes severity at critical/high and the Summary prompts cost wording
@@ -684,7 +716,7 @@ export function openSamplingFailureTask(store: Store, story: Story): Task {
             certified.length === 0
                 ? 'Discard or re-cost the fix tasks if they are what is wrong, widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).'
                 : listed.length === 0
-                  ? 'The work list is ANSWERED, so this is the drafts failing their Readers rather than the tasks being wrong: widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).'
+                  ? 'The work list is ANSWERED, so this is the drafts failing their Critics rather than the tasks being wrong: widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).'
                   : 'Re-cost the outstanding fix tasks if they are what is wrong, widen summary_sampling for another attempt in this wave, or clear this row and the sweep re-arms a fresh wave of samples against the same base draft (§6.4 step 3, T12/E).';
 
         return openEscalationTask(store, story.id, {
@@ -726,7 +758,7 @@ export const FINDING_VERIFY_STALL_PREFIX = 'Phase ① verification undecided for
  *
  * Why the row is `blocked` rather than `open`: an `open` row is dispatchable work, and the crew has
  * nothing left to run — the Story would read `ready` while every path forward was refused, which is
- * the contradiction this pass exists to remove. A `blocked` row is the shape `checker.ts:requestAuthor`
+ * the contradiction this pass exists to remove. A `blocked` row is the shape `reader.ts:requestAuthor`
  * writes for a question, and `status.ts:decideStory` step 4 turns it into the honest "the crew asked
  * you" Author wait (P7, L-36/L-37).
  *
@@ -773,11 +805,11 @@ export function openScreeningExhaustionTask(
     revisionIds: string[]
 ): Task {
     const cap = screeningCapOf(story);
-    const readers = screeningSizeOf(story);
+    const critics = screeningSizeOf(story);
 
     return openEscalationTask(store, story.id, {
         title: `${SCREENING_PARTIAL_PREFIX} ${round} — selection proceeded with partial screening`,
-        detail: `round ${round}: ${revisionIds.join(', ')} reached the ${cap}-attempt screening cap with ${readers}-or-fewer valid reviews each. Selection proceeded with the partial reviews (§6.5); the next round screens its own samples afresh (§6.4 step 4).`,
+        detail: `round ${round}: ${revisionIds.join(', ')} reached the ${cap}-attempt screening cap with ${critics}-or-fewer valid reviews each. Selection proceeded with the partial reviews (§6.5); the next round screens its own samples afresh (§6.4 step 4).`,
         reusePrefix: `${SCREENING_PARTIAL_PREFIX} ${round}`,
         why: `sampling round ${round} selected a sample whose screening was only partial; the provider answer is the Author's to fix (§6.4 step 4)`
     });
@@ -932,10 +964,10 @@ function phase1FixPrerequisites(store: Store, story: Story, summaryRef: string):
  *
  *   1. `draft_groups`  — ONE Writer pass over a batch of groups (a structured, no-tool turn whose
  *                        answer is installed whole by `engine.ts:settleJob`);
- *   2. `review_groups` — one structured Reader pass per seat over the INSTALLED Overview, keyed by the
+ *   2. `review_groups` — one structured Critic pass per seat over the INSTALLED Overview, keyed by the
  *                        group vector, which is the redesign's replacement for screening N candidates;
  *   3. `check_unit`    — the deep cross-group review, the tool-carrying pass that turns what the
- *                        Reader noticed into findings with `group_refs` on them (R3). It stays because
+ *                        Critic noticed into findings with `group_refs` on them (R3). It stays because
  *                        R5 keeps the deep review; only the whole-Summary sampling and the draft
  *                        selection are gone.
  *
@@ -960,14 +992,21 @@ function phase1GroupCandidates(
 
     // -- 1. The Writer batch -------------------------------------------------------------------
     // The batch is the owed set cut three ways, in this order, because each cut is a different rule:
-    //   a. R4 — a group a live Writer already holds is DEFERRED, not cancelled: a batch of
-    //      {premise, tone} with premise live offers {tone}. Two disjoint batches run at once, which is
-    //      the concurrency the redesign exists to buy;
+    //   a. R4 — a group a live Writer already holds is DEFERRED, not cancelled. D-66 changed the SHAPE
+    //      of the deferral: the unit that waits is the FINDING-SET, not the group, so a batch of
+    //      {premise, tone} with premise live offers NOTHING rather than {tone} — a tone-only install
+    //      would bank a partial fix under a claim that says the finding was answered. Two disjoint sets
+    //      still run at once, which is the concurrency the redesign exists to buy;
     //   b. the per-group allowance (`GROUP_WRITE_ATTEMPT_CAP`), measured against each group's own
-    //      current text;
-    //   c. the Author's batch size, read from the SAME dial phase ① always had: `summary_sampling`
-    //      was "how many competing drafts", and for a group book it is "how many groups one pass may
-    //      rewrite". Reusing it keeps one Author-facing knob and no new setting.
+    //      current text — and under D-66 a parked group holds back the whole set it belongs to, because
+    //      the loop cannot answer half a defect;
+    //   c. the Author's batch size, read from the SAME dial phase ① always had: `summary_sampling` was
+    //      "how many competing drafts", and for a group book it is "how many groups one pass may
+    //      rewrite". D-66 makes it a cap BETWEEN finding-sets: it never splits one, so a set larger than
+    //      the dial is dispatched whole. Reusing the dial keeps one Author-facing knob and no new
+    //      setting.
+    // All three live in `phrase/exclusion.ts:planGroupDraftBatch`, because the drain probe
+    // (`groupPipelineOwed`) has to answer with the same rules the queue dispatches (D-62).
     const targets = groupWorkTargets(store, story);
     // R5 keeps phase ①'s gates exactly where they were: the Writer batch does not open until an
     // accepted Seed Brief exists and its research leg is settled. This is the SAME
@@ -977,16 +1016,17 @@ function phase1GroupCandidates(
     const gatesOpen = brief !== undefined && researchGate(store, story, brief) !== 'needed';
 
     if (gatesOpen && targets.length > 0) {
-        const { free } = partitionGroups(store, story.id, targets.map((target) => target.group));
+        const batch = planGroupDraftBatch(store, story, targets);
 
-        if (free.length > 0) {
-            const batchSize = Math.max(1, summarySamplingOf(story));
-            const batch = free.slice(0, batchSize);
-            const batchRefs = batch.map((group) => group.id);
-            const batchIds = new Set(batchRefs);
-            const findingRefs = targets
-                .filter((target) => batchIds.has(target.group.id))
-                .flatMap((target) => target.findingRefs);
+        if (batch.length > 0) {
+            const batchRefs = batch.map((target) => target.group.id);
+            // D-66 put one finding's groups in the same batch, so the ids repeat once per group they
+            // name. They are DEDUPED here because this list is what the install stamps onto EVERY new
+            // revision row's `finding_refs` (`engine.ts` passes `item.findingRefs` straight through to
+            // `installGroupRevisions`, which copies it verbatim): `['finding_0', 'finding_0']` would
+            // claim the same defect twice on one text, and the Author's rail would read two closures
+            // from one fix.
+            const findingRefs = [...new Set(batch.flatMap((target) => target.findingRefs))];
 
             // The claim family is `wi_draft_groups_<summaryRef>_<group-set hash>_<attempt>` (see
             // `phrase/exclusion.ts:GROUP_DRAFT_ITEM_PREFIX` for why the shape is owned there): the
@@ -1007,7 +1047,10 @@ function phase1GroupCandidates(
                 'writer',
                 { kind: 'summary', ref: summaryRef },
                 claimKey(family, attempts + 1),
-                `rewrite ${batch.length} Summary group(s) — ${batch.map((group) => group.key).join(', ')} — in one structured pass (R2, R5)`,
+                // D-66: the ledger line names EVERY group of the batch, which under the atomic rule is
+                // every group of every defect the batch answers — so "the fix was applied" is readable
+                // from the Work Item alone, without re-deriving the finding's group set.
+                `rewrite ${batch.length} Summary group(s) — ${batch.map((target) => target.group.key).join(', ')} — in one structured pass (R2, R5)`,
                 2,
                 {
                     toolMode: 'none',
@@ -1048,10 +1091,10 @@ function phase1GroupCandidates(
     // than N drafts of one text. A restart re-reads the vector from the rows and reproduces the keys.
     const vectorHash = groupVectorHash(groupRevisionVector(store, story.id));
     const hasText = groups.some((group) => group.revision > 0);
-    const readers = summaryReadersOf(story);
+    const critics = summaryCriticsOf(story);
 
     if (hasText) {
-        for (let pass = 1; pass <= readers; pass += 1) {
+        for (let pass = 1; pass <= critics; pass += 1) {
             const key = `wi_review_groups_${vectorHash}_${pass}`;
 
             // One run per seat per vector: `runsForItem` counts CLOSED runs, so a seat that has
@@ -1063,15 +1106,15 @@ function phase1GroupCandidates(
                 store,
                 story,
                 'review_groups',
-                'reader',
+                'critic',
                 { kind: 'summary', ref: summaryRef },
                 key,
-                `Reader ${pass}/${readers} reviews the installed Overview at group vector ${vectorHash} (R3, R5)`,
+                `Critic ${pass}/${critics} reviews the installed Overview at group vector ${vectorHash} (R3, R5)`,
                 2,
                 {
                     toolMode: 'none',
                     responseSchema: { name: GROUP_REVIEW_SCHEMA_NAME, schema: GroupReviewSchema },
-                    // Every group, because the Reader judges the Overview as installed — the batch that
+                    // Every group, because the Critic judges the Overview as installed — the batch that
                     // moved the vector is not the only text it has to read, and a defect that crosses
                     // groups must be able to name every group it crosses.
                     groupRefs: allRefs,
@@ -1079,8 +1122,8 @@ function phase1GroupCandidates(
                     // Again no note: `run/phase1-prompt.ts:compileGroupReviewPrompt` appends
                     // `GROUP_REVIEW_INSTRUCTION` (name the groups, quote the line, grade the fixes), so
                     // the seat's brief and the cache key come from one compiler.
-                    templateRef: 'reader-screening',
-                    roleName: 'reader'
+                    templateRef: 'critic-screening',
+                    roleName: 'critic'
                 },
                 pass - 1
             );
@@ -1089,19 +1132,192 @@ function phase1GroupCandidates(
         }
     }
 
+    // -- 2b. The Reader's score of the REVIEWED Overview (D-65, gated by D-67) --------------------
+    // ONE seat per CLEAN vector, keyed exactly like the review seats above, so a Clean advance re-arms it
+    // by itself and a restart reproduces the key from the rows. The Author asked for the number "immediately
+    // next turn", which sets the two knobs here: it goes out on the FIRST sweep that has a reviewable
+    // Overview, and it is ranked AHEAD of the Critic seats inside the same priority class so the rail has
+    // a score before the review pass that may follow it with findings. It is display work: no findings,
+    // no tasks, no verdicts, and nothing in `loop/**` reads the rows it writes (P6's exception, D-65).
+    //
+    // THE GATE IS THE CLEAN SELECTION, NOT THE INSTALLED TEXT (D-67). The seat used to open the moment all
+    // five groups had text, which put a number on the rail in the same turn the first drafts landed — before
+    // anything had been REJECTED, which is the only evidence the phase has that the Summary says what the
+    // Author meant. So the Reader is armed by `cleanSelectionOf` (D-67): every group must have a Clean
+    // revision, and the hash the seat claims is the CLEAN selection's, not the live vector's. Two readings
+    // follow, and both are the point:
+    //   - a Writer install whose newest revision still has an unresolved defect does NOT re-arm this seat —
+    //     nothing reviewable changed, and a score of unreviewed text is the number the Author asked not to
+    //     be shown; and
+    //   - the seat re-arms the first time the clean selection ADVANCES (a deep pass clears the group, or a
+    //     later clean revision supersedes an older one), because the key is that selection's hash.
+    // The text the Reader is shown is the same selection (`run/phase1-prompt.ts` compiles the prompt from
+    // the rows behind `reviewed.vector_hash`), which is what makes the recorded `vector_hash` true.
+    const reviewed = cleanSelectionOf(store, story);
+
+    if (reviewed.complete) {
+        const key = sectionScoreClaimKey(reviewed.vector_hash);
+
+        // THREE ways this seat is not owed, in the order that costs least:
+        //   1. the hash already has score rows — the judgement exists, and re-reading the same text to
+        //      produce it again is the churn the seat's key was built to stop;
+        //   2. the seat has spent its attempts. D-67 REVERSED the old one-run-per-vector rule: a refusal
+        //      (a provider that cannot answer `SectionScores`) writes no rows, and under the old rule the
+        //      closed run spent the claim, so a vector that was Clean at the moment of one bad answer
+        //      stayed unscored until a Writer happened to rewrite it — a clean book stranded by plumbing.
+        //      A refusal now re-arms, and `SECTION_SCORE_ATTEMPT_CAP` is what stops a permanently broken
+        //      provider from buying a Reader every sweep; and
+        //   3. a live run already holds the key (`candidate`'s `isClaimed` guard below covers this too —
+        //      the closed-run count is the one this branch has to read).
+        const scored = scoredVectorHashes(store, story.id).has(reviewed.vector_hash);
+        const attempts = runsForItem(store, key).filter((run) => !isLiveRun(run)).length;
+
+        if (!scored && attempts < SECTION_SCORE_ATTEMPT_CAP) {
+            const built = candidate(
+                store,
+                story,
+                'score_sections',
+                'reader',
+                { kind: 'summary', ref: summaryRef },
+                key,
+                `Reader scores all ${groups.length} sections of the reviewed Overview at clean vector ${reviewed.vector_hash} (D-65, D-67)`,
+                2,
+                {
+                    toolMode: 'none',
+                    responseSchema: { name: SECTION_SCORES_SCHEMA_NAME, schema: SectionScoresSchema },
+                    // All five, always: the answer must name every group exactly once
+                    // (`phrase/section-scores.ts` refuses an incomplete run), and consistency with the
+                    // OTHER sections is one of the three things each section is judged on.
+                    groupRefs: allRefs,
+                    // The reader's own consistency angle: it is the built-in whose role prompt is about
+                    // the contract chain holding across artifacts, which is what a cross-section score is.
+                    // The scoring rules themselves are engine-owned text (`SECTION_SCORE_INSTRUCTION`), so
+                    // an Author rewriting this template cannot lose the contract.
+                    templateRef: 'reader-consistency',
+                    roleName: 'reader'
+                }
+            );
+
+            if (built !== undefined) {
+                // Ranked BEFORE the priority-2 Critic seats (whose rank is 0), for the reason in the
+                // header: the number is the fastest progress surface the rail has, and the dispatch
+                // tie-break would otherwise sort the alphabetically-earlier review seats first.
+                built.rank = -1;
+                out.push(built);
+            }
+        }
+    }
+
+    // -- 2c. The Editor's judgement: may this section be frozen as finished text? (R3/T6b) --------
+    // One Editor pass per CLEAN section per CLEAN vector, asking one question with one reason: may this
+    // section's current clean text be LOCKED — fixed, from now on, as the consistency evidence every
+    // other section is revised against? It is the crew-side half of `Story.editor_group_locking` (absent
+    // = OFF, and OFF means this loop produces nothing at all: no seat, no run, no lock). The write itself
+    // is not here — it is `phrase/locks.ts:lockPhraseGroup`, called by the settle — and so is every rule
+    // that decides eligibility: `loop/editor-lock.ts:editorLockSeatTargets` folds the Setting, the clean
+    // selection, this section's Reader row, the Writer hold and the already-locked state into ONE pass,
+    // which is also what the prompt renders and what the settle re-runs.
+    //
+    // WHY ONE SEAT PER SECTION AND NOT ONE PER BOOK: a lock is a judgement about ONE section, so a pass
+    // that answers "not yet" for `tone` must not stop `premise` from being frozen, and a pass that freezes
+    // `premise` must not spend `tone`'s turn. The group id is IN the key (`wi_group_lock_<vector>_<group>`)
+    // for that reason, and the vector half of it is what re-arms a decided seat when the Clean selection
+    // ADVANCES — the only event that makes the question worth asking again.
+    //
+    // WHY THIS WORK IS NEVER OWED: the seat is an offer, not a debt. `phrase/exclusion.ts`
+    // `:GROUP_PIPELINE_RUN_PREFIXES` and `:groupPipelineOwed` deliberately do not know this family, so the
+    // drain probe never counts it, sign-off never waits on it, and the hill-climb never reads the flag.
+    // A book where the Editor answers `false` five times — or is never asked, on a Story that left the
+    // Setting off — drains and signs off exactly as it did before R3/T6b. That is why this seat may sit
+    // LAST in its class, below work the pipeline actually owes.
+    for (const evidence of editorLockSeatTargets(store, story)) {
+        const key = groupLockSeatKey(evidence.vector_hash, evidence.group.id);
+
+        // 1. Spent: any run already carries this exact seat key on this Story (see
+        //    `editor-lock.ts:groupLockSeatSpent` for why the read is story-scoped). A CLOSED run retires
+        //    the seat whichever way the answer went — `false` is a decision, not a failure — and only an
+        //    advance of the clean selection brings it back. A LIVE run counts too: the section is already
+        //    being decided, and queueing a second opinion on one freeze is the churn the key exists to stop.
+        if (groupLockSeatSpent(store, evidence)) continue;
+
+        // 2. The text is moving UNDER the seat — and only a DRAFT pass can move it.
+        //    `phrase/exclusion.ts:GROUP_HOLDING_KINDS` is the domain's answer to "which kind can install a
+        //    group" (`draft_groups`, and nothing else), so it is the only family this skip may react to. The
+        //    review, score and deep-check seats all carry EVERY group id in `groupRefs` while installing
+        //    nothing; skipping behind those would let the Critic queue swallow the judgement seat every time
+        //    a vector is owed a review, which is not a rule about locks — it is an accident of the key shape.
+        //    A queued draft over THIS section is a real conflict: the words the Editor would freeze are not
+        //    the words the next clean selection will stand behind, and a lock fixes a REVISION. Skipping is
+        //    not a refusal and spends nothing — the install moves the vector, the key is that vector's hash,
+        //    and the seat re-arms itself against the new one.
+        if (out.some((job) => job.item.kind === 'draft_groups' && job.item.groupRefs?.includes(evidence.group.id) === true)) {
+            continue;
+        }
+
+        const built = candidate(
+            store,
+            story,
+            'group_lock',
+            'editor',
+            { kind: 'summary', ref: summaryRef },
+            key,
+            `Editor judges whether ${evidence.group.key} may be locked as finished text at clean vector ${evidence.vector_hash} (R3)`,
+            2,
+            {
+                // No tools: the seat reads a compiled brief (the clean text, the Reader's rationale, the
+                // live claims, the locked peers) and answers once. An Editor that could call
+                // `phrase_group_lock` here would be a second, unaudited path to the same flag.
+                toolMode: 'none',
+                responseSchema: { name: GROUP_LOCK_SCHEMA_NAME, schema: GroupLockDecisionSchema },
+                // EXACTLY one section — the seat's whole identity. `run/executor.ts` refuses a
+                // `group_lock` item that names more, so a bug here surfaces as a refusal rather than as a
+                // freeze of a section nobody was shown.
+                groupRefs: [evidence.group.id],
+                // The live claims the Editor weighed, so the brief renders the evidence behind each one and
+                // the journal can show which claims this freeze retires (`lockPhraseGroup` closes the open
+                // rows naming this section, exactly as an Author's lock does).
+                findingRefs: evidence.open_claims.map((claim) => claim.id),
+                // The prompt is compiled from its OWN slug (`run/phase1-prompt.ts:GROUP_LOCK_TEMPLATE_SLUG`
+                // → `compileGroupLockPrompt`), so the row names the copy the run was actually shown, and an
+                // Author editing the generic Editor template cannot quietly lose the freeze's rules. The slug
+                // HAS a built-in row: `templates.ts:builtIn('editor-group-lock')` ships the `editor` role
+                // copy and `templates.ts:DEFAULT_ASSIGNMENT` lists it, and
+                // `run/phase1-prompt.ts:rolePromptOf` reads that prompt off the store's templates. The
+                // stated-absence fallback is only for the case §8 allows (the Author deleted the row or
+                // emptied its prompt), and `GROUP_LOCK_INSTRUCTION` carries the binding contract whichever
+                // way the copy resolves (§5, R7).
+                templateRef: GROUP_LOCK_TEMPLATE_SLUG,
+                roleName: 'editor'
+            }
+        );
+
+        if (built !== undefined) {
+            // LAST in the priority-2 class (the Reader's score is -1, the Critic seats 0): the lock is an
+            // adjudication OVER both of those, and when two seats are both eligible in one sweep the
+            // freeze is the one whose absence costs the least — an unlocked section keeps being rewritten,
+            // which is the loop's normal, healthy state.
+            built.rank = 1;
+            out.push(built);
+        }
+    }
+
     // -- 3. The deep cross-group review (§6.4 step 6, R5) -----------------------------------------
     // The tool-carrying pass, offered once the structured seats for this vector have all run: it is
-    // the pass that turns "the Reader noticed something" into a FINDING with `group_refs` on it
-    // (`tools/checker.ts:raiseFinding`), and R3's whole closure rule runs on that attribution.
+    // the pass that turns "the Critic noticed something" into a FINDING with `group_refs` on it
+    // (`tools/reader.ts:raiseFinding`), and R3's whole closure rule runs on that attribution.
     // `revisionRef` is deliberately absent — there is no draft row in this model; the brief carries
     // the composed Overview and the run reads the book with tools (R6's mirror keeps `readSummary`
     // honest).
     if (hasText && phrase !== undefined) {
-        const reviewsFiled = groups.length > 0 && allReviewSeatsRun(store, vectorHash, readers);
+        const reviewsFiled = groups.length > 0 && allReviewSeatsRun(store, vectorHash, critics);
 
         if (reviewsFiled) {
-            for (let pass = 1; pass <= readers; pass += 1) {
-                const key = `wi_group_check_${vectorHash}_${pass}`;
+            for (let pass = 1; pass <= critics; pass += 1) {
+                // Built by `phrase/exclusion.ts:groupCheckSeatKey`, the same builder
+                // `phrase/reviewed.ts:stampCleanRevisions` reads the hash back from
+                // (`groupCheckVectorHashOf`): the Clean verdict is only trustworthy if the seat that
+                // claims a vector and the stamp that records it spell the key the same way.
+                const key = groupCheckSeatKey(vectorHash, pass);
 
                 if (runsForItem(store, key).length > 0) continue;
 
@@ -1111,24 +1327,24 @@ function phase1GroupCandidates(
                     store,
                     story,
                     'check_unit',
-                    'reader',
+                    'critic',
                     { kind: 'summary', ref: summaryRef },
                     key,
-                    `Reader ${pass}/${readers} reviews the group Overview at vector ${vectorHash} against the Seed (R3, R5)`,
+                    `Critic ${pass}/${critics} reviews the group Overview at vector ${vectorHash} against the Seed (R3, R5)`,
                     2,
                     {
                         groupRefs: allRefs,
                         templateRef: template,
-                        roleName: 'reader',
+                        roleName: 'critic',
                         // The group model's deep review (R3/R5): the artifact is the COMPOSED Overview,
                         // there is no draft row to name, and the one thing this pass must do that the
                         // legacy one never had to is say WHICH GROUPS each complaint is about. Without
                         // `group_refs` a finding means "the whole Overview" (the legacy reading) and the
                         // next Writer batch rewrites all five — the exact cost R2 exists to remove.
                         note:
-                            `Reader pass ${pass}/${readers} on the installed group Overview at vector ${vectorHash}. THIS IS THE OVERVIEW, NOT PROSE, and it is composed from the book's Summary groups: ${groups
+                            `Critic pass ${pass}/${critics} on the installed group Overview at vector ${vectorHash}. THIS IS THE OVERVIEW, NOT PROSE, and it is composed from the book's Summary groups: ${groups
                                 .map((group) => group.key)
-                                .join(', ')}. THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the Overview's own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. Word choice, sentence shape and register are taste or minor, because phase ③ writes the sentences. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
+                                .join(', ')}. THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the Overview's own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. Word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
                             "`group_refs` naming every group the defect is about, as the group ids in the brief. " +
                             `A premise contradiction belongs to the premise group; a promise the ending does not keep names both. Cross-group incoherence is the review this pass exists for: judge the groups AGAINST EACH OTHER, not five times in isolation. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict with submitVerdict at target_ref ${summaryRef}; there is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`,
                     },
@@ -1152,7 +1368,7 @@ function phase1GroupCandidates(
  *                          (D-51), so no candidate is generated and sampling is not gated on it.
  *   3. `sample_unit`    — priority 2, ONE job per sweep: the next sample of the in-flight round.
  *   4. `screen_samples` — priority 2, one job per unaided screening pass of a drafted sample.
- *   5. deep review      — priority 2, `check_unit` WITH tools, one pass per Reader on the selected
+ *   5. deep review      — priority 2, `check_unit` WITH tools, one pass per Critic on the selected
  *                          revision of the round that just closed a selection.
  *
  * One job per family per sweep on purpose: the claim key carries the attempt counter, so the
@@ -1266,7 +1482,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
 
     const round = samplingRoundOf(story);
     const size = summarySamplingOf(story);
-    const readers = summaryReadersOf(story);
+    const critics = summaryCriticsOf(story);
 
     // -- 3. Sample (§6.4 step 3) ------------------------------------------------------------------
     // Gated on BOTH gates above, and on the round's arming rule: round 1 samples immediately after
@@ -1366,7 +1582,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     //
     // A screen dispatched after the Editor confirms a new finding mid-round carries the WIDER list,
     // which can reject a draft its Writer never saw that task in. That asymmetry is deliberate and it
-    // fails closed: the round is not allowed to call a defect answered that its own Reader is looking
+    // fails closed: the round is not allowed to call a defect answered that its own Critic is looking
     // at, the rejected candidate simply costs one more attempt of the existing allowance, and the
     // retry's sampling job carries the wider list too (`fixRefs` above). Freezing the screen list to
     // each draft's own sample job would instead let a late-confirmed defect ride past the round
@@ -1393,16 +1609,16 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
         // forever. It is the sample cap's shape (§6.4 step 3), applied to the cheaper pass, and it is
         // read from `records.ts:screeningCapOf` so the dispatch gate and the selection gate
         // (`engine.ts:trySelectSample`, T12/C) measure the same exhaustion.
-        if (screens.length >= readers || attempts >= screeningCapOf(story) || live) continue;
+        if (screens.length >= critics || attempts >= screeningCapOf(story) || live) continue;
 
         const built = candidate(
             store,
             story,
             'screen_samples',
-            'reader',
+            'critic',
             { kind: 'summary', ref: revision.unit_ref },
             claimKey(prefix, attempts + 1),
-            `screen draft ${revision.id} (pass ${screens.length + 1} of ${readers}) — one structured turn, no tools (§6.4 step 4)`,
+            `screen draft ${revision.id} (pass ${screens.length + 1} of ${critics}) — one structured turn, no tools (§6.4 step 4)`,
             2,
             {
                 toolMode: 'none',
@@ -1413,8 +1629,8 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                 // that nothing was asked (`records.ts:sampleFixDemand`) and keeps the round-1 screen
                 // byte-identical to what it was before fix verification existed.
                 fixRefs: (revision.round ?? 1) > 1 || revision.origin === 'refined' ? fixTaskIds : [],
-                templateRef: 'reader-screening',
-                roleName: 'reader'
+                templateRef: 'critic-screening',
+                roleName: 'critic'
             }
         );
 
@@ -1423,7 +1639,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
 
     // -- 5. Deep review (§6.4 step 6) -------------------------------------------------------------
     // The selected revision of the round whose selection just completed gets the real review: a
-    // Reader WITH the tool catalogue, one pass per angle. `wi_review_` is a fresh family, so the
+    // Critic WITH the tool catalogue, one pass per angle. `wi_review_` is a fresh family, so the
     // screening passes (no tools) and the review passes (tools) can never be confused in the ledger.
     const selected = selectedSummaryRevision(store, story.id);
 
@@ -1432,7 +1648,7 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
     // sign-off read, so an Author-selected older-round draft is neither offered passes nor held open by
     // passes it was never owed (the round's `deepReviewRoundOf`, §6.4 step 6).
     if (selected !== undefined && isDeepReviewSelection(story, selected)) {
-        for (let pass = 1; pass <= readers; pass += 1) {
+        for (let pass = 1; pass <= critics; pass += 1) {
             const key = deepReviewKeyOf(selected.id, pass);
 
             if (runsForItem(store, key).length > 0) continue;
@@ -1443,18 +1659,18 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                 store,
                 story,
                 'check_unit',
-                'reader',
+                'critic',
                 { kind: 'summary', ref: selected.unit_ref },
                 key,
-                `Reader ${pass}/${readers} reviews the selected Summary revision ${selected.id} against the Seed (phase ① deep review)`,
+                `Critic ${pass}/${critics} reviews the selected Summary revision ${selected.id} against the Seed (phase ① deep review)`,
                 2,
                 {
                     // The one deep-review job that KEEPS its tools (D-26/D-30): the run may read the
                     // Summary, the Seed and the Knowledge to check a specific doubt.
                     revisionRef: selected.id,
                     templateRef: template,
-                    roleName: 'reader',
-                    note: `Reader pass ${pass}/${readers} on the selected Summary draft ${selected.id}. File TWO verdicts with submitVerdict: the goal verdict at target_ref ${selected.unit_ref} (the Goal’s own row) and the draft\u2019s own line at target_ref ${selected.id} (the crew panel\u2019s row). THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the draft\u2019s own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. A Summary is a set of facts, not prose: word choice, sentence shape and register are taste or minor, because phase ③ writes the sentences. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview; the draft line never replaces the Summary line. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor/taste notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                    roleName: 'critic',
+                    note: `Critic pass ${pass}/${critics} on the selected Summary draft ${selected.id}. File TWO verdicts with submitVerdict: the goal verdict at target_ref ${selected.unit_ref} (the Goal’s own row) and the draft\u2019s own line at target_ref ${selected.id} (the crew panel\u2019s row). THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the draft\u2019s own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. A Summary is a set of facts, not prose: word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview; the draft line never replaces the Summary line. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. A minor Issue and any Proposal are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
                 },
                 pass - 1
             );
@@ -1550,7 +1766,7 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     }
 
     // D-33/D-38: one Editor thread PER finding. A batch of findings made the Editor's brief (and
-    // its reply) grow with every Reader report, which is where a 1M-token thread came from; a
+    // its reply) grow with every Critic report, which is where a 1M-token thread came from; a
     // single finding per Work Item keeps each thread small and its decision auditable.
     //
     // T6/R2c + R2d put two bounds on this queue, both of which the sweep's escalation reads the same
@@ -1593,10 +1809,10 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
             {
                 findingRefs: [finding.id],
                 // T5: the note used to say "confirm it when the defect is real", which told the Editor to
-                // run the defect test on a row that is a PROPOSAL — and an improvement is never "real" in
+                // run the defect test on a row that is a PROPOSAL — and a proposal is never "real" in
                 // that sense, so it came back disputed without anyone weighing it. The note now names both
                 // questions; `run/brief.ts:jobStatement`'s `verify_findings` branch carries the full rule.
-                note: `Verify finding ${finding.id} only. Confirm it when the defect is real or the improvement is worth a pass, approve it in the same run, and dispute it when it is not — no other finding belongs to this thread.`
+                note: `Verify finding ${finding.id} only. Confirm it when the defect is real or the proposal is worth a pass, approve it in the same run, and dispute it when it is not — no other finding belongs to this thread.`
             }
         );
 
@@ -1604,7 +1820,7 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     }
 
     // Phase ①'s independent second look. The Editor's verify/approval is not enough to spend a
-    // Writer round: one Reader thread re-checks each confirmed or approved finding and calls
+    // Writer round: one Critic thread re-checks each confirmed or approved finding and calls
     const verifiable = ideasToVerify(store, story.id, story.phase);
 
     if (verifiable.length > 0) {
@@ -1625,23 +1841,23 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         if (built) out.push(built);
     }
 
-    // -- Checkers: every competing draft, then any unit whose newest draft is unjudged -------------
+    // -- Readers: every competing draft, then any unit whose newest draft is unjudged -------------
     for (const unit of units) {
-        // Phase ①'s review crew is the Readers above; a consistency checker here would be a
-        // third opinion between the Reader and the Editor, which is not the loop the Author set.
+        // Phase ①'s review crew is the Critics above; a consistency reader here would be a
+        // third opinion between the Critic and the Editor, which is not the loop the Author set.
         if (story.phase === 'summary') continue;
 
         // A unit mid-divergence is not worth judging yet: the Editor judges the SET of attempts together
-        // (§6.2a's loop B), so a checker bought for draft 1 of 3 would be re-bought after every sibling
-        // and would starve the drafts that are still owed (they rank below the checker's priority).
+        // (§6.2a's loop B), so a reader bought for draft 1 of 3 would be re-bought after every sibling
+        // and would starve the drafts that are still owed (they rank below the reader's priority).
         if (divergenceGap(store, story, unit.ref, writerAttempts) > 0) continue;
 
-        if (!needsChecker(store, story, unit.ref)) continue;
+        if (!needsReader(store, story, unit.ref)) continue;
 
         // `unitIsChecked` accepts either verdict convention — per-draft verdicts, or unit-level verdicts
         // covering the count, which is what §8.3's `submitVerdict` actually writes because its
         // `target_ref` is the unit. Reading only the per-draft convention here would re-buy the same
-        // checker pass on every sweep for a unit the Editor already has enough to choose between.
+        // reader pass on every sweep for a unit the Editor already has enough to choose between.
         if (unitIsChecked(store, story.id, unit.ref)) continue;
 
         const competing = competingRevisions(store, story.id, unit.ref);
@@ -1652,7 +1868,7 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
         // (`globalMaxConcurrent`, and the rig runs 1), and §8.3's `submitVerdict` files its verdict
         // against the UNIT because `target_ref` is the unit (brief.ts / tools/editor.ts) — so no draft is
         // ever recorded as "already read", and the first competing draft wins every sweep. Measured: with
-        // `attempts: 3`, three checker passes ran and all three were aimed at `revision_1`, while
+        // `attempts: 3`, three reader passes ran and all three were aimed at `revision_1`, while
         // `revision_2` and `revision_3` sat deferred and unread. Rotating by the generation (which is the
         // dispatch count, so this stays store-derived and survives a restart, L-3) puts each owed draft
         // first exactly once per cycle, and the siblings stay in the list for a higher ceiling to take.
@@ -1673,17 +1889,17 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
                 store,
                 story,
                 'check_unit',
-                'checker',
+                'reader',
                 unit.ref === '' ? wholeStoryUnit(ctx.phase) : { kind: unit.kind, ref: unit.ref },
                 claimKey(prefix, generation, revision?.id ?? 'unit'),
                 revision === undefined
                     ? `judge ${label(unit)} against the phase Goal (P4)`
                     : `judge draft ${revision.id} of ${label(unit)} (§6.2a: verdicts per revision)`,
                 2,
-                // The checker brief renders the UNIT, not a competing draft (brief.ts:672 shows draft
+                // The reader brief renders the UNIT, not a competing draft (brief.ts:672 shows draft
                 // bodies for `select`/`merge` only), so the draft this run is told to judge is named
                 // in the job line the sweep writes. `listRevisions` is in every session's catalogue
-                // (§8.2), which is how a checker reads the draft itself when the brief does not carry
+                // (§8.2), which is how a reader reads the draft itself when the brief does not carry
                 // it. This is the one place the loop reaches around the brief, and it is a tool-layer
                 // gap worth reporting rather than a loop bug.
                 revision === undefined
@@ -1896,7 +2112,7 @@ function fixWork(
     for (const finding of actionableFindings(store, story)) {
         // Phase ① never reaches this function any more (its Writer work is `sample_unit`, and the
         // deep review's findings arm a ROUND rather than a `wi_fix_*` pass), so the classic
-        // `reader_confirmed` wait is gone with the per-finding confirmation thread (§6.4 step 6).
+        // `critic_confirmed` wait is gone with the per-finding confirmation thread (§6.4 step 6).
         const task = openTasks(store, story.id).find((row) => row.finding_ref === finding.id);
 
         // A whole-book defect is filed against the STORY row, because that is what the whole-level
@@ -1999,7 +2215,7 @@ function unitRefInTask(task: Task): string {
 }
 
 /**
- * The whole-Story checker (§6.2's C-10/C-11/C-13 level, §5.2's `whole` level).
+ * The whole-Story reader (§6.2's C-10/C-11/C-13 level, §5.2's `whole` level).
  *
  * It runs only once every chapter has been judged, because pacing and promise-payment are
  * unanswerable against a half-written book — and because an early whole-Story pass would file findings
@@ -2024,7 +2240,7 @@ function wholeStoryCandidate(store: Store, story: Story, phase: StoryPhase): Wor
     const generation = dispatchCount(store, prefix) + 1;
 
     // Cheap idempotence: skip when the newest whole-Story verdict post-dates every chapter verdict.
-    // Only the pass's OWN verdicts count (records.ts:wholeStoryVerdicts) — a per-unit checker also
+    // Only the pass's OWN verdicts count (records.ts:wholeStoryVerdicts) — a per-unit reader also
     // files a Story-targeted line, and reading that as the pass would either stop it forever or, once
     // the Story row passes nine verdicts, let it re-arm on every sweep (ids collate `verdict_8` above
     // `verdict_9`, so the comparison goes through the journal: records.ts:createdAfter).
@@ -2040,7 +2256,7 @@ function wholeStoryCandidate(store: Store, story: Story, phase: StoryPhase): Wor
         store,
         story,
         'whole_story_check',
-        'checker',
+        'reader',
         { kind: 'chapter', ref: story.id },
         claimKey(prefix, generation, signature.slice(0, 40)),
         `judge the whole Story at the chapters→whole level once every chapter has been judged (§5.2, C-10/C-11/C-13)`,
@@ -2049,7 +2265,7 @@ function wholeStoryCandidate(store: Store, story: Story, phase: StoryPhase): Wor
 }
 
 /**
- * The drain probe's two jobs (L-37's condition 3, D-35b): one Reader round and one checker pass, and
+ * The drain probe's two jobs (L-37's condition 3, D-35b): one Critic round and one reader pass, and
  * nothing else — the round exists to answer "is there anything left at the threshold?", so spawning
  * drafts alongside it would put work in flight that the round is meant to rule out.
  *
@@ -2065,9 +2281,9 @@ function probeCandidates(
 ): WorkCandidate[] {
     const loop = story as import('./types').LoopStory;
 
-    // A round that has STARTED must finish. L-37's condition 3 is one Reader round PLUS one checker
+    // A round that has STARTED must finish. L-37's condition 3 is one Critic round PLUS one reader
     // pass, and the second half is still owed when the first half came back with something: the
-    // checker filing a finding breaks the preconditions (an unconfirmed finding is work), and a gate
+    // reader filing a finding breaks the preconditions (an unconfirmed finding is work), and a gate
     // applied to FINISHING a round would leave it `running` forever — which reads as "the round is
     // still in flight", so the Story never drains and never stalls. The gates below decide whether a
     // round may START (L-37's "single full pass" over a Story with nothing queued), never whether it
@@ -2086,33 +2302,33 @@ function probeCandidates(
     if (probeIsLive(story, phase, dialKeyOf(story), true)) return [];
 
     // A round already in flight still has work to hand out: capacity 1 means the sweep dispatches one
-    // job per sweep, so the Reader must survive the sweep that started the Checker. What must NOT
+    // job per sweep, so the Critic must survive the sweep that started the Reader. What must NOT
     // happen is the same job offered twice, so a probe job is offered only while it has never run —
     // unlike every other job kind, its "is it still needed?" answer cannot come from the artifact state,
     // because a clean round deliberately changes nothing (L-37). `round` only moves at the boundary
-    // where the round is judged, so the pair is exactly one Reader round plus one Checker pass.
+    // where the round is judged, so the pair is exactly one Critic round plus one Reader pass.
     const round = (loop.round ?? 0) + 1;
     const out: WorkCandidate[] = [];
 
-    // THE PAIR'S CLAIM KEYS. Each half counts its OWN prefix (`wi_probe_reader_chapters_1`, `_2`, …),
+    // THE PAIR'S CLAIM KEYS. Each half counts its OWN prefix (`wi_probe_critic_chapters_1`, `_2`, …),
     // and while a round is running the half already recorded on `ProbeState` keeps its id. The counter
     // is deliberately NOT `story.round`: L-15's round counter also moves on work cycles that are not
     // probe rounds (see engine.ts), and a key that moved mid-round would orphan the id the round was
     // stored with — which is exactly what L-37.3 reads to decide when a round is over.
-    const next = (kind: 'reader' | 'checker') =>
+    const next = (kind: 'critic' | 'reader') =>
         `wi_probe_${kind}_${phase}_${dispatchCount(store, `wi_probe_${kind}_${phase}`) + 1}`;
     const keys = {
-        reader: (started ? loop.probe?.reader_item_id : null) ?? next('reader'),
-        checker: (started ? loop.probe?.checker_item_id : null) ?? next('checker')
+        critic: (started ? loop.probe?.critic_item_id : null) ?? next('critic'),
+        reader: (started ? loop.probe?.reader_item_id : null) ?? next('reader')
     };
 
-    const reader = candidate(
+    const critic = candidate(
         store,
         story,
         'write_unit',
-        'reader',
+        'critic',
         phase === 'chapters' ? undefined : wholeStoryUnit(phase),
-        keys.reader,
+        keys.critic,
         `fresh reading round ${round}: propose what is still wrong at the dial threshold (L-37, D-30)`,
         4,
         {
@@ -2120,13 +2336,13 @@ function probeCandidates(
         }
     );
 
-    const checker = candidate(
+    const reader = candidate(
         store,
         story,
         'check_unit',
-        'checker',
+        'reader',
         phase === 'chapters' ? undefined : wholeStoryUnit(phase),
-        keys.checker,
+        keys.reader,
         `drain probe round ${round}: one consistency pass at the dial threshold (L-37, D-35b)`,
         4,
         {
@@ -2135,10 +2351,10 @@ function probeCandidates(
     );
 
     // `candidate` returns undefined when the role's template cannot be resolved (a Story assigned a
-    // reader template that no longer exists), and the round must not be recorded against a job that can
+    // critic template that no longer exists), and the round must not be recorded against a job that can
     // never run — that is how a probe would hang `running` forever (L-37.3).
+    if (critic !== undefined && runsForItem(store, keys.critic).length === 0) out.push(critic);
     if (reader !== undefined && runsForItem(store, keys.reader).length === 0) out.push(reader);
-    if (checker !== undefined && runsForItem(store, keys.checker).length === 0) out.push(checker);
 
     return out;
 }

@@ -335,8 +335,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
             storyId: story.id,
             phase: 'chapters',
             label: 'run_0',
-            roleName: 'checker',
-            roleKind: 'checker',
+            roleName: 'reader',
+            roleKind: 'reader',
             model: 'mock',
             system: 'BRIEF',
             kickoff: 'check',
@@ -349,7 +349,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         // The provider's OpenAI schema nests name/arguments under `function`; the engine keeps
         // them flat. A second turn with the flat form is a 400 on a strict provider ("Invalid
-        // value for `[0].function`: Field required"), which is the Checker's repeating fault.
+        // value for `[0].function`: Field required"), which is the Reader's repeating fault.
         const assistant = requests[1]?.messages.find((message) => message.role === 'assistant') as
             | (ChatMessage & { tool_calls?: unknown[] })
             | undefined;
@@ -376,7 +376,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
             {
                 story_id: story.id,
                 work_item_ref: 'wi_check_chapters_1',
-                role: 'checker',
+                role: 'reader',
                 state: 'failed',
                 started_at: '2026-11-22T10:00:00.000Z',
                 ended_at: '2026-11-22T10:00:01.000Z',
@@ -393,7 +393,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         expect(rows.every((row) => row.rank === 'A')).toBe(true);
         // The five employees, in roster order: §7.3 appends the Researcher to the catalogue.
-        expect(rows.map((row) => row.kind)).toEqual(['writer', 'editor', 'reader', 'checker', 'researcher']);
+        expect(rows.map((row) => row.kind)).toEqual(['writer', 'editor', 'critic', 'reader', 'researcher']);
         // V-1: an entry point is engine routing, not a roster role the dashboard draws.
         expect(rows.map((row) => (row as { entry?: boolean }).entry)).toEqual([
             undefined,
@@ -403,17 +403,17 @@ describe('StoryHarnessManager — one harness per Story', () => {
             undefined
         ]);
 
-        const checker = rows.find((row) => row.kind === 'checker');
+        const reader = rows.find((row) => row.kind === 'reader');
 
-        expect(checker?.recent).toHaveLength(1);
-        expect(checker?.recent[0]).toMatchObject({
+        expect(reader?.recent).toHaveLength(1);
+        expect(reader?.recent[0]).toMatchObject({
             run_id: 'run_0',
             story_title: 'Hollow Sea',
             work_item: 'wi_check_chapters_1',
             state: 'failed',
             no_op: true
         });
-        expect(checker?.recent[0]?.end_reason).toContain('Invalid value for `[0].function`');
+        expect(reader?.recent[0]?.end_reason).toContain('Invalid value for `[0].function`');
 
         manager.dispose();
     });
@@ -468,8 +468,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
         expect(rows.filter((row) => row.kind !== 'writer').map((row) => [row.kind, row.status, row.working.length])).toEqual(
             [
                 ['editor', 'idle', 0],
+                ['critic', 'idle', 0],
                 ['reader', 'idle', 0],
-                ['checker', 'idle', 0],
                 ['researcher', 'idle', 0]
             ]
         );
@@ -667,7 +667,7 @@ describe('StoryHarnessManager — one harness per Story', () => {
         manager.forStory(story.id);
 
         expect(Object.keys(built?.agents ?? {}).sort()).toEqual([
-            'checker',
+            'critic',
             'editor',
             'reader',
             'researcher',
@@ -676,8 +676,8 @@ describe('StoryHarnessManager — one harness per Story', () => {
         expect(built?.ranks).toEqual({
             writer: 'A',
             editor: 'A',
+            critic: 'A',
             reader: 'A',
-            checker: 'A',
             // V-2: the Researcher must be Rank A, or its `research` Work Item could not be owned.
             researcher: 'A'
         });

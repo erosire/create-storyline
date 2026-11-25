@@ -43,6 +43,11 @@ import {
     // H2/R1: the round's closure closes the fix rows the WRITER owns. `openFixTasks` used to mean
     // "every open fix row", which is what let a Researcher prerequisite be closed by a passing draft.
     openPrerequisiteFixTasks,
+    // D-33d: the issues-first gate. BOTH approval funnels read this one predicate — the dial's
+    // auto-approve sweep and `approveFinding` here — so neither can approve a `proposal` over an
+    // unresolved defect while `tools/editor.ts:approveFinding` refuses the same call (D-33c's
+    // filing-side rule is the third reader of it, in `tools/reader.ts`).
+    openIssueFindings,
     openUnserviceableFixTasks,
     openWriterFixTasks,
     pendingProposals,
@@ -133,10 +138,28 @@ import {
     isGroupManagedStory,
     parseGroupDraftAnswer,
     parseGroupReviewAnswer,
+    // READER SCORING (D-65): the answer validator (refuses an incomplete run whole) and the claim-key
+    // read that stamps the rows with the vector the pass was dispatched against.
+    parseSectionScoreAnswer,
+    sectionScoreVectorHashOf,
+    // SUMMARY PHRASE D-67: the Clean stamp a closed cross-group pass leaves behind, and the seat-family
+    // reader that decides which `check_unit` close may stamp at all.
+    groupCheckVectorHashOf,
+    stampCleanRevisions,
     // HARDENING (D-25a group reset): the Seed edit resets these rows too — see `editSeed`.
     phraseGroupsOf,
+    // GROUP LOCK (R3/T6b): the domain operation the Editor's judgement seat ends with, and the refusal
+    // type its settle catches (`phrase/locks.ts` — the WRITE stays there, the JUDGEMENT is in
+    // `loop/editor-lock.ts`). The refusal is thrown before any write and rolls its commit back, so
+    // catching it here means "the state moved while the Editor deliberated: nothing happened".
+    lockPhraseGroup,
+    isPhraseLockRefusal,
     storyPhrase
 } from '../phrase';
+// R3/T6b — the Editor's lock seat: the answer validator (contract-only, result union like the group
+// passes) and the settle guard (the domain state re-read inside the commit). Both live in one module so
+// the generator, the prompt compiler and the settle cannot disagree about what is lockable.
+import { editorLockMayLock, parseGroupLockAnswer } from './editor-lock';
 import {
     applySectionEdit,
     createFixTask,
@@ -498,10 +521,27 @@ export class LoopEngine implements EngineApi {
         await store.commit('loop_auto_approve', () => {
             const ids: string[] = [];
 
+            // D-33d — issues are in focus before anything else can be approved, INCLUDING the dial.
+            // Read ONCE for the sweep, from the same predicate every other funnel uses
+            // (`records.ts:openIssueFindings`), so the dial cannot approve into work what the Editor's
+            // `approveFinding` refuses to approve and the Critic's tool refuses to file (D-33c).
+            //
+            // A dial that skipped this spent Writer rounds on suggestions while confirmed defects sat
+            // in the queue: the sweep approved whatever cost the dial covered, kind-blind, and a
+            // `proposal` at `major` looked exactly like an `issue` at `major` from here.
+            const openIssues = openIssueFindings(store, story.id);
+
             for (const finding of storyFindings(store, story.id)) {
                 if (finding.state !== 'confirmed') continue;
+                // D-33d: a PROPOSAL waits for the issues, and a skip is the right shape here rather than
+                // a throw — this loop is one commit over every confirmed row of the Story, and a refusal
+                // on one proposal would abort the sweep and strand the ISSUES that are the very work the
+                // rule wants done first. The row stays `confirmed` (nothing is lost), the Author still
+                // sees it in the queue, and the next sweep approves it the moment the last issue closes.
+                // `auto_approved` reports what the sweep DID, so a skipped row is simply absent from it.
+                if (finding.kind === 'proposal' && openIssues.length > 0) continue;
                 // Phase ①'s bar is the deep review: the Editor's verification of a tool-using
-                // Reader's finding IS the acceptance that arms the next sampling round, and only the
+                // Critic's finding IS the acceptance that arms the next sampling round, and only the
                 // blocking costs travel back — a taste note is recorded, never a Writer round (D-30,
                 // D-34). Which costs block is ONE predicate (`records.ts:isBlockingCost`), read the same
                 // way by the Editor's `approveFinding`, the arming rule, the sign-off and the drain:
@@ -933,13 +973,13 @@ export class LoopEngine implements EngineApi {
         if (
             probe === undefined ||
             probe.status !== 'running' ||
-            probe.reader_item_id === null ||
-            probe.checker_item_id === null
+            probe.critic_item_id === null ||
+            probe.reader_item_id === null
         ) {
             return { story, judged: false };
         }
 
-        const stillRunning = [probe.reader_item_id, probe.checker_item_id].some((id) =>
+        const stillRunning = [probe.critic_item_id, probe.reader_item_id].some((id) =>
             runsForItem(store, id).some(isLiveRun)
         );
 
@@ -1094,13 +1134,13 @@ export class LoopEngine implements EngineApi {
             // L-5: two loops must not EDIT the same artifact at once. Any live job already naming
             // this unit holds it, so the second one waits for the lease rather than racing the
             // compare-and-swap. Phase ①'s three non-editing kinds are the exception:
-            //   * a `check_unit` reader pass only reads its draft and writes findings/verdicts;
+            //   * a `check_unit` critic pass only reads its draft and writes findings/verdicts;
             //   * a `sample_unit` run writes NOTHING (the engine persists its answer, §2 decision 2);
             //   * a `screen_samples` run writes nothing either (its review row is the engine's).
             // Every one of them names the same Summary unit, so without this exception a wider
             // capacity would serialize the whole sampling round behind its first sample.
             const unitRef = entry.candidate.item.unit?.ref;
-            const readerPass = entry.candidate.item.kind === 'check_unit' && entry.candidate.item.roleName === 'reader';
+            const criticPass = entry.candidate.item.kind === 'check_unit' && entry.candidate.item.roleName === 'critic';
             // SUMMARY PHRASE: `draft_groups` and `review_groups` join the non-editing exception (R4 —
             // disjoint group batches run CONCURRENTLY, and N reviewers read one Overview at once). A
             // group pass never races a group pass on the same GROUP: that is excluded from persisted Run
@@ -1110,9 +1150,21 @@ export class LoopEngine implements EngineApi {
                 entry.candidate.item.kind === 'sample_unit' ||
                 entry.candidate.item.kind === 'screen_samples' ||
                 entry.candidate.item.kind === 'draft_groups' ||
-                entry.candidate.item.kind === 'review_groups';
+                entry.candidate.item.kind === 'review_groups' ||
+                // READER SCORING (D-65): a scoring pass names the Summary unit and writes no artifact at
+                // all — only `summary_scores` rows — so it neither races an editor nor may be queued
+                // behind one. Same argument as the two group passes above.
+                entry.candidate.item.kind === 'score_sections' ||
+                // GROUP LOCK (R3/T6b): a judgement seat names the Summary unit and the ONE section it may
+                // freeze, and the only row it writes is that section's lock flag. It writes no text, so it
+                // cannot race an editing run over the Summary; and N seats on one clean vector (one per
+                // section) are the point of the feature, so they must be dispatchable together. What keeps
+                // two passes from freezing the same group is NOT the unit id — it is the guard
+                // (`editor-lock.ts:editorLockGuardReason`, "already locked at revision …") and
+                // `locks.ts:lockPhraseGroup`'s own `already_locked` refusal, both re-read in the commit.
+                entry.candidate.item.kind === 'group_lock';
 
-            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !readerPass && !structuredPass) {
+            if (unitRef !== undefined && unitRef.length > 0 && unitRef !== entry.story.id && !criticPass && !structuredPass) {
                 const busy = liveRuns(store, entry.story.id).some((run) => (run.work_item_ref ?? '').includes(unitRef));
 
                 if (busy) continue;
@@ -1185,7 +1237,7 @@ export class LoopEngine implements EngineApi {
             store.chapters.update(
                 chapter.id,
                 { state: 'in_review' },
-                { run_ref: null, why: `a checker is on chapter ${chapter.order} (§6.2's review crew)` },
+                { run_ref: null, why: `a reader is on chapter ${chapter.order} (§6.2's review crew)` },
                 [{ id: chapter.id, rev: chapter.rev }]
             );
         }
@@ -1208,7 +1260,7 @@ export class LoopEngine implements EngineApi {
      *     counts the attempt.
      *   * a fix job's findings — a `write_unit` job that NAMED findings (`wi_fix_*`) is the D-34 fix pass,
      *     and completing it is what makes the defect `fixed`. The fingerprint ledger then reads the
-     *     closure (L-16a); if the defect is actually still there, the next checker round re-files the same
+     *     closure (L-16a); if the defect is actually still there, the next reader round re-files the same
      *     fingerprint and L-16a reads that as a regression rather than trusting this write.
      *
      * A `verify_findings` job is deliberately absent from the finding branch: there the Editor's
@@ -1258,6 +1310,35 @@ export class LoopEngine implements EngineApi {
             item.kind === 'review_groups' && closed && result.structured !== undefined
                 ? parseGroupReviewAnswer(store, item.storyId, result.structured)
                 : undefined;
+        // ---------------------------------------------------------------------
+        // READER SCORING (D-65) — the section-score answer, parsed BEFORE the commit for the same
+        // reason the two group passes above are: the validator is a pure read, so a half answer or an
+        // invented `group_ref` writes NOTHING rather than three rows of a five-section Summary.
+        //
+        // This is the whole state change the kind makes. A scoring pass files no finding, opens no task,
+        // submits no verdict and touches no counter, so the only thing that can come out of it is the
+        // five `summary_scores` rows below — which is what keeps P6 and G-2 intact: no score reaches the
+        // criteria engine, the drain probe, the hill-climb or the sign-off gate.
+        const sectionScores =
+            item.kind === 'score_sections' && closed && result.structured !== undefined
+                ? parseSectionScoreAnswer(store, item.storyId, result.structured)
+                : undefined;
+        // ---------------------------------------------------------------------
+        // GROUP LOCK (R3/T6b) — the Editor's judgement, parsed BEFORE the commit for the same reason the
+        // three passes above are: `parseGroupLockAnswer` is a pure read, so an answer that names a section
+        // this seat was never shown, or gives no reason, writes NOTHING.
+        //
+        // THE SPLIT IS NOT ARBITRARY. This call answers only "is this a decision about the section the
+        // seat was claimed for, and did the Editor give a reason?" — the contract
+        // (`shared/schemas/group-lock.ts`) plus the seat's own identity, which the in-process validator
+        // cannot see. Whether the book still allows the freeze (Setting, vector, clean revision, Writer
+        // hold, unlocked) is answered a second later INSIDE the commit by
+        // `editor-lock.ts:editorLockGuardReason`, because that state can move while an Editor thread sits
+        // in the queue. Contract first, state second, one sentence each.
+        const groupLock =
+            item.kind === 'group_lock' && closed && result.structured !== undefined
+                ? parseGroupLockAnswer(store, item.storyId, item.groupRefs?.[0] ?? '', result.structured)
+                : undefined;
         // The sentence a HELD task reports, so the row says what it is waiting for instead of going
         // quietly. Computed once: an invalid answer and a refused batch are different refusals, and the
         // Author reads this string in the task's history.
@@ -1265,7 +1346,7 @@ export class LoopEngine implements EngineApi {
             groupDraft !== undefined && !groupDraft.ok
                 ? `its Writer answer was refused whole (${groupDraft.refusal})`
                 : groupReview !== undefined && !groupReview.ok
-                  ? `its Reader answer was refused whole (${groupReview.refusal})`
+                  ? `its Critic answer was refused whole (${groupReview.refusal})`
                   : closed
                     ? 'a revision was written, but the evidence that closes the row is the FINDING being resolved group by group (R3)'
                     : `run ${result.runId} ended ${result.ended}`;
@@ -1343,8 +1424,8 @@ export class LoopEngine implements EngineApi {
             // it. The run is closed now, so the draft is either complete enough to review
             // (`drafted`) or it stays `pending` for `reconcileDrafts`/a later Writer pass. PHASE ①'s
             // `write_unit` no longer exists (its samples are persisted `drafted` by the branch
-            // below), so this gate serves phases ②/③ only. Only `drafted` rows reach Readers,
-            // Checkers and the Editor — a reviewer never reads a half-written artifact.
+            // below), so this gate serves phases ②/③ only. Only `drafted` rows reach Critics,
+            // Readers and the Editor — a reviewer never reads a half-written artifact.
             if (item.kind === 'write_unit') {
                 // The run's own draft (`run_ref`) or the draft its unit names: a completion run
                 // extends an older `pending` row, so it keeps that row's original `run_ref` while
@@ -1416,7 +1497,7 @@ export class LoopEngine implements EngineApi {
                     {
                         story_id: item.storyId,
                         revision_ref: item.revisionRef,
-                        reader: item.roleName,
+                        critic: item.roleName,
                         issues: persistedScreens.issues ?? [],
                         valid: true,
                         fix_refs: [...(item.fixRefs ?? [])],
@@ -1528,11 +1609,11 @@ export class LoopEngine implements EngineApi {
             }
 
             // -----------------------------------------------------------------
-            // SUMMARY PHRASE R3/R5 — the group review's answer. A structured Reader pass has no tools, so
+            // SUMMARY PHRASE R3/R5 — the group review's answer. A structured Critic pass has no tools, so
             // its product is the review ROW, exactly as a legacy screen's was; the difference is that the
-            // artifact in front of the Reader is the INSTALLED Overview (there is no draft set to rank),
+            // artifact in front of the Critic is the INSTALLED Overview (there is no draft set to rank),
             // so `revision_ref` names the Phrase row rather than a Summary revision. Each issue carries
-            // the `group_refs` the Reader was shown, which is what makes a later finding attributable to
+            // the `group_refs` the Critic was shown, which is what makes a later finding attributable to
             // the groups it is actually about.
             if (groupReview !== undefined && groupReview.ok) {
                 const phrase = storyPhrase(store, item.storyId);
@@ -1541,7 +1622,7 @@ export class LoopEngine implements EngineApi {
                     {
                         story_id: item.storyId,
                         revision_ref: phrase?.id ?? (item.groupRefs ?? [])[0] ?? item.storyId,
-                        reader: item.roleName,
+                        critic: item.roleName,
                         issues: groupReview.review.issues ?? [],
                         valid: true,
                         fix_refs: [...(item.fixRefs ?? [])],
@@ -1553,6 +1634,132 @@ export class LoopEngine implements EngineApi {
                         `run ${result.runId} answered with a schema-valid GroupReview over ${item.groupRefs?.length ?? 0} group(s); the engine persisted it as a review of the installed Overview (§2 decision 2, R3, R5)`
                     )
                 );
+            }
+
+            // -----------------------------------------------------------------
+            // SUMMARY PHRASE D-67 — the CLEAN STAMP, in the same commit that closes the deep pass.
+            //
+            // WHY THIS SEAT AND THIS MOMENT: `check_unit` under a `wi_group_check_<vectorHash>_<pass>`
+            // claim is the group model's tool-carrying cross-group Critic (§6.4 step 6, R5) — the only
+            // group-model review that files real Findings, through `tools/reader.ts:raiseFinding`. Its
+            // close is therefore the first instant at which "this Critic read this combination of five
+            // texts and found no defect on this group" is a fact the book can show, and the finding
+            // rows it filed are already committed (a tool writes in its own commit, before the settle).
+            // The tool-less `review_groups` seat is NOT a stamper: its answer is a list of notes, and
+            // reading "no note" as a clean verdict would certify text nothing ever tried to break.
+            //
+            // WHY IN THIS COMMIT: the stamp is the pass's product. Writing it after the commit would let
+            // a crash between the two leave a closed review that reported nothing, and the seat's claim
+            // key is spent (`runsForItem` counts closed runs), so the vector would never be reviewable
+            // again. One commit means a restart either sees the verdict or owes the pass.
+            //
+            // `phrase/reviewed.ts:stampCleanRevisions` owns the rules (per-group open-issue check, the
+            // vector-moved guard, idempotence); this call site only decides WHICH run's close counts,
+            // and it reads the seat family off the claim key so a legacy `'sampling'` deep review
+            // (`wi_review_<revision>_a<pass>`, §16) stamps nothing — the hash reader answers `''`.
+            if (item.kind === 'check_unit' && closed && groupCheckVectorHashOf(item.id) !== '') {
+                const stampedFor = requireStory(store, item.storyId);
+
+                if (isGroupManagedStory(stampedFor)) {
+                    stampCleanRevisions(
+                        store,
+                        stampedFor,
+                        { seatKey: item.id, runRef: result.runId },
+                        loopAttr(
+                            `run ${result.runId} closed the cross-group review claimed on ${item.id}; every group of that vector whose read came back with no unresolved defect is stamped Clean (D-67)`
+                        )
+                    );
+                }
+            }
+
+            // -----------------------------------------------------------------
+            // READER SCORING (D-65) — the five rows, in THIS ONE commit.
+            //
+            // ONE COMMIT, NOT FIVE, because the rail reads the set: a partial write would show a Summary
+            // with four scores and a missing section, which is the exact state the parse exists to refuse.
+            // Nothing else moves here — no verdict, no task, no finding, no counter. A refused answer
+            // writes NO rows and its closed run spends the claim (`loop/work.ts:runsForItem` counts CLOSED
+            // runs whatever the outcome), so that vector stays unscored until the next install re-arms it.
+            //
+            // `vector_hash` comes off the CLAIM KEY, not from the rows read now: the score describes the
+            // Overview the Reader was shown, and a Writer install during the pass would otherwise re-stamp
+            // an old judgement onto a new book (`phrase/exclusion.ts:sectionScoreVectorHashOf`).
+            if (sectionScores !== undefined && sectionScores.ok) {
+                const phrase = storyPhrase(store, item.storyId);
+                const vectorHash = sectionScoreVectorHashOf(item.id);
+
+                for (const scored of sectionScores.scores) {
+                    store.summaryScores.create(
+                        {
+                            story_id: item.storyId,
+                            phrase_id: phrase?.id ?? scored.group.phrase_id,
+                            vector_hash: vectorHash,
+                            group_id: scored.group.id,
+                            group_key: scored.group.key,
+                            score: scored.score,
+                            rationale: scored.rationale,
+                            evidence: scored.evidence,
+                            run_ref: result.runId,
+                            work_item_ref: item.id
+                        },
+                        loopAttr(
+                            `run ${result.runId} scored ${scored.group.key} ${scored.score}/100 at vector ${vectorHash}; the engine persisted the Reader's answer (D-65, display-only)`
+                        )
+                    );
+                }
+            }
+
+            // -----------------------------------------------------------------
+            // GROUP LOCK (R3/T6b) — the Editor's freeze, applied in THIS ONE commit.
+            //
+            // WHAT MOVES: exactly one row — the section's `locked` / `locked_revision` / `locked_by` /
+            // `locked_at` — plus the open-claim closure `phrase/locks.ts` performs when a lock retires the
+            // claims that asked for this text to change. No verdict, no task, no counter, no draft, no
+            // finding: the seat is a judgement, and the flag it leaves is the whole product. That is what
+            // keeps P6 and G-2 intact: the lock is not a criterion signal, and it never enters the drain
+            // probe, the sign-off gate or the hill-climb.
+            //
+            // WHY THE GUARD IS RE-RUN HERE, one line above the write: `item` was queued whenever the
+            // generator ran, and an Editor pass is a thread that may sit in the queue for a whole capacity
+            // window. In that window the Author may flip `editor_group_locking` off, lock or rewrite the
+            // section by hand, or have a Writer install land under the pass — and a lock fixes a REVISION,
+            // so executing a judgement about a book that no longer exists would freeze words nobody judged.
+            // The guard is the cheap, sentence-returning half; `lockPhraseGroup` re-checks the same state
+            // and throws `PhraseLockRefusal` before writing, so the pair cannot leave a half-applied lock.
+            //
+            // WHY EVERY REFUSAL WRITES NOTHING AND CORRUPTS NOTHING: the answer was refused (a contract
+            // problem), the guard refused (the state moved), or the domain refused (its own CAS sees a
+            // newer row). None of them throws out of the settle: the run is already CLOSED, so the seat's
+            // one-per-vector claim is spent and the section simply stays unlocked — the generator re-arms a
+            // seat for the NEXT clean selection, because the key IS that selection's hash. The record is
+            // the Run row itself (its persisted answer carries `lock` and the rationale), exactly as a
+            // refused score row is recorded by the pass that asked for it (D-65's rule).
+            if (groupLock !== undefined && groupLock.ok && groupLock.decision.lock) {
+                const locking = requireStory(store, item.storyId);
+                const refused = editorLockMayLock(store, locking, item.id, groupLock.decision);
+
+                if (refused === undefined) {
+                    try {
+                        // `phrase/locks.ts` takes the ATTRIBUTION and the ACTOR separately (the attribution
+                        // is the journal sentence the Author reads, the actor is who the flag records), and
+                        // it re-validates the whole state itself before writing — which is why the guard
+                        // above is a fast, sentence-returning read rather than the enforcement.
+                        lockPhraseGroup(
+                            store,
+                            locking,
+                            groupLock.decision.group_ref,
+                            // D-15/§4.17: the journal line carries the Editor's own reason first, so the
+                            // Author reads the judgement — not a generic "locked by the loop".
+                            loopAttr(`run ${result.runId}: ${groupLock.decision.rationale}; the Editor's judgement pass closed ${groupLock.decision.group_ref} as finished text (R3)`),
+                            { actor: 'editor' }
+                        );
+                    } catch (error) {
+                        // A `PhraseLockRefusal` is a ROUTINE outcome of racing the Author or a Writer, it
+                        // threw before writing, and its commit rolled back; anything else — a store CAS
+                        // conflict above all — must keep carrying the retry's stack and frame.
+                        if (!isPhraseLockRefusal(error)) throw error;
+                    }
+                }
             }
         });
 
@@ -1638,7 +1845,7 @@ export class LoopEngine implements EngineApi {
 
         if (revisions.length < size && !progress.spent && !samplingLegClosed(store, story, round)) return;
 
-        const readers = screeningSizeOf(story);
+        const critics = screeningSizeOf(story);
 
         // T12/C: a draft is screened when it carries its full review set OR its screening attempts are
         // exhausted (`records.ts:isFullyScreened`). The second clause is the degrade path: the round
@@ -1649,11 +1856,11 @@ export class LoopEngine implements EngineApi {
         // A round still growing must not be truncated under a draft nobody screened (§6.4 step 4).
         if (liveRuns(store, story.id).some((run) => PHASE1_PIPELINE_RUN.test(run.work_item_ref ?? ''))) return;
 
-        // The drafts whose review set is short of `readers` but whose attempts are spent — named in
+        // The drafts whose review set is short of `critics` but whose attempts are spent — named in
         // the escalation the commit opens, so the Author can see WHICH samples went in partially
         // screened (the ids still exist at that point; the truncation below deletes the losers).
         const partiallyScreened = drafted
-            .filter((revision) => screensFor(store, revision.id).length < readers)
+            .filter((revision) => screensFor(store, revision.id).length < critics)
             .map((revision) => revision.id);
 
         // ----------------------------------------------------------------------------------------------
@@ -2047,7 +2254,7 @@ export class LoopEngine implements EngineApi {
      * is not progress and one defect described twice is not two regressions.
      *
      * THE TIMING (requirement 5) is the sweep position above: the entry is only owed once the review has
-     * fully closed AND every blocking suspicion the Readers filed has been decided by the Editor, so a
+     * fully closed AND every blocking suspicion the Critics filed has been decided by the Editor, so a
      * suspicion the Editor later disputes or re-costs below the bar never becomes a permanent number —
      * and the wait costs the loop nothing, because those same unconfirmed rows already refuse the
      * sampler. This step sits BEFORE the sweep builds its candidate list, which is what makes the guard
@@ -2390,9 +2597,9 @@ export class LoopEngine implements EngineApi {
     /**
      * Stores the probe's Work Item ids on the round, so its completion is a store question.
      *
-     * Only the jobs that ACTUALLY launched are recorded. Capacity 1 means the Reader and the Checker
+     * Only the jobs that ACTUALLY launched are recorded. Capacity 1 means the Critic and the Reader
      * launch on different sweeps, and stamping both ids on the first launch made the round look "over"
-     * the moment the Checker closed — the Reader round (L-37 condition 3, D-30's fresh eyes) never ran
+     * the moment the Reader closed — the Critic round (L-37 condition 3, D-30's fresh eyes) never ran
      * and the Story reported `drained` on half the evidence.
      *
      * A round already in flight keeps its own journal watermark and dial: the watermark is what decides
@@ -2413,12 +2620,12 @@ export class LoopEngine implements EngineApi {
             // The launched keys ARE the round's ids: each half keeps whichever of them actually ran,
             // and `judgeProbeRound` waits on both (L-37.3). Recomputing them from a counter here would
             // read the count AFTER these runs landed and name a job that was never dispatched.
+            const critic = probes.find((candidate) => candidate.key.startsWith('wi_probe_critic_'))?.key;
             const reader = probes.find((candidate) => candidate.key.startsWith('wi_probe_reader_'))?.key;
-            const checker = probes.find((candidate) => candidate.key.startsWith('wi_probe_checker_'))?.key;
             const probe: ProbeState = {
                 ...(running ? current : startProbe(this.store, story, story.phase, new Date().toISOString())),
-                ...(reader === undefined ? {} : { reader_item_id: reader }),
-                ...(checker === undefined ? {} : { checker_item_id: checker })
+                ...(critic === undefined ? {} : { critic_item_id: critic }),
+                ...(reader === undefined ? {} : { reader_item_id: reader })
             };
 
             this.store.stories.update(
@@ -2509,7 +2716,7 @@ export class LoopEngine implements EngineApi {
                     chapter_deps: {},
                     // The Author's phase-① pipeline dials (D-17d/D-38a: counts are settings).
                     ...(input.summary_sampling === undefined ? {} : { summary_sampling: input.summary_sampling }),
-                    ...(input.summary_readers === undefined ? {} : { summary_readers: input.summary_readers }),
+                    ...(input.summary_critics === undefined ? {} : { summary_critics: input.summary_critics }),
                     // SUMMARY PHRASE R1/R6: a NEW book is group-managed unless the caller asks for the
                     // legacy sampler. This is the ONLY place `'groups'` is chosen automatically — an
                     // existing Story opts in by the Author's explicit import (`POST /stories/:id/phrases/import`),
@@ -2849,6 +3056,12 @@ export class LoopEngine implements EngineApi {
      * L-31/D-25: the only way a lock opens. Unlocks phase N, scraps every later artifact, and resets the
      * phase with no memory of the scrapped pass — while the verdicts, findings and `selection_note`s of
      * that pass stay readable as provenance (P11).
+     *
+     * On a group-managed book the reopened phase's group TEXTS and numbers survive as the base for
+     * another round (L-31), and a lock that still names a live revision row survives with them. A lock
+     * whose `group_revisions` backing this scrap deleted does NOT: `scrapPhasesAfter` clears those four
+     * fields, because a flag naming a dead row blocks the reviewed rebuild and every install that names
+     * the group (D-69, T8 finding 1) — see that function's block for the full reasoning.
      */
     async backtrack(storyId: string, phase: StoryPhase): Promise<void> {
         await this.store.commit('backtrack_to_phase', () => {
@@ -3114,7 +3327,31 @@ export class LoopEngine implements EngineApi {
                         group.id,
                         // The fresh-row triple `catalog.ts` mints: unwritten is `''` + `0` + null
                         // authorship (the projection reads exactly that as "never written").
-                        { content: '', revision: 0, updated_by: null },
+                        //
+                        // R3/T6b + D-69 (T8 finding 1) — a Seed reset also LIFTS every group lock, which
+                        // is the same four-field clear `phrase/locks.ts:unlockPhraseGroup` writes (line
+                        // 331): `undefined` would DELETE the field and `null` is what this store's clear
+                        // convention uses. It is spelled HERE as well as in the scrap because the Seed
+                        // reset is the one flow that rolls a group back to `revision: 0` with NO content,
+                        // so a lock standing on empty text would freeze a section nobody ever judged — a
+                        // dangling lock. A plain `backtrack` clears the flag too, for the other half of
+                        // the same reason: `scrapPhasesAfter` (same commit, above) deletes the
+                        // `group_revisions` rows the flag names, and a lock is a fact ABOUT one of them —
+                        // `phrase/reviewed.ts:cleanSelectionOf` can only compose a locked group's Overview
+                        // entry from its `latest` row, and `revisions.ts:installGroupRevisions` refuses a
+                        // whole batch naming any locked group, so a stale flag would strand this section
+                        // AND the four that could still be rewritten. What clears NOTHING is a scrap that
+                        // deletes no revision backing (a backtrack to `chapters`): there the lock still
+                        // anchors a live `latest` row, real content, and its one-per-vector seat stays spent.
+                        {
+                            content: '',
+                            revision: 0,
+                            updated_by: null,
+                            locked: false,
+                            locked_revision: null,
+                            locked_by: null,
+                            locked_at: null
+                        },
                         authorAttr('the Author rewrote the Seed; the groups re-grow from the new one (D-25a, R2)'),
                         [{ id: group.id, rev: group.rev }]
                     );
@@ -3157,6 +3394,31 @@ export class LoopEngine implements EngineApi {
 
             const story = requireStory(store, finding.story_id);
             const by = opts.by ?? AUTHOR_APPROVED_BY;
+
+            // D-33d — the Author's approve passes through the SAME issues-first gate the Editor's
+            // `approveFinding` tool runs (`tools/editor.ts`), on the SAME predicate
+            // (`records.ts:openIssueFindings`). Without it this funnel was the hole in the rule: the
+            // Author's queue row (U-10a) and the dashboard's approve-all button both land here, and a
+            // proposal approved from the Author's desk would spend a Writer round over unresolved
+            // defects while the tool path refused the identical approval.
+            //
+            // An `Error`, not a new error type, because that is this engine's whole refusal convention
+            // and `api/routes.ts:refusal` turns it into the 409 whose body is the sentence the Author
+            // reads (L-13) — the rule id rides in the message so the pane can show which rule it hit.
+            if (finding.kind === 'proposal') {
+                const openIssues = openIssueFindings(store, finding.story_id);
+
+                if (openIssues.length > 0) {
+                    const named = openIssues
+                        .slice(0, 3)
+                        .map((issue) => `${issue.id} (${issue.cost}, ${issue.state})`)
+                        .join(', ');
+
+                    throw new Error(
+                        `proposal ${findingId} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${named}${openIssues.length > 3 ? `, and ${openIssues.length - 3} more` : ''} — because issues are in focus before anything else can be done. Resolve them, or discard the proposal (D-33d).`
+                    );
+                }
+            }
 
             store.findings.update(
                 findingId,
@@ -3204,7 +3466,7 @@ export class LoopEngine implements EngineApi {
      *
      * `note` is the Author's reason for the pick (D-29: "the Author's selection of an Idea is a recorded
      * decision, not a chat message"). §4.17's `selection_note` IS that record — U-15 renders it in the
-     * decided list and D-32's repeat detection is what the next fresh Reader reads — so the caller's words
+     * decided list and D-32's repeat detection is what the next fresh Critic reads — so the caller's words
      * are stored verbatim and only a call with no note falls back to the generic sentence.
      *
      * Each selected Idea spawns the absorb work the next Writer's brief names (D-29's other half).
@@ -3870,7 +4132,7 @@ function normaliseProposalPatch(field: string, patch: unknown): Record<string, u
  * Is this claim key already claimed, in this process or in the store? (L-2's two halves.)
  *
  * S-RUNTIME: scoped to the candidate's Story. The claim is a STRING comparison, and the id-less families
- * (`wi_verify_ideas`, `wi_whole_check`, a probe round's `wi_probe_reader_chapters_1`) are the same
+ * (`wi_verify_ideas`, `wi_whole_check`, a probe round's `wi_probe_critic_chapters_1`) are the same
  * string for every Story, so in a book holding more than one Story an unscoped read lets Story A's live
  * run answer "claimed" for Story B's job and Story B goes unswept. One Store per Story
  * (`store/story-stores.ts`) is what makes the scope a no-op; the scope is what makes a shared book honest.

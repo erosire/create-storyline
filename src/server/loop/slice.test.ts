@@ -11,7 +11,7 @@
 //                winner's prose is what the chapter row holds afterwards.
 //   L-35/L-36    a passed Goal is not a stop: the crew keeps working until the work DRAINS.
 //   L-37/D-35b   `pending`/`drained` needs the whole pass — no authorised work, nothing awaiting
-//                verification, nothing competing, and a fresh Reader+checker round that found nothing at
+//                verification, nothing competing, and a fresh Critic+reader round that found nothing at
 //                the dial — and it dispatches nothing.
 //   L-25/L-25b   completion is PROPOSED, never self-applied; accepting states what it discards; discarding
 //                keeps the crew working (L-30).
@@ -124,7 +124,7 @@ describe('§15 steps 1-2 — phase ①', () => {
         expect(last.runs_started).toBe(0);
         expect(last.stories[0].started).toEqual([]);
 
-        // The Summary level's Goal is answered from the verdicts the checker filed (L-14, G-2).
+        // The Summary level's Goal is answered from the verdicts the reader filed (L-14, G-2).
         expect(last.stories[0].consistency).toContain('summary 2/2');
     });
 
@@ -275,7 +275,7 @@ describe('§15 steps 5-9 — phase ③, the chapter loop', () => {
         const wholeRuns = rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_whole_check'));
 
         expect(wholeRuns).toHaveLength(1);
-        expect(wholeRuns[0].role).toBe('checker');
+        expect(wholeRuns[0].role).toBe('reader');
     });
 });
 
@@ -294,7 +294,7 @@ describe('§15 steps 10-11 — drained, then completion', () => {
         return rig;
     }
 
-    it('goes pending/drained after a clean Reader+checker round, and dispatches nothing (L-37, W4)', async () => {
+    it('goes pending/drained after a clean Critic+reader round, and dispatches nothing (L-37, W4)', async () => {
         const rig = await atDrain({ story: { chapter_count: 2 } });
 
         const story = rig.story();
@@ -307,12 +307,12 @@ describe('§15 steps 10-11 — drained, then completion', () => {
         expect(story.status_reason).toContain('D-35b');
         expect(story.status_reason).toContain('L-37');
 
-        // The round L-37 condition 3 demands ran: one Reader and one checker, and it came back clean.
+        // The round L-37 condition 3 demands ran: one Critic and one reader, and it came back clean.
         expect(
-            rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_probe_reader_'))
+            rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_probe_critic_'))
         ).toHaveLength(1);
         expect(
-            rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_probe_checker_'))
+            rig.store.runs.list().filter((run) => (run.work_item_ref ?? '').startsWith('wi_probe_reader_'))
         ).toHaveLength(1);
         expect(rig.story().probe?.status).toBe('clean');
 

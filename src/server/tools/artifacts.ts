@@ -58,7 +58,7 @@ export interface ResolvedRef {
 const RESOLVABLE: RefKind[] = [
     // The Story row is a real ref target, not a mistake: §5.2 scopes C-4 and every `whole`-level
     // criterion to it (criteria/engine.ts:scopeTargets), the loop files the set-level unit's
-    // judgements there (loop/work.ts:judgedBefore), and checker.ts:TARGET_KINDS' own comment reads
+    // judgements there (loop/work.ts:judgedBefore), and reader.ts:TARGET_KINDS' own comment reads
     // "plus the Story itself". Listing it first is what lets a whole-Story verdict resolve instead
     // of coming back as a `wrongKind` sniff.
     'stories',
@@ -140,7 +140,12 @@ const COLLECTION_ACCESSOR: Record<
     // id naming no group of this Story is a refusal with a label instead of a dangling attribution.
     phrases: (store) => store.phrases,
     phrase_groups: (store) => store.phraseGroups,
-    group_revisions: (store) => store.groupRevisions
+    group_revisions: (store) => store.groupRevisions,
+    // READER SCORING (D-65). The accessor exists because this map is TOTAL by construction — that is
+    // its guard, not a claim that a tool may name a score row. `summary_scores` is deliberately NOT in
+    // {@link RESOLVABLE}: scores are a display surface, no §7.1 tool takes a `section_score_*` id, and
+    // leaving it out keeps `resolveRef`'s sniffing honest about the families a call may address.
+    summary_scores: (store) => store.summaryScores
 };
 
 /** Reads the store's typed collection by name without a per-collection switch. */
@@ -413,7 +418,7 @@ const mintedSuffix = (id: string): number | undefined => {
  *     NUMBER to keep creation order intact (see `mintedSuffix`).
  *   * where the suffix cannot answer (a hand-minted id such as `revision_1a`), the fallback is the
  *     id's UTF-16 CODE UNITS rather than `localeCompare`, whose collation is locale- and
- *     ICU-version-dependent: the row order a Reader sees must not depend on the host's locale.
+ *     ICU-version-dependent: the row order a Critic sees must not depend on the host's locale.
  *
  * Rows are read per collection, so a tie is always between two ids of one prefix and the two rules
  * above cannot disagree about which one came later. Exported for the focused same-millisecond test
@@ -639,7 +644,7 @@ export async function fileRevision(
             run_ref: ctx.runId,
             template_ref: ctx.templateRef,
             // A new draft is `pending` until its Writer's run closes and the loop validates it
-            // (§4.15). Readers, checkers and the Editor only ever see `drafted` rows, so a
+            // (§4.15). Critics, readers and the Editor only ever see `drafted` rows, so a
             // reviewer can no longer read a Summary halfway through its blocks.
             state: 'pending',
             verdict_refs: []
@@ -698,7 +703,7 @@ export async function commitSelection(
             // Phase ① keeps the Author's sampling visible. A Summary selection still installs the
             // winner, but the losing samples are parked as `discarded` instead of being erased: the
             // left rail's Overview 1…N tree is the record of what the Writers actually sampled and
-            // what the Readers and the Editor said about each one. Every other unit keeps D-22's
+            // what the Critics and the Editor said about each one. Every other unit keeps D-22's
             // hard delete, because a chapter's losers have no second reader in this surface.
             if (winner.unit_kind === 'summary') {
                 const loserIds = new Set(losers.map((loser) => loser.id));
@@ -716,7 +721,7 @@ export async function commitSelection(
 
                 // A discarded draft is history, not work. Its findings stay in the book (nothing is
                 // deleted), but they no longer hold the Summary open or keep a Writer task alive.
-                // The kept draft gets its own fresh Readers, which is where a real defect returns.
+                // The kept draft gets its own fresh Critics, which is where a real defect returns.
                 const discardedFindings = store.findings
                     .list()
                     .filter(
@@ -824,7 +829,7 @@ export function findOpenTask(store: Store, storyId: string, kind: TaskKind, titl
 }
 
 /**
- * Opens a task unless an equivalent one is already open, which is what stops a checker running
+ * Opens a task unless an equivalent one is already open, which is what stops a reader running
  * in a fresh context every turn (P2) from filling the queue with the same request.
  */
 export function openTask(
@@ -862,7 +867,7 @@ export function openTask(
 }
 
 /** A task's `owner_role`, defaulted from the work's nature so the sweep can pick it up (§6.1). */
-export function ownerFor(role: string | undefined, fallback: 'writer' | 'editor' | 'checker' | 'author'): string {
+export function ownerFor(role: string | undefined, fallback: 'writer' | 'editor' | 'reader' | 'author'): string {
     return role && role.trim() ? role.trim() : fallback;
 }
 
@@ -966,7 +971,7 @@ export function decidedIdea(store: Store, storyId: string, body: string): Idea |
  *
  * T5: the kind is INSIDE the hash (`utilities.ts:findingFingerprint`), so this lookup needs no branch
  * and its semantics are otherwise exactly what they were: a repeat of the same claim against the same
- * target and criterion, an `improvement` and an `issue` with identical wording are two rows because
+ * target and criterion, an `proposal` and an `issue` with identical wording are two rows because
  * they are two claims.
  */
 export function duplicateFinding(store: Store, storyId: string, fingerprint: string): Finding | undefined {

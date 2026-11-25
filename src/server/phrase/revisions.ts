@@ -33,7 +33,7 @@ import type {
 } from '../../shared/schemas';
 import type { GroupRevision, Phrase, PhraseGroup, Story, Summary } from '../../shared/types';
 import type { Attribution, Store } from '../store';
-import { composeGroupContentFrom, phraseGroupsOf, storyPhrase } from './catalog';
+import { composeGroupContentFrom, isPhraseGroupLocked, phraseGroupsOf, storyPhrase } from './catalog';
 
 // ---------------------------------------------------------------------------
 // Reads — the current text, the history, and the review vector
@@ -235,7 +235,7 @@ export type GroupReviewDecision = { ok: true; review: GroupReview } | { ok: fals
  * reason a draft entry is: an attribution to a non-existent group can never be closed, so keeping
  * the issue would put a permanent, unanswerable defect in the Author's book.
  *
- * Issues keep their order and their text EXACTLY as answered (D-15: the quote is the Reader's, not
+ * Issues keep their order and their text EXACTLY as answered (D-15: the quote is the Critic's, not
  * the loop's to tidy), and `fix_verifications` is carried through verbatim — a missing entry is a
  * graded `unknown` later (`records.ts:sampleFixDemand`'s rule), not something to invent here.
  */
@@ -333,6 +333,12 @@ export interface GroupInstallResult {
  * longer exists in the book throws the store's own "no phrase_group named X" rather than being
  * skipped, because at that point the caller's batch and the book disagree and silently continuing
  * would install a batch the Author never saw.
+ *
+ * A LOCKED GROUP IS REFUSED, WHOLE BATCH AND BEFORE THE FIRST WRITE (R-LOCK): see the check below for
+ * the rule and `phrase/locks.ts` for how a group gets into that state. Note the two locks are NOT the
+ * same flag — `summaries.locked` (L-7a) freezes the legacy MIRROR and lets the group rows install,
+ * while `phrase_groups.locked` freezes the GROUP row itself, so the mirror rule below and the group rule
+ * above point in opposite directions on purpose.
  */
 export function installGroupRevisions(
     store: Store,
@@ -349,6 +355,25 @@ export function installGroupRevisions(
     for (const entry of entries) {
         if (entry.content.trim() === '') {
             throw new Error(`installGroupRevisions: ${entry.group.key} arrived with empty content — an empty group text is a refusal, not a revision`);
+        }
+
+        // THE GROUP LOCK (R-LOCK), checked against the ROW rather than the caller's copy: a Writer batch
+        // is planned off `groupWorkTargets`, which never offers a locked group, so the only way an entry
+        // names one is a lock that landed while the pass was already running (or a hand call that skipped
+        // the planner). Either way the text in hand is stale by definition — the Writer never saw the
+        // signed-off version — and installing it would put a paragraph the Author declared final back into
+        // circulation. This is the same before-the-first-write check the empty-content rule lives in, so a
+        // batch with one locked target installs NOTHING rather than half its groups (R2's atomicity).
+        const current = store.phraseGroups.get(entry.group.id);
+
+        if (isPhraseGroupLocked(current) || isPhraseGroupLocked(entry.group)) {
+            const row = current ?? entry.group;
+
+            throw new Error(
+                `installGroupRevisions: ${row.key} is locked at revision ${row.locked_revision ?? row.revision}${
+                    row.locked_by === undefined || row.locked_by === null ? '' : ` by ${row.locked_by}`
+                } — a locked group's text is the fixed point the other groups are revised against, so nothing installs over it until the Author unlocks it`
+            );
         }
     }
 

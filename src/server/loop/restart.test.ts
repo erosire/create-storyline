@@ -151,7 +151,7 @@ describe('W5 / L-3 — a restarted loop reads the same book', () => {
         // (P1/L-3), and `recover()` runs in its constructor — that is the restart (probe-f's
         // blueprint, without the disk the real server needs).
         const store = Store.empty();
-        const first = await createRig({ store, summarySampling: 3, summaryReaders: 1 });
+        const first = await createRig({ store, summarySampling: 3, summaryCritics: 1 });
 
         // Walk to the first persisted sample, then stop: the round is mid-flight.
         for (let index = 0; index < 12; index += 1) {

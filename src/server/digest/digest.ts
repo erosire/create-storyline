@@ -7,7 +7,7 @@
 // not be the one that summarised it. Everything below is therefore a pure function of (records,
 // journal), reached only from the engine/loop side: no agent calls it, and no agent may write the
 // collection at all (`updateDigest` is refused for every role — §7's `digests` row is read-only for
-// Writer, Editor, checker and Reader alike). The loop (W4/W5) calls `rebuild` on its commit and
+// Writer, Editor, reader and Critic alike). The loop (W4/W5) calls `rebuild` on its commit and
 // consults `isStale` before dispatching a review (D-14).
 //
 // DETERMINISM IS AN ACCEPTANCE PROPERTY, NOT A nicety: the same committed state must produce the

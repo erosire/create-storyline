@@ -3,7 +3,7 @@
  *
  * Every assertion is an exact value: the rule id a refusal carries, the row it came from, the
  * record a write produced, and the journal entry behind it. The §12 W2 sentence names four
- * refusals by rule (a Reader's prose write as P10, an Editor's prose write as L-19, a locked
+ * refusals by rule (a Critic's prose write as P10, an Editor's prose write as L-19, a locked
  * Summary as P5, a cross-Story ref as T-3) — those are pinned first, then the pipeline rules the
  * spec pins (T-4, T-5, T-6a, T-6c, T-8, T-11, T-12) and the behaviour rules (§7, D-1, D-12a,
  * D-15, D-16, D-26/D-32, D-31, P9, D-37).
@@ -167,14 +167,14 @@ describe('the W2 call pipeline', () => {
 
     // ── §12 W2's named refusals ─────────────────────────────────────────────
 
-    it('refuses a Reader finding with no detail, so the Editor gets the what-and-where line (D-30)', async () => {
-        const result = await call('reader', 'raiseFinding', {
+    it('refuses a Critic finding with no detail, so the Editor gets the what-and-where line (D-30)', async () => {
+        const result = await call('critic', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-7',
             title: 'the contract is not delivered',
             evidence: 'the prose skips the climb',
             cost: 'major',
-            why: 'the Reader angle found it'
+            why: 'the Critic angle found it'
         });
 
         expect(result).toMatchObject({
@@ -186,11 +186,11 @@ describe('the W2 call pipeline', () => {
         expect(store.findings.list()).toEqual([]);
     });
 
-    it("refuses a Reader's prose write naming P10, and names the row it came from", async () => {
-        const result = await call('reader', 'editChapter', {
+    it("refuses a Critic's prose write naming P10, and names the row it came from", async () => {
+        const result = await call('critic', 'editChapter', {
             chapter_id: chapter.id,
             section_id: WRITER_SECTION.id,
-            content: 'A reader tried to write prose.',
+            content: 'A critic tried to write prose.',
             expects: [{ id: chapter.id, rev: chapter.rev }],
             why: 'Because the brief said to.'
         });
@@ -199,11 +199,11 @@ describe('the W2 call pipeline', () => {
             ok: false,
             refused: 'P10',
             message:
-                'Rule: P10 — a reader may not editChapter on chapters.content (agent-written): §7 gives a reader "read" there. Route the job to a writer',
-            error: 'Rule: P10 — a reader may not editChapter on chapters.content (agent-written): §7 gives a reader "read" there. Route the job to a writer',
+                'Rule: P10 — a critic may not editChapter on chapters.content (agent-written): §7 gives a critic "read" there. Route the job to a writer',
+            error: 'Rule: P10 — a critic may not editChapter on chapters.content (agent-written): §7 gives a critic "read" there. Route the job to a writer',
             story_id: story.id,
             artifact: 'chapters.content (agent-written)',
-            role: 'reader',
+            role: 'critic',
             level: 'read',
             required: 'write',
             criterion_refs: ['L-19', 'D-37', 'P7'],
@@ -394,7 +394,7 @@ describe('the W2 call pipeline', () => {
             word_count: 9,
             section_count: 2,
             current_rev: 2,
-            next: 'Keep working the queue — a checker run judges this chapter and reports with submitVerdict.'
+            next: 'Keep working the queue — a reader run judges this chapter and reports with submitVerdict.'
         });
 
         const events = store.journal.filter((event) => event.collection === 'chapters' && event.op === 'update');
@@ -455,7 +455,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('names the rev a read saw (T-8)', async () => {
-        const result = await call('checker', 'readChapter', { chapter_id: chapter.id });
+        const result = await call('reader', 'readChapter', { chapter_id: chapter.id });
 
         expect(result.ok).toBe(true);
         expect(result.rev).toBe(1);
@@ -492,14 +492,14 @@ describe('the W2 call pipeline', () => {
             refused: 'T-0',
             role_kind: 'writter',
             // §7.2's five dispatched kinds — the Researcher is a session kind like the rest.
-            expected_kinds: ['writer', 'editor', 'reader', 'checker', 'researcher']
+            expected_kinds: ['writer', 'editor', 'critic', 'reader', 'researcher']
         });
     });
 
     // ── §7 rows the engine cannot express as a level ────────────────────────
 
     it('refuses updateDigest for every role naming D-12a, and names the digest_gap fix (D-12a, D-13)', async () => {
-        for (const role of ['writer', 'editor', 'checker', 'reader']) {
+        for (const role of ['writer', 'editor', 'reader', 'critic']) {
             const result = await call(role, 'updateDigest', {
                 body: 'A rewrite the crew is not allowed to make.',
                 expects: [{ id: story.id, rev: story.rev }],
@@ -519,7 +519,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('files a signoff task on markChapterDone and changes no chapter state (D-1, L-10)', async () => {
-        const result = await call('checker', 'markChapterDone', { chapter_id: chapter.id });
+        const result = await call('reader', 'markChapterDone', { chapter_id: chapter.id });
 
         expect(result.ok).toBe(true);
         expect(result.data).toEqual({
@@ -541,7 +541,7 @@ describe('the W2 call pipeline', () => {
 
     it('files a capability_gap task on reportGap and writes no artifact (T-12)', async () => {
         const before = store.journal.length;
-        const result = await call('reader', 'reportGap', {
+        const result = await call('critic', 'reportGap', {
             job: 'Compare this chapter against the Author\u2019s earlier draft.',
             needed: 'A read of archived drafts.',
             tried: 'Read the current draft and the digest instead.',
@@ -573,22 +573,22 @@ describe('the W2 call pipeline', () => {
             tried: 'Read the digest.',
             why: 'Nothing else reaches them.'
         };
-        const first = await call('reader', 'reportGap', args);
-        const second = await call('reader', 'reportGap', args);
+        const first = await call('critic', 'reportGap', args);
+        const second = await call('critic', 'reportGap', args);
 
         expect(first.repeat).toBeUndefined();
         expect(second).toMatchObject({ ok: true, repeat: true, task_id: 'task_0' });
         expect(store.tasks.list().length).toBe(1);
     });
 
-    it('refuses a checker verifying an Idea naming P10 — verification is the Editor row (D-31)', async () => {
+    it('refuses a reader verifying an Idea naming P10 — verification is the Editor row (D-31)', async () => {
         const idea = store.ideas.create(
             {
                 story_id: story.id,
                 phase: 'chapters',
                 body: 'The keeper should not survive chapter 1.',
                 kind: 'possibility',
-                author: 'reader_1',
+                author: 'critic_1',
                 sources: [],
                 fingerprint: 'fp_test',
                 seen_count: 1,
@@ -597,7 +597,7 @@ describe('the W2 call pipeline', () => {
             { why: 'seed: idea' }
         );
 
-        const result = await call('checker', 'verifyIdea', {
+        const result = await call('reader', 'verifyIdea', {
             idea_id: idea.id,
             verdict: 'verified',
             evidence: 'Checked against the Summary promise.',
@@ -608,7 +608,7 @@ describe('the W2 call pipeline', () => {
         expect(result.ok).toBe(false);
         expect(result.refused).toBe('P10');
         expect(result.message).toBe(
-            'Rule: P10 — a checker may not verifyIdea on ideas: §7 gives a checker "write" there. Route the job to an editor'
+            'Rule: P10 — a reader may not verifyIdea on ideas: §7 gives a reader "write" there. Route the job to an editor'
         );
     });
 
@@ -621,8 +621,8 @@ describe('the W2 call pipeline', () => {
             cost: 'major',
             why: 'It breaks the promise of the first chapter.'
         };
-        const first = await call('checker', 'raiseFinding', args);
-        const second = await call('checker', 'raiseFinding', args);
+        const first = await call('reader', 'raiseFinding', args);
+        const second = await call('reader', 'raiseFinding', args);
 
         expect(first.data).toMatchObject({ id: 'finding_0', state: 'unconfirmed', seen_count: 1, cost: 'major' });
         expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
@@ -638,7 +638,7 @@ describe('the W2 call pipeline', () => {
                 phase: 'chapters',
                 body: 'The light should fail on page one.',
                 kind: 'direction',
-                author: 'reader_1',
+                author: 'critic_1',
                 sources: [],
                 fingerprint: 'fp_decided',
                 seen_count: 1,
@@ -648,7 +648,7 @@ describe('the W2 call pipeline', () => {
             { why: 'seed: decided idea' }
         );
 
-        const result = await call('reader', 'proposeIdea', {
+        const result = await call('critic', 'proposeIdea', {
             phase: 'chapters',
             body: 'The light should fail on page one.',
             kind: 'direction',
@@ -695,7 +695,7 @@ describe('the W2 call pipeline', () => {
     // ── T-11 and D-15: validation inside the tool ───────────────────────────
 
     it('refuses a raiseFinding with no cost, naming the enum set (T-11)', async () => {
-        const result = await call('checker', 'raiseFinding', {
+        const result = await call('reader', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'A defect with no cost dial',
@@ -709,7 +709,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('refuses a failing verdict line with no evidence naming D-15 (D-15)', async () => {
-        const result = await call('checker', 'submitVerdict', {
+        const result = await call('reader', 'submitVerdict', {
             target_ref: chapter.id,
             criteria_passed: [{ criterion: 'C-3', result: false }],
             recommendation: 'fix',
@@ -724,7 +724,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('writes a verdict and changes no story state (P6, D-1)', async () => {
-        const result = await call('checker', 'submitVerdict', {
+        const result = await call('reader', 'submitVerdict', {
             target_ref: chapter.id,
             criteria_passed: [
                 { criterion: 'C-3', result: true, evidence: 'chapter_0 section_1 changes his mind.' },
@@ -754,7 +754,7 @@ describe('the W2 call pipeline', () => {
     it('writes a verdict against one competing draft, and reads it back as a `revision` target (§6.2a, D-21, U-13)', async () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
-        const result = await call('checker', 'submitVerdict', {
+        const result = await call('reader', 'submitVerdict', {
             target_ref: 'revision_0',
             criteria_passed: [
                 { criterion: 'C-3', result: true, evidence: 'revision_0 section_1 climbs the tower.' },
@@ -793,7 +793,7 @@ describe('the W2 call pipeline', () => {
         // the decision in one commit — P1: the record and the record about it land together.
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
-        const first = await call('checker', 'submitVerdict', {
+        const first = await call('reader', 'submitVerdict', {
             target_ref: 'revision_0',
             criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'revision_0 section_1 climbs the tower.' }],
             recommendation: 'advance',
@@ -810,9 +810,9 @@ describe('the W2 call pipeline', () => {
                 .map((event) => `${event.collection}:${event.op}:${event.id}`)
         ).toEqual(['verdicts:create:verdict_0', 'revisions:update:revision_0']);
 
-        // Additive, never a replace: a second checker pass on the same draft grows the list in order, and
+        // Additive, never a replace: a second reader pass on the same draft grows the list in order, and
         // the draft's own fields are untouched (D-1: a verdict judges, it does not decide).
-        const second = await call('checker', 'submitVerdict', {
+        const second = await call('reader', 'submitVerdict', {
             target_ref: 'revision_0',
             criteria_passed: [{ criterion: 'C-7', result: false, evidence: 'revision_0 never pays the bell off.' }],
             recommendation: 'fix',
@@ -833,7 +833,7 @@ describe('the W2 call pipeline', () => {
     it('writes nothing on a draft when the verdict is about an ARTIFACT — the append is target-scoped (§4.15)', async () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
-        const result = await call('checker', 'submitVerdict', {
+        const result = await call('reader', 'submitVerdict', {
             target_ref: chapter.id,
             criteria_passed: [{ criterion: 'C-3', result: true, evidence: 'chapter_0 section_1 climbs the tower.' }],
             recommendation: 'advance',
@@ -849,7 +849,7 @@ describe('the W2 call pipeline', () => {
     it('still refuses a FINDING aimed at a draft — a defect is a claim about the artifact (D-22, D-11)', async () => {
         seedRevision(store, story.id, chapter.id, 'The bell rings under the water.');
 
-        const result = await call('checker', 'raiseFinding', {
+        const result = await call('reader', 'raiseFinding', {
             target_ref: 'revision_0',
             criterion_ref: 'C-3',
             title: 'A defect aimed at a draft',
@@ -878,7 +878,7 @@ describe('the W2 call pipeline', () => {
     // ── D-37: the research tools run offline unless a fetch is injected ────
 
     it('reports a missing provider as a thinner Idea rather than a rule (D-37, T-12)', async () => {
-        const result = await call('reader', 'searchWeb', { query: 'lighthouse reliefs 1880' });
+        const result = await call('critic', 'searchWeb', { query: 'lighthouse reliefs 1880' });
 
         expect(result).toEqual({
             ok: false,
@@ -912,7 +912,7 @@ describe('the W2 call pipeline', () => {
                 };
             }) as unknown as typeof fetch
         });
-        const context = runtime.createContext(sessionFor(story.id, 'reader'));
+        const context = runtime.createContext(sessionFor(story.id, 'critic'));
 
         const result = await runtime.execute(context, 'searchWeb', { query: 'lighthouse oil relief 1880' });
 
@@ -941,7 +941,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('refuses a malformed url naming T-11 rather than fetching it (T-11)', async () => {
-        const result = await call('reader', 'fetchPage', { url: 'example.org/relief' });
+        const result = await call('critic', 'fetchPage', { url: 'example.org/relief' });
 
         expect(result).toMatchObject({ ok: false, refused: 'T-11', field: 'url', received: 'example.org/relief' });
     });
@@ -1006,7 +1006,7 @@ describe('the W2 call pipeline', () => {
                 deleted_drafts: ['revision_0'],
                 installed_rev: 2,
                 selection_note: 'It keeps the bell under the water.',
-                next: 'A fresh Writer now sees exactly one text for chapter_0; a checker run judges it and reports with submitVerdict.'
+                next: 'A fresh Writer now sees exactly one text for chapter_0; a reader run judges it and reports with submitVerdict.'
             },
             // T-8: the rev the call READ for the winner, which is what a follow-up `expects` sends.
             rev: 1,
@@ -1096,7 +1096,7 @@ describe('the W2 call pipeline', () => {
     // ── L-11a: `related_refs` carries a finding across chapters ───────────
 
     it('stores related_refs on the finding so one report propagates across chapters (L-11a)', async () => {
-        const result = await call('checker', 'raiseFinding', {
+        const result = await call('reader', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
@@ -1112,7 +1112,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('leaves related_refs off the record when the reporter names none (L-11a, §8 call shape)', async () => {
-        const result = await call('checker', 'raiseFinding', {
+        const result = await call('reader', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
@@ -1137,10 +1137,10 @@ describe('the W2 call pipeline', () => {
             related_refs: ['chapter_1'],
             why: 'It spoils the middle of the book.'
         };
-        const first = await call('checker', 'raiseFinding', args);
+        const first = await call('reader', 'raiseFinding', args);
         // The same defect, seen from another chapter: the fingerprint matches (D-16), so the row is
         // reused — and the new unit has to ride along or the propagation dies at the dedupe.
-        const second = await call('checker', 'raiseFinding', { ...args, related_refs: ['chapter_6', 'chapter_1'] });
+        const second = await call('reader', 'raiseFinding', { ...args, related_refs: ['chapter_6', 'chapter_1'] });
 
         expect(second).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
         expect(store.findings.list().length).toBe(1);
@@ -1158,8 +1158,8 @@ describe('the W2 call pipeline', () => {
             cost: 'major',
             why: 'It spoils the middle of the book.'
         };
-        await call('checker', 'raiseFinding', args);
-        const second = await call('checker', 'raiseFinding', args);
+        await call('reader', 'raiseFinding', args);
+        const second = await call('reader', 'raiseFinding', args);
 
         // An identical repeat writes exactly one field: the digest derives from commits, so a
         // repeat that rewrote unrelated fields would look like a change (D-12a). The create event
@@ -1173,7 +1173,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('refuses a non-string related_refs item naming the index (T-11)', async () => {
-        const result = await call('checker', 'raiseFinding', {
+        const result = await call('reader', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
@@ -1188,7 +1188,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('surfaces related_refs on readFindings so the propagation is readable (L-11a)', async () => {
-        await call('checker', 'raiseFinding', {
+        await call('reader', 'raiseFinding', {
             target_ref: chapter.id,
             criterion_ref: 'C-3',
             title: 'The keeper knows the answer too early',
@@ -1198,7 +1198,7 @@ describe('the W2 call pipeline', () => {
             why: 'It spoils the middle of the book.'
         });
 
-        const result = await call('checker', 'readFindings', {});
+        const result = await call('reader', 'readFindings', {});
         const page = result.data as Record<string, unknown>;
 
         expect((page.items as Record<string, unknown>[])[0]).toEqual({
@@ -1282,7 +1282,7 @@ describe('the W2 call pipeline', () => {
         expect(written.summary).toBe('Knowledge knowledge_entry_0 recorded (tech, critical)');
 
         // §7.2: only the Researcher writes `knowledge`; every other kind reads it. The refusal
-        // names P10 and routes the job, exactly as a Checker's or a Reader's prose refusal does.
+        // names P10 and routes the job, exactly as a Reader's or a Critic's prose refusal does.
         const refused = await call('writer', 'writeKnowledge', {
             topic: '1880 service revolver',
             kind: 'tech',
@@ -1427,13 +1427,13 @@ describe('the W2 call pipeline', () => {
                 why: 'Seed research.'
             });
 
-        for (const kind of ['writer', 'editor', 'checker', 'reader', 'researcher'] as const) {
+        for (const kind of ['writer', 'editor', 'reader', 'critic', 'researcher'] as const) {
             const read = await call(kind, 'readKnowledge', {});
 
             expect({ kind, ok: read.ok }).toEqual({ kind, ok: true });
         }
 
-        const read = await call('reader', 'readKnowledge', {});
+        const read = await call('critic', 'readKnowledge', {});
         const data = read.data as Record<string, unknown>;
 
         expect(
@@ -1449,7 +1449,7 @@ describe('the W2 call pipeline', () => {
             truncated: false
         });
 
-        const filtered = await call('reader', 'readKnowledge', { importance: 'critical' });
+        const filtered = await call('critic', 'readKnowledge', { importance: 'critical' });
         expect((filtered.data as { total: number }).total).toBe(1);
     });
 
@@ -1464,7 +1464,7 @@ describe('the W2 call pipeline', () => {
                 why: 'Bulk research for the cap.'
             });
 
-        const read = await call('reader', 'readKnowledge', {});
+        const read = await call('critic', 'readKnowledge', {});
         const data = read.data as Record<string, unknown>;
 
         expect({ total: data.total, limit: data.limit, truncated: data.truncated }).toEqual({
@@ -1479,7 +1479,7 @@ describe('the W2 call pipeline', () => {
     });
 
     it('refuses structureSeed for every kind but the Editor (P10, §7.2)', async () => {
-        for (const kind of ['writer', 'checker', 'reader', 'researcher'] as const) {
+        for (const kind of ['writer', 'reader', 'critic', 'researcher'] as const) {
             const refused = await call(kind, 'structureSeed', seedCall());
 
             expect({ kind, ok: refused.ok, refused: refused.refused }).toEqual({
@@ -1672,7 +1672,7 @@ describe('the W2 call pipeline', () => {
 
         // §7.1/§7.2: the answer is the Researcher's alone, even though every kind holds `read` on
         // `knowledge` — a Writer answering its own research question would be an unlogged decision.
-        for (const kind of ['writer', 'editor', 'checker', 'reader'] as const) {
+        for (const kind of ['writer', 'editor', 'reader', 'critic'] as const) {
             const refused = await call(kind, 'reportNoResearch', {
                 rationale: 'a non-Researcher answers the pass anyway',
                 why: 'T-1a: the refusal is the record'
@@ -1960,7 +1960,7 @@ describe('the pinned tool-runtime contract', () => {
         roleName: string;
         // §7.2's five dispatched kinds: the Researcher is a first-class session kind, so the
         // pinned context carries it exactly like the original four.
-        roleKind: 'writer' | 'editor' | 'reader' | 'checker' | 'researcher';
+        roleKind: 'writer' | 'editor' | 'critic' | 'reader' | 'researcher';
         services: {
             delegate?: (roleName: string, task: string) => Promise<{ ok: boolean; summary?: string; error?: string }>;
         };
@@ -1975,7 +1975,7 @@ describe('the pinned tool-runtime contract', () => {
                 runRef: string;
                 templateRef: string;
                 roleName: string;
-                roleKind: 'writer' | 'editor' | 'reader' | 'checker' | 'researcher';
+                roleKind: 'writer' | 'editor' | 'critic' | 'reader' | 'researcher';
             },
             hooks?: {
                 delegate?: (
@@ -2063,9 +2063,9 @@ describe('the pinned tool-runtime contract', () => {
             }
         );
 
-        const answer = await context.services.delegate!('checker_2', 'Which draft pays the setup off?');
+        const answer = await context.services.delegate!('reader_2', 'Which draft pays the setup off?');
 
-        expect(calls).toEqual([{ role: 'checker_2', task: 'Which draft pays the setup off?' }]);
+        expect(calls).toEqual([{ role: 'reader_2', task: 'Which draft pays the setup off?' }]);
         expect(answer).toEqual({ ok: true, summary: 'The bell, not the map.' });
     });
 });
@@ -2114,7 +2114,7 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         seedSummaryRevision('summary_0', 'competing', 1);
     });
 
-    async function file(args: Record<string, unknown>, roleKind = 'checker'): Promise<ToolResult> {
+    async function file(args: Record<string, unknown>, roleKind = 'reader'): Promise<ToolResult> {
         const runtime = createToolRuntime(store);
         const context: RunToolContext = runtime.createContext(sessionFor(story.id, roleKind));
 
@@ -2190,7 +2190,7 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
         fresh.store.stories.update(fresh.story.id, { phase: 'summary' }, { why: 'seed: phase ①, no selection' });
         const runtime = createToolRuntime(fresh.store);
         const beforeSelection = await runtime.execute(
-            runtime.createContext(sessionFor(fresh.story.id, 'checker')),
+            runtime.createContext(sessionFor(fresh.story.id, 'reader')),
             'raiseFinding',
             {
                 target_ref: 'summary_0',
@@ -2211,13 +2211,13 @@ describe('phase ① finding attribution on raiseFinding (T6/R2c, D-33)', () => {
 
 // ── D-33b / T5: the two finding kinds, and the fingerprint that separates them ────────────────
 //
-// WHY THIS BLOCK EXISTS: the Author's loop was spending rounds on disputes. A Reader compared the
+// WHY THIS BLOCK EXISTS: the Author's loop was spending rounds on disputes. A Critic compared the
 // text to the Seed, found the Seed silent about something, filed it, and the Editor's admissibility
 // rule (D-33) disputed it — correctly, because silence is not a defect — while the same pass had no
 // honest way to say "this change would make the book better", since a review pass bans Ideas (D-26,
 // D-30). §4.10 now carries `kind`, and three things have to stay true:
 //
-//   1. an `improvement` is ACCEPTED and travels (tool payload → row → every read), because the marker
+//   1. a `proposal` is ACCEPTED and travels (tool payload → row → every read), because the marker
 //      is the only thing that tells the Editor which of the two questions to answer;
 //   2. `issue` remains the default in both directions — a call that names no `kind` stores one, and a
 //      row written before the field existed still reads as one;
@@ -2245,6 +2245,34 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         return runtime.execute(runtime.createContext(sessionFor(story.id, roleKind)), 'raiseFinding', args);
     }
 
+    /**
+     * The SAME call as a DIFFERENT review pass (D-33c).
+     *
+     * D-33c's no-mixing rule attributes findings to the RUN that filed them, so these kind-separation
+     * and dedupe tests — whose subject is the FINGERPRINT, not the pass order — have to file across two
+     * passes now. A distinct `runId` is all that changes: the row, the role and every other input stay
+     * exactly as they were, so what the assertions pin is still the fingerprint contract.
+     */
+    async function callInPass(pass: string, roleKind: string, args: Record<string, unknown>): Promise<ToolResult> {
+        const runtime = createToolRuntime(store);
+        const context = runtime.createContext(sessionFor(story.id, roleKind, { runId: `run_${roleKind}_${pass}` }));
+
+        return runtime.execute(context, 'raiseFinding', args);
+    }
+
+    /**
+     * Closes one finding the way the loop closes it, so a test can say "this issue is resolved" without
+     * re-running the whole verify → approve → fix chain (D-33c reads only the state, and
+     * `loop/types.ts:CLOSED_FINDING_STATES` is the one list that says which states those are).
+     */
+    function resolveIssue(findingId: string, state: 'fixed' | 'discarded' = 'fixed'): void {
+        const row = store.findings.require(findingId);
+
+        store.findings.update(findingId, { state }, { why: `seed: the issue reached ${state} (D-33c)` }, [
+            { id: findingId, rev: row.rev }
+        ]);
+    }
+
     /** The proposal the fix is about: `detail` is present so D-30 is never what these tests read. */
     const proposal = (extra: Record<string, unknown> = {}) => ({
         target_ref: chapter.id,
@@ -2253,7 +2281,7 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         detail: 'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
         evidence: 'chapter_0 section_1: "he told them the truth"',
         cost: 'major',
-        kind: 'improvement',
+        kind: 'proposal',
         why: 'It costs one line and pays the middle of the book.',
         ...extra
     });
@@ -2269,46 +2297,46 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
     const legacyFingerprint = (title: string) =>
         computeFingerprint(`${chapter.id}|C-3|${normalizeForFingerprint(title)}`);
 
-    it('accepts an improvement, stores the kind on the row, and says the Editor will weigh it (D-33b)', async () => {
-        const result = await call('reader', proposal());
+    it('accepts a proposal, stores the kind on the row, and says the Editor will weigh it (D-33b)', async () => {
+        const result = await call('critic', proposal());
 
         expect(result.ok).toBe(true);
         expect(result.data).toMatchObject({
             id: 'finding_0',
-            kind: 'improvement',
+            kind: 'proposal',
             cost: 'major',
             state: 'unconfirmed',
             seen_count: 1
         });
         // The ROW carries it, not only the reply: the Editor's verify thread, the queue, and the Writer's
         // fix prompt all read the record.
-        expect(store.findings.require('finding_0')).toMatchObject({ kind: 'improvement', cost: 'major' });
-        // The Reader is told, in the result it is reading right now, which rule the Editor will run —
+        expect(store.findings.require('finding_0')).toMatchObject({ kind: 'proposal', cost: 'major' });
+        // The Critic is told, in the result it is reading right now, which rule the Editor will run —
         // otherwise the next pass re-files the same wish as a defect.
         expect((result.notes as string[])[1]).toBe(
-            'This is an improvement, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
+            'This is a proposal, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
         );
     });
 
     it('stores an omitted kind as the issue it has always meant (D-33b, D-16)', async () => {
         const { kind: _kind, ...withoutKind } = proposal();
-        const result = await call('reader', withoutKind);
+        const result = await call('critic', withoutKind);
 
         expect(result.data).toMatchObject({ kind: 'issue' });
         // Written explicitly, so a new row is self-describing; the kind-less row stays the legacy case
-        // and `tools/checker.ts:kindOf` is the one place the default is decided.
+        // and `tools/reader.ts:kindOf` is the one place the default is decided.
         expect(store.findings.require('finding_0').kind).toBe('issue');
     });
 
     it('refuses an unknown kind at the schema, naming the accepted set, and files nothing (T-11, D-33b)', async () => {
-        // WHY THIS IS PINNED AND THE OMITTED CASE ALONE IS NOT ENOUGH: `tools/checker.ts:kindOf`
+        // WHY THIS IS PINNED AND THE OMITTED CASE ALONE IS NOT ENOUGH: `tools/reader.ts:kindOf`
         // coerces ANY unknown value to `issue` on purpose, so a row can only be trusted while the
         // SCHEMA refuses first (T-11 puts enforcement in the tool, not the prompt). This is the pin
-        // that says a `kind: 'banana'` call never reaches that coercion — the Reader is sent the
+        // that says a `kind: 'banana'` call never reaches that coercion — the Critic is sent the
         // accepted set and the proposal is not silently re-classified into a defect claim the Editor
         // will dispute on absence grounds. Were the enum ever loosened, this test fails instead of a
         // coercion quietly deciding the claim type.
-        const result = await call('reader', proposal({ kind: 'banana' }));
+        const result = await call('critic', proposal({ kind: 'banana' }));
 
         expect(result.ok).toBe(false);
         expect(result.refused).toBe('T-11');
@@ -2316,45 +2344,82 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         expect(result.tool).toBe('raiseFinding');
         // The field, the accepted values, and what was actually sent — the three things that let the
         // same pass fix the call in one turn rather than guess at another spelling.
-        expect(result.issues).toEqual([{ field: 'kind', expected: 'one of issue | improvement', received: 'banana' }]);
-        expect((result.shape as Record<string, unknown>).enums).toMatchObject({ kind: ['issue', 'improvement'] });
+        expect(result.issues).toEqual([{ field: 'kind', expected: 'one of issue | proposal', received: 'banana' }]);
+        expect((result.shape as Record<string, unknown>).enums).toMatchObject({ kind: ['issue', 'proposal'] });
         // Validation runs before the tool body, so nothing was half-filed and no coerced `issue` row
         // exists wearing the proposal's title (P1).
         expect(store.findings.list()).toEqual([]);
     });
 
-    it('refuses an improvement at cost critical and sends it back as major at most (D-33b, D-35)', async () => {
-        const result = await call('reader', proposal({ cost: 'critical' }));
+    it('refuses a proposal at cost critical and sends it back as major at most (D-33b, D-35)', async () => {
+        const result = await call('critic', proposal({ cost: 'critical' }));
 
-        expect(result).toMatchObject({ ok: false, refused: 'D-33' });
+        expect(result).toMatchObject({ ok: false, refused: 'D-33b' });
         expect(result.message).toBe(
             refusal(
-                'D-33',
-                'a `kind: improvement` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.'
+                'D-33b',
+                'a `kind: proposal` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.'
             )
         );
-        // The fix names the ladder the Reader may actually use, which is the difference between a
+        // The fix names the ladder the Critic may actually use, which is the difference between a
         // proposal that comes back `major` and a pass that burns itself re-triaging. `refusalResult`
         // spreads the ToolRefusal details at the top level of the result, so they are pinned there.
         expect(result).toMatchObject({
             ok: false,
-            refused: 'D-33',
+            refused: 'D-33b',
             field: 'cost',
             expected: ['major', 'minor', 'taste'],
-            fix: "call raiseFinding again with cost `major` at most and kind `improvement`, or with kind `issue` if the draft contradicts something it states"
+            fix: "call raiseFinding again with cost `major` at most and kind `proposal`, or with kind `issue` if the draft contradicts something it states"
         });
         // Nothing half-filed (P1).
         expect(store.findings.list()).toEqual([]);
     });
 
-    it('keeps an improvement and an issue with identical wording apart, and dedupes each inside its kind (D-16, D-33b)', async () => {
-        const first = await call('reader', proposal());
+    // D-33b's MIRROR rule, and the half that keeps the taxonomy from leaking the long way round. A Critic
+    // that files a word-choice wish as a `taste`-cost ISSUE puts a preference in the defect column: the
+    // Author's queue reads it as a break, the Editor's absence gate disputes it, and the pass that could
+    // have said "here is a better version" is spent on a dispute. So the pairing is refused at the same
+    // gate, in the same shape, and the fix sentence names the kind the preference actually belongs to.
+    it('refuses an issue at cost taste and sends it back as a proposal or a minor at least (D-33b)', async () => {
+        // The default kind — an OMITTED `kind` — is what the rule has to catch too, because a taste-cost
+        // call that names no kind is exactly the mis-filing this rule exists to refuse.
+        const { kind: _kind, ...withoutKind } = proposal();
+        const result = await call('critic', { ...withoutKind, cost: 'taste' });
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33b' });
+        expect(result.message).toBe(
+            refusal(
+                'D-33b',
+                'an `issue` cannot be `taste`: an Issue is rated `critical`, `major` or `minor` — a preference is a Proposal (`kind: proposal`), not a defect.'
+            )
+        );
+        expect(result).toMatchObject({
+            ok: false,
+            refused: 'D-33b',
+            field: 'cost',
+            expected: ['critical', 'major', 'minor'],
+            fix: "call raiseFinding again with kind `proposal` and cost `taste` when this is a preference, or with cost `minor` at least when it really is a defect"
+        });
+        expect(store.findings.list()).toEqual([]);
+
+        // The same row marked honestly is accepted: the rule moves the LABEL, it never removes the rung.
+        const asProposal = await call('critic', proposal({ cost: 'taste' }));
+
+        expect(asProposal).toMatchObject({ ok: true, data: { id: 'finding_0', kind: 'proposal', cost: 'taste' } });
+    });
+
+    it('keeps a proposal and an issue with identical wording apart, and dedupes each inside its kind (D-16, D-33b)', async () => {
+        const first = await call('critic', proposal());
         // The same proposal seen again: D-16 counts it, it does not open a second claim.
-        const again = await call('reader', proposal());
+        const again = await call('critic', proposal());
         // The SAME sentence filed as a defect claim: same target, same criterion, same title. It has to
         // stay a second row, because one says "this is broken" and the other says "this would be better"
         // and the Editor answers them by opposite rules.
-        const asIssue = await call('reader', proposal({ kind: 'issue' }));
+        //
+        // It is filed in a SECOND pass (D-33c): an issue and a proposal never share a review pass, so a
+        // single-pass fixture can no longer produce one of each — and this test's subject is the
+        // FINGERPRINT, which the pass boundary does not touch.
+        const asIssue = await callInPass('next', 'critic', proposal({ kind: 'issue' }));
 
         expect(first).toMatchObject({ ok: true });
         expect(again).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
@@ -2364,12 +2429,12 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         expect(asIssue.repeat).toBeUndefined();
         expect(asIssue.data).toMatchObject({ id: 'finding_1', kind: 'issue' });
         expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}:${finding.seen_count}`)).toEqual([
-            'finding_0:improvement:2',
+            'finding_0:proposal:2',
             'finding_1:issue:1'
         ]);
         // The two rows are separated BY the fingerprint, not by an accident of insertion order.
-        const [improvement, issue] = store.findings.list();
-        expect(improvement.fingerprint).not.toBe(issue.fingerprint);
+        const [proposalRow, issue] = store.findings.list();
+        expect(proposalRow.fingerprint).not.toBe(issue.fingerprint);
         expect((asIssue.data as { fingerprint: string }).fingerprint).toBe(issue.fingerprint);
     });
 
@@ -2404,10 +2469,10 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         // The hash contract, pinned directly: `issue` IS the legacy form, which is why no stored row has
         // to be re-hashed and why an old finding cannot silently open a second row.
         expect(fingerprintFinding(chapter.id, 'C-3', title)).toBe(legacyFingerprint(title));
-        expect(fingerprintFinding(chapter.id, 'C-3', title, 'improvement')).not.toBe(legacyFingerprint(title));
+        expect(fingerprintFinding(chapter.id, 'C-3', title, 'proposal')).not.toBe(legacyFingerprint(title));
 
         // The behaviour that follows from it: a new raise that names no `kind` bumps the legacy row.
-        const repeat = await call('checker', args);
+        const repeat = await call('reader', args);
 
         expect(repeat).toMatchObject({ ok: true, repeat: true, finding_id: 'finding_0' });
         expect(store.findings.list().length).toBe(1);
@@ -2417,20 +2482,28 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
 
         // And the same wording as a proposal is NEW information about the same passage, so it opens its
         // own row rather than quietly counting against a defect nobody filed.
-        const improved = await call('checker', { ...args, kind: 'improvement' });
+        //
+        // The defect is RESOLVED first (D-33c): with `finding_0` still open it is an unresolved ISSUE,
+        // and a proposal is not filable over one — that is the whole rule. Closing it is also the honest
+        // reading of what this test is claiming, because a proposal that replaces a fixed defect is
+        // exactly the "new information about the same passage" case, and D-16's dedupe skips closed rows
+        // either way, so nothing here leans on the state.
+        resolveIssue('finding_0');
+
+        const improved = await call('reader', { ...args, kind: 'proposal' });
 
         expect(improved).toMatchObject({ ok: true });
         expect(improved.repeat).toBeUndefined();
-        expect(improved.data).toMatchObject({ id: 'finding_1', kind: 'improvement' });
+        expect(improved.data).toMatchObject({ id: 'finding_1', kind: 'proposal' });
         expect(store.findings.list().map((finding) => `${finding.id}:${finding.seen_count}`)).toEqual([
             'finding_0:2',
             'finding_1:1'
         ]);
     });
 
-    it('refuses a Reader improvement with no detail, the same D-30 gate a defect pays (D-30, D-33b)', async () => {
+    it('refuses a Critic proposal with no detail, the same D-30 gate a defect pays (D-30, D-33b)', async () => {
         const { detail: _detail, ...noDetail } = proposal();
-        const result = await call('reader', noDetail);
+        const result = await call('critic', noDetail);
 
         expect(result).toMatchObject({ ok: false, refused: 'D-30' });
         // A proposal the Editor has to re-read the draft to understand costs the very pass it proposes.
@@ -2439,7 +2512,7 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
 
     it('tells the Writer it is delivering a proposal, on the task an approval opens (D-34, D-33b)', async () => {
         const raised = await call('editor', proposal());
-        expect(raised).toMatchObject({ ok: true, data: { state: 'confirmed', kind: 'improvement' } });
+        expect(raised).toMatchObject({ ok: true, data: { state: 'confirmed', kind: 'proposal' } });
 
         const runtime = createToolRuntime(store);
         const context = runtime.createContext(sessionFor(story.id, 'editor'));
@@ -2453,7 +2526,372 @@ describe('the two finding kinds and the fingerprint that separates them (D-33b, 
         // The task detail is what the fix prompt renders as `work:`; without the marker a sample reads a
         // proposal as a break and makes the smallest change instead of the better one.
         expect(store.tasks.list().map((task) => task.detail)).toEqual([
-            'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension\nCost: major\nKind: improvement\nCriterion: C-3\nFinding: finding_0\nApproved by: editor_1'
+            'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension\nCost: major\nKind: proposal\nCriterion: C-3\nFinding: finding_0\nApproved by: editor_1'
         ]);
+    });
+});
+
+// ── D-33c / D-33d: issues come first, at the gate and at the approval ──────────────────────────
+//
+// WHY THIS BLOCK EXISTS: D-33b split the findings into the two kinds and stopped there, so a review
+// pass could answer BOTH questions at once and the round paid for it — the Critic filed three defects
+// and one improvement, the dial approved by cost and not by kind, and a Writer pass went to the
+// suggestion while the crew's own agreed defects sat unworked. Four things have to stay true, and each
+// is pinned with the exact sentence the crew reads, because that sentence is what makes the next turn
+// correct without a re-read of the docs:
+//
+//   1. a PROPOSAL WAITS FOR THE ISSUES (D-33c), counted and named in the refusal;
+//   2. an ISSUE AND A PROPOSAL NEVER SHARE A PASS (D-33c), in the direction the first rule cannot
+//      cover — the proposal that came first;
+//   3. the release is EXACT: `fixed` and `discarded` open the gate, and every other state — including
+//      `disputed`, the Editor's "not a defect" — keeps it shut;
+//   4. APPROVAL PAYS THE SAME BILL (D-33d): the Editor cannot approve a proposal over an open issue on
+//      any decision that means "do it", while discarding one and approving an issue both stay legal.
+describe('issues come first, at the filing gate and at the approval (D-33c, D-33d)', () => {
+    let store: Store;
+    let story: Story;
+    let chapter: Chapter;
+
+    beforeEach(() => {
+        const world = seedWorld();
+        store = world.store;
+        story = world.story;
+        chapter = world.chapter;
+    });
+
+    /** One `raiseFinding` call as one role kind, optionally as a NAMED run (D-33c's pass attribution). */
+    async function call(
+        roleKind: string,
+        args: Record<string, unknown>,
+        runId?: string
+    ): Promise<ToolResult> {
+        const runtime = createToolRuntime(store);
+        const context = runtime.createContext(sessionFor(story.id, roleKind, { runId }));
+
+        return runtime.execute(context, 'raiseFinding', args);
+    }
+
+    /** One `approveFinding` call, the way the Editor's `verify_findings` thread makes it. */
+    async function approve(findingId: string, decision: string): Promise<ToolResult> {
+        const runtime = createToolRuntime(store);
+        const context = runtime.createContext(sessionFor(story.id, 'editor'));
+
+        return runtime.execute(context, 'approveFinding', {
+            finding_id: findingId,
+            decision,
+            why: 'The Editor decided it.'
+        });
+    }
+
+    /** The proposal the rules are about. `detail` is present, so D-30 is never what these tests read. */
+    const proposal = (extra: Record<string, unknown> = {}) => ({
+        target_ref: chapter.id,
+        criterion_ref: 'C-3',
+        title: 'let the keeper lie first',
+        detail: 'chapter_0 section_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
+        evidence: 'chapter_0 section_1: "he told them the truth"',
+        cost: 'major',
+        kind: 'proposal',
+        why: 'It costs one line and pays the middle of the book.',
+        ...extra
+    });
+
+    /** The defect the rules put first. Same passage, so the two rows are about the same text. */
+    const issue = (extra: Record<string, unknown> = {}) => ({
+        target_ref: chapter.id,
+        criterion_ref: 'C-3',
+        title: 'the relief arrives before the storm',
+        detail: 'chapter_0 section_2 resolves the debt before the storm that was supposed to force it',
+        evidence: 'chapter_0 section_2: "the debt was paid, and then the storm came"',
+        cost: 'major',
+        kind: 'issue',
+        why: 'The order of the two scenes costs the ending its force.',
+        ...extra
+    });
+
+    /**
+     * A finding on the record already, in the state the test is asking about.
+     *
+     * Seeded directly rather than raised: a raised row is `unconfirmed` by D-33 and the tests below need
+     * `confirmed`, `approved`, `disputed`, `fixed` and `discarded` too, and D-33c reads ONLY the stored
+     * state (`loop/records.ts:openIssueFindings`), so seeding the row pins the rule against the state
+     * rather than against the chain that would have produced it.
+     */
+    function seedFinding(kind: 'issue' | 'proposal', state: string, cost = 'major'): string {
+        const row = store.findings.create(
+            {
+                story_id: story.id,
+                target_ref: chapter.id,
+                criterion_ref: 'C-3',
+                title: `seed ${kind} in ${state}`,
+                evidence: 'chapter_0 section_1',
+                cost: cost as 'critical' | 'major' | 'minor' | 'taste',
+                kind,
+                fingerprint: `seed-${kind}-${state}-${cost}`,
+                state: state as never,
+                seen_count: 1
+            },
+            { why: `seed: a ${kind} sitting in ${state}` }
+        );
+
+        return row.id;
+    }
+
+    /** The refusal prefix `tools/index.ts` adds before the sentence the crew reads. */
+    const refusal = (rule: string, message: string) => `Rule: ${rule} — ${message}`;
+
+    it('files a proposal the Story has no defect behind (D-33c)', async () => {
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_0', kind: 'proposal' } });
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}:${finding.state}`)).toEqual([
+            'finding_0:proposal:unconfirmed'
+        ]);
+    });
+
+    it('refuses a proposal while an issue is open, counting it and naming it (D-33c)', async () => {
+        seedFinding('issue', 'unconfirmed');
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', field: 'kind', expected: ['issue'] });
+        // The sentence carries the COUNT and the ROW, because "not yet" without the number is a guess at
+        // how much work is left, and the crew that cannot see the queue has to re-read it with a tool.
+        expect(result.message).toBe(
+            refusal(
+                'D-33c',
+                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach `fixed` or `discarded` before a proposal can be filed (D-33c).'
+            )
+        );
+        // The full set rides in the detail, so a refusal over forty issues still names all forty.
+        expect(result).toMatchObject({ open_issues: 1, open_issue_refs: ['finding_0'] });
+        expect(result.fix).toBe(
+            'resolve every open issue first (verify, approve, fix or discard it), then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
+        );
+        // Nothing half-filed, and no `seen_count` moved on the proposal row either: the refusal runs
+        // BEFORE D-16's dedupe, so an inadmissible proposal cannot advance the loop's no-progress ledger.
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}:${finding.seen_count}`)).toEqual([
+            'finding_0:issue:1'
+        ]);
+    });
+
+    it('refuses a proposal that follows an issue raised moments ago in the SAME pass (D-33c)', async () => {
+        const raised = await call('critic', issue());
+
+        expect(raised).toMatchObject({ ok: true, data: { id: 'finding_0', kind: 'issue' } });
+
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', open_issues: 1, open_issue_refs: ['finding_0'] });
+        // Only the issue's own state, cost and id appear, and they are the ones the row carries: the
+        // same-pass case needs no second rule, it is the first rule reading a store one write later.
+        expect(result.message).toBe(
+            refusal(
+                'D-33c',
+                'a proposal cannot be filed while 1 issue is unresolved — finding_0 (major, unconfirmed) — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach `fixed` or `discarded` before a proposal can be filed (D-33c).'
+            )
+        );
+        expect(store.findings.list().map((finding) => finding.id)).toEqual(['finding_0']);
+    });
+
+    it('refuses the issue that follows a proposal in the same pass, by name (D-33c)', async () => {
+        const raised = await call('critic', proposal());
+
+        expect(raised).toMatchObject({ ok: true, data: { id: 'finding_0', kind: 'proposal' } });
+
+        const result = await call('critic', issue());
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', field: 'kind', expected: ['proposal'] });
+        // The other direction of the no-mixing rule, and the one the first rule cannot catch: an ISSUE is
+        // always filable, so the proposal coming first is what has to be refused — attributed to THIS
+        // run through the journal, because §4.10 has no `run_ref` field.
+        expect(result.message).toBe(
+            refusal(
+                'D-33c',
+                'this pass already filed finding_0 as `kind: proposal`, and an issue cannot share a review pass with a proposal (D-33c).'
+            )
+        );
+        expect(result).toMatchObject({ proposal_refs: ['finding_0'] });
+        expect(result.fix).toBe(
+            'this pass filed a proposal; an issue and a proposal cannot share a pass. End the pass; file the issue in your next review'
+        );
+        expect(store.findings.list().map((finding) => `${finding.id}:${finding.kind}`)).toEqual(['finding_0:proposal']);
+    });
+
+    it('refuses the issue after a proposal raised by the same run on a DIFFERENT Story row (D-33c)', async () => {
+        // The pass boundary is the RUN, not the target: two calls about two different artifacts are
+        // still one pass, and one pass answers one question.
+        const raised = await call('reader', proposal({ target_ref: story.id }), 'run_review_1');
+
+        expect(raised.ok).toBe(true);
+
+        const result = await call('reader', issue({ criterion_ref: 'C-7' }), 'run_review_1');
+
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', proposal_refs: ['finding_0'] });
+
+        // The same issue by a DIFFERENT pass is filable: the rule is about the pass, not about the book.
+        const nextPass = await call('reader', issue({ criterion_ref: 'C-7' }), 'run_review_2');
+
+        expect(nextPass).toMatchObject({ ok: true, data: { id: 'finding_1', kind: 'issue' } });
+    });
+
+    it('never holds an issue back, however many issues and proposals are already open (D-33c)', async () => {
+        seedFinding('issue', 'unconfirmed');
+        seedFinding('issue', 'confirmed', 'critical');
+        seedFinding('proposal', 'confirmed');
+
+        // Issues are the release valve, so they stay filable over anything: refusing them is how a rule
+        // like this one deadlocks a book by refusing the very work that would unlock it.
+        const first = await call('critic', issue());
+        const second = await call('critic', issue({ title: 'the storm arrives after the relief' }));
+
+        expect(first).toMatchObject({ ok: true, data: { id: 'finding_3', kind: 'issue' } });
+        expect(second).toMatchObject({ ok: true, data: { id: 'finding_4', kind: 'issue' } });
+    });
+
+    it('releases the proposal the moment every issue reaches `fixed` (D-33c)', async () => {
+        seedFinding('issue', 'confirmed');
+        seedFinding('issue', 'unconfirmed', 'minor');
+        store.findings.list().forEach((row) => {
+            const fresh = store.findings.require(row.id);
+
+            store.findings.update(row.id, { state: 'fixed' }, { why: 'seed: the Writer landed the repair' }, [
+                { id: row.id, rev: fresh.rev }
+            ]);
+        });
+
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_2', kind: 'proposal' } });
+    });
+
+    it('releases the proposal the moment every issue reaches `discarded` (D-33c)', async () => {
+        seedFinding('issue', 'confirmed');
+        const row = store.findings.require('finding_0');
+
+        store.findings.update('finding_0', { state: 'discarded' }, { why: 'seed: the Author declined the claim' }, [
+            { id: row.id, rev: row.rev }
+        ]);
+
+        const result = await call('critic', proposal());
+
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_1', kind: 'proposal' } });
+    });
+
+    it.each([
+        ['unconfirmed', 'finding_0 (major, unconfirmed)'],
+        ['confirmed', 'finding_0 (major, confirmed)'],
+        ['approved', 'finding_0 (major, approved)'],
+        ['disputed', 'finding_0 (major, disputed)']
+    ] as const)('an issue in state `%s` still holds every proposal open (D-33c)', async (state, roster) => {
+        seedFinding('issue', state);
+        const result = await call('critic', proposal());
+
+        // `approved` counts because approval is the START of the repair, not the end of it (D-34: the
+        // approval is what creates the Writer task). `disputed` counts because the Editor's "that is not
+        // a defect" is a decision the Author can still overturn, and until the row closes, the record
+        // calls the book defective. Only `CLOSED_FINDING_STATES` release it.
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', open_issues: 1, open_issue_refs: ['finding_0'] });
+        expect(result.message).toContain(`— ${roster} —`);
+    });
+
+    it('refuses a proposal approved over an open issue, on `approve` and on `auto` (D-33d)', async () => {
+        // The dial covers `major`, so `auto` reaches the approval gate rather than paying D-35's
+        // refusal first — which is the whole point: the sweep that approves by cost alone is the funnel
+        // this rule closes.
+        store.stories.update(story.id, { auto_approve: ['critical', 'major'] }, { why: 'seed: the dial covers major' });
+        seedFinding('proposal', 'confirmed');
+        seedFinding('issue', 'confirmed');
+
+        for (const decision of ['approve', 'auto']) {
+            const result = await approve('finding_0', decision);
+
+            expect(result).toMatchObject({
+                ok: false,
+                refused: 'D-33d',
+                finding_id: 'finding_0',
+                kind: 'proposal',
+                open_issues: 1,
+                open_issue_refs: ['finding_1']
+            });
+            expect(result.message).toBe(
+                refusal(
+                    'D-33d',
+                    'proposal finding_0 cannot be approved while 1 issue is unresolved — finding_1 (major, confirmed) — because issues are in focus before anything else can be done (D-33d).'
+                )
+            );
+            expect(result.fix).toBe(
+                'work the issues first — verify, approve, fix or discard each one — then approve this proposal; or discard it now, which is allowed at any time'
+            );
+        }
+
+        // Nothing moved: the row is still the Author's queue row it was, not approved work.
+        expect(store.findings.require('finding_0').state).toBe('confirmed');
+        expect(store.tasks.list()).toEqual([]);
+    });
+
+    it('allows a proposal to be DISCARDED while issues are open (D-33d)', async () => {
+        seedFinding('proposal', 'confirmed');
+        seedFinding('issue', 'confirmed');
+
+        const result = await approve('finding_0', 'discard');
+
+        // Declining a change is not an approval: it creates no Writer task and it CLOSES the row, so
+        // refusing it would strand the proposal in the queue for the rest of the phase.
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_0', state: 'discarded' } });
+        expect(store.tasks.list()).toEqual([]);
+    });
+
+    it('approves an ISSUE while other issues are open, and the proposal once the issues are fixed (D-33d)', async () => {
+        seedFinding('issue', 'confirmed');
+        seedFinding('issue', 'confirmed', 'critical');
+        seedFinding('proposal', 'confirmed');
+
+        // The defects that unlock a proposal are never themselves held by the rule — that is the
+        // deadlock this avoids. A second open issue does not hold the first one's approval.
+        expect(await approve('finding_1', 'approve')).toMatchObject({ ok: true, data: { state: 'approved' } });
+
+        // And `approved` is NOT `resolved`: finding_1 is now approved work and still holds the proposal
+        // shut, alongside the issue that was never touched.
+        const stillBlocked = await approve('finding_2', 'approve');
+
+        expect(stillBlocked).toMatchObject({ ok: false, refused: 'D-33d', open_issue_refs: ['finding_0', 'finding_1'] });
+
+        for (const id of ['finding_0', 'finding_1']) {
+            const fresh = store.findings.require(id);
+
+            store.findings.update(id, { state: 'fixed' }, { why: 'seed: the repair landed' }, [
+                { id, rev: fresh.rev }
+            ]);
+        }
+
+        const approved = await approve('finding_2', 'approve');
+
+        expect(approved).toMatchObject({ ok: true, data: { id: 'finding_2', state: 'approved' } });
+        // D-34's task still opens on the far side of the gate — the rule sequences approvals, it does
+        // not neuter them. `finding_1`'s row is the issue approved at the top of the test.
+        expect(store.tasks.list().map((task) => `${task.kind}:${task.finding_ref}`)).toEqual([
+            'fix:finding_1',
+            'fix:finding_2'
+        ]);
+    });
+
+    it('refuses a proposal the Editor itself raised, not only a Critic\u2019s (D-33c, D-33d)', async () => {
+        seedFinding('issue', 'confirmed');
+        const result = await call('editor', proposal());
+
+        // The gate is on the CLAIM, not on the role that files it: an Editor confirming its own proposal
+        // over an open defect buys the same Writer round the rule exists to sequence.
+        expect(result).toMatchObject({ ok: false, refused: 'D-33c', open_issue_refs: ['finding_0'] });
+    });
+
+    it('files a proposal over an issue that was DISCARDED, and over a closed proposal (D-33c)', async () => {
+        seedFinding('issue', 'discarded');
+        seedFinding('proposal', 'fixed');
+
+        const result = await call('critic', proposal({ title: 'open on the lie instead' }));
+
+        // `fixed` and `discarded` are the only two closers, and they close regardless of their own kind:
+        // a closed proposal row is history, not an open claim competing for the same pass.
+        expect(result).toMatchObject({ ok: true, data: { id: 'finding_2', kind: 'proposal' } });
     });
 });

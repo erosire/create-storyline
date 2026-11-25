@@ -57,9 +57,9 @@ describe('D-31 / D-25 — opening a lock scraps the work above it', () => {
             // Phase ①'s selected Summary revision and one selected revision per chapter: `revisions`
             // counts every unit kind, and the research pipeline leaves its winner as a row.
             revisions: 3,
-            // 16 unit/story verdicts (phase ①'s deep-review Reader rates the selected Summary
+            // 16 unit/story verdicts (phase ①'s deep-review Critic rates the selected Summary
             // revision, which is one more than the classic walk left) + 4 filed against a competing
-            // DRAFT (§6.2a/D-21: the Checker judges one draft per run, so each chapter's selected
+            // DRAFT (§6.2a/D-21: the Reader judges one draft per run, so each chapter's selected
             // draft carries its own verdict row).
             verdicts: 20
         });
@@ -408,7 +408,7 @@ describe('D-19 / L-24 — one line of intent becomes a record with impact the lo
 describe("D-29 — the selection note IS the record of the Author's decision", () => {
     it("stores the Author's own words on the picked Idea, and the default only when no note was given (D-29, U-15, D-32)", async () => {
         // §4.17's `selection_note` is the half of D-29 that makes a pick a DECISION rather than a chat
-        // message: U-15 renders it in the tray's decided list and the next fresh Reader reads it as the
+        // message: U-15 renders it in the tray's decided list and the next fresh Critic reads it as the
         // reason a point is settled (D-32). So the engine stores what the Author actually said, and the
         // generic sentence is only the fallback for a call that carried no note at all.
         const rig = await createRig({ story: { chapter_count: 2 } });
@@ -548,17 +548,17 @@ describe('G-1 / D-17b — the Goal, the per-chapter bar, and the crew assignment
         // Every phase needs its own Writer (L-4's three loops, three template sets), and the catalogue's
         // built-ins are the only templates in this store. The phase-① crew is the research pipeline's
         // four (`editor-seed-structure` → `researcher-story` → `writer-summary-sampler` →
-        // `reader-screening`); `writer-summary` no longer exists.
+        // `critic-screening`); `writer-summary` no longer exists.
         const crew = [
             'editor-seed-structure',
             'researcher-story',
             'writer-summary-sampler',
-            'reader-screening',
+            'critic-screening',
             'writer-plotlines',
             'writer-chapters',
             'editor-general',
-            'reader-genre',
-            'checker-consistency'
+            'critic-genre',
+            'reader-consistency'
         ];
 
         expect(await rig.engine.assignTemplates(rig.storyId, crew)).toEqual({

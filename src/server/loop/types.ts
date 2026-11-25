@@ -45,10 +45,10 @@ export interface ProbeState {
     status: ProbeStateKind;
     /** The phase the round was run for; a phase change invalidates it (L-37's pass is per phase). */
     phase: StoryPhase;
-    /** The checker job's Work Item id, so its verdicts can be tied back to the round (L-14). */
-    checker_item_id: string | null;
-    /** The reader job's Work Item id — the "fresh round of Readers" half of L-37's condition 3. */
+    /** The reader job's Work Item id, so its verdicts can be tied back to the round (L-14). */
     reader_item_id: string | null;
+    /** The critic job's Work Item id — the "fresh round of Critics" half of L-37's condition 3. */
+    critic_item_id: string | null;
     /** Journal watermark: anything created after this seq counts as "found this round". */
     journal_seq: number;
     /** The `auto_approve` set the round was judged at, sorted (D-35b). */
@@ -338,7 +338,7 @@ export interface WorkCandidate {
     priority: number;
     /**
      * Order WITHIN a priority class, lowest first, for the rare case where the class itself does not
-     * decide who goes next. The checker rotation in `work.ts` is that case: three drafts of one chapter
+     * decide who goes next. The reader rotation in `work.ts` is that case: three drafts of one chapter
      * all sit at priority 2, and the claim-key tie-break would hand the same draft to every sweep.
      * Absent means 0. Like the priority and the key, it is a pure function of the records (the rotation
      * comes from the dispatch count), so a restarted engine picks the same next draft (L-3).
@@ -418,8 +418,8 @@ export interface CreateStoryInput {
     template_refs?: string[];
     /** Phase ①: how many Writers expand the Seed (the Author's sampling size; standard 5). */
     summary_sampling?: number;
-    /** Phase ①: how many Readers critique each sample (the Author's setting; standard 5). */
-    summary_readers?: number;
+    /** Phase ①: how many Critics critique each sample (the Author's setting; standard 5). */
+    summary_critics?: number;
     /**
      * SUMMARY PHRASE R1/R6 — how phase ① writes the Summary.
      *

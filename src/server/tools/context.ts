@@ -12,7 +12,7 @@
  *                               never from an argument;
  *  3. the role kind (T-0)     → the kind selects the §7 row; an unknown kind is refused rather
  *                               than defaulted, because a silent default would hand a Writer's
- *                               permissions to a Reader;
+ *                               permissions to a Critic;
  *  4. `why` (T-5)             → checked BEFORE the schema, so a missing reason is refused with its
  *                               own rule id instead of a generic malformed-call error;
  *  5. the request body (T-11) → schema validation, including the required enum and the unknown

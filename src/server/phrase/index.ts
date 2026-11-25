@@ -10,3 +10,14 @@ export * from './catalog';
 export * from './revisions';
 export * from './exclusion';
 export * from './findings';
+// PHRASE GROUP LOCK (R-lock): the two writes that put a group's current text out of the loop's reach and
+// bring it back, plus the refusal a route turns into a 409. The flag's READ is `catalog.ts`'s
+// `isPhraseGroupLocked`, because every module that subtracts locked groups already imports that file.
+export * from './locks';
+// SUMMARY PHRASE D-67/D-68: the Clean stamp, the reviewed selection, and the Author's choose. Its seat
+// keys are `exclusion.ts`'s, its rows are `group_revisions` rows, and its only consumer on the loop
+// side is the scoring seat — never a gate (D-65's boundary holds through this module).
+export * from './reviewed';
+// READER SCORING (D-65): the SectionScores answer check. Its claim key lives in `exclusion.ts`
+// beside the review seats it re-arms with, and its rows are written by the engine's settle.
+export * from './section-scores';

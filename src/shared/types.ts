@@ -82,6 +82,13 @@ export type Trend = (typeof TRENDS)[number];
  * §4.10 `cost` / §4.1 `auto_approve` — the finding costs. One list, two jobs (D-35b): the
  * dial that decides which findings skip the Author's approval gate, and the same dial that
  * sets the drain threshold (L-37). Order is significant: it is the triage scale.
+ *
+ * ALL FOUR VALUES STAY, whatever the kind taxonomy does to them. `taste` is load-bearing four
+ * ways over — persisted rows carry it, `costDistribution` hard-keys it (api/projections.ts), the
+ * D-35b auto-approve dial lists it, and the drain/threshold math reads the ladder as a whole —
+ * so D-33b narrows WHO may file at `taste` rather than deleting the word: `raiseFinding` refuses
+ * a `taste`-cost `issue` and a `critical`-cost `proposal` (tools/reader.ts). The Editor's own
+ * triage stays unrestricted (D-34a: its cost call is final, and it may re-cost a row to any rung).
  */
 export const FINDING_COSTS = ['critical', 'major', 'minor', 'taste'] as const;
 export type Cost = (typeof FINDING_COSTS)[number];
@@ -94,20 +101,25 @@ export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major', 'minor']
 
 /**
  * §4.10 `kind` (additive) — WHAT a finding claims, as distinct from `cost`, which says only how much
- * repairing it costs. The two are deliberately orthogonal: an improvement can be worth a `major` pass
- * and a defect can be `taste`.
+ * repairing it costs. The two are ORTHOGONAL, but not unrestricted: each kind owns part of the cost
+ * ladder (D-33b). An `issue` is rated `critical` / `major` / `minor` — never `taste`, because "that is
+ * a preference" is the sentence that makes it a Proposal. A `proposal` is rated `major` / `minor` /
+ * `taste` — never `critical`, because `critical` is the ladder's word for a contradiction the text
+ * cannot live with, and a suggestion the Seed never promised is not one.
  *
- * `issue` is the §4.10 claim: a defect, admissible only by quoting a commitment and showing the
- * artifact breaking it, which is why an Editor `dispute`s a claim whose whole case is an ABSENCE
- * (D-33's admissibility gate). `improvement` is a PROPOSAL the Seed never had to promise: the absence
- * rule does not apply to it, and the Editor weighs it on merit — does the change genuinely strengthen
- * the story the Seed promises, is it worth a Writer pass, does it contradict the installed text?
+ * `issue` is the §4.10 claim: a defect — it breaks the story's logic, it is inconsistent with a
+ * commitment, or it is a claim the artifact cannot support — and it is admissible only by quoting that
+ * commitment and showing the artifact breaking it, which is why an Editor `dispute`s a claim whose
+ * whole case is an ABSENCE (D-33's admissibility gate). `proposal` is the improvement the Author asked
+ * for by name: word changes, a new element, linking a twist. The absence rule does not apply to it,
+ * and the Editor weighs it on merit — does the change genuinely strengthen the story the Seed promises,
+ * is it worth a Writer pass, does it contradict the installed text?
  *
  * `issue` is FIRST because it is the default: a row raised before this field existed claimed a defect,
  * and a raise that names no `kind` claims a defect. Order carries no other meaning (unlike `cost`,
  * whose order is the triage scale).
  */
-export const FINDING_KINDS = ['issue', 'improvement'] as const;
+export const FINDING_KINDS = ['issue', 'proposal'] as const;
 export type FindingKind = (typeof FINDING_KINDS)[number];
 
 /**
@@ -120,7 +132,7 @@ export type FindingKind = (typeof FINDING_KINDS)[number];
  * period/place/facts a Story depends on without ever touching the book. Appending it (rather
  * than inserting) keeps the §4 order of the original four intact.
  */
-export const ROLE_KINDS = ['writer', 'editor', 'reader', 'checker', 'researcher'] as const;
+export const ROLE_KINDS = ['writer', 'editor', 'critic', 'reader', 'researcher'] as const;
 export type RoleKind = (typeof ROLE_KINDS)[number];
 
 /** §4.10 `state` — the finding chain: raise (unconfirmed) → verify → approve → fix (D-33, D-34). */
@@ -176,7 +188,7 @@ export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
  * is still working on the revision (a later `editSummary`/`editChapter` in the same run extends
  * the same row), then `drafted` once the run closes and the draft is complete enough to review.
  * Only `drafted` (and the legacy `competing` rows written before this lifecycle existed) are
- * offered to Readers, Checkers and the Editor.
+ * offered to Critics, Readers and the Editor.
  */
 export const REVISION_STATES = ['pending', 'drafted', 'competing', 'selected', 'merged_into', 'discarded'] as const;
 export type RevisionState = (typeof REVISION_STATES)[number];
@@ -201,7 +213,7 @@ export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
 export const IDEA_KINDS = ['direction', 'possibility', 'fact', 'warning'] as const;
 export type IdeaKind = (typeof IDEA_KINDS)[number];
 
-/** §4.9 `recommendation` — `stuck` means the checker believes the Story should go `pending`. */
+/** §4.9 `recommendation` — `stuck` means the reader believes the Story should go `pending`. */
 export const VERDICT_RECOMMENDATIONS = ['advance', 'fix', 'stuck'] as const;
 export type VerdictRecommendation = (typeof VERDICT_RECOMMENDATIONS)[number];
 
@@ -265,13 +277,13 @@ export interface ChapterSection {
 export const DEFAULT_SUMMARY_SAMPLING = 3;
 
 /**
- * Phase ①'s standard Reader count: how many no-tool screening passes judge each sample (§6.4
- * step 4), and how many deep-review Reader passes the selected revision gets (§6.4 step 6). The
- * Author may change it per Story (`summary_readers`).
+ * Phase ①'s standard Critic count: how many no-tool screening passes judge each sample (§6.4
+ * step 4), and how many deep-review Critic passes the selected revision gets (§6.4 step 6). The
+ * Author may change it per Story (`summary_critics`).
  */
-export const DEFAULT_SUMMARY_READERS = 5;
+export const DEFAULT_SUMMARY_CRITICS = 5;
 
-/** The largest sample/reader count the API accepts — a typo guard, not a model constraint. */
+/** The largest sample/critic count the API accepts — a typo guard, not a model constraint. */
 export const SUMMARY_REVIEW_LIMIT = 20;
 
 /**
@@ -287,8 +299,8 @@ export const SUMMARY_REVIEW_LIMIT = 20;
  *     Author's call, so this is a list, not a single ref).
  *   - `chapter_deps` — L-9's declared dependency set. Not for sequencing (all chapters are
  *     in flight together, L-8): it says which chapters a change must propagate to.
- *   - `summary_sampling` / `summary_readers` — the phase-① pipeline's two dials: how many
- *     Writer samples one Summary gets and how many Readers critique each sample. Author
+ *   - `summary_sampling` / `summary_critics` — the phase-① pipeline's two dials: how many
+ *     Writer samples one Summary gets and how many Critics critique each sample. Author
  *     settings, absent means the standard above.
  */
 export interface Story extends StoredRecord {
@@ -317,8 +329,8 @@ export interface Story extends StoredRecord {
     chapter_deps: Record<string, string[]>;
     /** Phase ①: how many Writers expand one Seed into competing Summary drafts (default 3). */
     summary_sampling?: number;
-    /** Phase ①: how many Readers critique each Summary draft before the Editor sees it (default 5). */
-    summary_readers?: number;
+    /** Phase ①: how many Critics critique each Summary draft before the Editor sees it (default 5). */
+    summary_critics?: number;
     /**
      * SUMMARY PHRASE (additive, §4 allows adding fields): which Summary authoring model this Story
      * uses.
@@ -343,6 +355,21 @@ export interface Story extends StoredRecord {
      * writes it, and no code path flips a Story back to `'sampling'` behind the Author's back.
      */
     summary_mode?: 'groups' | 'sampling';
+    /**
+     * PHRASE GROUP LOCK (additive) — may the EDITOR put a Summary phrase group into the locked state?
+     *
+     * The Editor's judgment is a recommendation about a group the pipeline keeps wanting to rewrite:
+     * the Critic's findings on it are exhausted (no issues, or no major improvement left to buy) and
+     * the Reader's score and rationale say the text is doing its job. Locking the group then stops the
+     * rewrites and makes that text the fixed point the OTHER groups are revised against for consistency.
+     *
+     * ABSENT means DISABLED — the conservative default, and what every book written before this field
+     * exists reads as. Only a deliberate Author write turns it on, and it is a permission for the Editor
+     * alone: the Author may lock on any group-managed Story whether this is on or not
+     * (`phrase/locks.ts:lockPhraseGroup`), and neither actor may unlock but the Author
+     * (`phrase/locks.ts:unlockPhraseGroup`).
+     */
+    editor_group_locking?: boolean;
     /**
      * Phase ①'s P11 audit for samples that were truncated (documents/phase-1-research-pipeline.md
      * §3.6/§6.6). The selection commit hard-deletes the losing `revisions` rows and their
@@ -388,7 +415,7 @@ export interface Story extends StoredRecord {
             valid: boolean;
             /**
              * H1, ADDED (additive): the fix task ids this candidate did NOT clear — its blocking
-             * screening issues plus the requested fixes a Reader marked `unresolved`/`unknown`/absent.
+             * screening issues plus the requested fixes a Critic marked `unresolved`/`unknown`/absent.
              *
              * WHY IT MUST SURVIVE THE COMMIT: the selection truncates every losing draft AND its
              * screening reviews (§6.6, P13/D-22), so without this line the reason a candidate was
@@ -418,7 +445,7 @@ export interface Story extends StoredRecord {
              * HILL CLIMB, ADDED: the candidate's blocking issues SPLIT BY ORIGIN relative to the
              * accepted draft it replaces. `introduced_*` are defects this draft created — any of them
              * makes the candidate ineligible — and `inherited_*` are defects the accepted text already
-             * had, which cost the candidate nothing on their own. An issue whose origin the Reader
+             * had, which cost the candidate nothing on their own. An issue whose origin the Critic
              * did not state counts in `introduced_*` (fail closed).
              */
             introduced_critical?: number;
@@ -627,7 +654,7 @@ export interface Task extends StoredRecord {
     kind: string;
     title: string;
     detail?: string;
-    /** A RoleKind (`writer`/`editor`/`reader`/`checker`/`researcher`) naming who does the work. */
+    /** A RoleKind (`writer`/`editor`/`critic`/`reader`/`researcher`) naming who does the work. */
     owner_role?: string;
     state: TaskState;
     priority: number;
@@ -711,9 +738,9 @@ export interface Verdict extends StoredRecord {
 
 /**
  * §4.10 — a named claim with evidence and a fingerprint: a defect (`kind: 'issue'`, the default) or
- * a proposal to improve the text (`kind: 'improvement'`).
+ * a proposal to improve the text (`kind: 'proposal'`).
  *
- * D-33: from a Reader or checker it starts `unconfirmed` — a suspicion worth nothing until
+ * D-33: from a Critic or reader it starts `unconfirmed` — a suspicion worth nothing until
  * an Editor confirms it. D-34: the Editor rewrites it into the Author's reading surface and
  * sets the cost it actually deserves (D-34a: that triage is final, no appeal). D-16:
  * `fingerprint` = stable hash of (criterion, target, kind, normalised subject); a repeat report
@@ -735,7 +762,7 @@ export interface Finding extends StoredRecord {
     evidence: string;
     cost: Cost;
     /**
-     * T5 (additive) — what the row CLAIMS: `issue` (a defect) or `improvement` (a proposal).
+     * T5 (additive) — what the row CLAIMS: `issue` (a defect) or `proposal` (an improvement).
      *
      * ABSENT ⇒ `'issue'`. That is both the legacy reading (a row raised before the field existed
      * claimed a defect) and the default of a new `raiseFinding` call that names no `kind`, and it is
@@ -744,11 +771,17 @@ export interface Finding extends StoredRecord {
      *
      * WHY THE FIELD EXISTS: an Editor auto-`dispute`s a claim whose whole case is an absence, because
      * the Seed is a commitment and not an outline. That gate is right for a defect and wrong for a
-     * proposal — a Reader that spots a change which would genuinely improve the book was having it
-     * rejected for describing something the Seed never promised. Marking the row `improvement` tells
+     * proposal — a Critic that spots a change which would genuinely improve the book was having it
+     * rejected for describing something the Seed never promised. Marking the row `proposal` tells
      * the Editor to weigh the change on merit (worth a Writer pass? does it break the installed text?)
-     * instead of disputing it on absence grounds. `critical` is refused for an improvement
-     * (`tools/checker.ts:raiseFinding`): a proposal is not a contradiction the text cannot live with.
+     * instead of disputing it on absence grounds.
+     *
+     * THE TAXONOMY IS ENFORCED AT THE GATE, not left to the reporter (D-33b, both refusals in
+     * `tools/reader.ts:raiseFinding`): a `proposal` may not cost `critical` (a suggestion is not a
+     * contradiction the text cannot live with), and an `issue` may not cost `taste` ("this is merely a
+     * preference" is the definition of a Proposal, and a taste-cost issue would sit on the Author's
+     * queue claiming to be a defect). Neither rule applies to the Editor's own `verifyFinding` cost
+     * rewrite — D-34a makes that triage final, so it may move a row to any rung it can justify.
      */
     kind?: FindingKind;
     fingerprint: string;
@@ -758,13 +791,13 @@ export interface Finding extends StoredRecord {
     /** The Author, or `auto` (D-35) — the gate that starts Writer work (D-34). */
     approved_by?: string | null;
     /**
-     * Phase ①'s independent second look: a Reader re-checks an Editor-confirmed finding after the
+     * Phase ①'s independent second look: a Critic re-checks an Editor-confirmed finding after the
      * approval and marks it valid. The Writer's fix pass waits for this flag in the Summary phase,
      * so an Editor approval alone does not spend a Writer round on a suspicion nobody confirmed.
      */
-    reader_confirmed?: boolean;
-    /** The Reader run that gave the independent confirmation, for P11's audit trail. */
-    reader_confirmed_by?: string | null;
+    critic_confirmed?: boolean;
+    /** The Critic run that gave the independent confirmation, for P11's audit trail. */
+    critic_confirmed_by?: string | null;
     seen_count: number;
     /**
      * L-11a: other records this defect touches (a chapter or plotline ref each), so one finding
@@ -1058,12 +1091,12 @@ export interface IdeaVerification {
 }
 
 /**
- * §4.17 — what Readers and the Author put forward before anything is written.
+ * §4.17 — what Critics and the Author put forward before anything is written.
  *
  * Phase-scoped and temporary (D-36): locking a phase deletes that phase's Ideas — selected,
  * discarded and deferred alike. Within the phase a discarded Idea is NEVER deleted (D-28):
  * a discarded draft is a dead alternative while a discarded Idea is a decision, and the
- * decided list is the memory that stops the next amnesiac Reader re-proposing it (D-32).
+ * decided list is the memory that stops the next amnesiac Critic re-proposing it (D-32).
  *
  * D-26: a proposal, never an edit. D-27: an Idea carrying `sources` must be verified by an
  * Editor before it can be selected (C-15).
@@ -1075,7 +1108,7 @@ export interface Idea extends StoredRecord {
     unit_ref?: string;
     body: string;
     kind: IdeaKind;
-    /** A Reader role name, or the Author (D-26). */
+    /** A Critic role name, or the Author (D-26). */
     author: string;
     sources: IdeaSource[];
     /** D-32: a repeat of a DECIDED Idea is reported to the Author with the earlier decision, not re-opened. */
@@ -1119,7 +1152,7 @@ export interface Proposal extends StoredRecord {
  * `critical`/`high` deliberately reuse the triage words of {@link FINDING_COSTS}, because the
  * prompt compiler's filter is one comparison against that vocabulary (§5: "only critical and
  * high entries enter the prompt"); `normal`/`low` stay readable through `readKnowledge` for the
- * deep-review Reader and never enter a sampling prefix.
+ * deep-review Critic and never enter a sampling prefix.
  */
 export const KNOWLEDGE_IMPORTANCE = ['critical', 'high', 'normal', 'low'] as const;
 export type KnowledgeImportance = (typeof KNOWLEDGE_IMPORTANCE)[number];
@@ -1219,7 +1252,7 @@ export interface SeedBrief extends StoredRecord {
 }
 
 /**
- * §3.4 — one screening Reader's `critical`/`high` complaint about ONE sample.
+ * §3.4 — one screening Critic's `critical`/`high` complaint about ONE sample.
  *
  * This is NOT a {@link Finding}: it never enters the D-33/D-34 ladder, cannot block a Writer,
  * and exists only to rank the round's samples (§6.5) and to seed the deep review's brief.
@@ -1228,7 +1261,7 @@ export interface SeedBrief extends StoredRecord {
  */
 export interface SampledIssue {
     /**
-     * The screening Reader's two severities. THE WORDS ARE NOT THE FINDING'S WORDS: screening's
+     * The screening Critic's two severities. THE WORDS ARE NOT THE FINDING'S WORDS: screening's
      * `critical` is a finding at cost `critical`, and screening's `high` is a finding at cost
      * `major` — the screening schema closes at two values (§4.3) while the finding ladder has four
      * (§4.10), and the mapping is one-to-one. Everything in the loop that says "blocking" means
@@ -1253,7 +1286,7 @@ export interface SampledIssue {
      * flaw the ACCEPTED text did not have is a regression, and no number of certified fixes buys it
      * (`sample-select.ts:scoreSample` makes it ineligible).
      *
-     * `inherited` therefore means "this is already in the text I was told to revise" — the Reader
+     * `inherited` therefore means "this is already in the text I was told to revise" — the Critic
      * saw it in the base — and `introduced` means "this draft created it". Absent or `unknown`
      * FAILS CLOSED as `introduced` in a round that has an accepted base: a screening pass that was
      * handed the base and did not classify the issue cannot claim the round is no worse than the
@@ -1274,7 +1307,7 @@ export interface SampledIssue {
 }
 
 /**
- * H1 — one screening Reader's verdict on ONE requested fix, for ONE candidate draft.
+ * H1 — one screening Critic's verdict on ONE requested fix, for ONE candidate draft.
  *
  * WHY THIS EXISTS AT ALL: before this row existed, an open `fix` task was closed because a
  * selection happened (`engine.ts:trySelectSample`'s §6.8 branch), not because anything proved the
@@ -1286,7 +1319,7 @@ export interface SampledIssue {
  * on. `evidence` follows D-15's rule: a verdict with no citable line about the draft is not a
  * verdict, so an empty/absent evidence line is what makes `unknown` the honest answer.
  *
- * `status` is deliberately three-valued: `unknown` covers a Reader that could not tell (the draft
+ * `status` is deliberately three-valued: `unknown` covers a Critic that could not tell (the draft
  * neither shows nor contradicts the fix). It is NOT a pass — `sample-select.ts:isEligibleSample`
  * treats anything but `resolved` as unresolved, because an unverifiable fix is a fix the round has
  * not earned yet.
@@ -1300,9 +1333,9 @@ export interface SampledFixVerification {
 }
 
 /**
- * §3.4 — the screening Reader's one-turn answer, persisted by the engine from the run's
+ * §3.4 — the screening Critic's one-turn answer, persisted by the engine from the run's
  * validated structured output (§2 decision 2 — the same named exception D-12a makes for the
- * Digest; the Reader never calls a tool in this mode).
+ * Digest; the Critic never calls a tool in this mode).
  *
  * `valid: false` means the schema-repair retry still failed: the sample is judged anyway, with
  * an explicit error, so the selector can refuse to install an unjudged draft (§6.5).
@@ -1310,8 +1343,8 @@ export interface SampledFixVerification {
 export interface SampleReview extends StoredRecord {
     story_id: string;
     revision_ref: string;
-    /** Reader role name that produced it. */
-    reader: string;
+    /** Critic role name that produced it. */
+    critic: string;
     issues: SampledIssue[];
     /** false = the one repair retry still failed schema validation. */
     valid: boolean;
@@ -1321,7 +1354,7 @@ export interface SampleReview extends StoredRecord {
      *
      * This is the anchor that makes the verification gradeable: a candidate is only ever judged
      * against the fixes its own prompt carried, so a fix task that opened after the round's screens
-     * were dispatched cannot retroactively disqualify the round, and a Reader that skips a fix it
+     * were dispatched cannot retroactively disqualify the round, and a Critic that skips a fix it
      * was handed counts against the candidate (silence is not a pass). A legacy row carries none,
      * which reads as "this pass graded issues only" — the round then falls back to the Story's
      * open fix list rather than trusting an empty set (`records.ts:sampleFixDemand`).
@@ -1362,10 +1395,18 @@ export interface SampleReview extends StoredRecord {
  * lists it separately, never in place of the current text). Nothing deletes a group revision: the
  * whole point of the redesign is that a superseded group text is history, not a loser to truncate.
  *
- * Order of the array is the lifecycle order (archived → latest), matching the enum style at the top
- * of this file; the numbers are derived per group, never globally.
+ * D-68 (the Reviewed Summary) adds a THIRD, terminal position: `discarded`. When the Author chooses
+ * the reviewed Overview, every revision that is NOT part of that choice becomes `discarded` — the row
+ * PERSISTS (P11/D-12a: it is still the history, and R3's closure join still reads it, so a `fixed`
+ * finding stays fixed), but no read of "current", no selection, and no Author rail lists it. It is
+ * terminal in one direction only: nothing installs over a discarded row, and nothing un-discards one;
+ * the group's own line keeps running, so the chosen text is a NEW `latest` at the group's next number
+ * and the numbers of the discarded rows are never reused or renumbered.
+ *
+ * Order of the array is the lifecycle order (archived → latest → discarded), matching the enum style
+ * at the top of this file; the numbers are derived per group, never globally.
  */
-export const GROUP_REVISION_STATES = ['archived', 'latest'] as const;
+export const GROUP_REVISION_STATES = ['archived', 'latest', 'discarded'] as const;
 export type GroupRevisionState = (typeof GROUP_REVISION_STATES)[number];
 
 /**
@@ -1401,6 +1442,29 @@ export interface Phrase extends StoredRecord {
     revision: number;
     /** The group ids in catalog order — the ordered key list the projection and the review brief read. */
     group_refs: string[];
+    /**
+     * D-68 (additive) — the Reviewed Summary the AUTHOR chose, as the group revision vector it was
+     * made of (`{groupId: revisionNumber}`).
+     *
+     * This is a DECISION record, not a derived read: `phrase/reviewed.ts:cleanSelectionOf` answers
+     * "which clean revision would the reviewed Overview be built from RIGHT NOW", and that answer moves
+     * whenever a new pass or a new install moves it. The Author's choose is a moment with a consequence
+     * (the texts become the live Overview and everything else is discarded), so the vector it was made
+     * from is persisted here, in the same commit as the install the choice performs.
+     *
+     * ABSENT (or `{}`) means the Author has never chosen. A persisted vector whose rows no longer exist
+     * — a Seed reset or a scrap deleted the history (`loop/invalidation.ts:scrapPhasesAfter`) — is read
+     * as no choice, because `chosenSelectionOf` requires each named row to still carry its Clean stamp.
+     */
+    reviewed_vector?: Record<string, number>;
+    /**
+     * D-68 — `groupVectorHash(reviewed_vector)`: the join key of the choice. The Reader's
+     * `summary_scores` rows carry the same hash (§4.19, D-65), so the rail can show the score that was
+     * judged against the text the Author actually picked, rather than the newest score of a newer text.
+     */
+    reviewed_vector_hash?: string;
+    /** D-68 — when the Author chose (the choose commit's own stamp; empty/absent = never chosen). */
+    reviewed_at?: string;
 }
 
 /**
@@ -1438,7 +1502,45 @@ export interface PhraseGroup extends StoredRecord {
     revision: number;
     /** The run that installed the current text (P11), or null while the group is unwritten. */
     updated_by?: string | null;
+    /**
+     * PHRASE GROUP LOCK (additive) — this group's CURRENT text is signed off and may not be rewritten.
+     *
+     * While `locked === true`: no install may write the group (`revisions.ts:installGroupRevisions`
+     * refuses, so a stale Writer result cannot land through a lock), a finding's claim against it is
+     * VOID — void means void, not owed: the row is discarded at lock time when every group it names is
+     * locked, and a claim that also names an unlocked group stops counting against the locked one
+     * (`findings.ts:findingActionableScope`) — and the other groups are the side that gets revised for
+     * consistency. The lock does not change the text and does not invent a revision: it is a flag on the
+     * row that already carries it.
+     *
+     * ABSENT or `false` means unlocked, so a book written before this field exists needs no migration.
+     * The lock is set by a domain operation (`phrase/locks.ts:lockPhraseGroup`) reached from the
+     * Author's route, or by the Editor when the Story enables it (`Story.editor_group_locking`); only
+     * the Author may lift it (`phrase/locks.ts:unlockPhraseGroup`).
+     */
+    locked?: boolean;
+    /**
+     * The revision number the CURRENT lock fixed — the group's `revision` at the moment of locking, so
+     * an audit can tell a lock from a later text that happens to carry the flag. `null` once unlocked
+     * (an `update` patch cannot delete a key — `store.ts` merges through JSON — so clearing means
+     * writing `null`), and `undefined` on a row that has never been locked.
+     */
+    locked_revision?: number | null;
+    /** Who set the current lock: the Author, or the Editor on a Story that enables it. `null` = unlocked. */
+    locked_by?: PhraseGroupLockActor | null;
+    /** When the current lock was set (the lock commit's own stamp). `null`/absent = no live lock. */
+    locked_at?: string | null;
 }
+
+/**
+ * Who may put a phrase group into the locked state ({@link PhraseGroup.locked}).
+ *
+ * The Author owns the lock outright. The Editor may only lock on a Story that switches
+ * {@link Story.editor_group_locking} on, and it may never UNLOCK — lifting a lock is the Author's
+ * decision, whichever hand set it, so an Editor judgment cannot sign the book back out on its own.
+ */
+export const PHRASE_GROUP_LOCK_ACTORS = ['author', 'editor'] as const;
+export type PhraseGroupLockActor = (typeof PHRASE_GROUP_LOCK_ACTORS)[number];
 
 /**
  * `group_revisions` — one superseded-or-current text of ONE group (R2's history).
@@ -1465,7 +1567,11 @@ export interface GroupRevision extends StoredRecord {
     number: number;
     /** The group's text, verbatim, as the Writer answered it. */
     content: string;
-    /** {@link GROUP_REVISION_STATES}: exactly one `latest` per group; every earlier one `archived`. */
+    /**
+     * {@link GROUP_REVISION_STATES}: exactly one `latest` per group; every earlier one `archived`,
+     * and every row the Author's Reviewed-Summary choice (D-68) passed over `discarded` — retained,
+     * never selected, never shown as current.
+     */
     state: GroupRevisionState;
     /** The run that produced it (P11), or null when a legacy import seeded it. */
     run_ref?: string | null;
@@ -1482,6 +1588,76 @@ export interface GroupRevision extends StoredRecord {
     knowledge_used?: string[];
     /** Byte-stable prompt hash (the compiler's 16-char sha256 prefix) — §5's cache key, P11. */
     prompt_hash?: string;
+    /**
+     * D-67 (additive) — the Clean stamp: THIS text was the group's text in a cross-group Critic pass
+     * that closed with no unresolved defect on it.
+     *
+     * Written ONLY as `true`, by `phrase/reviewed.ts:stampCleanRevisions`, in the same settle commit
+     * that closes the deep-review run that earned it; a revision nobody stamped simply has no field
+     * (absent = "never earned a clean pass"), which is what keeps a pre-D-67 book honest: none of its
+     * rows claims a judgement it never had.
+     *
+     * WHY A STAMP RATHER THAN A RE-DERIVATION: the clean verdict is a fact about a PASS, not about the
+     * text — "this Critic read this combination and found nothing on this group" — and the finding that
+     * pass filed can be discarded a week later. D-67 keeps the verdict permanent and puts the
+     * revocation in the SELECTION read instead (`cleanSelectionOf` re-checks the open-issue set on
+     * every read), so a late finding invalidates a selection naturally while a revision whose own pass
+     * found a defect never becomes selectable again, even after that defect is discarded.
+     */
+    clean?: boolean;
+    /** D-67 — the deep-review RUN whose clean pass stamped this row (P11's audit of the verdict). */
+    clean_run_ref?: string;
+}
+
+// ---------------------------------------------------------------------------
+// READER SCORING — `summary_scores` (one Reader run per Summary revision)
+//
+// WHY A COLLECTION RATHER THAN A FIELD ON THE GROUP ROW: the Author asked for a score that
+// ACCUMULATES over time — "have several Reader do this over time" — and a group row holds one
+// current value, so a new install would overwrite the history. One row per (vector, group) keeps
+// every run's answer, which is also what makes the trend readable ("premise was 62, now 81").
+//
+// WHY KEYED BY `vector_hash` AND NOTHING ELSE: the group revision vector is the identity of the
+// installed Overview, and the whole phase-① review pipeline is already keyed that way
+// (`phrase/revisions.ts:groupVectorHash`, `phrase/exclusion.ts:groupReviewSeatKey`). A score is a
+// judgement of ONE state of the book; after a Writer install changes the entire Summary, the old
+// score is still true of the text it was written against, and a new run is owed against the new
+// hash. Same re-arm idiom, no new clock.
+//
+// IT IS DISPLAY-ONLY, and the row's existence is the whole guarantee: nothing in `loop/**` reads
+// this collection, so a 12 cannot block a sign-off and a 100 cannot pass a criterion. That is the
+// documented exception to P6 ("pass/fail criteria, not scores") — a PROGRESS SURFACE the Author
+// reads, not a number the loop decides on (documents/specifications.md, D-65).
+// ---------------------------------------------------------------------------
+
+/**
+ * `summary_scores` — one section's score from one Reader run over one installed Overview.
+ *
+ * `vector_hash` is the group revision vector the score was judged against; `run_ref` and
+ * `work_item_ref` say which job produced it, so the Author can open the thread behind a number.
+ * `rationale` and `evidence` are required by the answer contract (D-15: a number with no quoted
+ * line is not a judgement) and travel to the rail lazily — the row's `score` is what renders.
+ */
+export interface SummaryScore extends StoredRecord {
+    story_id: string;
+    /** The phrase these rows score (`Phrase.id`) — the Overview as one artifact. */
+    phrase_id: string;
+    /** The group revision vector this score was judged against (re-arm key, D-65). */
+    vector_hash: string;
+    /** The group this row scores (its `PhraseGroup.id`, a UUID — the same address R3 routes by). */
+    group_id: string;
+    /** Denormalised catalog key (`premise` … `ending`), so the rail labels a row without a join. */
+    group_key: string;
+    /** 0–100, enforced at parse time (`phrase/section-scores.ts`), never recomputed here. */
+    score: number;
+    /** The Reader's one-line reason for the number. */
+    rationale: string;
+    /** The quoted line the judgement rests on (D-15). */
+    evidence: string;
+    /** The run that answered (P11). */
+    run_ref: string;
+    /** The Work Item that asked (`wi_summary_score_<hash>`). */
+    work_item_ref: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1489,7 +1665,7 @@ export interface GroupRevision extends StoredRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * The 20 §4 collection names plus the three the Summary Phrase redesign appends, in §4 order.
+ * The 20 §4 collection names plus the four this session's designs append, in §4 order.
  * Exported as data so the store, the persistence
  * layer and the dashboard can enumerate the model without hardcoding the list in three
  * places (P15: adding a collection must touch one file).
@@ -1498,7 +1674,7 @@ export interface GroupRevision extends StoredRecord {
  * `sample_reviews`. They are APPENDED, never inserted, because the original 17 are pinned §4
  * names and their relative order is what old snapshots were written in. New collections are
  * additive: every snapshot reader walks this registry, so an old `store.json` loads with the
- * three new collections empty (§11.1).
+ * new collections empty (§11.1).
  */
 export const COLLECTION_NAMES = [
     'stories',
@@ -1525,7 +1701,10 @@ export const COLLECTION_NAMES = [
     // Every snapshot reader walks this registry, so an old `store.json` loads these three empty.
     'phrases',
     'phrase_groups',
-    'group_revisions'
+    'group_revisions',
+    // READER SCORING (D-65): one Reader run per group vector writes five of these, and they
+    // accumulate across revisions. Appended last, per the additive-only rule.
+    'summary_scores'
 ] as const;
 
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
@@ -1558,6 +1737,8 @@ export interface CollectionRecords {
     phrases: Phrase;
     phrase_groups: PhraseGroup;
     group_revisions: GroupRevision;
+    // READER SCORING (D-65) — see `SummaryScore`.
+    summary_scores: SummaryScore;
 }
 
 /** Any §4 record — the type the journal, the audit trail and generic tool plumbing need. */
@@ -1597,7 +1778,13 @@ export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
     // (group id, number) and an Author reading history wants `group_revision_3`, not a UUID.
     phrases: 'phrase',
     phrase_groups: 'phrase_group',
-    group_revisions: 'group_revision'
+    group_revisions: 'group_revision',
+    // READER SCORING (D-65). The singular is `section_score`, NOT `summary_score`, and the reason is
+    // the id-prefix rule `store.ts:_resolveId` depends on (pinned in `types.test.ts`): `summaries`
+    // already mints `summary_0`, so a `summary_score_0` row would read as a `summary_…` family on a
+    // persisted id alone. `section_score_` is unambiguous against every other singular, and the row is
+    // addressed as (vector_hash, group_id) anyway — the id is just a ledger label.
+    summary_scores: 'section_score'
 };
 
 /**

@@ -38,7 +38,7 @@ describe('the Storyline service route', () => {
         expect(result.raw.status).toBe(200);
         // §7.3 / U-8: five dispatched kinds, ALPHABETICALLY (the route sorts the harness catalogue
         // projection; T12/F1).
-        expect(await kindsOf(result.raw)).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
+        expect(await kindsOf(result.raw)).toEqual(['critic', 'editor', 'reader', 'researcher', 'writer']);
     });
 
     it('ignores any harness variables: the storyline control plane owns them', async () => {
@@ -47,6 +47,6 @@ describe('the Storyline service route', () => {
         expect(result.raw.status).toBe(200);
         // §7.3 / U-8: five dispatched kinds, ALPHABETICALLY (the route sorts the harness catalogue
         // projection; T12/F1).
-        expect(await kindsOf(result.raw)).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
+        expect(await kindsOf(result.raw)).toEqual(['critic', 'editor', 'reader', 'researcher', 'writer']);
     });
 });

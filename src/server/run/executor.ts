@@ -1,7 +1,7 @@
 // W5's spawner half: `RunExecutor` — one Work Item in, one closed run row out.
 //
 // VOCABULARY (V-1). The Work Item names a template role, which names an EMPLOYEE kind (Writer,
-// Editor, Reader, Checker). The executor opens one THREAD on that employee's engine profile; the
+// Editor, Critic, Reader). The executor opens one THREAD on that employee's engine profile; the
 // employee is an agent only for that thread's life. A panel's N agents (D-38) and a delegate's
 // sub-context (D-17e) are additional agents inside the same thread, never additional employees,
 // and neither opens a Work Item.
@@ -53,12 +53,23 @@ import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
 import {
     compileGroupDraftPrompt,
+    compileGroupLockPrompt,
     compileGroupReviewPrompt,
     compileSamplePrompt,
     compileScreenPrompt,
+    compileSectionScorePrompt,
     type CompiledPrompt
 } from './phase1-prompt';
 import { runEngineAgent, StoryHarnessManager } from './story-engine';
+// D-67: the reviewed hash a scoring seat claimed under, read back off its Work Item id — the SAME
+// reader `loop/engine.ts` uses when it stamps the score rows, so the prompt the Reader is shown and
+// the `vector_hash` the ledger files cannot name different books. `server/phrase` imports nothing from
+// the run layer, so this adds no cycle (and `phase1-prompt.ts` already reaches across the same way).
+import { sectionScoreVectorHashOf } from '../phrase';
+// PHRASE GROUP LOCK: the other half of the same read for an Editor lock seat — `{vector, group}` off the
+// `wi_group_lock_<cleanVectorHash>_<groupId>` claim key, owned by `loop/editor-lock.ts` because the
+// generator, the compiler and the settle all spell the key from there.
+import { groupLockSeatOf } from '../loop/editor-lock';
 import { resolveAggregation } from './types';
 import type { StoryThreadLog, StoryThreadRecord, StoryThreadState } from './thread-log';
 import {
@@ -707,6 +718,48 @@ export class RunExecutor {
             });
         }
 
+        // READER SCORING (D-65): the one-turn, no-tool score pass. Like the two above it reads the ITEM
+        // for what it is about (byte-identical prompts, restartable), and unlike them it has no fix list:
+        // a score is of the TEXT, and a pass shown the approved work would start grading the work.
+        if (item.kind === 'score_sections') {
+            if (item.groupRefs === undefined || item.groupRefs.length === 0) {
+                // A Reader with no section in front of it has nothing to score, and an answer with no
+                // group_ref is refused at settle anyway — refusing here is the cheaper, louder answer.
+                throw new Error('a score_sections item must name the groups it scores in groupRefs (§D-65)');
+            }
+
+            return compileSectionScorePrompt(this.store, item.storyId, {
+                groupRefs: item.groupRefs,
+                // D-67: the hash the seat CLAIMED under, read back off the Work Item id — the same read
+                // the engine's settle uses to stamp the score rows, so the compiler and the ledger name
+                // one hash. The Reader is scored against the CLEAN selection that hash identifies, never
+                // against whatever the live vector happens to be when the run starts: a Writer install
+                // mid-queue changes the book, not the judgement this seat was armed for.
+                vectorHash: sectionScoreVectorHashOf(item.id)
+            });
+        }
+
+        // PHRASE GROUP LOCK (R-lock): the Editor's one-turn, no-tool judgement over ONE section. The
+        // compiler reads the ITEM for both halves of its identity — the group the seat was claimed for
+        // (`WorkItem.groupRefs`, exactly one) and the clean vector in its claim key — which is what keeps
+        // a queued seat judging the Overview it was armed on rather than whatever the book looks like when
+        // capacity frees up. A throw here is the seat's gate having gone (Setting off, selection advanced,
+        // score scrapped): the run fails, the seat's key is spent, and the next clean vector asks again.
+        if (item.kind === 'group_lock') {
+            const refs = item.groupRefs ?? [];
+
+            if (refs.length !== 1) {
+                throw new Error(
+                    `a group_lock item must name exactly one group in groupRefs, and this one named ${refs.length} — one seat decides one section (§R-lock)`
+                );
+            }
+
+            return compileGroupLockPrompt(this.store, item.storyId, {
+                groupRef: refs[0],
+                vectorHash: groupLockSeatOf(item.id).vector_hash
+            });
+        }
+
         if (item.kind === 'screen_samples') {
             if (item.revisionRef === undefined || item.revisionRef.length === 0) {
                 // A screen with no draft can judge nothing; failing loudly beats an empty issue
@@ -717,7 +770,7 @@ export class RunExecutor {
             // H1/R2 — the fix list travels on the ITEM, not on a store read: the queue recorded it when
             // it queued the pass, so (a) every pass of one round renders the same bytes (§5's cache
             // argument), and (b) the verdict the engine persists is graded against exactly the fixes
-            // this Reader was handed (`WorkItem.fixRefs`).
+            // this Critic was handed (`WorkItem.fixRefs`).
             return compileScreenPrompt(this.store, item.storyId, item.revisionRef, { fixRefs: item.fixRefs });
         }
 
@@ -1145,7 +1198,7 @@ export class RunExecutor {
         const inner = scope.harness.template?.roles?.find((candidate) => candidate.name === role);
         const innerTally = createTally();
         const hooks: RunToolHooks = {
-            // A sub-context may itself delegate (the built-in Writer template names `checker`);
+            // A sub-context may itself delegate (the built-in Writer template names `reader`);
             // the recursion is bounded by the template's own delegation lists.
             delegate: (nestedRole, nestedTask) => this.delegate(scope, nestedRole, nestedTask)
         };
@@ -1200,7 +1253,7 @@ export class RunExecutor {
     /**
      * D-17e: `delegation` names the roles a template may delegate to inside its own run. An
      * absent field means "undeclared" and is allowed (the built-in templates that forbid it say
-     * so with an explicit empty list, e.g. `reader-genre.delegation: []`).
+     * so with an explicit empty list, e.g. `critic-genre.delegation: []`).
      *
      * WHY AN EXPLICIT LIST IS HONOURED STRICTLY, INCLUDING FOR A KIND NAME: this method used to
      * allow ANY RoleKind through regardless of the list, so a template could "safely" name a kind
@@ -1213,7 +1266,7 @@ export class RunExecutor {
         const declared = scope.harness.template?.delegation;
 
         // An absent `delegation` field is undeclared rather than forbidden: the built-in roster
-        // forbids explicitly (`reader-genre.delegation: []`), and T-6a's "every kind sees all
+        // forbids explicitly (`critic-genre.delegation: []`), and T-6a's "every kind sees all
         // tools" applies to the catalogue, not to what a template chooses to fan out to.
         if (declared === undefined) return { allowed: true };
         if (declared.includes(role)) return { allowed: true };

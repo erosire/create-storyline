@@ -23,7 +23,7 @@ import { DIGEST_CHAR_BUDGET, DIGEST_GAP_CRITERION, DigestBuilder } from './diges
 
 const AUTHOR: Attribution = { run_ref: null, author: true, why: 'author seeds the story' };
 const WRITER: Attribution = { run_ref: 'run_0', why: 'writer produces the artifact' };
-const CHECKER: Attribution = { run_ref: 'run_1', why: 'checker reports the finding' };
+const READER: Attribution = { run_ref: 'run_1', why: 'reader reports the finding' };
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -145,7 +145,7 @@ function createFinding(
             state,
             seen_count: 1
         },
-        CHECKER
+        READER
     );
 }
 
@@ -232,9 +232,9 @@ describe('DigestBuilder — the derived standing view (§4.8, D-12a)', () => {
             '10 · create ledger_entry_3 — writer produces the artifact (by run run_0)',
             '11 · create cast_member_0 — writer produces the artifact (by run run_0)',
             '12 · create cast_member_1 — writer produces the artifact (by run run_0)',
-            '13 · create finding_0 — checker reports the finding (by run run_1)',
-            '14 · create finding_1 — checker reports the finding (by run run_1)',
-            '15 · create finding_2 — checker reports the finding (by run run_1)'
+            '13 · create finding_0 — reader reports the finding (by run run_1)',
+            '14 · create finding_1 — reader reports the finding (by run run_1)',
+            '15 · create finding_2 — reader reports the finding (by run run_1)'
         ]);
     });
 

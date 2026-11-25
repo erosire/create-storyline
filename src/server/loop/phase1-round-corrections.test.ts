@@ -9,7 +9,7 @@
 //   R1+R2 A WAIVED research leg (D-51) reaches the same clean Stop as a researched one: the waiver writes
 //         no run row, the round samples, screens, selects, deep-reviews, and the Story sits `pending`
 //         with `phase_signoff` offered and the drain met — and it stays there across further sweeps.
-//   Scale The pipeline runs at the published default (`summary_sampling` 3, `summary_readers` 5): three
+//   Scale The pipeline runs at the published default (`summary_sampling` 3, `summary_critics` 5): three
 //         samples, five screening passes EACH, five deep-review passes on the winner, the losers
 //         hard-deleted, and one clean Stop. The 1/1 fixtures elsewhere are the rig's clock, not the
 //         product's numbers, so this row is what pins the counts the Author's dial advertises.
@@ -34,7 +34,7 @@ import {
 import { seedHashOf } from '../../shared/seed-hash';
 import type { Rig } from './mock';
 import type { Story } from '../../shared/types';
-import { DEFAULT_SUMMARY_READERS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
+import { DEFAULT_SUMMARY_CRITICS, DEFAULT_SUMMARY_SAMPLING } from '../../shared/types';
 
 /** Every run row as its claim key, in clock order — the dispatch order the rules below are about. */
 function runKeys(rig: Rig, prefix = ''): string[] {
@@ -121,9 +121,9 @@ function seedSummaryFinding(
 
 describe('T10/F5 — a round that started stays started across a sampling-wave bump', () => {
     it('reaches selection after the wave bump instead of stranding the drafts it already had', async () => {
-        // Three samples per round and one screening Reader: round 1 completes, and the approved finding
+        // Three samples per round and one screening Critic: round 1 completes, and the approved finding
         // plus its fix task arm round 2 (`records.ts:samplingArmed`).
-        const rig = await createRig({ summarySampling: 3, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 3, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -206,7 +206,7 @@ describe('T10 R1+R2 — a waived research leg reaches the same clean Stop', () =
         const rig = await createRig({
             seedStructured: false,
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { researchQuestions: [] }
         });
 
@@ -262,16 +262,17 @@ describe('T10 R1+R2 — a waived research leg reaches the same clean Stop', () =
         for (let sweep = 0; sweep < 3; sweep += 1) await rig.step();
 
         expect(runKeys(rig)).toEqual(before);
-        expect(offers(rig)).toEqual(['wi_probe_checker_summary_1', 'wi_probe_reader_summary_1']);
+        // Offer order is the sweep's key sort: `wi_probe_reader_*` now sorts after `wi_probe_critic_*`.
+        expect(offers(rig)).toEqual(['wi_probe_critic_summary_1', 'wi_probe_reader_summary_1']);
     });
 });
 
-describe('T10 — the pipeline at the default scale (3 samples, 5 Reader passes)', () => {
+describe('T10 — the pipeline at the default scale (3 samples, 5 Critic passes)', () => {
     it('runs 3 samples through 5 screening passes each, selects once, and deep-reviews the winner 5 times', async () => {
-        // The published standard, not the rig's 1/1 clock: `DEFAULT_SUMMARY_SAMPLING` / `DEFAULT_SUMMARY_READERS`.
+        // The published standard, not the rig's 1/1 clock: `DEFAULT_SUMMARY_SAMPLING` / `DEFAULT_SUMMARY_CRITICS`.
         const rig = await createRig({
             summarySampling: DEFAULT_SUMMARY_SAMPLING,
-            summaryReaders: DEFAULT_SUMMARY_READERS
+            summaryCritics: DEFAULT_SUMMARY_CRITICS
         });
 
         await rig.run(60);
@@ -360,7 +361,7 @@ describe('T12/P3 — the drain counts the sampling retry cap in the wave the eng
     it('reads the cap per wave: a spent wave goes silent, the re-armed wave owes samples again (T12/E)', async () => {
         // 1 sample per round so the arithmetic is one-at-a-time: the retry cap is 4 attempts per round,
         // and the §6.4 step-3 sentence is the only sampling clause in play (no samples exist yet).
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 

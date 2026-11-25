@@ -1,6 +1,6 @@
 // U-8 — the global EMPLOYEE roster's model choices.
 //
-// VOCABULARY (V-1): the five entries — Writer, Editor, Reader, Checker, Researcher — are
+// VOCABULARY (V-1): the five entries — Writer, Editor, Critic, Reader, Researcher — are
 // EMPLOYEES. They are standing roster identities, not agents; an employee becomes an agent only
 // while a thread runs.
 //
@@ -53,7 +53,7 @@ export interface AgentTemplateModel {
 }
 
 /**
- * True for one of the five Storyline employee kinds (writer, editor, reader, checker,
+ * True for one of the five Storyline employee kinds (writer, editor, critic, reader,
  * researcher), so a bad path parameter cannot reach the store.
  */
 export const isAgentKind = (value: string): value is RoleKind => (ROLE_KINDS as readonly string[]).includes(value);

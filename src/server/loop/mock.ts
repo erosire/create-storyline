@@ -45,7 +45,7 @@ import { seedHashOf } from '../../shared/seed-hash';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
-import type { GroupDraft, GroupReview, IssueList, SummarySample } from '../../shared/schemas';
+import type { GroupDraft, GroupLockDecision, GroupReview, IssueList, SectionScores, SummarySample } from '../../shared/schemas';
 import type { Cost, Finding, SampledFixVerification, Story } from '../../shared/types';
 import type { LoopEngineConfig, SweepReport } from './types';
 
@@ -77,8 +77,8 @@ export interface CrewBehaviour {
      * which is the only input that exercises the loop's bound on repeated verification.
      */
     verifyReports?: 'report' | 'silent';
-    /** The Reader's independent confirmation of an Editor-approved finding (default `confirm`). */
-    readerConfirm?: 'confirm' | 'dispute';
+    /** The Critic's independent confirmation of an Editor-approved finding (default `confirm`). */
+    criticConfirm?: 'confirm' | 'dispute';
     /** Ideas the verify-ideas job confirms or refutes; default `verified`. */
     ideaVerdict?: 'verified' | 'refuted';
     /**
@@ -98,19 +98,19 @@ export interface CrewBehaviour {
      */
     researchCalls?: 'knowledge' | 'report';
     /**
-     * Findings the CHECKER files every pass (W4d and the drain rows). Absent means the book is clean,
+     * Findings the READER files every pass (W4d and the drain rows). Absent means the book is clean,
      * which is what lets a Story drain at all in a test that is about something else.
      */
-    checkerFinds?: Array<{ cost: Cost; title: string; criterion?: string }>;
+    readerFinds?: Array<{ cost: Cost; title: string; criterion?: string }>;
     /**
-     * G1 — what the phase-① DEEP-REVIEW Reader files (§6.4 step 6, D-30). Absent means the review is
+     * G1 — what the phase-① DEEP-REVIEW Critic files (§6.4 step 6, D-30). Absent means the review is
      * clean, which is what every existing phase-① fixture assumes and what lets a Story install a
      * Summary with nothing to fix.
      *
-     * This is a SEPARATE knob from `checkerFinds` on purpose: `check_unit` with `roleName: 'reader'` is
-     * the deep review of the SELECTED revision (a tool-carrying Reader), while the checker's rows belong
+     * This is a SEPARATE knob from `readerFinds` on purpose: `check_unit` with `roleName: 'critic'` is
+     * the deep review of the SELECTED revision (a tool-carrying Critic), while the reader's rows belong
      * to the chapters' consistency pass (D-30's angles). One knob for both would arm a Summary round
-     * every time a test scripts a checker defect.
+     * every time a test scripts a reader defect.
      *
      * The function form receives the draft under review, so a row can file a DIFFERENT cost per
      * accepted revision — which is how a G1 row walks the plateau (3 revisions that do not lower the
@@ -120,14 +120,29 @@ export interface CrewBehaviour {
      * WHY THE ARGS LOOK LIKE THIS: `raiseFinding` is the REAL tool here (the rig doubles only
      * `editChapter`/`selectRevision`), so the call must satisfy its guards or the run silently files
      * nothing — a phase-① finding on the Summary must name the CARRIED revision in `related_refs`
-     * (T6/R2c), and a Reader finding must carry `detail` (D-30). The default title names the revision
+     * (T6/R2c), and a Critic finding must carry `detail` (D-30). The default title names the revision
      * because the tool's fingerprint is `target|criterion|title` (D-16): a title that varied only in
      * prose would let a re-sighting dedupe into the previous revision's row and the audit would count
      * nothing for it.
+     *
+     * THE GROUP MODEL'S SHAPE (D-67): on a `summary_mode: 'groups'` book the deep review claims
+     * `wi_group_check_<vector>_<pass>` and has NO `revisionRef` — the artifact is the composed Overview
+     * — and `tools/reader.ts:raiseFinding` then REQUIRES `group_refs` and drops the `related_refs` rule
+     * (R3 scopes a Summary finding by group, not by draft). So the rig files `group_refs` for that
+     * seat: every group the item carries by default (a whole-Overview defect names all five), narrowed
+     * by `groupKeys` when a row wants a defect on ONE section. `groupIds` in the callback input is the
+     * same list, and `pass` is read off the seat's own key family. Absent means the pass files NOTHING,
+     * which is the case the Clean stamp exists for: the review closes with no unresolved defect and
+     * `phrase/reviewed.ts:stampCleanRevisions` marks the vector's rows clean.
      */
     deepReviewFinds?:
-        | { cost: Cost; criterion?: string; title?: string }
-        | ((input: { item: WorkItem; revisionId: string; pass: number }) => { cost: Cost; criterion?: string; title?: string } | undefined);
+        | { cost: Cost; criterion?: string; title?: string; groupKeys?: string[] }
+        | ((input: {
+              item: WorkItem;
+              revisionId: string;
+              pass: number;
+              groupIds: string[];
+          }) => { cost: Cost; criterion?: string; title?: string; groupKeys?: string[] } | undefined);
     /**
      * What a `sample_unit` run answers (§6.4 step 3). The default derives the six prose fields from
      * the Seed Brief the compiled prompt carries, so the installed Summary provably came from the
@@ -169,6 +184,32 @@ export interface CrewBehaviour {
      * until BOTH groups have a resolving revision.
      */
     groupReview?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => GroupReview | string;
+    /**
+     * What a `score_sections` run answers (D-65 — the Reader's display-only section scores). The default
+     * scores every group the Work Item carried, in that order, at `60 + 8 × position` — the same numbers
+     * `integration/harness.ts:defaultSectionScoreAnswer` gives the full-server slices, so a score pinned
+     * in one mock reads identically in the other.
+     *
+     * The hook is how a test drives the REFUSAL path: return a partial answer (a section missing), an
+     * out-of-range score, or prose that is not JSON, and `phrase/section-scores.ts:parseSectionScoreAnswer`
+     * refuses the whole thing — which `loop/engine.ts:settleJob` answers by writing NO rows at all.
+     */
+    sectionScores?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => SectionScores | string;
+    /**
+     * What a `group_lock` run answers (R3/T6b — the Editor's judgement on ONE section of the clean
+     * Overview, offered only when `story.editor_group_locking` is on). Default: lock it, with a rationale
+     * naming the section, because a seat is only ever armed when the book already allows the freeze
+     * (Setting, clean vector, Reader row, no Writer hold) — so the flag is the outcome a default-driven
+     * test asserts, and the flag is what `phrase/locks.ts:lockPhraseGroup` writes.
+     *
+     * The hook is how a test drives every other outcome: `{ lock: false }` (the section stays unlocked and
+     * the seat is STILL spent — a decision, not a failure), a blank `rationale` (the contract refuses and
+     * nothing is written), an answer naming a different `group_ref` (refused rather than re-attributed), or
+     * prose that is not JSON. A guard refusal is driven from outside the mock instead — flip the Setting or
+     * install a Writer between the claim and the settle, and `editorLockGuardReason` answers inside the
+     * commit.
+     */
+    groupLock?: (input: { item: WorkItem; groupRefs: string[]; prompt: string }) => GroupLockDecision | string;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +225,8 @@ export interface RigOptions {
     attempts?: number;
     /** Phase ① sampling size for this rig's Story (default 1: the rig is the clock, not the product). */
     summarySampling?: number;
-    /** Phase ① Reader passes per sample for this rig's Story (default 1, same reason). */
-    summaryReaders?: number;
+    /** Phase ① Critic passes per sample for this rig's Story (default 1, same reason). */
+    summaryCritics?: number;
     /**
      * SUMMARY PHRASE R1/R6 — which phase-① pipeline this rig's Story runs (default `'sampling'`).
      *
@@ -467,10 +508,10 @@ export async function createRig(options: RigOptions = {}): Promise<Rig> {
             chapter_count: options.story?.chapter_count ?? 1,
             auto_approve: options.story?.auto_approve,
             // The loop rig exercises the pipeline, not the sample count: one Writer and one
-            // Reader keeps each sweep deterministic and cheap. The product's standards (5/5)
+            // Critic keeps each sweep deterministic and cheap. The product's standards (5/5)
             // are the Story defaults and are pinned against the real server.
             summary_sampling: options.summarySampling ?? options.attempts ?? 1,
-            summary_readers: options.summaryReaders ?? 1,
+            summary_critics: options.summaryCritics ?? 1,
             // R1/R6: the rig keeps the pre-redesign pipeline unless a Summary Phrase test asks for the
             // group one, so the existing loop suite is unaffected by the new product default.
             summary_mode: options.summaryMode ?? 'sampling'
@@ -594,16 +635,16 @@ function snapshot(store: Store, storyId: string) {
 // The crew
 // ---------------------------------------------------------------------------
 
-/** Every criterion id the brief names — what a checker reports on (D-15: the brief IS the criteria). */
+/** Every criterion id the brief names — what a reader reports on (D-15: the brief IS the criteria). */
 function criteriaNamed(text: string): string[] {
     return [...new Set(text.match(/\bC-\d+\b/g) ?? [])].sort();
 }
 
 /**
- * The checker's per-criterion report (D-15: one line per criterion the brief named).
+ * The reader's per-criterion report (D-15: one line per criterion the brief named).
  *
- * Everything passes EXCEPT the criteria the test's `checkerFinds` name — which is how the rig models a
- * real book: a checker can file a `minor` defect while the unit still passes its Goal (a soft criterion
+ * Everything passes EXCEPT the criteria the test's `readerFinds` name — which is how the rig models a
+ * real book: a reader can file a `minor` defect while the unit still passes its Goal (a soft criterion
  * failing leaves `soft_count` above `threshold_soft`, so `chapterGoalStatus` stays green). Tying every
  * verdict to the presence of a finding, as an earlier draft did, made any finding block the phase Goal
  * and no Story could ever drain.
@@ -616,7 +657,7 @@ function verdictLines(
         criterion,
         result: !finds.some((finding) => finding.criterion === criterion),
         evidence: finds.some((finding) => finding.criterion === criterion)
-            ? 'the checker saw it on the page'
+            ? 'the reader saw it on the page'
             : 'the unit delivers what this criterion asks for'
     }));
 }
@@ -814,16 +855,16 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
 
         case 'check_unit':
         case 'whole_story_check': {
-            // The brief's ROLE section names criteria in prose (a Reader prompt names the
-            // reader-visible ones), so filtering the WHOLE brief over-reports. A Reader review
-            // reports the criteria the PHASE briefing lists; a checker's existing whole-brief
+            // The brief's ROLE section names criteria in prose (a Critic prompt names the
+            // critic-visible ones), so filtering the WHOLE brief over-reports. A Critic review
+            // reports the criteria the PHASE briefing lists; a reader's existing whole-brief
             // read is left alone (its fixtures depend on it).
             const phaseBriefing = text.split('# PHASE AND GOAL CRITERIA')[1]?.split('\n# SEED')[0] ?? text;
-            const ids = criteriaNamed(item.roleName === 'reader' ? phaseBriefing : text);
+            const ids = criteriaNamed(item.roleName === 'critic' ? phaseBriefing : text);
             const report: ScriptCall[] = [];
-            const lines = verdictLines(ids, crew.checkerFinds);
+            const lines = verdictLines(ids, crew.readerFinds);
             // §4.9's recommendation enum is `advance | fix | stuck`. The rig used to answer `rework`,
-            // which the tool schema (checker.ts:200 `enumOf(['advance','fix','stuck'])`) would refuse
+            // which the tool schema (reader.ts:200 `enumOf(['advance','fix','stuck'])`) would refuse
             // from a real crew — the mock runtime does not validate, so the illegal value silently landed
             // in the verdict rows. `fix` is what the failing-criteria case means: work remains.
             const recommendation = lines.some((line) => !line.result) ? 'fix' : 'advance';
@@ -856,26 +897,26 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                 });
             }
 
-            // `checkerFinds` is the CHECKER's knob (§4.12's consistency crew). A phase-①
-            // `check_unit` job with `roleName: 'reader'` is the deep-review Reader, whose findings
+            // `readerFinds` is the READER's knob (§4.12's consistency crew). A phase-①
+            // `check_unit` job with `roleName: 'critic'` is the deep-review Critic, whose findings
             // are a different judgement (D-30's angles, filed against the selected revision), so the
-            // rig must not let a checker fixture leak into the Summary review — the defect a test
+            // rig must not let a reader fixture leak into the Summary review — the defect a test
             // scripts for the chapters would otherwise arm sampling rounds nobody meant to test.
-            if (item.roleName !== 'reader') {
-                for (const finding of crew.checkerFinds ?? []) {
+            if (item.roleName !== 'critic') {
+                for (const finding of crew.readerFinds ?? []) {
                     report.push({
                         name: 'raiseFinding',
                         args: {
                             target_ref: item.unit?.ref ?? item.storyId,
                             criterion_ref: finding.criterion ?? 'C-4',
                             title: finding.title,
-                            evidence: `the checker saw it: ${finding.title}`,
+                            evidence: `the reader saw it: ${finding.title}`,
                             cost: finding.cost
                         }
                     });
                 }
             } else if (item.revisionRef !== undefined) {
-                // G1 — the deep-review Reader's own knob. The pass number comes from the claim key
+                // G1 — the deep-review Critic's own knob. The pass number comes from the claim key
                 // (`deepReviewKeyOf` mints `wi_review_<revision>_a<pass>`), so a row can script pass 1
                 // filing and pass 2 staying clean, and `records.ts:revisionReviewFindings` attributes the
                 // row to this revision's review through the run's `attribution.run_ref`.
@@ -885,7 +926,10 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                         ? crew.deepReviewFinds({
                               item,
                               revisionId,
-                              pass: Number(/_a(\d+)$/.exec(item.id)?.[1] ?? '1')
+                              pass: Number(/_a(\d+)$/.exec(item.id)?.[1] ?? '1'),
+                              // The legacy seat reviews a DRAFT, so it has no group scope to offer; an
+                              // empty list is the honest value rather than a fabricated five.
+                              groupIds: []
                           })
                         : crew.deepReviewFinds;
 
@@ -898,14 +942,64 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                             target_ref: item.unit?.ref ?? item.storyId,
                             criterion_ref: spec.criterion ?? 'C-4',
                             title,
-                            // D-30: the Reader's what-and-where line — the tool refuses without it.
+                            // D-30: the Critic's what-and-where line — the tool refuses without it.
                             detail: `The promise field of ${revisionId} states an obligation the rest of the draft never pays; the ending is where it stops.`,
                             evidence: `the deep-review pass read ${revisionId} against the Seed and found the promise unpaid`,
                             cost: spec.cost,
                             // T6/R2c: a phase-① Summary defect must name the draft it describes, which is
                             // also exactly the id `findingRevisionScope` uses to keep it out of `superseded`.
                             related_refs: [revisionId],
-                            why: 'The Reader angle: what a reader of this Author would object to (D-30).'
+                            why: 'The Critic angle: what a reader of this Author would object to (D-30).'
+                        }
+                    });
+                }
+            } else if ((item.groupRefs?.length ?? 0) > 0) {
+                // D-67 — the GROUP model's deep review, the seat the Clean stamp hangs on. It carries
+                // `group_refs` (all five, because the Critic judges the composed Overview) and NO
+                // `revisionRef`, so the legacy branch above never sees it and the rig has to answer the
+                // book's own shape: `group_refs` on the finding, and no `related_refs` naming a draft
+                // that does not exist.
+                const spec =
+                    typeof crew.deepReviewFinds === 'function'
+                        ? crew.deepReviewFinds({
+                              item,
+                              // There is no draft row to name; the seat's key IS the identity of what is
+                              // under review (the vector), so a fixture that prints it stays readable.
+                              revisionId: item.id,
+                              // `wi_group_check_<hash>_<pass>` carries the pass at the END, with no `a`
+                              // marker — the group family's own spelling, matching `groupCheckSeatKey`.
+                              pass: Number(/_(\d+)$/.exec(item.id)?.[1] ?? '1'),
+                              groupIds: item.groupRefs ?? []
+                          })
+                        : crew.deepReviewFinds;
+
+                if (spec !== undefined) {
+                    // The scope. Default is EVERY group the seat carries, because `findingGroupScope`
+                    // reads an unscoped Summary finding as "all five" and the tool refuses an empty
+                    // `group_refs` on a grouped book anyway; `groupKeys` narrows it to the sections a
+                    // row is actually about, which is how a test stamps three groups clean and leaves
+                    // two open.
+                    const owned = store.phraseGroups
+                        .list()
+                        .filter((group) => group.story_id === item.storyId)
+                        .sort((left, right) => left.order - right.order);
+                    const groupRefs =
+                        spec.groupKeys === undefined
+                            ? owned.map((group) => group.id)
+                            : owned.filter((group) => spec.groupKeys?.includes(group.key)).map((group) => group.id);
+
+                    report.push({
+                        name: 'raiseFinding',
+                        args: {
+                            target_ref: item.unit?.ref ?? item.storyId,
+                            criterion_ref: spec.criterion ?? 'C-4',
+                            title: spec.title ?? `Deep review: the Overview claimed on ${item.id} leaves the Seed's promise unpaid`,
+                            detail: `The Overview as installed states an obligation the rest of the Summary never pays; the section is where it stops (reviewed on ${item.id}).`,
+                            evidence: `the deep-review pass read the installed Overview at ${item.id} against the Seed and found the promise unpaid`,
+                            cost: spec.cost,
+                            // R3: the group scope, and the ONLY scope a grouped Summary finding may carry.
+                            group_refs: groupRefs.length > 0 ? groupRefs : item.groupRefs ?? [],
+                            why: 'The Critic angle: what a reader of this Author would object to (D-30, R3).'
                         }
                     });
                 }
@@ -972,7 +1066,7 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                     }
                 ];
 
-                // Phase ①'s granular pipeline approves in the same thread, so the Reader's own
+                // Phase ①'s granular pipeline approves in the same thread, so the Critic's own
                 // confirmation has an approved finding to check. A dispute needs no approval, and
                 // phase ①'s bar is critical/major — a minor/taste note is recorded, never work.
                 const story = store.stories.get(item.storyId);
@@ -990,7 +1084,7 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                         args: {
                             finding_id: findingId,
                             decision: 'auto',
-                            why: 'the Editor confirmed the claim and the Story dial covers it; the Reader performs the independent second look'
+                            why: 'the Editor confirmed the claim and the Story dial covers it; the Critic performs the independent second look'
                         }
                     });
                 }
@@ -1004,7 +1098,7 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
 
             return refs.map((findingId) => {
                 const finding = store.findings.get(findingId);
-                const verdict = crew.readerConfirm ?? 'confirm';
+                const verdict = crew.criticConfirm ?? 'confirm';
 
                 return {
                     name: 'confirmFinding',
@@ -1014,8 +1108,8 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
                         evidence: `independent re-read of the cited passage on ${finding?.target_ref ?? 'the unit'}: ${finding?.evidence ?? ''}`,
                         why:
                             verdict === 'confirm'
-                                ? 'the Reader checked the passage itself and the defect holds'
-                                : 'the Reader checked the passage itself and does not believe the defect'
+                                ? 'the Critic checked the passage itself and the defect holds'
+                                : 'the Critic checked the passage itself and does not believe the defect'
                     }
                 };
             });
@@ -1075,8 +1169,10 @@ function structuredAnswer(
 ): string {
     const prompt = request.messages.map((message) => message.content).join('\n\n');
     // The answer contract names the job (T-11): `IssueList` is the screening pass, `GroupDraft` and
-    // `GroupReview` are the Summary Phrase's per-group Writer and Reviewer, and anything else in a
-    // schema-constrained request is the legacy whole-Summary sampler.
+    // `GroupReview` are the Summary Phrase's per-group Writer and Reviewer, `SectionScores` is D-65's
+    // Reader scoring pass, `GroupLockDecision` is R3/T6b's Editor judgement seat, and anything else in a
+    // schema-constrained request is the legacy whole-Summary sampler. Each literal is the matching
+    // `*_SCHEMA_NAME` constant from `shared/schemas`.
     const formatName = request.responseFormat?.name;
     const kind: WorkItem['kind'] =
         formatName === 'IssueList'
@@ -1085,7 +1181,11 @@ function structuredAnswer(
               ? 'draft_groups'
               : formatName === 'GroupReview'
                 ? 'review_groups'
-                : 'sample_unit';
+                : formatName === 'SectionScores'
+                  ? 'score_sections'
+                  : formatName === 'GroupLockDecision'
+                    ? 'group_lock'
+                    : 'sample_unit';
     const pool = store.runs
         .list()
         .filter((run) => LIVE_RUN_STATES.includes(run.state))
@@ -1135,6 +1235,37 @@ function structuredAnswer(
         return typeof answer === 'string' ? answer : JSON.stringify(answer);
     }
 
+    // D-65 — the Reader's scoring pass. Same authority rule as the two group branches: the WORK ITEM
+    // carries the five groups the seat was claimed against, and answering exactly that set is what
+    // `parseSectionScoreAnswer` accepts (an answer naming a group the job never carried is refused).
+    if (kind === 'score_sections') {
+        const groupRefs = chosen.groupRefs ?? [];
+        const answer =
+            crew.sectionScores !== undefined
+                ? crew.sectionScores({ item: chosen, groupRefs, prompt })
+                : defaultSectionScoreAnswer(groupRefs);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
+    // R3/T6b — the Editor's judgement seat. One group, straight off the WORK ITEM: the seat's key names
+    // exactly one section, `run/executor.ts` refuses a `group_lock` job that carries more, and
+    // `parseGroupLockAnswer` refuses an answer that decides a DIFFERENT section than the seat was claimed
+    // for. So the default has one possible subject, and a test that wants "the other section" scripts it.
+    //
+    // The pool above resolves it by prompt because N lock seats (one per section) can be live at once:
+    // `groupJobOf` matches the group ids the compiler put in front of the model, which is what keeps a
+    // five-seat sweep from answering every seat with the same section.
+    if (kind === 'group_lock') {
+        const groupRefs = chosen.groupRefs ?? [];
+        const answer =
+            crew.groupLock !== undefined
+                ? crew.groupLock({ item: chosen, groupRefs, prompt })
+                : defaultGroupLockAnswer(groupRefs);
+
+        return typeof answer === 'string' ? answer : JSON.stringify(answer);
+    }
+
     const revisionId = chosen.revisionRef ?? '';
     const answer =
         crew.screenAnswer !== undefined
@@ -1144,7 +1275,7 @@ function structuredAnswer(
     // H1/R2 — a screening job that carried fix tasks owes a certificate for every one of them, or the
     // round it belongs to has no certifiable candidate and never selects (the hill-climb, R3). The
     // ids come from the WORK ITEM, which is the list the prompt rendered, so the mock cannot certify
-    // a fix the Reader was never handed. `src/server/integration/harness.ts` carries the same default
+    // a fix the Critic was never handed. `src/server/integration/harness.ts` carries the same default
     // for the full-server tests; the two mocks stay separate so neither imports the other's world.
     const fixIds = chosen.fixRefs ?? [];
     const certified =
@@ -1196,6 +1327,47 @@ const defaultGroupDraftAnswer = (groupRefs: string[]): GroupDraft => ({
 });
 
 /**
+ * The default `SectionScores` answer (D-65): one entry per group the seat carried, in the SAME order, at
+ * `60 + 8 × position` — premise 60, promise 68, theme 76, tone 84, ending 92. The spread (rather than one
+ * constant) is what makes a five-section rail legible in a fixture and keeps every value inside the
+ * schema's 1-100 range; a test that wants a specific number scripts `crew.sectionScores`.
+ *
+ * Both text fields are non-empty on purpose: `parseSectionScoreAnswer` refuses a score with no rationale
+ * or no quoted line (D-15), so a default that left either blank would write no rows and every loop test
+ * about the scoring seat would silently be a test about nothing. The evidence line quotes the content the
+ * default group Writer answer installs, which is the passage the seat was shown.
+ */
+const SECTION_SCORE_BASE = 60;
+const SECTION_SCORE_STEP = 8;
+
+const defaultSectionScoreAnswer = (groupRefs: string[]): SectionScores => ({
+    sections: groupRefs.map((group_ref, index) => ({
+        group_ref,
+        score: SECTION_SCORE_BASE + index * SECTION_SCORE_STEP,
+        rationale: `${group_ref} holds together as written and is contradicted by none of the other sections`,
+        evidence: `The ${group_ref} line this story refuses to lose.`
+    }))
+});
+
+/**
+ * The default `GroupLockDecision` answer (R3/T6b): LOCK the ONE section the seat carried, with a rationale
+ * that names it. The default says yes because a lock seat is only ever armed when the book already allows
+ * the freeze — the Setting is on, the section's current text IS the clean selection, a Reader row exists at
+ * that exact vector, and no Writer holds it — so what a default-driven test wants to see is the FLAG. Every
+ * other outcome is scripted: `crew.groupLock` answers `false` or hands back a malformed decision, and a
+ * state that moved under the pass is driven by moving the rows between the claim and the settle.
+ *
+ * The rationale is non-blank for the same reason the score default's is: `parseGroupLockAnswer` refuses a
+ * decision with no reason (D-15), and a default that left it blank would turn every lock test into a test
+ * about a refusal.
+ */
+const defaultGroupLockAnswer = (groupRefs: string[]): GroupLockDecision => ({
+    group_ref: groupRefs[0] ?? '',
+    lock: true,
+    rationale: `${groupRefs[0] ?? ''} is contradicted by none of the locked peers and no open claim names it — nothing here is left for the loop to rewrite`
+});
+
+/**
  * The first line of the screen prompt's `## TARGET DRAFT` section — the quotation the default
  * certificate answers with. `undefined` when the prompt carries no draft, and the caller then says so
  * in words rather than inventing a quote (D-15: an evidence line has to come from the text).
@@ -1219,12 +1391,12 @@ const defaultSampleAnswer = (sampleIndex: number, logline: string): SummarySampl
     knowledge_used: []
 });
 
-/** The refs a checker's verdicts have to cover for the phase Goal to be answerable (criteria engine). */
+/** The refs a reader's verdicts have to cover for the phase Goal to be answerable (criteria engine). */
 function verdictTargets(store: Store, item: WorkItem): Array<{ ref: string; kind: string }> {
     const unit = item.unit;
     // C-4 (cross-plotline consistency) and the whole-Story level are scoped to the STORY row
-    // (criteria/engine.ts:scopeTargets), so a per-unit checker pass also files its Story-level judgement.
-    // A cross-cutting checker judging one unit is exactly the run that can answer "do these agree?".
+    // (criteria/engine.ts:scopeTargets), so a per-unit reader pass also files its Story-level judgement.
+    // A cross-cutting reader judging one unit is exactly the run that can answer "do these agree?".
     const story = { ref: item.storyId, kind: 'story' };
 
     // The whole-Story pass judges the STORY, not each chapter: the chapters already have their own check

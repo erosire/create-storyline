@@ -12,6 +12,7 @@ import type { ReactNode } from 'react';
 import { vi } from 'vitest';
 import type {
     ApiClient,
+    PhraseGroupLockResult,
     PhraseGroupReviseResult,
     PhraseView,
     QueueItem,
@@ -244,6 +245,46 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 installed: [{ group_id: groupId, group_key: 'premise', revision_id: `rev-${groupId}-2`, number: 2 }],
                 archived: [{ group_id: groupId, group_key: 'premise', revision_id: `rev-${groupId}-1`, number: 1 }],
                 mirror: { summary_id: 'sum_1', fields: ['premise'], written: true },
+                view: groupedPhraseView(storyId)
+            })
+        ),
+        // R1 — the two lock verbs, defaulted on the revise route's convention: the result carries the
+        // refreshed `view` with THIS group's lock fields moved, which is what `state.ts:groupLockWrite`
+        // commits. A test that wants a refusal overrides these with a rejecting `vi.fn` (a 409), so the
+        // pane's refusal line is pinned against the same shape the server sends.
+        lockPhraseGroup: vi.fn(
+            async (storyId: string, groupId: string): Promise<PhraseGroupLockResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_summary_1',
+                group_id: groupId,
+                locked: true,
+                locked_revision: 1,
+                locked_by: 'author',
+                locked_at: '2026-11-09T10:00:00.000Z',
+                view: groupedPhraseView(storyId, {
+                    groups: groupedPhraseView(storyId).groups.map((group) =>
+                        group.id === groupId
+                            ? {
+                                  ...group,
+                                  locked: true,
+                                  locked_revision: group.revision,
+                                  locked_by: 'author' as const,
+                                  locked_at: '2026-11-09T10:00:00.000Z'
+                              }
+                            : group
+                    )
+                })
+            })
+        ),
+        unlockPhraseGroup: vi.fn(
+            async (storyId: string, groupId: string): Promise<PhraseGroupLockResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_summary_1',
+                group_id: groupId,
+                locked: false,
+                locked_revision: null,
+                locked_by: null,
+                locked_at: null,
                 view: groupedPhraseView(storyId)
             })
         ),

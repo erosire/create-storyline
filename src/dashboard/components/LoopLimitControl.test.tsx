@@ -28,7 +28,7 @@ describe('LoopLimitControl — S-5’s ceiling, edited', () => {
 
         const options = screen.getAllByRole('option').map((option) => option.textContent);
 
-        expect(options).toEqual(['1', '2', '3', '4', '6', '8', '12', '16', '24', '32']);
+        expect(options).toEqual(['4', '6', '8', '10', '12', '16', '20', '24']);
     });
 
     it('prepends a ceiling that is off the list, so the control never misreports the process’s setting', () => {

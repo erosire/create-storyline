@@ -8,16 +8,28 @@
 //
 // These are also the ONLY place the rules are decided: the rail's badges, the Overview's rows, the group
 // pane's finding chips and the lock all read these functions, so a rule pinned here is pinned everywhere.
+//
+// D-67/D-68 add a second set of those rules — WHICH text the Summary tab prints, which number belongs beside
+// it, why a group is missing from the reviewed Overview, and when the Author may choose it. The pane tests
+// render the sentences; this suite pins the decisions underneath them, because a second surface (the rail, a
+// future panel) has to reach the same answers from the same wire.
 import { describe, expect, it } from 'vitest';
 
 import {
     findingGroups,
+    findingKindLabel,
+    findingKindToken,
     findingTargetsGroup,
     groupArchivedRevisions,
     groupBlockingFindings,
     groupLatestRevision,
+    groupLatestScore,
     groupOpenFindings,
     groupOpenTasks,
+    groupPreviousScore,
+    groupPreviousScorePercent,
+    groupScorePercent,
+    groupScores,
     groupSignOffBlockers,
     isArchivedPhraseFinding,
     isGroupSummary,
@@ -26,7 +38,19 @@ import {
     lockCheck,
     phraseGroupById,
     phraseGroups,
+    phraseOverallScore,
     phraseOverview,
+    phraseReviewed,
+    phraseScorePercent,
+    reviewedBlockingIssues,
+    reviewedChooseError,
+    reviewedChooseRefusal,
+    reviewedGapReason,
+    reviewedGaps,
+    reviewedGroupRows,
+    reviewedState,
+    reviewedSummaryText,
+    reviewedSupersededGroups,
     summaryBlockingCost,
     unwrittenGroups
 } from './story-contract';
@@ -34,9 +58,9 @@ import { fixturePhrase, fixtureView } from './story-fixtures';
 // R-T2/F1: the rail's ready tick and the Accept button are the SAME fact, and the regression below asserts
 // both, so the nav module's derivation is under test here as well as the contract's blocker list.
 import { summaryReadyForReview } from './story-nav';
-import { groupedPhraseView } from '../testing/shell-fakes';
+import { groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
 import type { StoryViewData } from './story-contract';
-import type { PhraseFindingRow, PhraseGroupRow, PhraseTaskRow, PhraseView } from '../api';
+import type { PhraseFindingRow, PhraseGroupRow, PhraseGroupScore, PhraseTaskRow, PhraseView } from '../api';
 import type { Cost } from '../../shared/types';
 import type { Story } from '../../shared/types';
 
@@ -496,3 +520,297 @@ describe('story-contract — the sign-off gate cannot claim a grouped book is re
 function legacyView() {
     return fixtureView();
 }
+
+// ---------------------------------------------------------------------------
+// T3 — the two fields the wire added: the SCORE a pass writes against each group, and the CLAIM TYPE a finding
+// carries.
+//
+// Both rules live in this module rather than in the rail and the pane, because three surfaces answer from the
+// same `PhraseGroupRow.scores` array — a group row's percentage, the phrase header's average and the pane's
+// trail — and a rule that is a function of the row is pinnable without a DOM. The facts pinned below are the
+// ones a surface could silently get wrong: the order of the trail, what absence means, whether a scored-zero
+// group counts toward the average, and which of the wire's three kind spellings is a Proposal.
+// ---------------------------------------------------------------------------
+describe('story-contract — the group’s score trail (T3)', () => {
+    /** One scoring pass, in the shape the projection sends it. */
+    function pass(value: number, at: string, hash = 'vh-1'): PhraseGroupScore {
+        return { value, vector_hash: hash, at, run_ref: `run_critic_${hash}` };
+    }
+
+    /** A group row whose `scores` are exactly the passes a case needs (`undefined` = the key is absent). */
+    function scoredGroup(scores: PhraseGroupScore[] | undefined): PhraseGroupRow {
+        // Ending is the fixture's unscored row, so the spread cannot smuggle a stale `scores` in.
+        const row = rowKeyed(fixturePhrase(), 'ending');
+
+        return { ...row, ...(scores === undefined ? {} : { scores }) };
+    }
+
+    it('reads the Author’s percentage from either spelling, and clamps what overshoots the scale', () => {
+        // `0.84` and `84` are the same claim in two notations, and `1` is the fraction's top, not one percent.
+        // A value off the end of the scale is clamped rather than printed: `118%` on a 320px rail is a bug
+        // pretending to be a score, and a negative is the same claim upside down.
+        expect(
+            [0.84, 84, 1, 0, 0, 84.6, 118, -5].map((value) => phraseScorePercent(value))
+        ).toEqual([84, 84, 100, 0, 0, 85, 100, 0]);
+    });
+
+    it('drops a pass whose value is not a number instead of printing `NaN%`', () => {
+        const group = scoredGroup([pass(Number.NaN, '2026-11-09T12:00:00.000Z', 'vh-3'), pass(70, '2026-11-08T12:00:00.000Z', 'vh-2'), pass(Number.POSITIVE_INFINITY, '2026-11-07T12:00:00.000Z', 'vh-1')]);
+
+        // Only the finite row survives, so the newest real pass is 70 and there is nothing before it.
+        expect(groupScores(group)).toEqual([pass(70, '2026-11-08T12:00:00.000Z', 'vh-2')]);
+        expect(groupScorePercent(group)).toBe(70);
+        expect(groupPreviousScorePercent(group)).toBeUndefined();
+    });
+
+    it('orders the trail newest first whatever order the wire sent it in', () => {
+        // `scores[0]` being the latest pass is the difference between "84% (was 78%)" and the same pair
+        // printed backwards, so the read does not trust the payload's ordering.
+        const group = scoredGroup([
+            pass(71, '2026-11-05T12:00:00.000Z', 'vh-a'),
+            pass(84, '2026-11-09T12:00:00.000Z', 'vh-c'),
+            pass(78, '2026-11-01T12:00:00.000Z', 'vh-b')
+        ]);
+
+        expect(groupScores(group).map((row) => [row.value, row.at])).toEqual([
+            [84, '2026-11-09T12:00:00.000Z'],
+            [71, '2026-11-05T12:00:00.000Z'],
+            [78, '2026-11-01T12:00:00.000Z']
+        ]);
+        expect(groupLatestScore(group)?.vector_hash).toBe('vh-c');
+        expect(groupPreviousScore(group)?.vector_hash).toBe('vh-a');
+    });
+
+    it('answers absence with absence: no key, an empty list, and a scored zero are three different states', () => {
+        expect(groupScores(scoredGroup(undefined))).toEqual([]);
+        expect(groupScores(scoredGroup([]))).toEqual([]);
+        expect(groupScorePercent(scoredGroup(undefined))).toBeUndefined();
+        expect(groupScorePercent(scoredGroup([]))).toBeUndefined();
+        // A group the pass rated 0 HAS been rated — the rail prints `0%`, it does not hide the worst number.
+        expect(groupScorePercent(scoredGroup([pass(0, '2026-11-09T12:00:00.000Z')]))).toBe(0);
+        // One pass has no previous, and that is not the same as a previous of zero.
+        expect(groupPreviousScore(scoredGroup([pass(50, '2026-11-09T12:00:00.000Z')]))).toBeUndefined();
+    });
+
+    it('takes each group’s latest and previous percentages from the fixture’s two passes', () => {
+        const phrase = fixturePhrase();
+        const percentOf = (key: string) => [
+            groupScorePercent(rowKeyed(phrase, key)),
+            groupPreviousScorePercent(rowKeyed(phrase, key))
+        ];
+
+        // Premise 78→84 and Promise 55→62 are the improvements, Tone 64→58 is the rewrite that went backwards,
+        // Theme has ONE pass (so no previous), and Ending has never been scored.
+        expect(percentOf('premise')).toEqual([84, 78]);
+        expect(percentOf('promise')).toEqual([62, 55]);
+        expect(percentOf('theme')).toEqual([71, undefined]);
+        expect(percentOf('tone')).toEqual([58, 64]);
+        expect(percentOf('ending')).toEqual([undefined, undefined]);
+    });
+
+    it('averages the phrase only when every group carries a score, and rounds once', () => {
+        // `groupedPhraseView` scores all five in one pass: 84 + 76 + 70 + 88 + 66 = 384, /5 = 76.8 → 77.
+        expect(phraseOverallScore(grouped())).toBe(77);
+        // The fixture book has one UNSCORED group (Ending, no `scores` key), so its header prints nothing:
+        // the mean of the four rows that happened to arrive is a number the server never claimed.
+        expect(phraseOverallScore(midReview())).toBeUndefined();
+        // A sampling-mode book has no group rows at all, and a book whose read has not landed either.
+        expect(phraseOverallScore(legacyView())).toBeUndefined();
+        expect(phraseOverallScore(grouped({ groups: [] }))).toBeUndefined();
+        // A group whose only pass is malformed is an unscored group, and it silences the average the same way.
+        const rows = groupedPhraseView('s1').groups.map((row) =>
+            row.key === 'ending' ? { ...row, scores: [pass(Number.NaN, '2026-11-09T12:00:00.000Z')] } : row
+        );
+
+        expect(phraseOverallScore(grouped({ groups: rows }))).toBeUndefined();
+        // A zero counts: it is a verdict, not an absence. (0+100+0+100+0)/5 = 40.
+        const spread = groupedPhraseView('s1').groups.map((row, index) => ({
+            ...row,
+            scores: [pass(index % 2 === 0 ? 0 : 100, '2026-11-09T12:00:00.000Z')]
+        }));
+
+        expect(phraseOverallScore(grouped({ groups: spread }))).toBe(40);
+        // …and the mean is taken over the unrounded percents and rounded ONCE: 80.5 goes up, to 81.
+        const tie = groupedPhraseView('s1').groups.slice(0, 2).map((row, index) => ({
+            ...row,
+            scores: [pass(index === 0 ? 80 : 81, '2026-11-09T12:00:00.000Z')]
+        }));
+
+        expect(phraseOverallScore(grouped({ groups: tie }))).toBe(81);
+    });
+});
+
+describe('story-contract — what a finding claims (T3)', () => {
+    it('names both claim types, and defaults every other token to an Issue', () => {
+        const cases: Array<[string | undefined, 'Issue' | 'Proposal']> = [
+            ['issue', 'Issue'],
+            ['proposal', 'Proposal'],
+            // The token mid-rename: a payload from the other side of it still means a Proposal, and a surface
+            // that switched on the new spelling alone would render every improvement as a defect.
+            ['improvement', 'Proposal'],
+            [undefined, 'Issue'],
+            ['', 'Issue'],
+            // No trimming, no fuzzy matching: an unknown token is the default claim, never a proposal the
+            // desk was not told about.
+            ['issue ', 'Issue'],
+            ['Proposal', 'Issue'],
+            ['weird', 'Issue']
+        ];
+
+        expect(cases.map(([kind]) => findingKindLabel(kind))).toEqual(cases.map(([, label]) => label));
+        // The style hook carries the SAME decision in the lowercase form the stylesheet keys on, so a surface
+        // cannot colour a label its own text says differently.
+        expect(cases.map(([kind]) => findingKindToken(kind))).toEqual(
+            cases.map(([, label]) => (label === 'Proposal' ? 'proposal' : 'issue'))
+        );
+    });
+});
+
+describe('story-contract — the Reviewed Summary’s decisions (D-67, D-68)', () => {
+    /** One of the four reviewed frames, wrapped in the view shape the selectors read. */
+    function reviewed(state: 'pending' | 'ready' | 'chosen' | 'stale' | 'writer_busy') {
+        return fixtureView({ phrase: reviewedPhraseView('s1', state) });
+    }
+
+    it('prints the reviewed Overview in `ready`, the chosen text in `chosen`, and NOTHING in `pending`', () => {
+        // D-67's whole rule lives in this one function: `pending` returns `''` rather than the live composed
+        // Overview, which is what stops an unreviewed sentence standing under a heading that says it was read.
+        const ready = reviewed('ready');
+
+        expect(reviewedSummaryText(ready)).toContain('Ending — the clean text the Reviewers passed at Revision 2.');
+        expect(reviewedSummaryText(ready)).not.toContain('the newest text the Writer installed');
+        expect(reviewedSummaryText(reviewed('stale'))).toContain(
+            'Ending — the clean text the Reviewers passed at Revision 2.'
+        );
+        expect(reviewedSummaryText(reviewed('chosen'))).toBe(
+            [
+                'Premise — the text the Author chose.',
+                'Promise — the text the Author chose.',
+                'Theme — the text the Author chose.',
+                'Tone — the text the Author chose.',
+                'Ending — the text the Author chose.'
+            ].join('\n\n')
+        );
+        // The waiting frame has no Summary text at all, even though the live Overview is full of it.
+        const waiting = reviewed('pending');
+
+        expect(reviewedSummaryText(waiting)).toBe('');
+        expect(waiting.phrase?.overview).not.toBe('');
+    });
+
+    it('reports `stale` as a `ready` selection with a recorded choice, and never as a state of its own', () => {
+        const frame = reviewed('stale');
+
+        // The tab's branch token is `ready`: `stale` rides BESIDE it (the projection computes the state that
+        // way), so a pane that branched on a third token would draw a frame the server never sends.
+        expect(reviewedState(frame)).toBe('ready');
+        const stale = phraseReviewed(frame);
+
+        expect(stale.state).toBe('ready');
+        expect(stale.stale).toBe(true);
+        expect(stale.chosen).not.toBeNull();
+        // The fixture is coherent the way the projection is: the chosen hash is NOT the live selection's,
+        // which is the only reason `stale` is true. A fixture that faked the token would teach the pane a
+        // state the server cannot send.
+        expect(stale.chosen?.vector_hash).toBe('vh-chosen-1');
+        expect(stale.vector_hash).toBe('vh-clean-1');
+        // `ready` without a choice, and `chosen` with one: the two are decided by the hash comparison the
+        // server makes, not by a flag this file could invent.
+        const ready = phraseReviewed(reviewed('ready'));
+
+        expect(ready.chosen).toBeNull();
+        expect(ready.stale).toBe(false);
+        expect(reviewedState(reviewed('chosen'))).toBe('chosen');
+    });
+
+    it('says why each group is missing, one sentence per wire token, and none for a selected group', () => {
+        // Four different waits, four different sentences. `issues_open` outranks `no_clean_revision` because
+        // the finding is what the Author can actually act on.
+        expect(
+            reviewedGaps(reviewed('pending')).map((row) => [row.reviewed.key, row.reason])
+        ).toEqual([
+            ['promise', 'has open issues'],
+            ['theme', 'nothing written yet'],
+            ['tone', 'awaiting a clean pass']
+        ]);
+        // A selected group has no reason, whatever else is going on around it.
+        const waiting = reviewed('pending');
+
+        expect(reviewedGapReason(waiting.phrase?.reviewed?.groups[0] as never)).toBe('');
+        // An unknown gap token is reported as itself rather than guessed away: the pane may not invent a
+        // reason the wire did not send.
+        expect(
+            reviewedGapReason({ gap: 'retired', issues_open: false, selected_revision: null } as never)
+        ).toBe('awaiting a clean pass (retired)');
+    });
+
+    it('names the unresolved issues holding a clean pass back, by group TITLE rather than by key', () => {
+        expect(reviewedBlockingIssues(reviewed('pending'))).toEqual([
+            {
+                id: 'f-clean-block',
+                title: 'the promise names a cost the premise never sets up',
+                cost: 'major',
+                groups: ['Promise']
+            }
+        ]);
+        expect(reviewedBlockingIssues(reviewed('ready'))).toEqual([]);
+    });
+
+    it('keeps the Choose offered while the crew has reviewed past the Author’s choice, and shuts it for the wire’s two reasons', () => {
+        const bound = true;
+
+        // The deviation the pane depends on: `stale` never disables. An Author who already chose once has to
+        // be able to take the NEWER reviewed text, which is the case the route exists for a second time.
+        expect(reviewedChooseRefusal(reviewed('ready'), bound)).toBe('');
+        expect(reviewedChooseRefusal(reviewed('stale'), bound)).toBe('');
+        expect(reviewedChooseRefusal(reviewed('writer_busy'), bound)).toBe(
+            'The Writer is rewriting part of this Summary right now, so choosing would install under a pass that has not finished (R4).'
+        );
+        // The missing binding is the shell's own refusal, and it outranks everything: a click on an unbound
+        // verb would do nothing at all.
+        expect(reviewedChooseRefusal(reviewed('writer_busy'), false)).toBe(
+            'The reviewed-Summary choose route is not available in this shell.'
+        );
+        expect(reviewedChooseRefusal(reviewed('ready'), false)).toBe(
+            'The reviewed-Summary choose route is not available in this shell.'
+        );
+    });
+
+    it('joins each reviewed row to the score that judged the CLEAN vector, not the live rows’ pass', () => {
+        // The two lists carry DIFFERENT numbers on purpose (79/71/66/83/62 for `vh-clean-1`, 84/76/70/88/66
+        // for the live `vh-9` pass), so a wrong join is visible rather than plausible.
+        expect(
+            reviewedGroupRows(reviewed('ready')).map((row) => [row.title, row.score, row.superseded])
+        ).toEqual([
+            ['Premise', 79, false],
+            ['Promise', 71, false],
+            ['Theme', 66, false],
+            ['Tone', 83, false],
+            ['Ending', 62, true]
+        ]);
+        // A partial selection carries a hash no score row claims, so the rows print without numbers rather
+        // than borrowing the live pass.
+        expect(reviewedGroupRows(reviewed('pending')).map((row) => row.score)).toEqual([
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined
+        ]);
+        // And the drop the confirmation step names is exactly the superseded set.
+        expect(reviewedSupersededGroups(reviewed('ready')).map((row) => [row.title, row.reviewed.latest_revision])).toEqual([
+            ['Ending', 3]
+        ]);
+        expect(reviewedSupersededGroups(reviewed('pending'))).toEqual([]);
+    });
+
+    it('passes the choose’s refusal through untouched, and reads absence as absence', () => {
+        // The sentence is the Author's next action, so this layer may not reword, trim or default it.
+        const refusal =
+            'the Writer is rewriting part of this Summary right now (run_write_groups_1), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).';
+
+        expect(reviewedChooseError({ reviewedError: refusal })).toBe(refusal);
+        expect(reviewedChooseError({ reviewedError: null })).toBeUndefined();
+        expect(reviewedChooseError({})).toBeUndefined();
+    });
+});

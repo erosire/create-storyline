@@ -140,7 +140,7 @@ async function installedRig(options: { store?: Store; crew?: typeof refusesTheFi
     const rig = await createRig({
         store: options.store,
         summarySampling: 1,
-        summaryReaders: 1,
+        summaryCritics: 1,
         crew: options.crew ?? refusesTheFix
     });
 

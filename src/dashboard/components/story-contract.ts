@@ -23,8 +23,12 @@ import type {
     CompletionPreview,
     CostDistribution,
     FailingCriterion,
+    PhraseChosenSummary,
     PhraseFindingRow,
     PhraseGroupRow,
+    PhraseGroupScore,
+    PhraseReviewedGroup,
+    PhraseReviewedSummary,
     PhraseRevisionRow,
     PhraseReviewState,
     PhraseTaskRow,
@@ -32,6 +36,10 @@ import type {
     StoryView,
     UndoTarget
 } from '../api';
+// R1 — the store's own cache key for a group's lock refusal, imported as a VALUE (see the re-export below):
+// `state.ts:groupLockWrite` writes `groupLockErrors[groupLockKey(story, group)]`, and the group pane reads it
+// through this module, so both sides cannot hold their own spelling of the key.
+import { groupLockKey } from '../api';
 import type {
     Cost,
     Criterion,
@@ -51,16 +59,31 @@ import type {
     TemplateRole,
     Verdict
 } from '../../shared/types';
-// Phase ①'s Readers-per-sample default. It is a SHARED constant (`shared/types.ts`, the same value
+// Phase ①'s Critics-per-sample default. It is a SHARED constant (`shared/types.ts`, the same value
 // `records.ts:screeningSizeOf` falls back to), so the dashboard's owed-review readout counts the
 // passes the loop actually dispatches rather than a number this file invented.
-import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
+import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
 
 export type { CompletionPreview, CostDistribution, FailingCriterion };
 // R6 — the group rows the Summary rail and its panes render. Aliased here (rather than imported at every
 // call site) so the panels keep reading ONE module for their view contract, and so the shapes the panes
 // assert are the shapes `../api` pins to the wire.
-export type { PhraseFindingRow, PhraseGroupRow, PhraseReviewState, PhraseView };
+// D-67/D-68 widen the same alias with the reviewed block: the Summary tab renders it, and a pane that
+// imported `../api` for one row and this module for the other would be two contracts in one component.
+export type {
+    PhraseChosenSummary,
+    PhraseFindingRow,
+    PhraseGroupRow,
+    PhraseGroupScore,
+    PhraseReviewedGroup,
+    PhraseReviewedSummary,
+    PhraseReviewState,
+    PhraseView
+};
+// R1 — the one VALUE this module takes from the wire layer: the key the store files a group's lock refusal
+// under. It is imported rather than re-typed here because `state.ts` writes that key and the pane reads it
+// through this module; two spellings of one key is a refusal that never reaches the pane that raised it.
+export { groupLockKey };
 
 /**
  * The pinned `getStory(id)` payload (U-4…U-17) with TWO widenings: `templates` carries the
@@ -90,6 +113,24 @@ export type StoryViewData = Omit<StoryView, 'templates'> & {
     templates: Template[];
     phrase?: PhraseView | null;
     phraseError?: string | null;
+    /**
+     * D-68 — the last refusal of THIS Story's Reviewed-Summary choose, the server's own sentence
+     * (`state.ts:reviewedErrors`). It travels with the frame for the same reason `phraseError` does: the
+     * store already shows refusals in its shell-wide line, but the Author standing on the Summary tab made
+     * the choice THERE, and a 409 that names the three groups holding the clean selection is only useful
+     * beside the control that raised it. Absent means no refusal — never "the choose succeeded".
+     */
+    reviewedError?: string | null;
+    /**
+     * R1 — the last refusal of each group's lock/unlock write, the server's own sentence, keyed
+     * `<storyId>:<groupId>` (`state.ts:groupLockErrors`, threaded through `shell-binding.storyViewData`).
+     *
+     * The key carries the group because a lock is a decision about ONE row of the Summary: a refusal on Tone
+     * must not be printed in Premise's pane, and the shell-wide line that `mutate` also commits is gone as soon
+     * as anything else succeeds. Absent (or no entry for this group) means no refusal on the frame — which is
+     * NOT the same claim as success: the pane's locked badge comes from the phrase read, never from this cache.
+     */
+    groupLockErrors?: Record<string, string>;
 };
 
 /**
@@ -140,6 +181,35 @@ export function storyStatusLabel(status: StoryStatus, pendingKind: PendingKind):
     }
 
     return status === 'completed' ? 'done' : status;
+}
+
+/**
+ * T3 — the Author's word for a finding's claim type: "Issue" or "Proposal".
+ *
+ * THE WIRE HAS THREE SPELLINGS AND THE UI HAS TWO WORDS. A row raised before the field existed carries
+ * NOTHING, and both the server's default (`tools/utilities.ts:raiseFinding`'s `kind = 'issue'`) and the
+ * legacy record mean the same thing: the Critic is claiming the text contradicts a commitment. A row that
+ * claims the text could simply be BETTER — a word change, a new element, a twist linked up — is the other
+ * type, and the token for it is mid-rename (`improvement` → `proposal`). So every findings surface reads
+ * through THIS function rather than comparing tokens itself: a component that switched on `'proposal'`
+ * would render a proposal as an Issue for as long as the older payload is what the desk is served, and the
+ * whole point of the type is that the Author can tell the two kinds of work apart.
+ *
+ * It takes a bare `string | undefined` for exactly that reason — the shared `FindingKind` enum is the
+ * server's and is changing under it, and an unknown token is treated as the default (Issue), never as a
+ * crash and never as a proposal it was not told about.
+ */
+export function findingKindLabel(kind?: string): 'Issue' | 'Proposal' {
+    return kind === 'proposal' || kind === 'improvement' ? 'Proposal' : 'Issue';
+}
+
+/**
+ * The chip's style hook: the SAME two-value decision as {@link findingKindLabel}, in the lowercase form a
+ * `data-kind` attribute and the stylesheet key on. Two exported functions rather than a `.toLowerCase()` at
+ * each call site, so a surface cannot style a label its own text says differently.
+ */
+export function findingKindToken(kind?: string): 'issue' | 'proposal' {
+    return findingKindLabel(kind) === 'Proposal' ? 'proposal' : 'issue';
 }
 
 /**
@@ -198,6 +268,36 @@ export interface StoryActions {
         groupId: string,
         input: { content: string; note?: string }
     ) => Promise<unknown> | unknown;
+    /**
+     * R1 — the Author locks ONE SUMMARY GROUP in (`POST …/phrases/groups/:groupId/lock`). Locked content is
+     * settled: the group stops being editable, its own findings are void, and the other groups adapt to the text
+     * that now stands. The route addresses the group by its UUID like revise does, and refuses an unwritten
+     * group and a group a live Writer holds — the same reads the pane disables its control off (R4).
+     */
+    lockPhraseGroup?: (storyId: string, groupId: string) => Promise<unknown> | unknown;
+    /**
+     * R1 — the Author opens a locked group again (`POST …/phrases/groups/:groupId/unlock`). The Editor may lock
+     * a group when the Story's Setting is on, and it may never lift a lock: this verb is the Author's alone,
+     * and it lifts a lock whichever of the two made it.
+     */
+    unlockPhraseGroup?: (storyId: string, groupId: string) => Promise<unknown> | unknown;
+    /**
+     * R2 — the Story's Editor-locking Setting (`PATCH /stories/:id` with `editor_group_locking`). OFF is the
+     * default and the legacy state: with the Setting off, only the Author locks a group. With it on, the Editor
+     * may commit one group's text on its own judgement over the CURRENT Critic findings for that group and the
+     * Reader's score and rationale beside them — and only the Author unlocks.
+     */
+    setEditorGroupLocking?: (storyId: string, enabled: boolean) => Promise<unknown> | unknown;
+    /**
+     * D-68 — the Author takes the REVIEWED Summary: the clean selection becomes the book in one commit
+     * (five installs, every revision it passed over `discarded`, the choice recorded on the Phrase row).
+     * This is the ONLY whole-Summary Author verb the group rail offers, and unlike `revisePhraseGroup` it
+     * addresses no group — the choice is the Overview, so its only argument is the Story.
+     *
+     * The pane disables it off `reviewed.writer_busy` (the same read the route's 409 refuses with, R4) and
+     * prints the refusal verbatim; `note` is the optional reason the route writes into the attribution line.
+     */
+    chooseReviewedSummary?: (storyId: string, note?: string) => Promise<unknown> | unknown;
     /** L-31/L-32 — the only way a lock opens; deletes every later phase's artifacts. */
     backtrack?: (storyId: string, phase: BacktrackTarget) => Promise<unknown> | unknown;
     /** D-37 / D-20a — a direct Author write, refused while the Story runs (naming D-37). */
@@ -234,10 +334,10 @@ export interface StoryActions {
     /** D-35 / D-35b — the dial: the approval gate and the drain threshold are the same write. */
     setAutoApprove?: (storyId: string, costs: Cost[]) => Promise<unknown> | unknown;
     /**
-     * Phase ①'s two counts: how many Writer samples one Summary gets, and how many Readers
+     * Phase ①'s two counts: how many Writer samples one Summary gets, and how many Critics
      * critique each sample (D-17d/D-38a: the Author's settings, never engine constants).
      */
-    setSummaryReview?: (storyId: string, sampling: number, readers: number) => Promise<unknown> | unknown;
+    setSummaryReview?: (storyId: string, sampling: number, critics: number) => Promise<unknown> | unknown;
     /** U-8 / D-17b — the crew is a list, and the count is the Author's call (D-38a). */
     assignTemplates?: (storyId: string, templateIds: string[]) => Promise<unknown> | unknown;
     /** D-17 — New sends a template body; Duplicate names the row to copy (built-ins are duplicate-only). */
@@ -342,7 +442,7 @@ export interface LockCheck {
 // Phase ①'s sign-off reads (T5 — ONE predicate per question)
 //
 // WHY THIS SECTION EXISTS: the rail ("does this Revision carry findings"), the Summary pane
-// ("No Reader findings on this revision yet") and the lock ("1 critical/major finding still open")
+// ("No Critic findings on this revision yet") and the lock ("1 critical/major finding still open")
 // all answer the SAME attribution question, and while they each carried their own matching rule the
 // Author got a disabled Accept next to an empty findings list — a blocker that is invisible on the
 // row it blocks. Every rule below is the single dashboard-side answer; `story-nav.ts` and `lockCheck`
@@ -662,13 +762,13 @@ export function unconfirmedBlockingFindings(view: StoryViewData): Finding[] {
     );
 }
 
-/** The Author's Readers-per-sample count (D-17d) — `records.ts:screeningSizeOf`, mirrored not imported. */
-export const summaryReadersOf = (story: Story): number => {
-    const raw = story.summary_readers;
+/** The Author's Critics-per-sample count (D-17d) — `records.ts:screeningSizeOf`, mirrored not imported. */
+export const summaryCriticsOf = (story: Story): number => {
+    const raw = story.summary_critics;
 
     if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
 
-    return DEFAULT_SUMMARY_READERS;
+    return DEFAULT_SUMMARY_CRITICS;
 };
 
 /**
@@ -696,14 +796,14 @@ export interface DeepReviewProgress {
 
 /**
  * How far the deep review of the SELECTED revision has got (§6.4 step 6, §16.7): the passes are
- * `summary_readers` in number, and a pass is answered once its claim key carries a non-live run.
+ * `summary_critics` in number, and a pass is answered once its claim key carries a non-live run.
  *
  * T11/F1 — THE DEFAULT IS OWED, NOT SILENT. `StoryView.runs` is a REQUIRED, uncapped projection
  * (`api.ts:StoryView`, `server/api/projections.ts`'s `runs:` line sends every row of the Story), so a
  * present slice that carries no `wi_review_` row for the winner is evidence of ONE thing: the sweep has
- * not dispatched the review yet, and all `summary_readers` passes are owed. Counting that case as zero
+ * not dispatched the review yet, and all `summary_critics` passes are owed. Counting that case as zero
  * made a freshly selected revision look reviewed and let Accept light up over an unread Summary. The
- * count therefore walks the numbered passes `1..summaryReaders` and asks each one for its own key —
+ * count therefore walks the numbered passes `1..summaryCritics` and asks each one for its own key —
  * exactly `records.ts:deepReviewPassesOwed`'s loop — so:
  *   - a closed row for pass 3 does not answer pass 1;
  *   - an extra or suffixed key (`_a1x`, another draft's prefix) is not a numbered pass at all and cannot
@@ -742,7 +842,7 @@ export function deepReviewProgress(view: StoryViewData, selected: Revision | und
         else rows.push(run);
     }
 
-    const passes = summaryReadersOf(view.story);
+    const passes = summaryCriticsOf(view.story);
     const context = summaryScopeContext(view);
     const closedFor = (pass: number): boolean =>
         (runsByKey.get(deepReviewKeyOf(selected.id, pass)) ?? []).some((run) => !isLiveRun(run));
@@ -852,7 +952,7 @@ export function lockCheck(view: StoryViewData): LockCheck {
 
         // THE SAME PREDICATE THE PANE USES. `story-nav.ts:summaryRevisions` lists a revision's findings
         // through `findingAppliesToRevision`; counting the blockers here through anything else is what
-        // let a finding disable the Accept button while the opened revision read "No Reader findings on
+        // let a finding disable the Accept button while the opened revision read "No Critic findings on
         // this revision yet".
         const blocking = summaryBlockingFindings(view, selected);
 
@@ -1096,6 +1196,169 @@ export function groupLatestRevision(group: PhraseGroupRow): PhraseRevisionRow | 
     return group.history.find((revision) => revision.state === 'latest') ?? group.history[0];
 }
 
+// ---------------------------------------------------------------------------
+// T3 — the SCORE the Reader-style pass writes against each group
+//
+// WHY THESE LIVE HERE AND NOT IN THE RAIL: the rail row, the phrase header's overall number and the group
+// pane's progress line all answer from the SAME `PhraseGroupRow.scores` array, and each of them needs the
+// same three answers — which row is the latest, which one it improved on, and what integer to print. A rule
+// that is a function of the row is pinnable without a DOM, which is this module's standing argument.
+//
+// THE WIRE PINS THE ORDER (newest first, one pass scores all five groups with one `vector_hash`/`at`), and
+// these helpers still sort: `scores[0]` being the newest is the difference between "84% (was 78%)" and the
+// same pair printed backwards, and a stable sort by `at` descending is a no-op on a payload that already
+// arrives in that order.
+// ---------------------------------------------------------------------------
+
+/**
+ * One group's score rows, newest first, with the malformed ones dropped.
+ *
+ * `scores` is OPTIONAL (`api.ts:PhraseGroupRow`) and a group nobody has scored yet carries none, so the
+ * honest answer for that case is an empty list — which is what makes every renderer print nothing rather
+ * than `0%`. A row whose `value` is not a finite number is skipped rather than clamped: `NaN%` on the rail
+ * is the bug this list prevents, and a number the projection could not name is not a score.
+ */
+export function groupScores(group: PhraseGroupRow): PhraseGroupScore[] {
+    const scores = (group.scores ?? []).filter((score) => Number.isFinite(score?.value));
+
+    return [...scores].sort((left, right) => String(right.at).localeCompare(String(left.at)));
+}
+
+/** The newest score row a group carries, or `undefined` when it has never been scored. */
+export function groupLatestScore(group: PhraseGroupRow): PhraseGroupScore | undefined {
+    return groupScores(group)[0];
+}
+
+/**
+ * The pass a group's latest score IMPROVED on — the second-newest row, or `undefined` after a single run.
+ *
+ * This is what "the user sees how the phrase improves over time" is made of: one number says where the
+ * group is, this one says where it came from. A group scored once has no history to compare against, and
+ * the pane says `84%` alone rather than inventing a zero to subtract from.
+ */
+export function groupPreviousScore(group: PhraseGroupRow): PhraseGroupScore | undefined {
+    return groupScores(group)[1];
+}
+
+/**
+ * The integer percentage the Author reads, from whatever spelling the payload used.
+ *
+ * `value` is documented as 0–100, and a payload that sends the 0–1 fraction of the same claim (0.84) means
+ * the same sentence to the Author — so a value at or below 1 is read as the fraction and scaled, and every
+ * other value is already a percentage. `Math.round` is the ONE rounding rule, shared by the rail row, the
+ * header average's parts and the pane, so the number on the rail and the number in the pane are the same
+ * number. Clamping to 0–100 keeps a payload that overshot from printing `118%` on a 320px rail.
+ */
+export function phraseScorePercent(value: number): number {
+    const scaled = value <= 1 ? value * 100 : value;
+
+    return Math.min(100, Math.max(0, Math.round(scaled)));
+}
+
+/** The percentage of a group's LATEST score, or `undefined` when the group has none. */
+export function groupScorePercent(group: PhraseGroupRow): number | undefined {
+    const latest = groupLatestScore(group);
+
+    return latest === undefined ? undefined : phraseScorePercent(latest.value);
+}
+
+/** The percentage of the pass a group's latest score improved on, or `undefined` on a first run. */
+export function groupPreviousScorePercent(group: PhraseGroupRow): number | undefined {
+    const previous = groupPreviousScore(group);
+
+    return previous === undefined ? undefined : phraseScorePercent(previous.value);
+}
+
+// ---------------------------------------------------------------------------
+// T5 — the TWO Reader marks the group pane may show
+//
+// WHAT THE REQUEST ASKED FOR AND WHAT THE WIRE OFFERS. The pane used to print every pass in a dated list, which
+// reads like a changelog nobody compares. The Author's question is narrower: what does this section score NOW,
+// and what did it score the last time the Reader read it? Two rows answer it, and the wire already orders them:
+// `groupLatestScore` and `groupPreviousScore` are the same two selectors the rail's percentage and the delta
+// sentence are built from, so the pane, the rail and the header average cannot print three different pairs.
+//
+// WHY "CURRENT CLEAN REVISION" IS THE HONEST LABEL. D-67 moved the scoring join onto the CLEAN vector: the
+// Reader pass scores the revision a cross-group Critic pass closed clean on, not the newest draft. So the newest
+// row is a verdict about a clean revision, and calling it "latest" or "current score" would blur the one
+// distinction the desk keeps insisting on. The second row is the mark BEFORE it — the immediately previous Reader
+// mark for this group — which is exactly what `scores[1]` is.
+//
+// NO DATES, AND NOTHING OLDER. `at` stays out of the output on purpose (the pane used to print it, and the
+// report is that a timestamp beside a percentage answers neither question); a third row is history, and history
+// is not on this pane.
+// ---------------------------------------------------------------------------
+
+/** One of the two marks the pane prints, in the shape a renderer can print without re-deciding anything. */
+export interface GroupScoreMark {
+    /** `current` = the newest Reader mark (the clean revision); `previous` = the mark immediately before it. */
+    role: 'current' | 'previous';
+    /** The words the row is labelled with: 'Current clean revision' / 'Previous mark'. */
+    label: string;
+    /** The percentage, through the ONE normalizer (`phraseScorePercent`), so the rail and the pane agree. */
+    percent: number;
+    /** The pass itself — for the Critic's sentence and the vector tooltip, never for a date. */
+    pass: PhraseGroupScore;
+    /** The Critic's sentence for THIS mark, or `undefined` when the pass wrote none. */
+    rationale?: string;
+}
+
+/** The two labels, in reading order. Exported so a test pins the words without reading them off the pane. */
+export const GROUP_SCORE_CURRENT_LABEL = 'Current clean revision';
+export const GROUP_SCORE_PREVIOUS_LABEL = 'Previous mark';
+
+/**
+ * A group's Reader marks, AT MOST TWO, newest first, and an empty list for a group nobody has scored.
+ *
+ * The slice is the whole rule: `groupScores` is newest-first and drops malformed rows, so `slice(0, 2)` is the
+ * current mark and the mark it moved from — and a book with twelve passes still renders two rows. Absent scores
+ * answer `[]`, which is what lets the pane print its empty state instead of `0%`.
+ */
+export function groupScoreMarks(group: PhraseGroupRow): GroupScoreMark[] {
+    return groupScores(group)
+        .slice(0, 2)
+        .map((pass, index) => ({
+            role: index === 0 ? ('current' as const) : ('previous' as const),
+            label: index === 0 ? GROUP_SCORE_CURRENT_LABEL : GROUP_SCORE_PREVIOUS_LABEL,
+            percent: phraseScorePercent(pass.value),
+            pass,
+            ...(pass.rationale === undefined ? {} : { rationale: pass.rationale })
+        }));
+}
+
+/**
+ * The Summary phrase's OVERALL score: the mean of every group's latest percentage.
+ *
+ * ALL-OR-NOTHING BY RULE. One scoring pass scores all five groups (pinned in `api.ts:PhraseGroupScore`), so
+ * a book where four groups carry a score and one does not is a book mid-write or mid-read — the pass that
+ * scored four has not landed on the fifth, and printing the mean of the four that arrived would be a number
+ * the server never claimed. So any group without a score makes the whole header silent, and an empty group
+ * list (a phrase read that has not landed, or a sampling-mode book) is silent the same way.
+ *
+ * The mean is taken over the UNROUNDED percents and rounded once, so the header cannot drift a point from
+ * what the five rows imply; ties round up (`Math.round`), which is the reading a person expects of "86.5".
+ */
+export function phraseOverallScore(view: Pick<StoryViewData, 'phrase' | 'story'>): number | undefined {
+    const groups = phraseGroups(view);
+
+    if (groups.length === 0) return undefined;
+
+    const percents = groups.map((group) => {
+        const latest = groupLatestScore(group);
+
+        return latest === undefined ? undefined : phraseScorePercent(latest.value);
+    });
+
+    if (percents.some((percent) => percent === undefined)) return undefined;
+
+    // The guard above is the proof, and the filter is how the compiler sees it: narrowing each element to a
+    // `number` (rather than casting the sum) keeps the mean honest, and `groups.length > 0` already means the
+    // list being divided by is non-empty.
+    const scored = percents.filter((percent): percent is number => percent !== undefined);
+
+    return Math.round(scored.reduce((sum, percent) => sum + percent, 0) / scored.length);
+}
+
 /** A group is written once it has a revision — `revision: 0` is the loop's "never written" (R1). */
 export const isGroupWritten = (group: PhraseGroupRow): boolean => group.revision > 0;
 
@@ -1106,6 +1369,180 @@ export const isGroupWriterBusy = (group: PhraseGroupRow): boolean => group.write
 export function unwrittenGroups(view: Pick<StoryViewData, 'phrase' | 'story'>): PhraseGroupRow[] {
     return phraseGroups(view).filter((group) => !isGroupWritten(group));
 }
+
+// ---------------------------------------------------------------------------
+// R1 — the LOCK on one SUMMARY GROUP: the state, the sentence, and what the desk may offer
+//
+// WHY HERE AND NOT IN THE PANE. Three surfaces read the same lock — the rail's row, the group pane's badge and
+// its two controls — and all three have to agree about what `locked` absent MEANS (open), which revision the
+// lock names when the wire's `locked_revision` and the row's `revision` differ, and what the words are. A rule
+// that is a function of the row is pinnable without a DOM, which is this module's standing argument.
+//
+// ABSENCE IS THE WHOLE DESIGN. `locked`, `locked_revision`, `locked_by` and `locked_at` are all OPTIONAL on the
+// wire (`api.ts:PhraseGroupRow`), and a payload from before the lock exists sends none of them. Every selector
+// below reads that as "the group is open", so an old book keeps the pane it had — no badge, no unlock line —
+// rather than a badge over a lock nobody made.
+// ---------------------------------------------------------------------------
+
+/** Who committed a lock, in the dashboard's own vocabulary (the wire's tokens are the same two words). */
+export type PhraseLockActor = 'author' | 'editor';
+
+/** A group whose text someone has committed to. Absent `locked` means OPEN — the legacy and normal state. */
+export const isGroupLocked = (group: PhraseGroupRow): boolean => group.locked === true;
+
+/**
+ * WHO made the lock: `'author'`, `'editor'`, or `undefined` when the row does not say.
+ *
+ * `undefined` is a real third state rather than a synonym for Author: a payload that marks a group locked but
+ * names no actor must not be reported as a lock the Author made, because the pane's whole unlock sentence rests
+ * on who is allowed to lift it.
+ */
+export function groupLockActor(group: PhraseGroupRow): PhraseLockActor | undefined {
+    return group.locked_by === 'author' || group.locked_by === 'editor' ? group.locked_by : undefined;
+}
+
+/**
+ * The revision the lock stands on — the number the badge prints.
+ *
+ * `locked_revision` is the wire's answer and is used whenever it carries one. It falls back to the row's current
+ * `revision` ONLY as the honest second reading: a lock is always made ON a revision, so a payload that says
+ * `locked:true` without the number still means "the text that stands now is the text that was committed". The
+ * fallback never invents a number for an unlocked group — `undefined` there, so no renderer prints one.
+ */
+export function groupLockRevision(group: PhraseGroupRow): number | undefined {
+    if (!isGroupLocked(group)) return undefined;
+
+    const revision = group.locked_revision;
+
+    return typeof revision === 'number' && Number.isFinite(revision) ? revision : group.revision;
+}
+
+/** The two actor words the desk prints: capitalized because they begin a clause ("Locked … by Author"). */
+export const groupLockActorLabel = (actor: PhraseLockActor | undefined): string =>
+    actor === 'editor' ? 'Editor' : actor === 'author' ? 'Author' : 'Crew';
+
+/**
+ * The locked badge's exact words: the revision the lock stands on, and who made it.
+ *
+ * Both halves are the request, not decoration: `Locked` alone leaves the Author guessing WHICH text is frozen
+ * once the loop has installed another revision, and the actor is the fact that explains why the pane is shut for
+ * an Editor's hand. `by Crew` is the fallback spelling for a row that names no actor — never a guessed Author.
+ */
+export function groupLockBadge(group: PhraseGroupRow): string {
+    const revision = groupLockRevision(group);
+
+    return `Locked at Revision ${revision === undefined ? '?' : revision} · by ${groupLockActorLabel(groupLockActor(group))}`;
+}
+
+/**
+ * The badge's tooltip: what a lock does to the group, in the same words for every surface.
+ *
+ * `locked_at` travels on the wire and stays HERE rather than in the badge's text: the Author compares locks, not
+ * timestamps, and a date on a badge competes with the revision number that actually identifies the text.
+ */
+export function groupLockTooltip(group: PhraseGroupRow): string {
+    const actor = groupLockActorLabel(groupLockActor(group)).toLowerCase();
+    const head = `Locked in by ${actor}: this group's text cannot be revised, the findings it carries are void, and the other groups adapt to it.`;
+
+    return group.locked_at ? `${head} Locked at ${group.locked_at}.` : head;
+}
+
+/**
+ * R1 / U-16 — why the LOCK control is shut, or `''` when the Author may use it.
+ *
+ * Every reason is a fact off the row, never a guess from run rows: no verb in this shell, the Writer replacing
+ * the text this second (the same `writer_busy` the revise route refuses with, R4), nothing written to commit
+ * (R1 — `revision: 0` is the loop's own "never written"), or already locked. Order matters: the missing verb is
+ * the shell's fault and comes first, and an already-locked group is not offered a second lock.
+ */
+export function groupLockRefusal(group: PhraseGroupRow, hasAction: boolean): string {
+    if (!hasAction) return 'The group lock route is not available in this shell.';
+    if (isGroupLocked(group)) return 'This group is already locked in.';
+    if (isGroupWriterBusy(group)) {
+        return 'The Writer is rewriting this group right now — the lock route refuses to commit text that is about to move (R4).';
+    }
+    if (!isGroupWritten(group)) {
+        return 'Nothing is written to lock in yet — the lock commits a revision, and this group has none.';
+    }
+    return '';
+}
+
+/**
+ * R1 / U-16 — why the UNLOCK control is shut, or `''` when the Author may use it.
+ *
+ * Only the Author lifts a lock, whoever made it — and the Writer hold is a refusal too, because the lock
+ * may be holding off an install that was dispatched BEFORE it and is still in flight (`api/routes.ts`'s
+ * unlock leg checks `liveGroupWriters` before it calls the domain, R4). Unlocking under that pass would
+ * open the group for a text nobody reviewed, so the control is shut on the same `writer_busy` read the
+ * route's 409 refuses with — a greyed button and a refusal cannot disagree (F8/R4). Order keeps the
+ * existing reasons first: the missing verb is the shell's fault, and a group that is not locked has
+ * nothing to unlock whatever else is true of it.
+ */
+export function groupUnlockRefusal(group: PhraseGroupRow, hasAction: boolean): string {
+    if (!hasAction) return 'The group unlock route is not available in this shell.';
+    if (!isGroupLocked(group)) return 'This group is not locked, so there is nothing to unlock.';
+    if (isGroupWriterBusy(group)) {
+        return 'The Writer is rewriting this group right now — the unlock route refuses to open a section under a pass that has not installed its text (R4).';
+    }
+
+    return '';
+}
+
+export const canAuthorLockGroup = (group: PhraseGroupRow, hasAction: boolean): boolean =>
+    groupLockRefusal(group, hasAction) === '';
+
+export const canAuthorUnlockGroup = (group: PhraseGroupRow, hasAction: boolean): boolean =>
+    groupUnlockRefusal(group, hasAction) === '';
+
+/**
+ * R1 — the confirmation sentence the Author clicks twice.
+ *
+ * A lock has three consequences and all three are stated before the verb, because the Author cannot undo any of
+ * them alone from here: the text stops being editable, the findings that were aimed at it are void, and the
+ * other four groups start adapting to it. The last clause is the one that is easy to forget — the lock is a
+ * promise the REST of the Summary has to keep.
+ */
+export function groupLockStatement(group: PhraseGroupRow): string {
+    // The revision the lock COMMITS. On a locked row that is `locked_revision` (the text the lock already
+    // stands on); on the OPEN group the Author is about to commit it is the row's own current revision, because
+    // the text that stands now is exactly the text the lock freezes — and naming it is the whole point of the
+    // confirmation. An unwritten group has no revision to name, and its control is shut before this sentence is
+    // ever read (`groupLockRefusal` refuses it, R1's `revision: 0`).
+    const revision = groupLockRevision(group) ?? group.revision;
+
+    return `Locking Revision ${revision} of “${group.title}” makes it settled content: this group stops being editable, the findings aimed at it are void, and the other groups adapt to the text that now stands. Only the Author can unlock it.`;
+}
+
+/**
+ * R1 — the cached refusal for THIS group, or `undefined` when the frame carries none.
+ *
+ * `undefined` is not "the lock succeeded": the pane's badge is read off the phrase rows, so a refusal shows the
+ * sentence while an unchanged `locked` flag keeps showing the group as it stands. Keyed through
+ * `api.ts:groupLockKey` — the same builder the store wrote with, so a refusal cannot miss its own pane.
+ */
+export function groupLockError(
+    view: Pick<StoryViewData, 'groupLockErrors' | 'story'>,
+    groupId: string
+): string | undefined {
+    return view.groupLockErrors?.[groupLockKey(view.story.id, groupId)];
+}
+
+/**
+ * R2 — the Story's Editor-locking Setting, read the way every absent-by-default flag on this desk is read.
+ *
+ * ABSENT MEANS OFF. The key is additive on `Story` and on `PATCH /stories/:id`, and a Story written before the
+ * Setting exists has no key at all; treating absence as "on" would hand the Editor a power the Author never
+ * granted. `=== true` is the whole rule, so a payload that sends a string or a null reads as off.
+ */
+export const isEditorGroupLockingEnabled = (story: Story): boolean =>
+    (story as Story & { editor_group_locking?: boolean }).editor_group_locking === true;
+
+/** R2 — the Setting's own words, kept in one place so the pane and its test read the same label. */
+export const EDITOR_GROUP_LOCKING_LABEL = 'Editor may lock phrase groups';
+
+/** R2 — what the Setting does, in the two sentences the Author needs before turning it on. */
+export const EDITOR_GROUP_LOCKING_NOTE =
+    'On, the Editor may lock a Summary group in on its own judgement — it weighs the Critic findings open on that group now, with the Reader score and rationale beside them, and commits the text that stands. Off (the default), only the Author locks a group. Either way, only the Author can unlock one.';
 
 /**
  * The sign-off blockers the GROUP model adds to the phase gate (U5's last test).
@@ -1196,6 +1633,234 @@ export function groupSignOffBlockers(view: StoryViewData): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// D-67 / D-68 — the REVIEWED Summary the Summary tab renders
+//
+// WHY THESE SELECTORS EXIST RATHER THAN THE PANE READING `view.phrase.reviewed` DIRECTLY. The reviewed block
+// is a wire shape with three states, a score join keyed by GROUP UUID, and per-group gaps that arrive under
+// two different tokens; the Summary tab, the choose control and (later) the rail all have to answer the same
+// questions from it, and each of those answers is a RULE about the wire (which state renders which text, what
+// a gap means in an Author's words, which revision a score describes). A rule that is a function of the row
+// is pinnable without a DOM — this module's standing argument — and it keeps the pane from re-deciding what
+// "ready" or "dropped" means.
+//
+// WHAT IS NEVER RE-DERIVED HERE. The selection itself (`cleanSelectionOf`, server), the score join (the
+// server joins on `vector_hash` and ships the rows), and the state token (the projection computes it). The
+// helpers below only pair rows with rows (a reviewed group with its catalog row, for a title) and put the
+// wire's facts into sentences the Author reads.
+// ---------------------------------------------------------------------------
+
+/** The empty reviewed block: what a payload from before D-67, or a book with no groups, amounts to. */
+const EMPTY_REVIEWED: PhraseReviewedSummary = {
+    state: 'pending',
+    complete: false,
+    vector: {},
+    vector_hash: '',
+    overview: '',
+    groups: [],
+    chosen: null,
+    stale: false,
+    blocking_issues: [],
+    writer_busy: false
+};
+
+/**
+ * The reviewed block, or the EMPTY block when the phrase read has not landed or the server predates D-67.
+ *
+ * The wire sends it ALWAYS (`projections.ts:PhraseView.reviewed`), so this is not a loading branch —
+ * `phraseReadLanded` is. It is the tolerance for an older build: the Summary tab must answer `pending`
+ * rather than crash on `undefined.groups`, and it must never fill the gap with the live text.
+ */
+export function phraseReviewed(view: Pick<StoryViewData, 'phrase'>): PhraseReviewedSummary {
+    return view.phrase?.reviewed ?? EMPTY_REVIEWED;
+}
+
+/** The state token the Summary tab branches on; `pending` for a payload that has no reviewed block at all. */
+export function reviewedState(view: Pick<StoryViewData, 'phrase'>): PhraseReviewedSummary['state'] {
+    return phraseReviewed(view).state;
+}
+
+/** The instant the choose committed, as the wire sent it (`YYYY-MM-DD`). Absent ⇒ `''`, and the pane prints no date. */
+export function reviewedChosenDate(view: Pick<StoryViewData, 'phrase'>): string {
+    const at = phraseReviewed(view).chosen?.at ?? '';
+
+    return at.length >= 10 ? at.slice(0, 10) : at;
+}
+
+/**
+ * THE Summary text the tab prints — and the one place that decides WHICH text that is.
+ *
+ * `ready` → the compiled reviewed Overview; `chosen` → the text the Author took; `pending` → `''`, which is
+ * what keeps the tab from substituting the live composed Overview. D-67's rule is the whole point of the
+ * pane: a Reader's number and the crew's standing describe the text they were shown, so the live text —
+ * which may carry an open defect on one group — is not this Summary and is printed nowhere here.
+ */
+export function reviewedSummaryText(view: Pick<StoryViewData, 'phrase'>): string {
+    const reviewed = phraseReviewed(view);
+
+    if (reviewed.state === 'chosen') return reviewed.chosen?.overview ?? '';
+
+    return reviewed.state === 'ready' ? reviewed.overview : '';
+}
+
+/** The live group rows by UUID and by key — the reviewed block names ids and keys but carries no title. */
+const groupIndex = (view: Pick<StoryViewData, 'phrase' | 'story'>): Record<string, PhraseGroupRow> => {
+    const index: Record<string, PhraseGroupRow> = {};
+
+    for (const group of phraseGroups(view)) {
+        index[group.id] = group;
+        // The reviewed block's `blocking_issues[].group_keys` are CATALOG KEYS (`projections.ts:keyById`),
+        // while its `groups[]` are addressed by UUID, so a title lookup needs both spellings.
+        index[group.key] = group;
+    }
+
+    return index;
+};
+
+/** One reviewed group with everything a row has to print: its live sibling (title, purpose) and its score. */
+export interface ReviewedGroupRow {
+    /** The wire's row for this group — selection, supersession, gap and the scores that judged the selection. */
+    reviewed: PhraseReviewedGroup;
+    /** The live catalog row, or `undefined` when the phrase read has no sibling (a group retired mid-flight). */
+    group?: PhraseGroupRow;
+    /** The display title, from the live row: the rail, the pane and this row name a group identically (U6). */
+    title: string;
+    /** The newest score that judged THIS selection, or `undefined` when no pass reported against the hash. */
+    score?: number;
+    /** True when the newest text is not the reviewed one — the pair of numbers the feature exists to show. */
+    superseded: boolean;
+}
+
+/**
+ * The reviewed rows in the composition order the rail uses, each paired with its live sibling.
+ *
+ * The projection emits them in catalog order, but a pane must not depend on that: the pair is looked up by
+ * id and sorted by the LIVE `order` (the same tie-break `phraseGroups` uses), so a refetch that reshuffles
+ * the payload cannot reorder the tab, and a reviewed row whose group has gone keeps the server's order
+ * instead of vanishing (an entry the Author is owed is not a row this file may drop).
+ */
+export function reviewedGroupRows(view: Pick<StoryViewData, 'phrase' | 'story'>): ReviewedGroupRow[] {
+    const byId = groupIndex(view);
+    const reviewed = phraseReviewed(view);
+    const order = new Map(phraseGroups(view).map((group, index) => [group.id, index]));
+    // The server's own position is the FALLBACK sort key, so a reviewed row whose live sibling has gone
+    // stays where the wire put it rather than jumping to the front of the tab.
+    const rows = reviewed.groups.map((row, index) => ({ row, index }));
+
+    rows.sort((left, right) => {
+        const leftOrder = order.get(left.row.id) ?? left.index;
+        const rightOrder = order.get(right.row.id) ?? right.index;
+
+        return leftOrder - rightOrder || left.row.key.localeCompare(right.row.key);
+    });
+
+    return rows.map(({ row }) => {
+        const group = byId[row.id];
+        // The newest row that judged THIS selection: the wire already filtered by `reviewed.vector_hash`
+        // (`scoresForVector`), so the head of the list is the number the pane prints — and a pane that
+        // reached for `groups[].scores` instead would print a score of text nobody reviewed (D-67).
+        const [latest] = row.scores.filter((score) => Number.isFinite(score?.value));
+
+        return {
+            reviewed: row,
+            group,
+            title: group?.title ?? row.key,
+            score: latest === undefined ? undefined : phraseScorePercent(latest.value),
+            superseded: row.superseded
+        };
+    });
+}
+
+/** Why ONE group has no reviewed text, in the Author's words; `''` when it does. */
+export function reviewedGapReason(row: PhraseReviewedGroup): string {
+    // `unwritten` first: there is no text to review at all, which is a different wait from "written, never
+    // passed". An open issue outranks `no_clean_revision` in the sentence because it names what the Author
+    // can actually act on — the finding, not the missing pass.
+    if (row.selected_revision !== null) return '';
+
+    if (row.gap === 'unwritten') return 'nothing written yet';
+    if (row.issues_open) return 'has open issues';
+    if (row.gap === 'no_clean_revision') return 'awaiting a clean pass';
+
+    // A row with neither a gap token nor an open issue is still unselected, so the honest sentence is the
+    // missing pass; the pane never claims a reason the wire did not send.
+    return row.gap === null ? 'awaiting a clean pass' : `awaiting a clean pass (${row.gap})`;
+}
+
+/** Every group the reviewed Overview is missing, with its reason — the waiting state's list (never the live text). */
+export function reviewedGaps(view: Pick<StoryViewData, 'phrase' | 'story'>): Array<ReviewedGroupRow & { reason: string }> {
+    return reviewedGroupRows(view)
+        .map((row) => ({ ...row, reason: reviewedGapReason(row.reviewed) }))
+        .filter((row) => row.reason !== '');
+}
+
+/** The unresolved issues holding a clean verdict back, each with the group TITLES it scopes to. */
+export function reviewedBlockingIssues(
+    view: Pick<StoryViewData, 'phrase' | 'story'>
+): Array<{ id: string; title: string; cost: string; groups: string[] }> {
+    const byId = groupIndex(view);
+
+    return phraseReviewed(view).blocking_issues.map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+        cost: issue.cost,
+        // Catalog KEYS become the catalog's titles here, so the tab never prints a key the Author has
+        // never seen (`premise`, not `grp-1`), and an unknown key falls back to the key itself.
+        groups: issue.group_keys.map((key) => byId[key]?.title ?? key)
+    }));
+}
+
+/** The scores that judged the CHOSEN text for one group — keyed by GROUP UUID on the wire, never by key. */
+export function chosenGroupScores(
+    view: Pick<StoryViewData, 'phrase'>,
+    groupId: string
+): PhraseGroupScore[] {
+    return phraseReviewed(view).chosen?.scores?.[groupId] ?? [];
+}
+
+/** The revision the CHOSEN vector names for one group, or null when the record does not name one. */
+export function chosenGroupRevision(view: Pick<StoryViewData, 'phrase'>, groupId: string): number | null {
+    return phraseReviewed(view).chosen?.vector?.[groupId] ?? null;
+}
+
+/**
+ * Why the Choose control cannot run, `''` when it can (U-16: a disabled control states its reason).
+ *
+ * Two refusals, both the wire's, and deliberately NO third:
+ *   - the shell has no binding, so the click would do nothing;
+ *   - `reviewed.writer_busy` — the SAME read the route's 409 refuses with, so a greyed control and a
+ *     refusal can never disagree (R4).
+ *
+ * WHY `stale` does NOT disable. `stale` is not a stale frame: it says the clean selection has moved PAST
+ * what the Author chose, which is exactly the case the choose exists for a second time — the server's own
+ * comment on `reviewedSummaryView` calls it "the choose is offered again". Greying the button on `stale`
+ * would strand a book whose Author has already chosen once: they could never take newer reviewed text.
+ * The pane therefore LABELS the action when stale (and its refusal list stays the wire's two).
+ */
+export function reviewedChooseRefusal(
+    view: Pick<StoryViewData, 'phrase'>,
+    hasAction: boolean
+): string {
+    if (!hasAction) return 'The reviewed-Summary choose route is not available in this shell.';
+
+    if (phraseReviewed(view).writer_busy) {
+        return 'The Writer is rewriting part of this Summary right now, so choosing would install under a pass that has not finished (R4).';
+    }
+
+    return '';
+}
+
+/** Every group whose newest text the choice will pass over — the drop the confirmation step names. */
+export function reviewedSupersededGroups(
+    view: Pick<StoryViewData, 'phrase' | 'story'>
+): ReviewedGroupRow[] {
+    return reviewedGroupRows(view).filter((row) => row.reviewed.superseded);
+}
+
+/** The choose's refusal sentence, verbatim from the server, or `undefined` when no refusal is on the frame. */
+export const reviewedChooseError = (view: Pick<StoryViewData, 'reviewedError'>): string | undefined =>
+    view.reviewedError ?? undefined;
+
+// ---------------------------------------------------------------------------
 // Findings and Ideas (D-33/D-34, D-27/D-32)
 // ---------------------------------------------------------------------------
 
@@ -1206,7 +1871,7 @@ export function isOpenFinding(finding: Finding): boolean {
     return OPEN_FINDING_STATES.includes(finding.state);
 }
 
-/** D-32/D-36 — the Author's decisions, which are the memory that stops the next Reader re-arguing. */
+/** D-32/D-36 — the Author's decisions, which are the memory that stops the next Critic re-arguing. */
 export const DECIDED_IDEA_STATES: IdeaState[] = ['selected', 'discarded', 'deferred'];
 
 export function isDecidedIdea(idea: Idea): boolean {
@@ -1408,7 +2073,7 @@ export interface RevisionUnit {
     revisions: Revision[];
     /**
      * U-13 (D-21/D-22): the verdict rows that speak to each DRAFT, newest last, keyed by revision id.
-     * §6.2a files a checker's report against the draft it read — the Checker also appends the verdict to
+     * §6.2a files a reader's report against the draft it read — the Reader also appends the verdict to
      * `revision.verdict_refs` — so this is the honest per-column judgement, matched by `target_ref`
      * because the dashboard recomputes nothing (L-14) and joins §4.9 rows per pane instead.
      */
@@ -1491,7 +2156,7 @@ export function buildRevisionUnits(view: StoryViewData): RevisionUnit[] {
 /**
  * The verdicts one DRAFT is shown, and where they came from (U-13, D-21, D-22).
  *
- * §6.2a's loop B files a checker's report against the draft it read, so a draft with its own rows is
+ * §6.2a's loop B files a reader's report against the draft it read, so a draft with its own rows is
  * judged on its own merits. A draft with none is NOT unjudged: §8.3's `submitVerdict` takes a
  * `target_ref` and the loop's convention for a unit-level pass is the unit, so the unit's rows are the
  * only judgement that exists. Showing nothing there would tell the Author "nobody read this draft" when

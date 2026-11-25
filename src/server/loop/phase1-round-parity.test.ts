@@ -228,7 +228,7 @@ function seedSampleRun(rig: Rig, key: string): void {
     );
 }
 
-/** A Reader finding in phase ①'s spelling: the Summary row as target, the draft it read in `related_refs`. */
+/** A Critic finding in phase ①'s spelling: the Summary row as target, the draft it read in `related_refs`. */
 function seedScopedFinding(
     rig: Rig,
     input: { fingerprint: string; refs?: string[]; target?: string; cost?: Finding['cost'] }
@@ -285,7 +285,7 @@ function competition(rig: Rig): { server: string[]; dashboard: string[] } {
 
 describe('T12/P1 — the active round means the same thing on the server, on the wire and on the rail', () => {
     it('round 1 before the first selection: its drafts are LIVE work on both sides', async () => {
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1 });
 
         // Two sweeps write the round's two samples; the third screens them and the fourth selects, so this
         // is the state with drafts on the ledger and no selection yet (§6.4 steps 3-4).
@@ -322,7 +322,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
     });
 
     it('after round 1 selects, a round-1 survivor is set aside on both sides — and stops holding the lock', async () => {
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1 });
 
         await rig.run();
 
@@ -356,7 +356,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
     });
 
     it('during round 2, its own drafts are live while round 1 stays set aside', async () => {
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1 });
 
         await rig.run();
 
@@ -403,7 +403,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
     });
 
     it('an Author override to an older round neither resurrects rivals nor re-opens the review debt', async () => {
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1 });
 
         await rig.run();
 
@@ -467,7 +467,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
     });
 
     it('round 10 vs round 1: the round number never leaks across the claim-key boundary', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const summary = summaryOf(rig);
 
         // Nine completed rounds (an Author-side state: the row says what it says), with a round-1 attempt
@@ -516,7 +516,7 @@ describe('T12/P1 — the active round means the same thing on the server, on the
 
 describe('T12/P2 — a Summary draft with no round is still a draft, on both sides', () => {
     it('keys round-less drafts at round 1 in BOTH maps, and keeps an unknown id an unknown id', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const summary = summaryOf(rig);
 
         // A Story written before §3.5 numbered rounds: no sampling history, and Summary rows whose `round`
@@ -599,7 +599,7 @@ describe('T12/P2 — a Summary draft with no round is still a draft, on both sid
     });
 
     it('the same round-less draft turns over as soon as a round completes — one boundary, two readers', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const legacyDraft = seedSurvivor(rig);
 
         expect(supersessionRows(rig)).toEqual([`${legacyDraft.id}:rundefined:drafted server=false dashboard=false`]);

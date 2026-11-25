@@ -228,7 +228,7 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
 
         expect(schemas.length > 0).toBe(true);
         expect(toolsForRunKind(schemas, 'writer', 'none')).toEqual([]);
-        expect(toolsForRunKind(schemas, 'reader', 'none')).toEqual([]);
+        expect(toolsForRunKind(schemas, 'critic', 'none')).toEqual([]);
         // …while the default stays exactly the declared catalogue for a non-assistant kind.
         expect(toolsForRunKind(schemas, 'writer')).toBe(schemas);
     });
@@ -304,7 +304,7 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
             { tool: 'submitVerdict', args: { target_ref: 'chapter_0', recommendation: 'fix' } }
         ];
 
-        // A checker that filed a task and then submitted its verdict is reporting the VERDICT;
+        // A reader that filed a task and then submitted its verdict is reporting the VERDICT;
         // counting both would double-weight it.
         expect(primaryActionOf(proposals)).toEqual({
             tool: 'submitVerdict',

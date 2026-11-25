@@ -64,14 +64,21 @@ describe('§4 enums', () => {
     // D-33b: the claim type. `issue` is FIRST because it is the default in both directions — the reading
     // of a row raised before the field existed, and of a `raiseFinding` call that names no `kind` — and
     // that default is what keeps D-16's fingerprint byte-compatible for every open finding.
+    //
+    // The two words are `issue` and `proposal` (the Author's own vocabulary: Issues are the things that
+    // break the story's logic, Proposals are the things that make it better). The kinds are NOT
+    // unconstrained against `FINDING_COSTS` — `tools/reader.ts:raiseFinding` refuses `proposal` at
+    // `critical` and `issue` at `taste`, and both refusals are pinned in `tools/runtime.test.ts` — but
+    // the SCALE itself stays four values, because persisted rows, `costDistribution` and the D-35b dial
+    // all key on it (the test above).
     it('a finding names which kind of claim it is, and issue is the default (D-33b)', () => {
-        expect(FINDING_KINDS).toEqual(['issue', 'improvement']);
+        expect(FINDING_KINDS).toEqual(['issue', 'proposal']);
     });
 
     it('the crew kinds and their aggregation modes are §4.12/D-38', () => {
         // `researcher` is appended (research pipeline §3.1): the original four keep their §4 order,
         // so the permission matrix and the roster read the same prefix they always did.
-        expect(ROLE_KINDS).toEqual(['writer', 'editor', 'reader', 'checker', 'researcher']);
+        expect(ROLE_KINDS).toEqual(['writer', 'editor', 'critic', 'reader', 'researcher']);
         expect(ROLE_AGGREGATIONS).toEqual(['majority', 'merge', 'lead']);
     });
 
@@ -123,11 +130,12 @@ describe('§4 enums', () => {
 });
 
 describe('§4 collection registry', () => {
-    it('lists the 23 collections in registry order', () => {
-        // F2 — 20 §4 names, 3 the phase-① pipeline appended, and the 3 SUMMARY PHRASE records R1 adds.
+    it('lists the 24 collections in registry order', () => {
+        // F2 — 20 §4 names, 3 the phase-① pipeline appended, the 3 SUMMARY PHRASE records R1 adds, and
+        // the Reader's score rows D-65 appends last.
         // Appending (never inserting) is the load-bearing half: every snapshot reader walks THIS list,
         // so an old `store.json` still loads and simply has no rows in the new collections.
-        expect(COLLECTION_NAMES).toHaveLength(23);
+        expect(COLLECTION_NAMES).toHaveLength(24);
         expect(COLLECTION_NAMES).toEqual([
             'stories',
             'summaries',
@@ -156,7 +164,10 @@ describe('§4 collection registry', () => {
             // rule pinned in the next test).
             'phrases',
             'phrase_groups',
-            'group_revisions'
+            'group_revisions',
+            // READER SCORING (D-65), appended last for the same reason: a score row is a read surface,
+            // and no existing collection may shift position in the registry.
+            'summary_scores'
         ]);
     });
 

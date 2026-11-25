@@ -408,9 +408,9 @@ function findingEntries(findings: Finding[]): DesiredEntry[] {
         title: `${finding.cost} · ${finding.title}`,
         body: paragraph(
             line('State', finding.state),
-            // T5: the claim type, spelled out only when it is not the default. An improvement card has
+            // T5: the claim type, spelled out only when it is not the default. A proposal card has
             // to say so, or the crew reading it weighs a proposal by the defect's admissibility rule.
-            ...(finding.kind === 'improvement' ? [line('Kind', 'improvement')] : []),
+            ...(finding.kind === 'proposal' ? [line('Kind', 'proposal')] : []),
             line('Target', finding.target_ref),
             line('Criterion', finding.criterion_ref),
             line('Detail', finding.detail),

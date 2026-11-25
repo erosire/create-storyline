@@ -4,13 +4,13 @@
  *
  * What each pin exists to prevent:
  *
- *   1. `tools/checker.ts`'s unknown-group-id fix line used to tell EVERY book "omit group_refs when the
+ *   1. `tools/reader.ts`'s unknown-group-id fix line used to tell EVERY book "omit group_refs when the
  *      defect is the whole Overview" — but on a grouped book omission is refused by the rule one line
  *      below, so the structured advice contradicted the refusal the crew had just been handed. The
  *      grouped fix line must say the truth instead: a cross-Overview defect NAMES every affected group
  *      (all 5 for a whole-Overview claim); there is no unscoped path. The legacy fix line keeps the
  *      omission meaning, which is correct there (that book has no groups at all). (The unknown-id
- *      refusals themselves are pinned in `checker-group-attribution.test.ts`; only the `fix` detail is
+ *      refusals themselves are pinned in `reader-group-attribution.test.ts`; only the `fix` detail is
  *      re-pinned here — see its two `fix` assertions.)
  *   2. `tools/editor.ts`'s `requestMerge` D-23 refusal branched its MESSAGE by pipeline but told BOTH
  *      books `listRevisions …, then selectRevision` — sending a grouped book straight at the selection
@@ -25,7 +25,7 @@
  *   5. The legacy sampling book is unchanged in every case: the same writes, the same fix copy.
  *
  * FIXTURE: the same `run/mock.ts:seedStory` + `phrase/catalog.ts:ensurePhraseCatalog` rig as
- * `checker-group-attribution.test.ts` — `recordUidAt(1)` is the Phrase row, `recordUidAt(2..6)` the
+ * `reader-group-attribution.test.ts` — `recordUidAt(1)` is the Phrase row, `recordUidAt(2..6)` the
  * five groups in catalog order — so every id below is a literal a reader can point at. Refusals carry
  * the `tools/index.ts` prefix (`Rule: <id> — `), and refusal DETAILS spread onto the result
  * (`utilities.ts:refusalResult`), so `fix` is asserted from the result row.
@@ -46,12 +46,12 @@ interface Book {
     story: Story;
     groups: PhraseGroup[];
     runtime: ToolRuntime;
-    contexts: Record<'writer' | 'editor' | 'reader', RunToolContext>;
+    contexts: Record<'writer' | 'editor' | 'critic', RunToolContext>;
 }
 
 const idOf = (groups: PhraseGroup[], key: string) => groups.find((group) => group.key === key)!.id;
 
-const sessionFor = (storyId: string, kind: 'writer' | 'editor' | 'reader'): RunSession => ({
+const sessionFor = (storyId: string, kind: 'writer' | 'editor' | 'critic'): RunSession => ({
     storyId,
     roleKind: kind,
     roleName: kind,
@@ -98,7 +98,7 @@ function seedBook(summaryMode: 'groups' | 'sampling', withHistory = false): Book
         contexts: {
             writer: runtime.createContext(sessionFor(story.id, 'writer')),
             editor: runtime.createContext(sessionFor(story.id, 'editor')),
-            reader: runtime.createContext(sessionFor(story.id, 'reader'))
+            critic: runtime.createContext(sessionFor(story.id, 'critic'))
         }
     };
 }
@@ -247,7 +247,7 @@ describe('the mirror is the install\u2019s, not a second write path (R6)', () =>
 
 describe('the unknown-group fix line matches the book\u2019s pipeline (R3, item 1)', () => {
     // The refusal MESSAGES of these two calls are already pinned verbatim in
-    // `checker-group-attribution.test.ts`; this pins the structured `fix` the crew acts on, which is
+    // `reader-group-attribution.test.ts`; this pins the structured `fix` the crew acts on, which is
     // what the hardening changed.
     const unknownFiling = (refs: string[]) => ({
         target_ref: 'summary_0',
@@ -261,7 +261,7 @@ describe('the unknown-group fix line matches the book\u2019s pipeline (R3, item 
 
     it('tells a grouped book to name every affected group — no unscoped path', async () => {
         const book = seedBook('groups');
-        const result = await book.runtime.execute(book.contexts.reader, 'raiseFinding', unknownFiling([recordUidAt(0)]));
+        const result = await book.runtime.execute(book.contexts.critic, 'raiseFinding', unknownFiling([recordUidAt(0)]));
 
         expect(result.ok).toBe(false);
         expect((result as { fix?: string }).fix).toBe(
@@ -272,7 +272,7 @@ describe('the unknown-group fix line matches the book\u2019s pipeline (R3, item 
 
     it('tells a group-less book to omit group_refs, which is its whole-Overview meaning', async () => {
         const book = seedBook('sampling');
-        const result = await book.runtime.execute(book.contexts.reader, 'raiseFinding', unknownFiling([recordUidAt(1)]));
+        const result = await book.runtime.execute(book.contexts.critic, 'raiseFinding', unknownFiling([recordUidAt(1)]));
 
         expect(result.ok).toBe(false);
         expect((result as { fix?: string }).fix).toBe(
@@ -282,7 +282,7 @@ describe('the unknown-group fix line matches the book\u2019s pipeline (R3, item 
 
     it('keeps the must-name-groups refusal fix pointed at the ids, not at omission', async () => {
         const book = seedBook('groups');
-        const result = await book.runtime.execute(book.contexts.reader, 'raiseFinding', {
+        const result = await book.runtime.execute(book.contexts.critic, 'raiseFinding', {
             ...unknownFiling([]),
             group_refs: undefined
         });

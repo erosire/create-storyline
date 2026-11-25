@@ -24,8 +24,8 @@ const agent = (kind: string, title: string): AgentStatusRow => ({
 const idle: AgentStatusRow[] = [
     agent('writer', 'Writer'),
     agent('editor', 'Editor'),
+    agent('critic', 'Critic'),
     agent('reader', 'Reader'),
-    agent('checker', 'Checker'),
     // Phase ①'s Researcher is the fifth employee (§3.1): Rank A, writes only `knowledge`.
     agent('researcher', 'Researcher')
 ];
@@ -60,9 +60,9 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(within(header).queryByText(/threads? running/i)).toBeNull();
 
         const tiles = panel.querySelectorAll<HTMLElement>('.sv-agent-tile');
-        // Alphabetical by title, five rows: the Researcher sorts between Reader and Writer.
+        // Alphabetical by title, five rows: the Researcher sorts between Editor and Writer.
         expect(Array.from(tiles).map((tile) => tile.dataset.agent)).toEqual([
-            'checker',
+            'critic',
             'editor',
             'reader',
             'researcher',
@@ -162,9 +162,9 @@ describe('AgentsPanel — the global employee roster', () => {
 
         // Every other employee keeps the idle face: a running count never leaks onto its peers (R3).
         const titles: Record<string, string> = {
-            checker: 'Checker',
-            editor: 'Editor',
             reader: 'Reader',
+            editor: 'Editor',
+            critic: 'Critic',
             researcher: 'Researcher'
         };
 
@@ -236,7 +236,7 @@ describe('AgentsPanel — the global employee roster', () => {
 
         const editor = panel.querySelector<HTMLElement>('[data-agent="editor"]')!;
         expect(within(editor).getByText('Editor')).toBeTruthy();
-        // The Researcher is a Rank A peer with its own tile — not a sub-role of the Reader.
+        // The Researcher is a Rank A peer with its own tile — not a sub-role of the Critic.
         const researcher = panel.querySelector<HTMLElement>('[data-agent="researcher"]')!;
         expect(within(researcher).getByText('Researcher')).toBeTruthy();
         expect(within(panel).queryByText(/the Editor is your channel/)).toBeNull();
@@ -259,8 +259,8 @@ describe('AgentsPanel — the global employee roster', () => {
         // state too, or it would only appear on the one tile that happens to be running.
         expect(
             Array.from(document.querySelectorAll<HTMLElement>('.sv-agent-tile')).map((tile) => tile.dataset.agent)
-        ).toEqual(['checker', 'editor', 'reader', 'researcher', 'writer']);
-        for (const kind of ['checker', 'editor', 'reader', 'researcher', 'writer']) {
+        ).toEqual(['critic', 'editor', 'reader', 'researcher', 'writer']);
+        for (const kind of ['critic', 'editor', 'reader', 'researcher', 'writer']) {
             expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.status).toBe('idle');
             expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.selected).toBe('false');
             expect(stateClass(kind)).toBe('sv-agent-tile__state sv-agent-tile__state--idle');
@@ -297,7 +297,7 @@ describe('AgentsPanel — the global employee roster', () => {
         expect(document.querySelector<HTMLElement>('[data-agent="writer"]')?.dataset.selected).toBe('true');
         expect(stateClass('writer')).toBe('sv-agent-tile__state sv-agent-tile__state--running');
 
-        for (const kind of ['checker', 'editor', 'reader', 'researcher']) {
+        for (const kind of ['critic', 'editor', 'reader', 'researcher']) {
             expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.status).toBe('idle');
             expect(document.querySelector<HTMLElement>(`[data-agent="${kind}"]`)?.dataset.selected).toBe('false');
             expect(stateClass(kind)).toBe('sv-agent-tile__state sv-agent-tile__state--idle');
@@ -334,16 +334,16 @@ describe('AgentsPanel — the global employee roster', () => {
 
     it('does not need a provenance marker to tell where a model came from', () => {
         const configured = idle.map((agent) =>
-            agent.kind === 'checker' ? { ...agent, model: 'deepseek-r1', model_source: 'agent' as const } : agent
+            agent.kind === 'reader' ? { ...agent, model: 'deepseek-r1', model_source: 'agent' as const } : agent
         );
 
         render(<AgentsPanel agents={configured} />);
 
-        const checker = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="checker"]')!;
-        const select = within(checker).getByLabelText(/model for Checker/) as HTMLSelectElement;
+        const reader = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="reader"]')!;
+        const select = within(reader).getByLabelText(/model for Reader/) as HTMLSelectElement;
 
         expect(select.value).toBe('deepseek-r1');
-        expect(within(checker).queryByText(/set for this agent/)).toBeNull();
+        expect(within(reader).queryByText(/set for this agent/)).toBeNull();
     });
 
     it('discloses the template-role models that would otherwise govern the crew (T-6b)', () => {
@@ -377,22 +377,22 @@ describe('AgentsPanel — the global employee roster', () => {
     it('clears an agent’s choice from the same inline dropdown (U-8, T-6b)', () => {
         const onSetModel = vi.fn();
         const configured = idle.map((row) =>
-            row.kind === 'reader' ? { ...row, model: 'deepseek-r1', model_source: 'agent' as const } : row
+            row.kind === 'critic' ? { ...row, model: 'deepseek-r1', model_source: 'agent' as const } : row
         );
 
         render(<AgentsPanel agents={configured} onSetModel={onSetModel} />);
 
-        const reader = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="reader"]')!;
-        const select = within(reader).getByLabelText(/model for Reader/) as HTMLSelectElement;
+        const critic = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="critic"]')!;
+        const select = within(critic).getByLabelText(/model for Critic/) as HTMLSelectElement;
 
         fireEvent.change(select, { target: { value: '' } });
 
-        expect(onSetModel).toHaveBeenCalledWith('reader', null);
+        expect(onSetModel).toHaveBeenCalledWith('critic', null);
     });
 
     it('does not duplicate the retained thread history on the rail (it belongs to the content area)', () => {
         const failed = idle.map((row) =>
-            row.kind === 'checker'
+            row.kind === 'reader'
                 ? {
                       ...row,
                       recent: [
@@ -416,12 +416,12 @@ describe('AgentsPanel — the global employee roster', () => {
 
         render(<AgentsPanel agents={failed} />);
 
-        const checker = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="checker"]')!;
+        const reader = screen.getByTestId('agents-panel').querySelector<HTMLElement>('[data-agent="reader"]')!;
 
-        expect(within(checker).queryByText(/Invalid value/)).toBeNull();
-        expect(within(checker).queryByText('wi_check_chapters_1')).toBeNull();
+        expect(within(reader).queryByText(/Invalid value/)).toBeNull();
+        expect(within(reader).queryByText('wi_check_chapters_1')).toBeNull();
         // The tile still says the agent is idle (the failed thread is history, not a live one).
-        expect(within(checker).getByText('idle')).toBeTruthy();
+        expect(within(reader).getByText('idle')).toBeTruthy();
     });
 
     it('renders the five employee kinds even before the first roster read answers', () => {
@@ -430,7 +430,7 @@ describe('AgentsPanel — the global employee roster', () => {
         // The placeholders are the rail's whole promise: all five kinds appear before `GET /agents`
         // answers, so a slow read cannot make the Researcher (or anyone) look absent.
         expect(Array.from(document.querySelectorAll<HTMLElement>('.sv-agent-tile')).map((tile) => tile.dataset.agent)).toEqual([
-            'checker',
+            'critic',
             'editor',
             'reader',
             'researcher',

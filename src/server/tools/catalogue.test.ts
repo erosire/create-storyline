@@ -45,8 +45,8 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
         'listIdeas',
         'delegate'
     ],
-    // §8.3 — the checker surface.
-    checker: [
+    // §8.3 — the reader surface.
+    reader: [
         'submitVerdict',
         'raiseFinding',
         'confirmFinding',
@@ -88,7 +88,7 @@ const SPEC_GROUP_SIZES: Record<keyof typeof TOOL_GROUPS, string[]> = {
  * The whole §8 surface as one table: the args §8 lists, the subset §8 marks required (an arg with
  * no `?` in the table), the §7 collection/level the call needs, and which kinds may call it.
  *
- * `allow` is four characters in the order **writer, editor, checker, reader** — `y` for "the §7
+ * `allow` is four characters in the order **writer, editor, reader, critic** — `y` for "the §7
  * row (or §8's explicit grant) accepts the call". The two places the row alone is not the whole
  * answer are visible here: `updateDigest` is `nnnn` because the Digest is engine-derived (D-12a),
  * and `selectRevision` is `nynn` because §7 gives the Writer `write` on `revisions` for CREATING
@@ -390,7 +390,7 @@ const SPEC_TOOL_CONTRACT: Record<
         allow: 'nnyy'
     },
     // ── Phase-1 research (§7.1) ─────────────────────────────────────────────
-    // `allow` stays four characters in the writer/editor/checker/reader order the column has
+    // `allow` stays four characters in the writer/editor/reader/critic order the column has
     // always used; the Researcher's own column is pinned in permissions.test.ts.
     structureSeed: {
         args: [
@@ -470,7 +470,7 @@ const SPEC_TOOL_CONTRACT: Record<
 };
 
 /** The kinds in `allow`'s order, so the table above has one reading. */
-const ALLOW_ORDER: RoleKind[] = ['writer', 'editor', 'checker', 'reader'];
+const ALLOW_ORDER: RoleKind[] = ['writer', 'editor', 'reader', 'critic'];
 
 /** `describeTool`'s answer keys, in the order the tool builds them (T-6c: "the exact shape"). */
 const DESCRIBE_KEYS = [
@@ -552,7 +552,7 @@ describe('the §8 catalogue', () => {
         expect(TOOL_NAMES.map((name) => GROUP_OF_TOOL.get(name) ?? 'missing')).toEqual([
             ...SPEC_GROUP_SIZES.writer.map(() => 'writer'),
             ...SPEC_GROUP_SIZES.editor.map(() => 'editor'),
-            ...SPEC_GROUP_SIZES.checker.map(() => 'checker'),
+            ...SPEC_GROUP_SIZES.reader.map(() => 'reader'),
             ...SPEC_GROUP_SIZES.plumbing.map(() => 'plumbing'),
             ...SPEC_GROUP_SIZES.research.map(() => 'research'),
             ...SPEC_GROUP_SIZES.knowledge.map(() => 'knowledge')
@@ -624,12 +624,12 @@ describe('the §8 catalogue', () => {
                 permission: {
                     writes: contract.writes,
                     level: contract.level,
-                    // §8 grants phase ①'s Reader confirmation explicitly (the row gives a Reader
+                    // §8 grants phase ①'s Critic confirmation explicitly (the row gives a Critic
                     // `write` there, and this tool needs `verify`). `structureSeed` names its one
                     // kind in §7.1 even though the `seed_briefs` row already grants the Editor
                     // `write`, so `describeTool` states the Editor-only surface out loud.
                     ...(name === 'confirmFinding'
-                        ? { extra_kinds: ['reader'] }
+                        ? { extra_kinds: ['critic'] }
                         : name === 'structureSeed'
                           ? { extra_kinds: ['editor'] }
                           : {})
@@ -646,13 +646,13 @@ describe('the §8 catalogue', () => {
     });
 
     it('answers listTools with the whole catalogue and who may call what (T-6c, T-6a)', async () => {
-        const result = await callAs(store, 'reader', 'listTools', {});
+        const result = await callAs(store, 'critic', 'listTools', {});
         const data = result.data as Record<string, any>;
 
         expect(Object.keys(data)).toEqual(['role', 'role_name', 'tools', 'total', 'note']);
         expect({ role: data.role, role_name: data.role_name, total: data.total, note: data.note }).toEqual({
-            role: 'reader',
-            role_name: 'reader_1',
+            role: 'critic',
+            role_name: 'critic_1',
             total: 52,
             note: LIST_NOTE
         });
@@ -666,8 +666,8 @@ describe('the §8 catalogue', () => {
             needs: { expects: true, why: true },
             allowed_for_writer: true,
             allowed_for_editor: false,
-            allowed_for_checker: false,
             allowed_for_reader: false,
+            allowed_for_critic: false,
             allowed_for_researcher: false,
             allowed_for_this_role: false
         });
@@ -680,8 +680,8 @@ describe('the §8 catalogue', () => {
             needs: { expects: true, why: true },
             allowed_for_writer: false,
             allowed_for_editor: false,
-            allowed_for_checker: false,
             allowed_for_reader: false,
+            allowed_for_critic: false,
             allowed_for_researcher: false,
             allowed_for_this_role: false
         });
@@ -695,8 +695,8 @@ describe('the §8 catalogue', () => {
         for (const [kind, total] of [
             ['writer', 39],
             ['editor', 37],
-            ['checker', 33],
-            ['reader', 34]
+            ['reader', 33],
+            ['critic', 34]
         ] as [RoleKind, number][]) {
             const filtered = await callAs(store, kind, 'listTools', { kind });
             const rows = (filtered.data as Record<string, any>).tools as Array<Record<string, unknown>>;
@@ -724,29 +724,29 @@ describe('the §8 catalogue', () => {
             needs: { expects: false, why: false },
             allowed_for_writer: false,
             allowed_for_editor: false,
-            allowed_for_checker: false,
             allowed_for_reader: false,
+            allowed_for_critic: false,
             allowed_for_researcher: true,
             allowed_for_this_role: false
         });
 
-        // A Reader holds `proposeIdea` and not `editChapter` — T-9's one extra right, visible from
+        // A Critic holds `proposeIdea` and not `editChapter` — T-9's one extra right, visible from
         // inside the run rather than only from the harness config.
-        const readerRows = (await callAs(store, 'reader', 'listTools', { kind: 'reader' })).data as Record<string, any>;
-        const readerNames = readerRows.tools.map((row: { name: string }) => row.name);
-        expect(readerNames).toContain('proposeIdea');
-        expect(readerNames.filter((name: string) => name === 'editChapter' || name === 'updateDigest')).toEqual([]);
+        const criticRows = (await callAs(store, 'critic', 'listTools', { kind: 'critic' })).data as Record<string, any>;
+        const criticNames = criticRows.tools.map((row: { name: string }) => row.name);
+        expect(criticNames).toContain('proposeIdea');
+        expect(criticNames.filter((name: string) => name === 'editChapter' || name === 'updateDigest')).toEqual([]);
     });
 
     it('describes one tool exactly, enums and permission row included (T-6c, T-11)', async () => {
-        const result = await callAs(store, 'reader', 'describeTool', { name: 'raiseFinding' });
+        const result = await callAs(store, 'critic', 'describeTool', { name: 'raiseFinding' });
 
         // W2's sentence "returns the exact shape of every tool in §8" pinned on the tool §8 singles
         // out for a required enum.
         expect(result.data).toEqual({
             name: 'raiseFinding',
             description:
-                'File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT, and the proof is a quotation — name the commitment the Seed or the artifact states and show the artifact breaking it; a claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. An `improvement` proposes a change the Seed never had to promise: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass — the Editor weighs it on merit, never on whether the Seed promised it, and `critical` is refused for it because a proposal is not a contradiction. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
+                'File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story\'s logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST, in both directions (D-33c): while any issue on this Story is unresolved — only `fixed` or `discarded` closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold — a `kind: proposal` call is refused with the count of open issues, and an `issue` is refused if THIS pass already filed a proposal, because an issue and a proposal never share a review pass: end the pass and file the issue in your next review. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
             required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
             fields: [
                 {
@@ -766,21 +766,21 @@ describe('the §8 catalogue', () => {
                     type: 'string',
                     required: true,
                     description:
-                        'The claim in one line, specific enough to act on (P4). For `kind: improvement` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'
+                        'The claim in one line, specific enough to act on (P4). For `kind: proposal` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'
                 },
                 {
                     name: 'detail',
                     type: 'string',
                     required: false,
                     description:
-                        'What is wrong and where — the lines or rows involved. For `kind: improvement`: what to change, and why it is worth a Writer pass.'
+                        'What is wrong and where — the lines or rows involved. For `kind: proposal`: what to change, and why it is worth a Writer pass.'
                 },
                 {
                     name: 'evidence',
                     type: 'string',
                     required: true,
                     description:
-                        'The citable proof (D-15): a quote, a line range, a ledger row. For `kind: improvement`, the passage the change would improve.'
+                        'The citable proof (D-15): a quote, a line range, a ledger row. For `kind: proposal`, the passage the change would improve.'
                 },
                 {
                     name: 'cost',
@@ -795,10 +795,10 @@ describe('the §8 catalogue', () => {
                     // omitted `kind` is an `issue` and that an improvement may not be `critical`.
                     name: 'kind',
                     type: 'string',
-                    enum: ['issue', 'improvement'],
+                    enum: ['issue', 'proposal'],
                     required: false,
                     description:
-                        '`issue` (the default) claims a defect and must quote a commitment the artifact breaks; `improvement` proposes a change the Seed never promised, which the Editor weighs on merit and may not cost `critical`.'
+                        '`issue` (the default) claims a defect and must quote a commitment the artifact breaks, at cost `critical`, `major` or `minor`; `proposal` suggests a change the Seed never promised, which the Editor weighs on merit, at cost `major`, `minor` or `taste`.'
                 },
                 {
                     // L-11a: the additive arg, spelled out so a fresh run learns it from
@@ -827,7 +827,7 @@ describe('the §8 catalogue', () => {
                     description: 'Optional: why this is worth the Author attention.'
                 }
             ],
-            enums: { cost: ['critical', 'major', 'minor', 'taste'], kind: ['issue', 'improvement'] },
+            enums: { cost: ['critical', 'major', 'minor', 'taste'], kind: ['issue', 'proposal'] },
             // T-4: `expects` is spelled out rather than guessed. `raiseFinding` CREATES a row, so
             // there is nothing to compare-and-swap against.
             expects: {
@@ -844,8 +844,8 @@ describe('the §8 catalogue', () => {
                     artifact: 'findings',
                     writer: 'write',
                     editor: 'write_verify',
-                    checker: 'write',
                     reader: 'write',
+                    critic: 'write',
                     // §7.2: the Researcher reads findings and raises none (it does not judge prose).
                     researcher: 'read',
                     rules: ['D-16', 'D-33', 'D-34', 'D-35'],

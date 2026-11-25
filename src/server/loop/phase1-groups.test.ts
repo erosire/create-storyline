@@ -16,7 +16,7 @@
  *   4. R4 — the hold is read from a PERSISTED live Run row: with a Writer holding three groups, the
  *      planner's next batch is the two groups nobody holds;
  *   5. R3/R5 — the structured review re-arms on the GROUP VECTOR: one `review_groups` seat per
- *      `summary_readers`, keyed `wi_review_groups_<vectorHash>_<pass>`, reading every group.
+ *      `summary_critics`, keyed `wi_review_groups_<vectorHash>_<pass>`, reading every group.
  *
  * Group ids are uid addresses, so they are read from the book; the hashes are recomputed with the same
  * helpers the planner uses (`phrase/revisions.ts`), never hardcoded. Values were read off the rig (one
@@ -53,7 +53,7 @@ const groupJobs = (rig: Rig) =>
         .filter((job) => job.item.kind === 'draft_groups')
         .map((job) => ({ key: job.key, refs: job.item.groupRefs ?? [], why: job.why, toolMode: job.item.toolMode }));
 
-/** The Reader seats, same shape: the seat's claim key is what makes it reproducible across a restart. */
+/** The Critic seats, same shape: the seat's claim key is what makes it reproducible across a restart. */
 const reviewSeats = (rig: Rig) =>
     candidates(rig)
         .filter((job) => job.item.kind === 'review_groups')
@@ -82,7 +82,7 @@ const fixBatches = (rig: Rig) =>
  * deep review leaves in the book.
  *
  * Seeded directly on purpose: this file pins what the SCHEDULER does with such a row (does a Writer pass
- * get bought for the group it names?), while `tools/checker.test.ts` pins the attribution rule that
+ * get bought for the group it names?), while `tools/reader.test.ts` pins the attribution rule that
  * produces it and `integration/` drives the whole chain with a real crew.
  */
 const seedGroupFinding = (rig: Rig, groupId: string): { finding: Finding; task: Task } => {
@@ -115,17 +115,17 @@ const seedGroupFinding = (rig: Rig, groupId: string): { finding: Finding; task: 
 };
 
 /**
- * Every CLOSED run row that names one group — the count F1 replaced. It includes the two reading passes
- * (the seat and the deep review carry `group_refs` because their Reader judged the whole Overview), so
- * the pair of numbers here — this raw count against `groupWriteAttempts` — is what makes the exclusion
- * falsifiable instead of a comment.
+ * Every CLOSED run row that names one group — the count F1 replaced. It includes the THREE reading
+ * passes (the seat, the deep review and D-65's scoring pass each carry `group_refs` because their crew
+ * judged the whole Overview), so the pair of numbers here — this raw count against `groupWriteAttempts`
+ * — is what makes the exclusion falsifiable instead of a comment.
  */
 const closedRefRunsOf = (rig: Rig, groupId: string): number =>
     rig.store.runs.list().filter((run) => !isLiveRun(run) && (run.group_refs ?? []).includes(groupId)).length;
 
 describe('an approved finding still buys its Writer fix (F1)', () => {
     it('counts writes, not reads: a seat and a deep review spend nothing, so the fix dispatches', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryReaders: 1 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryCritics: 1 });
 
         // Round 1 of the group pipeline, run for real: one Writer pass writes all five groups, then the
         // seat and the deep review read that installed Overview. This is the state F1 mis-read — three
@@ -133,6 +133,12 @@ describe('an approved finding still buys its Writer fix (F1)', () => {
         // `GROUP_WRITE_ATTEMPT_CAP`, so the finding below could never schedule its fix.
         await rig.run();
 
+        // D-67 took the scoring pass OUT of this list. It is armed by the CLEAN selection, and this rig's
+        // deep review files findings, so no group of this vector ever carries a Clean verdict — a Reader is
+        // never offered a Summary the crew is still rejecting. What remains is the pipeline the phase
+        // actually owes: the Writer batch, the structured seat, the deep cross-group pass. (The dispatch
+        // ORDER of the scoring seat, `rank: -1` ahead of these two, is pinned in `section-scores.test.ts`,
+        // where the fixture closes a clean pass first.)
         expect(rig.store.runs.list().map((run) => run.work_item_ref ?? run.id)).toEqual([
             'wi_research_1',
             `${familyOf(groupsOf(rig).map((group) => group.id))}_1`,
@@ -142,7 +148,11 @@ describe('an approved finding still buys its Writer fix (F1)', () => {
 
         const premise = groupsOf(rig).find((group) => group.key === 'premise')!;
 
-        // The raw read F1 replaced: three closed runs carry this group id — one wrote it, two only read it.
+        // The raw read F1 replaced: THREE closed runs carry this group id — one wrote it, two only read it
+        // (the structured seat and the deep cross-group review). The Run row carries `group_refs` because
+        // the pass really did judge every group, which is what
+        // the rail shows; it is `isGroupHoldingRun` (`phrase/exclusion.ts:40`), not the refs, that decides
+        // whether a row spent the Writer's allowance, and a scoring run is not a holding kind.
         expect(closedRefRunsOf(rig, premise.id)).toBe(3);
         // The counter's answer: ZERO. Two of those rows are not holding runs (R4's own predicate), and the
         // third is the pass that WROTE this text, so it is not an attempt AGAINST it — the baseline is the
@@ -201,18 +211,20 @@ describe('an approved finding still buys its Writer fix (F1)', () => {
         expect(premiseGroup.content).toBe(`The ${premise.id} line this story refuses to lose.`);
 
         // F1's second half — the RESET, pinned against the ledger. premise now carries TWO closed Writer
-        // passes (the draft and this fix) plus the two reading passes: four rows name it, and the counter
-        // reads ZERO, because the allowance runs from the NEW text. A baseline taken from the
-        // `phrase_groups` row (the pre-F1 read) would show all four here and freeze the book after two
-        // rounds, which is the failure this correction removes.
+        // passes (the draft and this fix) plus the TWO reading passes over the first vector (the structured
+        // seat and the deep cross-group review): four rows name it, and the counter reads ZERO, because the
+        // allowance runs from the NEW text. A baseline taken from the `phrase_groups` row (the pre-F1
+        // read) would show all four here and freeze the book after two rounds, which is the failure this
+        // correction removes. (D-67 is why the count is four and not five: the fix moved the vector, and a
+        // vector with no Clean verdict is never offered to the Reader, so D-65's scoring row is absent.)
         expect(closedRefRunsOf(rig, premise.id)).toBe(4);
         expect(attemptsOf(rig)).toEqual(['premise: 0', 'promise: 0', 'theme: 0', 'tone: 0', 'ending: 0']);
     });
 });
 
-describe('the per-group allowance stops a Writer pass, never a Reader (F1, F3)', () => {
+describe('the per-group allowance stops a Writer pass, never a Critic (F1, F3)', () => {
     it('gives no Writer candidate once the corrected allowance is spent, and spends none on reading', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryReaders: 1 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryCritics: 1 });
 
         await rig.engine.sweep();
         await rig.engine.settle();
@@ -255,28 +267,40 @@ describe('the per-group allowance stops a Writer pass, never a Reader (F1, F3)',
         expect(candidates(rig).find((job) => job.item.kind === 'draft_groups')).toBeUndefined();
 
         // And reading stays free: the seat for this vector is still armed, and once it closes the allowance
-        // is exactly where it was — a Reader pass never spends a Writer's budget.
+        // is exactly where it was — a Critic pass never spends a Writer's budget.
         const seats = reviewSeats(rig);
 
         expect(seats).toHaveLength(1);
         expect(seats[0].key).toBe(`wi_review_groups_${groupVectorHash(groupRevisionVector(rig.store, rig.storyId))}_1`);
 
+        // Two sweeps, because the ceiling is 1 in this rig (`loop/mock.ts:445`) and D-65 put the scoring
+        // seat AHEAD of the review seats in the dispatch order (`loop/work.ts` candidate 2b carries
+        // `rank: -1`, so a Summary revision is scored before anything can rewrite it). One sweep launches
+        // one seat: sweep 1 = the score for this vector, sweep 2 = the review seat this test is about.
+        await rig.engine.sweep();
+        await rig.engine.settle();
         await rig.engine.sweep();
         await rig.engine.settle();
 
         // The seat ran (`wi_review_groups_…_1` is closed) and premise's number did not move: the review
         // consumed a run, not the group's write budget, so the parked state survives the read (F1, F3).
-        // The seat ran, premise's number did not move, and the counter still reads the cap: a Reader pass
+        // The seat ran, premise's number did not move, and the counter still reads the cap: a Critic pass
         // consumed a run, not the group's write budget (F1), and the parked state survives the read (F3).
+        // The raw count still reads FIVE, and D-67 is why its composition changed rather than its size: the
+        // display-only scoring pass is gone (no Clean verdict on this vector, so no Reader is offered it),
+        // and the deep cross-group pass now lands in this sweep instead of the next one. Both of those rows
+        // carry all five `group_refs`, and NEITHER is a holding kind, so `groupWriteAttempts` stays at the
+        // cap — which is exactly the pair F1 was built to make visible.
         expect(groupWriteAttempts(rig.store, rig.story(), premise)).toBe(GROUP_WRITE_ATTEMPT_CAP);
-        expect(closedRefRunsOf(rig, premise.id)).toBe(4);
+        expect(closedRefRunsOf(rig, premise.id)).toBe(5);
         expect(rig.store.phraseGroups.require(premise.id).revision).toBe(1);
         expect(rig.store.runs.list().map((run) => run.work_item_ref ?? run.id)).toEqual([
             'wi_research_1',
             `${familyOf(groupsOf(rig).map((group) => group.id))}_1`,
             `${familyOf([premise.id])}_9`,
             `${familyOf([premise.id])}_10`,
-            `wi_review_groups_${groupVectorHash(groupRevisionVector(rig.store, rig.storyId))}_1`
+            `wi_review_groups_${groupVectorHash(groupRevisionVector(rig.store, rig.storyId))}_1`,
+            `wi_group_check_${groupVectorHash(groupRevisionVector(rig.store, rig.storyId))}_1`
         ]);
         expect(fixBatches(rig)).toEqual([]);
     });
@@ -284,7 +308,7 @@ describe('the per-group allowance stops a Writer pass, never a Reader (F1, F3)',
 
 describe('a group-managed book runs the group pipeline, never the sampler (R5)', () => {
     it('dispatches the three-group batch, holds its groups on the Run row, and books no sampler job', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryReaders: 2 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryCritics: 2 });
         const batch = groupsOf(rig).slice(0, 3).map((group) => group.id);
 
         const started = (await rig.engine.sweep()).stories[0].started;
@@ -336,7 +360,7 @@ describe('a group-managed book runs the group pipeline, never the sampler (R5)',
     });
 
     it('cuts the batch at the dial: a two-group book asks for two groups and no more (R2)', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 2, summaryCritics: 1 });
         const groups = groupsOf(rig);
 
         expect(groupJobs(rig)).toEqual([
@@ -353,7 +377,7 @@ describe('a group-managed book runs the group pipeline, never the sampler (R5)',
     });
 
     it('writes the batch in catalog order and leaves the rest of the book to later batches (R2)', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryReaders: 2 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryCritics: 2 });
 
         await rig.engine.sweep();
 
@@ -377,7 +401,7 @@ describe('a group-managed book runs the group pipeline, never the sampler (R5)',
 
 describe('an accepted answer installs on settle (R2, R5, R6)', () => {
     it('writes one Group Revision per group, mirrors the Overview, and leaves the other two groups untouched', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryReaders: 2 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryCritics: 2 });
 
         await rig.engine.sweep();
 
@@ -435,7 +459,7 @@ describe('an accepted answer installs on settle (R2, R5, R6)', () => {
 
 describe('one live Writer op per group (R4)', () => {
     it('reads the hold from the persisted live Run row, not from the claim key', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryReaders: 2 });
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 3, summaryCritics: 2 });
         const groups = groupsOf(rig);
         const held = groups.slice(0, 3);
         const free = groups.slice(3);
@@ -477,8 +501,8 @@ describe('one live Writer op per group (R4)', () => {
 });
 
 describe('the structured review re-arms on the group vector (R3, R5)', () => {
-    it('books one seat per Reader, keyed by the vector the install moved, over every group', async () => {
-        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryReaders: 2 });
+    it('books one seat per Critic, keyed by the vector the install moved, over every group', async () => {
+        const rig = await createRig({ summaryMode: 'groups', summarySampling: 5, summaryCritics: 2 });
 
         await rig.engine.sweep();
 
@@ -495,20 +519,20 @@ describe('the structured review re-arms on the group vector (R3, R5)', () => {
             {
                 key: `wi_review_groups_${vectorHash}_1`,
                 refs: allRefs,
-                why: `Reader 1/2 reviews the installed Overview at group vector ${vectorHash} (R3, R5)`
+                why: `Critic 1/2 reviews the installed Overview at group vector ${vectorHash} (R3, R5)`
             },
             {
                 key: `wi_review_groups_${vectorHash}_2`,
                 refs: allRefs,
-                why: `Reader 2/2 reviews the installed Overview at group vector ${vectorHash} (R3, R5)`
+                why: `Critic 2/2 reviews the installed Overview at group vector ${vectorHash} (R3, R5)`
             }
         ]);
 
         const seats = [1, 2].map((pass) => candidates(rig).find((job) => job.key === `wi_review_groups_${vectorHash}_${pass}`)!.item);
 
         expect(seats.map((item) => [item.kind, item.toolMode, item.responseSchema?.name, item.roleName])).toEqual([
-            ['review_groups', 'none', 'GroupReview', 'reader'],
-            ['review_groups', 'none', 'GroupReview', 'reader']
+            ['review_groups', 'none', 'GroupReview', 'critic'],
+            ['review_groups', 'none', 'GroupReview', 'critic']
         ]);
     });
 });

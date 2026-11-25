@@ -18,8 +18,12 @@ import {
     findingsAwaitingAuthor,
     // SUMMARY PHRASE R6: the view says "has this text been reviewed?" from CLOSED run rows, so it needs
     // the same liveness test the loop uses (`isLiveRun`) and the Author's seat count (`screeningSizeOf`),
-    // rather than a second opinion about what "running" and "how many Readers" mean.
+    // rather than a second opinion about what "running" and "how many Critics" mean.
     isLiveRun,
+    // D-67 — the rail names the defects holding a clean verdict back, over D-33c's ONE open-issue read
+    // (`isOpenIssueFinding` behind it), so the sentence on the rail and the gate in the stamp can never
+    // disagree about which states still hold a group open.
+    openIssueFindings,
     loopStory,
     samplingRoundOf,
     screeningSizeOf,
@@ -43,10 +47,21 @@ import {
     groupRevisionVector,
     groupVectorHash,
     isGroupManagedStory,
+    // R1 — the ONE predicate for "is this group's current text locked?". Projected rather than
+    // re-derived, so the rail's badge and the loop's refusal read the same flag
+    // (`phrase/catalog.ts:isPhraseGroupLocked`).
+    isPhraseGroupLocked,
     // F8 / R4 — the same held-group read the dispatch and the Author's 409 use, so the rail's disabled
     // button and the server's refusal can never disagree about who is writing this group.
     liveGroupRefs,
     phraseGroupsOf,
+    // D-67/D-68 — the Reviewed Summary's three reads, all from the module that owns the rule: the live
+    // clean selection, the Author's recorded choice (re-validated against the rows), and the composed
+    // reviewed text. A projection that reimplemented "newest clean revision" would be a fourth opinion
+    // on the same rows, and the rail would disagree with the seat that arms on it.
+    cleanSelectionOf,
+    chosenSelectionOf,
+    composeReviewedOverview,
     storyPhrase
 } from '../phrase';
 import { SUMMARY_MIRROR_FIELDS } from '../../shared/phrase';
@@ -76,6 +91,12 @@ import type {
     Finding,
     FindingKind,
     Idea,
+    // The reviewed block's signature names both stored rows (the Phrase row carries the Author's choice,
+    // the group rows are what its selection picks), so the projection states its shape in stored types.
+    Phrase,
+    PhraseGroup,
+    // R1 — the lock actor ('author' | 'editor') the group row projects verbatim.
+    PhraseGroupLockActor,
     Revision,
     RoleKind,
     Run,
@@ -570,8 +591,8 @@ export function storyView(deps: ProjectionDeps, story: Story): StoryView {
         // Phase ①'s sampling tree reads the Summary drafts' full history (see `viewRevisions`).
         revisions: viewRevisions(store, story),
         // U-13 (D-21): the side-by-side panes must show the judgement that goes with each draft. §6.2a
-        // files verdicts per revision — the Checker appends the verdict to `revisions.verdict_refs`
-        // (tools/checker.ts) — and the §4.9 rows still travel as their own slice so the panes can match
+        // files verdicts per revision — the Reader appends the verdict to `revisions.verdict_refs`
+        // (tools/reader.ts) — and the §4.9 rows still travel as their own slice so the panes can match
         // them by `target_ref` without walking every revision's ref list client-side.
         verdicts: verdictsFor(store, story.id),
         findings: storyFindings(store, story.id),
@@ -1008,7 +1029,7 @@ export const agentThreadsAcross = (perBook: AgentThreadRecord[][]): AgentThreadR
 // the old one. A projection may only READ (the header rule), so everything below is a rendering of
 // rows the loop already owns: the group rows, their archived history, the findings' group scope and
 // resolution (`phrase/findings.ts`, the one place R3's rule is written), and the run rows that say
-// which Reader seats have already reported on the Overview as it stands.
+// which Critic seats have already reported on the Overview as it stands.
 //
 // WHAT THE AUTHOR CAN SEE FROM IT, in one pass: which groups are written and to what number, what the
 // Overview says right now, which defect names which groups and which of those groups still owe it a
@@ -1031,6 +1052,14 @@ export interface PhraseRevisionRow {
     task_refs: string[];
     /** The text's length; the body itself is on the group row (latest) and costs a second read otherwise. */
     chars: number;
+    /**
+     * D-67 — the Clean stamp: this text was the group's text in a cross-group Critic pass that closed
+     * with no unresolved defect on the group. It is a VERDICT ABOUT THAT PASS, so it never moves when a
+     * later finding is raised or discarded; what a later event moves is the SELECTION (see `reviewed`).
+     */
+    clean: boolean;
+    /** D-67 — the deep-review run whose clean pass earned the stamp, or null for an unstamped row. */
+    clean_run_ref: string | null;
 }
 
 /** One group: current text, its number, its retained history, and the findings it still owes. */
@@ -1051,7 +1080,14 @@ export interface PhraseGroupRow {
      * stay server-side (their `history` rows carry `chars`, never prose).
      */
     previous_content: string;
-    /** Newest first, `latest` included — R2 keeps every superseded text, so the rail can show it. */
+    /**
+     * Newest first, `latest` included — R2 keeps every superseded text, so the rail can show it.
+     *
+     * D-68 EXCLUDES `discarded` rows (the texts the Author's Reviewed-Summary choice passed over). The
+     * rows PERSIST — R3's closure join still walks them, so a `fixed` finding stays fixed — but they are
+     * not candidates any more, and a history rail that listed them next to the live line would read as
+     * "these are still on the table". The reviewed block below is where the choice is reported.
+     */
     history: PhraseRevisionRow[];
     /** Open findings that target this group and have no revision of IT resolving them (R3). */
     owed_by_findings: string[];
@@ -1063,6 +1099,59 @@ export interface PhraseGroupRow {
      * cannot disagree, and a restart of the server changes the answer with no bookkeeping of ours.
      */
     writer_busy: boolean;
+    /**
+     * READER SCORING (D-65) — this section's scores, NEWEST FIRST, one entry per scoring run.
+     *
+     * A section accumulates scores instead of holding one, because the Author asked for "several Reader
+     * runs over time" and a single number would throw the trend away: the rail shows the current value
+     * and can still say what it was before the last install. The entries are keyed to the group VECTOR
+     * they were judged against (`vector_hash`), so a score is never read as a judgement of text that has
+     * since been rewritten, and `run_ref` reaches the thread behind the number.
+     *
+     * PINNED WIRE CONTRACT: `value` / `vector_hash` / `at` / `run_ref` / `rationale` are the field names
+     * the dashboard rail consumes. `evidence` stays server-side — the rail draws a percentage, and the
+     * quote is in the run's thread when the Author wants to see why.
+     */
+    scores: PhraseGroupScoreRow[];
+    /**
+     * PHRASE GROUP LOCK (R1) — this group's CURRENT text is signed off and settled.
+     *
+     * ALL FOUR FIELDS ARE ADDITIVE AND ABSENCE IS THE MEANING: a row that carries no `locked` key is
+     * unlocked — the reading of every book written before the lock exists, and of a group whose lock the
+     * Author lifted (`locks.ts:unlockPhraseGroup` writes `locked: false` plus three `null`s). The
+     * projection therefore emits `locked` ONLY while a live lock stands, and each metadata field only when
+     * the row actually holds it: a store patch cannot delete a key, so an unlocked row carries `null`
+     * (`shared/types.ts:PhraseGroup.locked_revision`), and `null` on the wire would be a number-shaped or
+     * string-shaped lie rather than an absence. The rail reads `locked_revision` rather than `revision`
+     * because the lock names the text a person committed to, which a later install moves past.
+     */
+    locked?: boolean;
+    /** The revision number the live lock fixed — the text that stands. */
+    locked_revision?: number;
+    /** WHO committed the lock: the Author, or the Editor on a Story that enables it. */
+    locked_by?: PhraseGroupLockActor;
+    /** ISO instant the lock commit wrote. */
+    locked_at?: string;
+}
+
+/**
+ * One Reader score of one section (D-65) — the projection row, not the stored row.
+ *
+ * The stored `summary_scores` record carries the ids a join needs; this carries only what the rail
+ * draws, which is why `group_id`/`group_key` are absent (the row is already inside its group) and
+ * `rationale` is optional (a display line, not a D-15 judgement the loop acts on).
+ */
+export interface PhraseGroupScoreRow {
+    /** 0–100, exactly as the Reader answered it — the projection never re-scales or averages. */
+    value: number;
+    /** The group revision vector this score judged, so the rail can say which text it describes. */
+    vector_hash: string;
+    /** When the row was written (the stored record's `created_at`), newest first across the list. */
+    at: string;
+    /** The run that produced it — the thread the Author can open. */
+    run_ref: string;
+    /** The Reader's one-line reason, when it gave one. */
+    rationale?: string;
 }
 
 /** A finding, its group attribution, and R3's resolution against the book as it stands. */
@@ -1073,7 +1162,7 @@ export interface PhraseFindingRow {
     /**
      * T5 (additive) — the claim type, defaulted so a rail never has to interpret absence: `issue` for
      * a row raised before the field existed. The rail stays kind-blind in its layout; the field is here
-     * because an improvement and a defect are different work, and hiding that from the read forces a
+     * because a proposal and a defect are different work, and hiding that from the read forces a
      * renderer to guess it from the title.
      */
     kind: FindingKind;
@@ -1100,6 +1189,89 @@ export interface PhraseTaskRow {
     finding_ref: string | null;
 }
 
+/**
+ * One group INSIDE the Reviewed Summary block (D-67) — what the reviewed Overview stands behind for
+ * this section, and why it stands behind THAT text rather than the newest one.
+ *
+ * This is the rail's answer to the question the Author actually asks ("which revision is my ending,
+ * and what happened to the one I liked?"). The live `groups[]` rows answer "what does the book say
+ * now"; this answers "what does the crew stand behind, and what has been REJECTED since?". Both are
+ * needed because they legitimately differ: the user's Ending example (r1 issue, r2 clean, r3 issue,
+ * r4 clean, r5 issue) shows `latest_revision: 5` beside `selected_revision: 4`.
+ */
+export interface PhraseReviewedGroup {
+    id: string;
+    key: string;
+    /** The Clean revision the reviewed Overview is built from, or null while this group has none. */
+    selected_revision: number | null;
+    /** The row behind `selected_revision`, so the rail can open the text itself. */
+    selected_id: string | null;
+    /** The deep-review run whose clean pass earned the verdict; null with no selection. */
+    clean_run_ref: string | null;
+    /** The group's newest revision number (0 when unwritten) — the number the selection fell back past. */
+    latest_revision: number;
+    /** True when the newest text is NOT the reviewed one: the state the Author acts on (R5's evidence). */
+    superseded: boolean;
+    /** An unresolved ISSUE names this group, which blocks its clean verdicts from being selected. */
+    issues_open: boolean;
+    /** Why there is no selection — `unwritten` / `no_clean_revision`; null when there is one. */
+    gap: string | null;
+    /**
+     * The scores judged against THIS reviewed vector, newest first (D-65 rows, D-67 join).
+     *
+     * The join is the row's `vector_hash` and nothing else: a Reader's number describes the text it was
+     * shown, so a score of an older or newer combination is not this section's reviewed score. The rows
+     * are still ALSO on `groups[].scores` with their own hashes (D-65's trend list) — the rail never has
+     * to reconcile two copies, because both are views of the same rows.
+     */
+    scores: PhraseGroupScoreRow[];
+}
+
+/** What the Author chose, read back off the Phrase row (D-68), or null when none is valid. */
+export interface PhraseChosenSummary {
+    /** `{groupId: revisionNumber}` — the vector the choice adopted (its rows are now `latest`). */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** When the choose committed (the Phrase row's `reviewed_at`). */
+    at: string;
+    /** The composed text that was chosen, recomposed from the rows the vector names. */
+    overview: string;
+    /** The scores that judged THAT text, per group, newest first — the number the choice was made under. */
+    scores: Record<string, PhraseGroupScoreRow[]>;
+}
+
+/** The Reviewed Summary: the Clean selection, the score that judged it, and the Author's choice. */
+export interface PhraseReviewedSummary {
+    /**
+     * `pending` — no complete clean selection and no valid recorded choice;
+     * `ready` — a complete reviewed Overview the Author may choose, not the one they chose;
+     * `chosen` — the Author's recorded choice stands, whether or not newer reviewed text exists.
+     */
+    state: 'pending' | 'ready' | 'chosen';
+    /** Every group has a selectable Clean revision — the gate a choose and a scoring pass both hang on. */
+    complete: boolean;
+    /** The live clean selection, catalog order, PARTIAL when `complete` is false. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** The composed reviewed Overview; `''` while the selection is partial. */
+    overview: string;
+    groups: PhraseReviewedGroup[];
+    /** The Author's choice, or null when they never chose or the chosen history is gone (a reset). */
+    chosen: PhraseChosenSummary | null;
+    /** True when the clean selection has moved PAST what the Author chose: newer reviewed text to take. */
+    stale: boolean;
+    /** The unresolved issues holding a clean verdict back, with the group KEYS each one names. */
+    blocking_issues: Array<{ id: string; title: string; cost: Cost; group_keys: string[] }>;
+    /**
+     * A live Writer pass holds at least one group, so a choose would refuse (D-68's 409 preview).
+     *
+     * The same `liveGroupRefs` read the route refuses with and the group rows' `writer_busy` uses, so a
+     * disabled Choose button and a 409 can never disagree — and the run ids behind it are on
+     * `groups[].writer_busy` / the route's own refusal body.
+     */
+    writer_busy: boolean;
+}
+
 /** The state of the group pipeline: what is written, what is reviewed, and whether the mirror agrees. */
 export interface PhraseReviewState {
     /** `story.summary_mode`, echoed — the switch is a Setting, not a derived fact (R6). */
@@ -1110,7 +1282,7 @@ export interface PhraseReviewState {
     /** `{groupId: revisionNumber}` — the identity the reviews and the deferrals are keyed by. */
     vector: Record<string, number>;
     vector_hash: string;
-    /** Reader seats the Author's dial asks for on this vector, and how many have produced a review. */
+    /** Critic seats the Author's dial asks for on this vector, and how many have produced a review. */
     review_seats: number;
     reviews_on_current_vector: number;
     deep_reviews_on_current_vector: number;
@@ -1139,6 +1311,17 @@ export interface PhraseView {
     findings: PhraseFindingRow[];
     tasks: PhraseTaskRow[];
     review: PhraseReviewState;
+    /**
+     * The Reviewed Summary (D-67) and the Author's choice (D-68) — ALWAYS present, empty for a book
+     * that has no groups, so the rail never has to branch on absence.
+     *
+     * WHY IT IS A SIBLING OF `review` AND NOT A FIELD ON IT: `review` answers "what is the pipeline
+     * doing with the CURRENT text" (seats run, mirror in sync, groups owed); this answers "what text has
+     * been READ and passed, what was it scored at, and what did the Author take". They disagree during
+     * exactly the window the feature exists for — the newest Ending has an open defect while the reviewed
+     * Ending is the earlier clean one — and a single block would have to be wrong in one of those reads.
+     */
+    reviewed: PhraseReviewedSummary;
 }
 
 /** Closed runs of one claim family — the "has this seat reported yet?" read (L-3: the rows are the state). */
@@ -1146,6 +1329,164 @@ function closedRunsFor(store: Store, storyId: string, prefix: string): number {
     return store.runs.list().filter(
         (run) => run.story_id === storyId && !isLiveRun(run) && (run.work_item_ref ?? '').startsWith(prefix)
     ).length;
+}
+
+/**
+ * The Story's Reader scores, transposed onto their groups, NEWEST FIRST (D-65).
+ *
+ * One read for the whole view rather than one per group, for the reason the finding debt above gets the
+ * same treatment: five groups asking the same collection the same question five times is five sorts of
+ * the same rows. Order is `created_at` descending with the row id as the tie-break, so two rows written
+ * inside one commit still list deterministically and the rail's "current score" is the same row after a
+ * restart (L-3: the rows are the state, and so is the order they read back in).
+ */
+function sectionScoresByGroup(store: Store, storyId: string): Map<string, PhraseGroupScoreRow[]> {
+    const byGroup = new Map<string, PhraseGroupScoreRow[]>();
+
+    const rows = store.summaryScores
+        .list()
+        .filter((row) => row.story_id === storyId)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
+
+    for (const row of rows) {
+        const entry: PhraseGroupScoreRow = {
+            value: row.score,
+            vector_hash: row.vector_hash,
+            at: row.created_at,
+            run_ref: row.run_ref,
+            ...(row.rationale === '' ? {} : { rationale: row.rationale })
+        };
+
+        byGroup.set(row.group_id, [...(byGroup.get(row.group_id) ?? []), entry]);
+    }
+
+    return byGroup;
+}
+
+/**
+ * The scores that judged ONE exact group vector, transposed onto their groups (D-67's join).
+ *
+ * Filtering keeps the source's newest-first order, so the rail's "current reviewed score" is the same
+ * row before and after a restart. An empty hash matches nothing: a partial selection has a hash but no
+ * Overview, and the seat only ever claims a COMPLETE one, so score rows never carry a partial hash.
+ */
+function scoresForVector(
+    byGroup: Map<string, PhraseGroupScoreRow[]>,
+    vectorHash: string
+): Map<string, PhraseGroupScoreRow[]> {
+    const matched = new Map<string, PhraseGroupScoreRow[]>();
+
+    if (vectorHash === '') return matched;
+
+    for (const [groupId, rows] of byGroup) {
+        const rowsAtHash = rows.filter((row) => row.vector_hash === vectorHash);
+
+        if (rowsAtHash.length > 0) matched.set(groupId, rowsAtHash);
+    }
+
+    return matched;
+}
+
+/**
+ * The Reviewed Summary block (D-67, D-68) — the Clean selection, its Reader score, and the choice.
+ *
+ * EVERY NUMBER HERE IS A READ OF ROWS, which is what makes the block survive a restart with no
+ * bookkeeping: the selection is `phrase/reviewed.ts:cleanSelectionOf` (the newest Clean revision per
+ * group whose group carries no unresolved issue), the choice is `chosenSelectionOf` (the Phrase row's
+ * vector, re-validated against the rows), and the scores are joined by vector hash. Nothing is cached,
+ * nothing is set by a hook, and a rail that polls this twice in a row cannot see two different answers.
+ *
+ * THE THREE STATES, spelled here because they are the part a reader argues about:
+ *   - `pending`: no complete selection and no valid choice — the rail has nothing to show but the gaps;
+ *   - `ready`: a complete reviewed Overview exists that the Author has NOT chosen (this includes the
+ *     case where they chose earlier and the pipeline has since reviewed a different combination — that
+ *     is `stale: true`, and the choose is offered again); and
+ *   - `chosen`: the Author's choice stands and there is nothing newer to take. Immediately after a
+ *     choose this is the state even though the selection looks empty: the chosen rows are the live
+ *     `latest` rows, they carry no Clean stamp (nobody has re-read them), and the choice record is the
+ *     only reviewed Summary the book has.
+ */
+function reviewedSummaryView(
+    store: Store,
+    story: Story,
+    phrase: Phrase | undefined,
+    groups: readonly PhraseGroup[],
+    scoresByGroup: Map<string, PhraseGroupScoreRow[]>,
+    /** The live Writer-held group ids, read ONCE by `phraseView` for the group rows too (F8's read). */
+    held: Set<string>
+): PhraseReviewedSummary {
+    const selection = cleanSelectionOf(store, story);
+    const chosen = chosenSelectionOf(store, story);
+    const gaps = new Map(selection.gaps.map((gap) => [gap.group_id, gap]));
+    const selected = new Map(selection.entries.map((entry) => [entry.group.id, entry]));
+    const reviewedScores = scoresForVector(scoresByGroup, selection.vector_hash);
+    const chosenScores = scoresForVector(scoresByGroup, chosen?.vector_hash ?? '');
+    const keyById = new Map(groups.map((group) => [group.id, group.key]));
+
+    const reviewedGroups: PhraseReviewedGroup[] = groups.map((group) => {
+        const entry = selected.get(group.id);
+        const gap = gaps.get(group.id);
+
+        return {
+            id: group.id,
+            key: group.key,
+            selected_revision: entry?.revision.number ?? null,
+            selected_id: entry?.revision.id ?? null,
+            clean_run_ref: entry?.revision.clean_run_ref ?? null,
+            // R2 keeps the group row's number and its newest revision row in step, so this is the
+            // "newest text" the fallback passed over — no second history walk needed.
+            latest_revision: group.revision,
+            superseded: entry !== undefined && entry.revision.number !== group.revision,
+            issues_open: gap?.issues_open ?? false,
+            gap: gap?.reason ?? null,
+            scores: reviewedScores.get(group.id) ?? []
+        };
+    });
+
+    // An unresolved issue names a group, so the rail can say WHICH defect is holding a clean verdict
+    // back instead of leaving the Author to guess why the reviewed Ending is three revisions old. The
+    // scope is R3's read, so an unscoped finding lists all five keys — the same reading that blocks it.
+    const keysOf = new Set(groups.map((group) => group.id));
+    const blockingIssues = openIssueFindings(store, story.id).map((finding) => ({
+        id: finding.id,
+        title: finding.title,
+        cost: finding.cost,
+        group_keys: findingGroupScope(store, story, finding).refs
+            .filter((groupId) => keysOf.has(groupId))
+            .map((groupId) => keyById.get(groupId) ?? groupId)
+    }));
+
+    const chosenAtChosenHash = chosen !== undefined && chosen.vector_hash === selection.vector_hash;
+
+    return {
+        state: selection.complete
+            ? chosenAtChosenHash
+                ? 'chosen'
+                : 'ready'
+            : chosen === undefined
+              ? 'pending'
+              : 'chosen',
+        complete: selection.complete,
+        vector: selection.vector,
+        vector_hash: selection.vector_hash,
+        overview: selection.complete ? composeReviewedOverview(selection) : '',
+        groups: reviewedGroups,
+        chosen:
+            chosen === undefined
+                ? null
+                : {
+                      vector: chosen.vector,
+                      vector_hash: chosen.vector_hash,
+                      at: phrase?.reviewed_at ?? '',
+                      overview: composeReviewedOverview(chosen),
+                      scores: Object.fromEntries(
+                          chosen.entries.map((entry) => [entry.group.id, chosenScores.get(entry.group.id) ?? []])
+                      )
+                  },
+        stale: chosen !== undefined && selection.complete && !chosenAtChosenHash,
+        blocking_issues: blockingIssues,
+        writer_busy: groups.some((group) => liveGroupRefs(store, story.id).has(group.id))
+    };
 }
 
 /**
@@ -1201,12 +1542,25 @@ export function phraseView(store: Store, story: Story): PhraseView {
     // `group_refs` on its live run counts as held for EVERY group, which is `liveGroupRefs`'s
     // fail-closed reading — the rail then disables five buttons rather than let an edit race a writer.
     const held = liveGroupRefs(store, story.id);
+    // D-65 — the Reader's scores, likewise read once and transposed onto the group rows. A book with
+    // no scoring run yet gets an empty list on every group: the rail shows "not scored", not a zero.
+    const scoresByGroup = sectionScoresByGroup(store, story.id);
 
     const groupRows: PhraseGroupRow[] = groups.map((group) => {
         const history = groupRevisionHistory(store, group.id);
+        // R1 — the live lock, read once so the four projected keys below agree with each other (a row
+        // that says `locked` but names no revision is a badge over a claim the read cannot support).
+        const lockLive = isPhraseGroupLocked(group);
         // The newest `archived` row IS the revision the latest one replaced. One body only: the pane's
         // latest-vs-previous diff needs it, and nothing else in the history belongs on this read.
-        const replaced = history.find((revision) => revision.state === 'archived');
+        //
+        // D-68 adds a second source: a choose discards every row it passed over, so the text the chosen
+        // revision replaced is `discarded`, not `archived`. Falling back rather than reporting an empty
+        // `previous_content` keeps the diff working across a choose — the alternative is a rail that
+        // silently loses its "before" side on the one transition the Author cares about.
+        const replaced =
+            history.find((revision) => revision.state === 'archived') ??
+            history.find((revision) => revision.state === 'discarded');
 
         return {
             id: group.id,
@@ -1218,18 +1572,37 @@ export function phraseView(store: Store, story: Story): PhraseView {
             revision: group.revision,
             updated_by: group.updated_by ?? null,
             previous_content: replaced?.content ?? '',
-            history: history.map((revision) => ({
-                id: revision.id,
-                number: revision.number,
-                state: revision.state,
-                at: revision.created_at,
-                run_ref: revision.run_ref ?? null,
-                finding_refs: [...(revision.finding_refs ?? [])],
-                task_refs: [...(revision.task_refs ?? [])],
-                chars: revision.content.length
-            })),
+            // D-68: `discarded` rows stay in the store (R3's closure join walks them) and never come back
+            // as candidates, so the live line hides them; `reviewed` is where the choice is reported.
+            history: history
+                .filter((revision) => revision.state !== 'discarded')
+                .map((revision) => ({
+                    id: revision.id,
+                    number: revision.number,
+                    state: revision.state,
+                    at: revision.created_at,
+                    run_ref: revision.run_ref ?? null,
+                    finding_refs: [...(revision.finding_refs ?? [])],
+                    task_refs: [...(revision.task_refs ?? [])],
+                    chars: revision.content.length,
+                    // D-67: the Clean stamp rides with its row, so the history rail can mark the text a
+                    // cross-group pass passed without a second read of the reviewed block.
+                    clean: revision.clean === true,
+                    clean_run_ref: revision.clean_run_ref ?? null
+                })),
             owed_by_findings: owedByGroup.get(group.id) ?? [],
-            writer_busy: held.has(group.id)
+            writer_busy: held.has(group.id),
+            // D-65, newest first; `[]` until a scoring run has answered for this vector.
+            scores: scoresByGroup.get(group.id) ?? [],
+            // R1 — the lock's four fields, each present ONLY when the row actually carries it (see the
+            // note on `PhraseGroupRow.locked`). An unlocked group keeps the exact row it sent before the
+            // lock existed, which is what a rail rendering a pre-lock payload expects.
+            ...(lockLive ? { locked: true as const } : {}),
+            ...(lockLive && typeof group.locked_revision === 'number' ? { locked_revision: group.locked_revision } : {}),
+            ...(lockLive && (group.locked_by === 'author' || group.locked_by === 'editor')
+                ? { locked_by: group.locked_by }
+                : {}),
+            ...(lockLive && typeof group.locked_at === 'string' ? { locked_at: group.locked_at } : {})
         };
     });
 
@@ -1297,6 +1670,10 @@ export function phraseView(store: Store, story: Story): PhraseView {
                 locked: summary?.locked ?? false,
                 fields: Object.keys(SUMMARY_MIRROR_FIELDS)
             }
-        }
+        },
+        // D-67/D-68 — the reviewed block. Computed AFTER `review` because it reads the same rows the
+        // group rows and the score transpose already read (no second pass over the collections), and it
+        // is always present: a legacy book simply reports `pending` with no groups.
+        reviewed: reviewedSummaryView(store, story, phrase, groups, scoresByGroup, held)
     };
 }

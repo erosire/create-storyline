@@ -169,7 +169,7 @@ describe('parseStructuredContent', () => {
     });
 });
 
-// H1/R2 — the fix certificate, over the schema the screening Reader is actually answered against.
+// H1/R2 — the fix certificate, over the schema the screening Critic is actually answered against.
 //
 // WHY THESE CASES ARE HERE AND NOT IN A SCHEMA FILE: the selection is gated on this array
 // (`loop/sample-select.ts:scoreSample`), and the gate is only as strong as the transport that

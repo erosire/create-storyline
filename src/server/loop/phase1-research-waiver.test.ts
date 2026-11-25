@@ -72,7 +72,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         const rig = await createRig({
             seedStructured: false,
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { researchQuestions: [] }
         });
         const story = rig.story();
@@ -109,7 +109,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
     it('starts a waived Story straight at sampling when the rig seeds the closed state (R1b, seeded)', async () => {
         // The other half of the same rule: the rig's SEEDED phase ① honours the waiver too, by
         // leaving the research run out entirely rather than faking a closed one.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { researchQuestions: [] } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { researchQuestions: [] } });
 
         expect(briefOf(rig).research_questions).toEqual([]);
         expect(runs(rig, 'wi_research')).toEqual([]);
@@ -121,7 +121,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         const rig = await createRig({
             seedStructured: false,
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: { researchQuestions: [question] }
         });
 
@@ -163,7 +163,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
     it('reads a brief that predates the field as NEEDED, never as waived (R1a, compatibility)', async () => {
         // No `crew.researchQuestions` at all: the scripted structureSeed call sends the pre-D-51 arg
         // list, and the row that lands has NO `research_questions` property.
-        const rig = await createRig({ seedStructured: false, summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ seedStructured: false, summarySampling: 1, summaryCritics: 1 });
 
         expect((await rig.step()).stories[0].started).toEqual([
             `wi_structure_seed_${seedHashOf(rig.story().idea)}`
@@ -191,7 +191,7 @@ describe('D-51 — the research waiver: an empty `research_questions` list close
         const rig = await createRig({
             seedStructured: false,
             summarySampling: 1,
-            summaryReaders: 1,
+            summaryCritics: 1,
             crew: {
                 researchQuestions: ['What did the 1911 survey map actually measure?'],
                 // The pass WAS dispatched, and it answers `reportNoResearch` instead of writing.

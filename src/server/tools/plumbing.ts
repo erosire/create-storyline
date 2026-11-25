@@ -3,7 +3,7 @@
  * record editors, the self-describing catalogue (T-6c), and `reportGap` (T-12).
  *
  * §8.4's own sentence fixes the shape of this file: "Present on every session — Writer, Editor,
- * Reader, and checker alike. The `edit*` variants are permitted to the Writer only: the tool is
+ * Critic, and reader alike. The `edit*` variants are permitted to the Writer only: the tool is
  * registered everywhere, and the server refuses anyone else's call (T-1a)." So nothing here is
  * hidden by role, and the two writes are refused by the §7 row rather than by a special case.
  *
@@ -191,14 +191,14 @@ const readSummary: ToolDefinition = {
 const DECIDED_IDEA_STATES: Idea['state'][] = ['selected', 'discarded', 'deferred'];
 
 /**
- * §8.4 `readIdeas`: what the Readers put forward and how the Editor verified it — INCLUDING the
+ * §8.4 `readIdeas`: what the Critics put forward and how the Editor verified it — INCLUDING the
  * Ideas already selected, discarded or deferred. That inclusion is the point (D-32): a fresh
  * context that cannot see the decided list re-proposes what was already rejected.
  */
 const readIdeas: ToolDefinition = {
     name: 'readIdeas',
     description:
-        'Read the Ideas: what Readers and the Author put forward, with the Editor verification on each. Includes the ones already selected, discarded or deferred — that list is the memory that stops a fresh context re-proposing a settled point (D-32).',
+        'Read the Ideas: what Critics and the Author put forward, with the Editor verification on each. Includes the ones already selected, discarded or deferred — that list is the memory that stops a fresh context re-proposing a settled point (D-32).',
     inputSchema: {
         type: 'object',
         properties: {
@@ -470,7 +470,7 @@ const readCast: ToolDefinition = {
 /**
  * §8.4 `editCast`: Writer-only, registered everywhere (T-1a). No `cast_id` creates a member;
  * with one it patches, so the sheet is updated in one call rather than delete-and-recreate.
- * The §7 `cast` row is what refuses an Editor or a checker — there is no role check in here.
+ * The §7 `cast` row is what refuses an Editor or a reader — there is no role check in here.
  */
 const editCast: ToolDefinition = {
     name: 'editCast',
@@ -724,7 +724,7 @@ const readDigest: ToolDefinition = {
                 rev: digest.rev,
                 notes: digest.stale
                     ? [
-                          'Rule D-14: this digest is stale. It blocks a review, not a fix — a checker that cannot trust it says so in its verdict instead of inventing one.'
+                          'Rule D-14: this digest is stale. It blocks a review, not a fix — a reader that cannot trust it says so in its verdict instead of inventing one.'
                       ]
                     : undefined
             }
@@ -736,7 +736,7 @@ const readDigest: ToolDefinition = {
 
 /**
  * §8.4 `readGoals`: the criteria list and the threshold (G-4). §7 gives every kind `read` on
- * `goals, criteria` because a checker cannot soften the bar it is measured against (L-15), so
+ * `goals, criteria` because a reader cannot soften the bar it is measured against (L-15), so
  * there is no write tool for this collection on the agent surface at all.
  */
 const readGoals: ToolDefinition = {
@@ -798,7 +798,7 @@ const listTasks: ToolDefinition = {
         type: 'object',
         properties: {
             state: TASK_STATE_ENUM,
-            owner_role: str('Restrict to one owner: writer, editor, reader, checker, or author.'),
+            owner_role: str('Restrict to one owner: writer, editor, critic, reader, or author.'),
             ...PAGE_ARGS
         },
         required: []
@@ -886,14 +886,14 @@ const readVerdicts: ToolDefinition = {
 };
 
 /**
- * §8.4 `readFindings`: the defect chain with the state each finding is in — D-33 (a reader or
- * checker finding is `unconfirmed` until an Editor confirms it) and D-34 (the Author approves)
+ * §8.4 `readFindings`: the defect chain with the state each finding is in — D-33 (a critic or
+ * reader finding is `unconfirmed` until an Editor confirms it) and D-34 (the Author approves)
  * are both readable here, which is what stops a fresh run re-raising a settled defect.
  */
 const readFindings: ToolDefinition = {
     name: 'readFindings',
     description:
-        'Read the findings with their state, cost and evidence. A finding from a reader or checker is unconfirmed until an Editor confirms it, and nothing is fixed until the Author approves (D-33, D-34).',
+        'Read the findings with their state, cost and evidence. A finding from a critic or reader is unconfirmed until an Editor confirms it, and nothing is fixed until the Author approves (D-33, D-34).',
     inputSchema: {
         type: 'object',
         properties: {
@@ -959,8 +959,8 @@ function permissionRowView(row: PermissionRow): Record<string, unknown> {
         artifact: row.artifact,
         writer: row.writer,
         editor: row.editor,
-        checker: row.checker,
         reader: row.reader,
+        critic: row.critic,
         // §7.2's fifth column. Rendered here too, or `describeTool` would answer a Researcher's
         // "may I?" from four cells and hide the one cell that grants it.
         researcher: row.researcher,
@@ -984,7 +984,7 @@ const listTools: ToolDefinition = {
             kind: enumOf(
                 // §7.2's five dispatched kinds: a run asks "can a Researcher reach this?" the same
                 // way it asks about any other kind before filing a task for it.
-                ['writer', 'editor', 'reader', 'checker', 'researcher'],
+                ['writer', 'editor', 'critic', 'reader', 'researcher'],
                 'Restrict to the tools one role kind may actually call.'
             ),
             writes: str('Restrict to the tools that touch one collection (for example "chapters" or "tasks").')
@@ -1009,8 +1009,8 @@ const listTools: ToolDefinition = {
                 needs: { expects: def.expectsArg === true, why: def.mutating && def.whyOptional !== true },
                 allowed_for_writer: mayCallKind('writer', def),
                 allowed_for_editor: mayCallKind('editor', def),
-                allowed_for_checker: mayCallKind('checker', def),
                 allowed_for_reader: mayCallKind('reader', def),
+                allowed_for_critic: mayCallKind('critic', def),
                 // §7.2: one more flag, because the knowledge tools are the first ones whose answer
                 // differs materially for the Researcher (it alone may write `knowledge`).
                 allowed_for_researcher: mayCallKind('researcher', def),

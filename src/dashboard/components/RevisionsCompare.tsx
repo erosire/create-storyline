@@ -24,7 +24,7 @@
 // rather than being faked (the route is exercised by the API tests meanwhile).
 //
 // U-13's other half — "with the verdicts" — reads the view's `verdicts` slice, not
-// `revision.verdict_refs`: §6.2a files a checker's report against the draft it read, and no server
+// `revision.verdict_refs`: §6.2a files a reader's report against the draft it read, and no server
 // path populates the refs on the revision row. A draft with no verdict naming it falls back to the
 // unit's rows and SAYS SO, because "this draft was not read" and "no verdict names this draft" are
 // different claims.
@@ -38,7 +38,7 @@ import type { Revision, Verdict } from '../../shared/types';
  * without a citation is an invalid verdict, so the citation is the point of showing the row).
  *
  * Nothing is summarised into a score (P6), and a row filed against the UNIT is labelled as such: the
- * Author must be able to tell "the checker read this draft" from "the checker read the unit".
+ * Author must be able to tell "the reader read this draft" from "the reader read the unit".
  */
 function DraftVerdicts({ unit, revision }: { unit: RevisionUnit; revision: Revision }) {
     const { verdicts, source } = draftVerdicts(unit, revision);

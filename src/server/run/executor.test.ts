@@ -763,7 +763,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
     });
 
     it('refuses a delegation the template forbids, and teaches the model why (D-17e, T-1a)', async () => {
-        // The built-in `reader-genre` forbids fan-out with an explicit empty list; an absent field
+        // The built-in `critic-genre` forbids fan-out with an explicit empty list; an absent field
         // means undeclared and is allowed.
         const store = Store.empty();
         const story = seedStory(store);
@@ -774,11 +774,11 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
         const chapter = seedChapter(store, story.id);
 
         seedTemplate(store, {
-            name: 'reader-genre',
+            name: 'critic-genre',
             roles: [
                 {
-                    name: 'reader',
-                    kind: 'reader',
+                    name: 'critic',
+                    kind: 'critic',
                     prompt: 'You read for what the genre promises and propose, never edit (D-26, P10).'
                 }
             ],
@@ -789,8 +789,8 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             id: 'work_1',
             storyId: story.id,
             kind: 'check_unit',
-            templateRef: 'reader-genre',
-            roleName: 'reader',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
             unit: { kind: 'chapter', ref: chapter.id }
         };
         const runtime = new MockToolRuntime(store, story.id);
@@ -828,7 +828,7 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             ok: false,
             refused: 'D-17e',
             message:
-                'template "reader-genre" does not name "researcher" in its delegation list (D-17e) — delegate to nobody, or do the reasoning yourself'
+                'template "critic-genre" does not name "researcher" in its delegation list (D-17e) — delegate to nobody, or do the reasoning yourself'
         });
     });
 
@@ -1045,12 +1045,12 @@ function samplingRig() {
     });
 
     seedTemplate(store, {
-        name: 'reader-screening',
+        name: 'critic-screening',
         roles: [
             {
-                name: 'reader',
-                kind: 'reader',
-                prompt: 'You are the screening Reader for phase ①. Report ONLY critical and high problems.'
+                name: 'critic',
+                kind: 'critic',
+                prompt: 'You are the screening Critic for phase ①. Report ONLY critical and high problems.'
             }
         ],
         serves_phase: ['summary']
@@ -1275,8 +1275,8 @@ describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', (
             id: 'wi_screen_summary_0_1_2',
             storyId: story.id,
             kind: 'screen_samples',
-            templateRef: 'reader-screening',
-            roleName: 'reader',
+            templateRef: 'critic-screening',
+            roleName: 'critic',
             revisionRef: draft.id,
             toolMode: 'none',
             responseSchema: { name: ISSUE_LIST_SCHEMA_NAME, schema: IssueListSchema }

@@ -1,5 +1,5 @@
 /**
- * SUMMARY PHRASE R3 — `tools/checker.ts`'s group attribution, pinned at the tool layer.
+ * SUMMARY PHRASE R3 — `tools/reader.ts`'s group attribution, pinned at the tool layer.
  *
  * WHY THIS FILE EXISTS: the group finding's `group_refs` is the JOIN key every downstream rule runs on —
  * the planner routes a fix to exactly those groups (`loop/work.ts:groupWorkTargets`), the rail computes
@@ -58,12 +58,12 @@ interface Book {
 /** The catalog order, so a test can name a group by key and still assert its pinned id. */
 const idOf = (groups: PhraseGroup[], key: string) => groups.find((group) => group.key === key)!.id;
 
-/** The deep-review session: the group Overview's reviewer is a `reader` (R5's `check_unit` pass). */
+/** The deep-review session: the group Overview's reviewer is a `critic` (R5's `check_unit` pass). */
 const sessionFor = (storyId: string): RunSession => ({
     storyId,
-    roleKind: 'reader',
-    roleName: 'reader_1',
-    runId: 'run_reader'
+    roleKind: 'critic',
+    roleName: 'critic_1',
+    runId: 'run_critic'
 });
 
 /**
@@ -108,7 +108,7 @@ function seedBook(summaryMode: 'groups' | 'sampling'): Book {
 
 /**
  * The filing call the group deep review's brief asks for (the note in `loop/work.ts`), with `group_refs`
- * left to the test. `detail` is present because a Reader finding without it is refused for the D-30
+ * left to the test. `detail` is present because a Critic finding without it is refused for the D-30
  * reason before any group rule is reached.
  */
 const filing = (groupRefs: string[] | undefined, extra: Record<string, unknown> = {}) => ({
@@ -240,7 +240,7 @@ describe('a Summary defect on a group book has to name its groups (R3)', () => {
             book.context,
             'raiseFinding',
             filing([premise, ending], {
-                kind: 'improvement',
+                kind: 'proposal',
                 criterion_ref: 'C-11',
                 title: 'let the promise arrive in the premise, not the ending',
                 detail: 'summary_0 promise states the return late; the premise already holds the map'
@@ -249,7 +249,7 @@ describe('a Summary defect on a group book has to name its groups (R3)', () => {
 
         expect(filed.ok).toBe(true);
         expect(book.store.findings.require('finding_0')).toMatchObject({
-            kind: 'improvement',
+            kind: 'proposal',
             cost: 'major',
             group_refs: [premise, ending]
         });
@@ -260,7 +260,7 @@ describe('a Summary defect on a group book has to name its groups (R3)', () => {
             book.context,
             'raiseFinding',
             filing(undefined, {
-                kind: 'improvement',
+                kind: 'proposal',
                 criterion_ref: 'C-13',
                 title: 'state the debt in the tone group',
                 detail: 'summary_0 tone never names the debt the premise owes'

@@ -78,7 +78,7 @@ describe('a finding’s group scope (R3)', () => {
             'ending'
         ]);
         // Unscoped means ALL five must be rewritten before it may close — the expensive end of R3, and
-        // the reason `tools/checker.ts:raiseFinding` asks a group book to name its groups.
+        // the reason `tools/reader.ts:raiseFinding` asks a group book to name its groups.
         expect(findingResolution(store, story, finding)).toEqual({
             finding_id: 'finding_0',
             targeted: [recordUidAt(1), recordUidAt(2), recordUidAt(3), recordUidAt(4), recordUidAt(5)],

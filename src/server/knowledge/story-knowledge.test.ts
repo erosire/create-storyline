@@ -393,7 +393,7 @@ describe('StoryKnowledge — the finding card names its claim type (T5, D-33b)',
 
         // A PROPOSAL. The directory is what a crew reads before it decides anything, and a card that
         // does not say "proposal" gets weighed by the defect's admissibility rule — the exact mistake
-        // the `improvement` kind exists to stop.
+        // the `proposal` kind exists to stop.
         store.findings.create(
             {
                 story_id: story.id,
@@ -403,7 +403,7 @@ describe('StoryKnowledge — the finding card names its claim type (T5, D-33b)',
                 detail: 'opening on the lie gives chapter 2 its tension',
                 evidence: 'section_1: "he told them the truth"',
                 cost: 'major',
-                kind: 'improvement',
+                kind: 'proposal',
                 fingerprint: 'C-14|summary_0|improvement',
                 state: 'approved',
                 seen_count: 2
@@ -457,7 +457,7 @@ describe('StoryKnowledge — the finding card names its claim type (T5, D-33b)',
                 // `Kind` sits right under `State` and only here: it is the claim type, not a status.
                 body:
                     'State: approved\n' +
-                    'Kind: improvement\n' +
+                    'Kind: proposal\n' +
                     'Target: summary_0\n' +
                     'Criterion: C-14\n' +
                     'Detail: opening on the lie gives chapter 2 its tension\n' +
@@ -495,7 +495,7 @@ describe('StoryKnowledge — the finding card names its claim type (T5, D-33b)',
         // here rather than in a client that started depending on the extra line.
         const bodies = (findings?.entries ?? []).map((entry) => entry.body);
 
-        expect(bodies[0]).toContain('Kind: improvement');
+        expect(bodies[0]).toContain('Kind: proposal');
         expect(bodies[1]).not.toContain('Kind');
         expect(bodies[2]).not.toContain('Kind');
     });

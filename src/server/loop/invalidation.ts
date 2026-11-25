@@ -10,8 +10,10 @@
 //   * D-36's tray deletion belongs to the lock commit for the same reason.
 //
 // L-11's line is the boundary this module respects: a change to a LOCKED artifact is not a commit, it
-// is a backtrack (L-31). So nothing here unlocks anything, and `scrapPhasesAfter` is the only path
-// that deletes a locked phase's artifacts.
+// is a backtrack (L-31). So nothing here unlocks an artifact it KEEPS, and `scrapPhasesAfter` is the only
+// path that deletes a locked phase's artifacts — with the one exception D-69 forces (T8 finding 1): a
+// PHRASE GROUP lock whose revision rows this scrap deletes comes off with them, because a flag naming a
+// deleted row is not a lock, it is a deadlock. See the block inside `scrapPhasesAfter`.
 import {
     authorAttr,
     deletePhaseIdeas,
@@ -25,8 +27,10 @@ import {
 import { TASK_KINDS, UNDO_STACK_LIMIT, type LoopChapter, type UndoEntry } from './types';
 // HARDENING (D-25/D-25a group reset): `scrapPhasesAfter` has to scrap the group pipeline's history
 // alongside the legacy `revisions` rows — see the block in the function — and the switch is the book
-// itself (`phrase/catalog.ts:isGroupManagedStory`).
-import { isGroupManagedStory } from '../phrase';
+// itself (`phrase/catalog.ts:isGroupManagedStory`). `phraseGroupsOf` + `isPhraseGroupLocked` are the two
+// reads the D-69 lock clear needs, and they come from the SAME catalog module the write layer reads, so
+// a scrap can never disagree with `phrase/locks.ts` about which row carries a live lock.
+import { isGroupManagedStory, isPhraseGroupLocked, phraseGroupsOf } from '../phrase';
 import type { Chapter, ChapterSection, Story, StoryPhase, Task } from '../../shared/types';
 import type { Store } from '../store';
 
@@ -293,8 +297,15 @@ export function materialiseChapters(store: Store, story: Story, count: number): 
  * (P11 — the Author must still be able to ask why this draft was chosen).
  *
  * The Ideas go too (D-36, D-25's note): a phase that was locked already deleted its tray, and a phase
- * that was never locked loses it with the rest, because keeping them means a new Reader proposing what
+ * that was never locked loses it with the rest, because keeping them means a new Critic proposing what
  * the Author already rejected against artifacts that no longer exist.
+ *
+ * ONE LOCK IS DELETED WITH ITS ARTIFACT (D-69, T8 finding 1): a PHRASE GROUP lock is a flag on a
+ * REVISION (`locked_revision` names a `group_revisions` row, and `phrase/reviewed.ts:cleanSelectionOf`
+ * resolves a locked group's Overview entry through its `latest` row), so the scrap that deletes those
+ * rows deletes the lock's subject and clears the flag with them. The reopened phase's group TEXT and
+ * numbers survive; only the dead flag goes. Every other lock this module respects survives, because a
+ * phase whose artifact survives keeps the artifact's lock (L-11's line).
  *
  * Ledger entries survive: they are the continuity FACTS of the book, and the book still exists — what
  * changed is that its structure is being rebuilt above them. The `stale` flag is where a fact a
@@ -353,11 +364,52 @@ export function scrapPhasesAfter(
     // plotlines survive a backtrack. Whether the current text itself is re-grown is the CALLER's
     // decision, exactly as the legacy prose is cleared by `engine.ts:editSeed` and kept by
     // `backtrack('summary')` — those flows reset the group rows with the mirror, never this scrap.
+    //
+    // THE LOCK THAT STANDS ON THOSE ROWS GOES WITH THEM (D-69, T8 finding 1), and this branch — not the
+    // group row loop above or below — is the only place it may. A group lock is not a flag on the GROUP,
+    // it is a flag on a REVISION: `phrase/locks.ts` writes `locked_revision`, and
+    // `phrase/reviewed.ts:cleanSelectionOf` resolves a locked group's Overview entry by finding its
+    // `latest` row at `group.revision`. Deleting the history deletes the lock's subject, and the stale
+    // flag then strands the book in BOTH directions:
+    //   * the reviewed Overview can never COMPOSE again, because the locked group has a permanent gap
+    //     (`cleanSelectionOf` answers `no_clean_revision` for a group with no `latest` row), and the
+    //     Reader score seats, the Editor lock seats and the Author's reviewed choose are all keyed to a
+    //     COMPLETE selection; and
+    //   * `phrase/revisions.ts:installGroupRevisions` refuses a batch naming ANY locked group BEFORE its
+    //     first write (R2's atomicity), so the stale flag blocks the re-install of the other four groups
+    //     too — the loop cannot rebuild the Overview at all, and the only way out is an Author unlock the
+    //     rail has no reason to offer, on a lock the Author never set.
+    // Clearing is `phrase/locks.ts:unlockPhraseGroup`'s exact write: the four fields to `false`/`null`
+    // (`null`, never `undefined` — a store patch merges through JSON, so an `undefined` would DELETE the
+    // key instead of clearing it), with `content` and `revision` untouched so the text survives
+    // byte-for-byte as L-31 requires. NOTHING ELSE moves: the claims the lock voided stay `discarded`
+    // (§4.10 makes a discard terminal, and a scrap that resurrected one would invent work the Author
+    // watched close), and only rows that actually carry a lock are written, because an UNLOCKED row
+    // leaves these four fields OUT entirely and that absence is the shape every projection reads as
+    // "open" (`api/projections.ts`, `dashboard/api.ts:PhraseGroupRow`).
+    //
+    // THE BRANCH IS THE RULE, not a matter of placement: a backtrack to `chapters` (`rank >=
+    // phaseRank('chapters')`) deletes nothing group-shaped, so every lock there still names a live
+    // `latest` row and STANDS — cleared locks would be the bug there, not the fix.
     if (rank < phaseRank('chapters') && isGroupManagedStory(story)) {
         counts.groupRevisions = store.groupRevisions.deleteWhere(
             (revision) => revision.story_id === story.id,
             loopAttr(`${why}; the group revisions of the scrapped phase go with their drafts (D-25, R2)`)
         );
+
+        for (const group of phraseGroupsOf(store, story.id).filter(isPhraseGroupLocked)) {
+            store.phraseGroups.update(
+                group.id,
+                { locked: false, locked_revision: null, locked_by: null, locked_at: null },
+                loopAttr(
+                    `${why}; ${group.key}'s lock named a revision row this scrap deleted, so the flag goes with the history while the words stay (D-69, R2)`
+                ),
+                // CAS against the row as the catalog read it, exactly like `locks.ts`'s two writes: a
+                // install that moved the group inside this same commit loses this update rather than
+                // having its flag cleared behind it.
+                [{ id: group.id, rev: group.rev }]
+            );
+        }
     }
 
     // T12/B: a `sample_reviews` row is a review OF one revision (`revision_ref`), so it is scoped to

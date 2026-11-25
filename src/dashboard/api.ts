@@ -34,7 +34,6 @@ import type {
     Chapter,
     Digest,
     Finding,
-    FindingKind,
     Goal,
     Idea,
     LedgerEntry,
@@ -62,6 +61,15 @@ export type StreamKind = 'story' | 'runs' | 'queue';
 
 /** Poll cadence for the no-`EventSource` fallback (§10 clients refetch on event; W9). */
 const FALLBACK_POLL_MS = 5000;
+
+/**
+ * R1 — the key the store's cached lock refusals are filed under, and the pane's lookup reads the same helper.
+ *
+ * It lives in `api.ts` (not here, not in the contract) because BOTH sides need one spelling: `state.ts` writes
+ * `groupLockErrors[groupLockKey(story, group)]` and `SummaryGroupPane` reads it through
+ * `story-contract.groupLockError`. A string built in two places is a cache that misses silently.
+ */
+export const groupLockKey = (storyId: string, groupId: string): string => `${storyId}:${groupId}`;
 
 // ---------------------------------------------------------------------------
 // Projections (server-computed; the dashboard renders, never recomputes)
@@ -273,8 +281,8 @@ export interface StoryView {
     revisions: Revision[];
     /**
      * §4.9's verdict rows for this Story. Additive: U-13 (D-21 side-by-side) renders each draft's own
-     * verdict, and §6.2a files those against a `revision_N` — the Checker appends the verdict to
-     * `revision.verdict_refs` (server/tools/checker.ts), but the rows still travel as their own slice so
+     * verdict, and §6.2a files those against a `revision_N` — the Reader appends the verdict to
+     * `revision.verdict_refs` (server/tools/reader.ts), but the rows still travel as their own slice so
      * the dashboard can match them by `target_ref` without joining ref lists client-side (L-14: the
      * dashboard recomputes nothing).
      */
@@ -344,6 +352,46 @@ export interface PhraseRevisionRow {
     finding_refs: string[];
     task_refs: string[];
     chars: number;
+    /**
+     * D-67 — P11's audit of a verdict: this text closed a cross-group Critic pass with no unresolved defect
+     * on it, which is the ONLY thing that makes a revision selectable into the Reviewed Summary.
+     *
+     * OPTIONAL ON PURPOSE: a payload from before D-67 sends neither key, and `false`/absent are the same
+     * claim to the desk (this text was never certified clean). The dashboard reads it for a badge only —
+     * the selection itself is the server's (`reviewed.groups[].selected_revision`), never re-derived here.
+     */
+    clean?: boolean;
+    /** The deep-review run whose clean pass earned the stamp; null with no stamp (P11: every verdict names its run). */
+    clean_run_ref?: string | null;
+}
+
+/**
+ * T3 — ONE scoring pass over the Summary's group vector, as the projection attaches it to a group row.
+ *
+ * WHY THE VALUE IS NOT A LABEL: the rail prints a percentage and the pane prints the Critic's sentence, and
+ * both read the SAME row — a score the UI had to re-derive from findings would be a number the desk invented
+ * (L-14's rule against the client doing the engine's arithmetic). One run scores ALL FIVE groups at once, so
+ * the rows carry the same `vector_hash` and `at` for a given pass, and the rail's header average is a read
+ * over those rows rather than a sixth number nobody wrote.
+ *
+ * ORDER IS NEWEST FIRST (`scores[0]` is the latest pass) — the same direction `history` travels (R2), so a
+ * pane that reads the newest row of one field cannot read the oldest of the other.
+ */
+export interface PhraseGroupScore {
+    /**
+     * The score, as a 0–100 percentage. `story-contract.ts:phraseScorePercent` is the ONE normalizer the
+     * UI reads it through: it also accepts the 0–1 fraction spelling and clamps, so a payload from either
+     * side of that convention renders one honest number instead of `0.84%` or `NaN%`.
+     */
+    value: number;
+    /** The group-vector digest this pass scored — ties the number to the exact text it judged. */
+    vector_hash: string;
+    /** ISO instant the pass ran; the rail's "improves over time" read sorts on this. */
+    at: string;
+    /** The run that scored it, or `''` when the projection has no run to name. */
+    run_ref: string;
+    /** The Critic's sentence about this group, when the pass wrote one. Absent ⇒ the pane prints nothing. */
+    rationale?: string;
 }
 
 /** One group: its current text, its number, its retained history, and the findings it still owes. */
@@ -374,13 +422,70 @@ export interface PhraseGroupRow {
      * disagree: the control is disabled off this flag, never off a guess from run rows.
      */
     writer_busy: boolean;
+    /**
+     * T3 — the Critic's score for THIS group, newest pass first (see `PhraseGroupScore`).
+     *
+     * ADDITIVE AND OPTIONAL ON PURPOSE: a scoring run is a server-side job that has not happened for every
+     * book yet, and a rail row whose group has never been scored renders NO number at all — absence is a
+     * fact about the book, not a zero. One pass scores all five groups, so the phrase header's overall score
+     * appears only when every group carries one (a partial average would be a made-up number).
+     */
+    scores?: PhraseGroupScore[];
+    /**
+     * R1 — the Author's (or, with the Setting on, the Editor's) lock-in of THIS group's text.
+     *
+     * A locked group is settled content: it cannot be revised, its own findings are voided by the lock, and
+     * the other groups adapt to it. ABSENT MEANS UNLOCKED — the legacy reading, and the normal state of every
+     * group until someone commits to a text — so a payload from before the lock exists renders exactly the
+     * pane it rendered before, with no badge and no unlock control.
+     */
+    locked?: boolean;
+    /**
+     * The group revision the lock stands on — the number the lock was made AT.
+     *
+     * It travels rather than being read off `revision`, because the two facts can differ: the lock names the
+     * text a person committed to, and `revision` is whatever the loop has installed since. The pane prints
+     * this number, so `Locked at Revision 4` can never claim the lock sits on text that has moved.
+     */
+    locked_revision?: number;
+    /** WHO committed the lock. It decides the pane's sentence, and whether the desk offers an unlock. */
+    locked_by?: PhraseGroupLockActor;
+    /** ISO instant the lock was made, as the wire sent it. The pane keeps it in the badge's tooltip only. */
+    locked_at?: string;
 }
+
+/**
+ * R1 — who may hold a group's lock.
+ *
+ * The Author always may. The Editor may only when the Story's `editor_group_locking` Setting is on, and it
+ * never lifts a lock: `locked_by:'editor'` still unlocks through the Author alone. The token is the wire's,
+ * so the desk states who locked a group rather than guessing from `updated_by`.
+ */
+export type PhraseGroupLockActor = 'author' | 'editor';
+
+/**
+ * T3 — the claim type on the wire, as the dashboard READS it: `issue` or `proposal`.
+ *
+ * WHY NOT the shared `FindingKind` union: that enum is the server's and its proposal token is mid-rename
+ * (`improvement` → `proposal`), and the dashboard must render BOTH spellings — a legacy payload whose row
+ * says `improvement` and a current one that says `proposal` are the same kind of claim to the Author, and
+ * one that says neither is an Issue. `story-contract.ts:findingKindLabel` is the single place that decides
+ * the wording, so widening the mirror to `string` costs no type safety the UI was actually using, and a
+ * stricter shared union would make this file fail to compile against a payload from the other side.
+ */
+export type FindingKindWire = string;
 
 /** A finding with its group attribution and R3's resolution against the book as it stands. */
 export interface PhraseFindingRow {
     id: string;
     title: string;
     cost: Cost;
+    /**
+     * T3 — what the row CLAIMS: `issue` (a defect the commitment set is measured against) or `proposal`
+     * (a change that would improve the text). ABSENT ⇒ Issue, the legacy reading of a row raised before
+     * the field existed, which is also the default of a raise that named no kind.
+     */
+    kind?: FindingKindWire;
     state: Finding['state'];
     seen_count: number;
     /** The ids on the record; empty is the legacy "the whole Overview" reading. */
@@ -415,7 +520,7 @@ export interface PhraseReviewState {
     /** `{groupId: revisionNumber}` — the identity reviews and deferrals are keyed by. */
     vector: Record<string, number>;
     vector_hash: string;
-    /** Reader seats the Author's dial asks for on this vector, and how many have reported. */
+    /** Critic seats the Author's dial asks for on this vector, and how many have reported. */
     review_seats: number;
     reviews_on_current_vector: number;
     deep_reviews_on_current_vector: number;
@@ -425,6 +530,100 @@ export interface PhraseReviewState {
     open_tasks: number;
     /** R6's compatibility mirror: does the legacy `summaries` prose still say what the groups say? */
     mirror: { summary_id: string | null; in_sync: boolean; locked: boolean; fields: string[] };
+}
+
+// ---------------------------------------------------------------------------
+// D-67 / D-68 — the REVIEWED Summary and the Author's choose
+//
+// WHY A WHOLE SECOND BLOCK BESIDE `review`. `review` answers "what is the pipeline doing with the CURRENT
+// text"; `reviewed` answers "what text has been READ and passed, what was it scored at, and what did the
+// Author take". They disagree during exactly the window the feature exists for — the newest Ending has an
+// open defect while the reviewed Ending is the earlier clean one — so the Summary tab shows the reviewed
+// reading and leaves the live one to the group panes and the rail. Field-for-field the server's
+// `api/projections.ts:PhraseReviewedSummary`; the shapes are duplicated here because the client contract
+// lives in this file (the projection imports its own return types from here), so neither side may drift.
+// ---------------------------------------------------------------------------
+
+/**
+ * One group INSIDE the reviewed block (D-67): the pair of numbers the feature exists to show.
+ * `latest_revision: 5` beside `selected_revision: 4` IS "Ending r5 has an issue, so the reviewed Ending is r4".
+ */
+export interface PhraseReviewedGroup {
+    /** The group's UUID — the same address the rail's selection ref carries (U2). */
+    id: string;
+    key: string;
+    /** The Clean revision the reviewed Overview is built from, or null while this group has none. */
+    selected_revision: number | null;
+    /** The row behind `selected_revision`; carried so a pane can name the row without re-deriving it. */
+    selected_id: string | null;
+    /** The deep-review run whose clean pass earned the verdict; null with no selection. */
+    clean_run_ref: string | null;
+    /** The group's newest revision number (0 when unwritten) — the number the selection fell back past. */
+    latest_revision: number;
+    /** True when the newest text is NOT the reviewed one — the state the Author acts on. */
+    superseded: boolean;
+    /** An unresolved ISSUE names this group, which holds its clean verdicts out of the selection. */
+    issues_open: boolean;
+    /** Why there is no selection: `'unwritten'` | `'no_clean_revision'`; null when there is one. */
+    gap: string | null;
+    /**
+     * The scores that judged THIS reviewed vector, newest first — joined on `reviewed.vector_hash` and
+     * nothing else, because a Reader's number describes the text it was shown.
+     *
+     * D-67 moved scoring onto the clean vector, so `groups[].scores` (the live rows' trend list) is EMPTY
+     * until a clean selection exists; a pane that printed the live rows in this block would print a number
+     * for a combination nobody reviewed.
+     */
+    scores: PhraseGroupScore[];
+}
+
+/** What the Author chose (D-68), read back off the Phrase row, or null when none is valid. */
+export interface PhraseChosenSummary {
+    /** `{groupId: revisionNumber}` — the vector the choice adopted; its rows are the live `latest` now. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** When the choose committed (the Phrase row's `reviewed_at`); `''` when the row carries no instant. */
+    at: string;
+    /** The composed text that was chosen, recomposed from the rows the vector names. */
+    overview: string;
+    /**
+     * The scores that judged THAT text, per group, newest first — the number the choice was made under.
+     *
+     * KEYED BY GROUP UUID (`entry.group.id` in the projection), not by catalog key: a lookup by `key`
+     * silently misses every row and the pane prints no number. See `story-contract.chosenGroupScores`.
+     */
+    scores: Record<string, PhraseGroupScore[]>;
+}
+
+/** The Reviewed Summary: the Clean selection, the score that judged it, and the Author's choice. */
+export interface PhraseReviewedSummary {
+    /**
+     * `pending` — no complete clean selection and no valid recorded choice;
+     * `ready` — a complete reviewed Overview the Author may choose, not the one they chose (this is also
+     * the state after a choose once the pipeline reviews a different combination, i.e. `stale: true`);
+     * `chosen` — the Author's recorded choice stands, whether or not newer reviewed text exists.
+     */
+    state: 'pending' | 'ready' | 'chosen';
+    /** Every group has a selectable Clean revision — the gate a choose and a scoring pass both hang on. */
+    complete: boolean;
+    /** The live clean selection, catalog order; PARTIAL when `complete` is false. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** The composed reviewed Overview; `''` while the selection is partial. */
+    overview: string;
+    /** One entry per catalog group, in catalog order — always all five on a grouped book. */
+    groups: PhraseReviewedGroup[];
+    /** The Author's choice, or null when they never chose or the chosen history is gone (a Seed reset). */
+    chosen: PhraseChosenSummary | null;
+    /** True when the clean selection has moved PAST what the Author chose: newer reviewed text to take. */
+    stale: boolean;
+    /** The unresolved issues holding a clean verdict back, with the group KEYS each one scopes to. */
+    blocking_issues: Array<{ id: string; title: string; cost: Cost; group_keys: string[] }>;
+    /**
+     * A live Writer pass holds at least one group, so a choose would refuse — the SAME read the route's 409
+     * and `groups[].writer_busy` use, so a greyed-out control and a refusal can never disagree (R4).
+     */
+    writer_busy: boolean;
 }
 
 /** The whole group surface for one Story — the one read the Summary rail and its panes render (R6). */
@@ -440,6 +639,65 @@ export interface PhraseView {
     findings: PhraseFindingRow[];
     tasks: PhraseTaskRow[];
     review: PhraseReviewState;
+    /**
+     * D-67/D-68 — the Reviewed Summary and the Author's choice. ALWAYS present on the wire (a book with no
+     * groups reports `pending` with nothing in it), so the Summary tab never branches on absence; the
+     * panes still read it through `story-contract.phraseReviewed`, which answers the same empty block for
+     * a payload from before the feature so an older server cannot crash the desk.
+     */
+    reviewed: PhraseReviewedSummary;
+}
+
+/**
+ * `POST /stories/:id/phrases/reviewed/choose` body (D-68) — the Author takes the Reviewed Summary.
+ * `note` is optional: the route records it in the attribution line, and an empty one is sent as absent.
+ */
+export interface PhraseReviewedChooseInput {
+    note?: string;
+}
+
+/**
+ * One group's install in the choose's report — same shape as the revise route's, with the group KEY
+ * spelled out because the choose installs all five at once and the pane lists them by name.
+ */
+export interface PhraseReviewedChooseInstallRow {
+    group_id: string;
+    group_key: string;
+    revision_id: string;
+    number: number;
+}
+
+/**
+ * What the choose route answers, including the refreshed `view` so the pane re-reads nothing by hand.
+ *
+ * `discarded` is the half the Author acted on: every revision the choice passed over is flipped to the
+ * terminal `discarded` state (retained for R3's closure join, hidden from every current read), and the
+ * pane names them so the drop is not silent.
+ */
+export interface PhraseReviewedChooseResult {
+    story_id: string;
+    phrase_id: string;
+    revision: number;
+    /** The vector that was adopted — `{groupId: revisionNumber}`. */
+    vector: Record<string, number>;
+    vector_hash: string;
+    /** When the choose committed (the Phrase row's `reviewed_at`). */
+    at: string;
+    /** The composed Overview the Author took. */
+    overview: string;
+    installed: PhraseReviewedChooseInstallRow[];
+    discarded: PhraseReviewedChooseInstallRow[];
+    /** Where each chosen text came from: the source row and the number that now holds it (catalog order). */
+    sources: Array<{
+        group_id: string;
+        group_key: string;
+        source_revision: number;
+        source_id: string;
+        installed_revision: number;
+    }>;
+    /** What happened to the legacy `summaries` mirror (R6): a `written: false` with a reason is a fact, not a failure. */
+    mirror: { summary_id: string | null; fields: string[]; written: boolean; reason?: 'locked' | 'no_summary' };
+    view: PhraseView;
 }
 
 /**
@@ -470,6 +728,34 @@ export interface PhraseGroupReviseResult {
     /** What happened to the legacy `summaries` mirror (R6): `written: false` with a reason is a fact, not a failure. */
     mirror: { summary_id: string | null; fields: string[]; written: boolean; reason?: 'locked' | 'no_summary' };
     view: PhraseView;
+}
+
+/**
+ * R1 — what the group lock and unlock routes answer.
+ *
+ * THE SHAPE IS THE REVISE ROUTE'S, NOT A NEW ONE. `POST …/groups/:id/revise` and `POST …/reviewed/choose` both
+ * answer the refreshed phrase `view`, and the store commits it straight away so the rail and the pane move with
+ * the write rather than with a later poll (R2/D-68). Lock and unlock are the same kind of verb — they change a
+ * group row the phrase read projects — so they carry the same `view`, and the store's `mutate` re-reads the
+ * Story and the rail afterwards exactly as it does for a revise.
+ *
+ * `view` IS OPTIONAL FOR ONE HONEST REASON: these two routes are being landed by another wave, and a body that
+ * carries only the lock verdict (or only the Story row) is a body this client must survive. Every field below
+ * is therefore read for a badge, never for arithmetic, and the store falls back to `mutate`'s own re-read when
+ * the route sends no `view`.
+ */
+export interface PhraseGroupLockResult {
+    story_id?: string;
+    phrase_id?: string;
+    group_id?: string;
+    /** The state the route is leaving the group in: `true` from lock, `false` from unlock. */
+    locked: boolean;
+    /** The revision the lock was made on, or `null`/absent once the group is open again. */
+    locked_revision?: number | null;
+    locked_by?: PhraseGroupLockActor | null;
+    locked_at?: string | null;
+    /** The refreshed phrase read, on the revise route's convention. Absent means "re-read it", not "nothing changed". */
+    view?: PhraseView;
 }
 
 /**
@@ -506,8 +792,12 @@ export interface QueueItem {
      * T5 (additive) — the FINDING's claim type, on the `finding` rows only. It cannot be called `kind`:
      * that field is already this row's queue discriminator ('finding' | 'idea' | ...). Absent on the
      * other three flavours, and `'issue'` for a finding raised before the field existed.
+     *
+     * T3 — typed as the dashboard's `FindingKindWire` rather than the shared enum, for the reason named
+     * there: the proposal token is mid-rename server-side, and this row's ONLY consumer is
+     * `story-contract.ts:findingKindLabel`, which reads both spellings and defaults absence to Issue.
      */
-    finding_kind?: FindingKind;
+    finding_kind?: FindingKindWire;
     story_id: string;
     story_title: string;
     id: string;
@@ -533,8 +823,8 @@ export interface CreateStoryInput {
     chapter_count?: number;
     /** Phase ①: Writer samples per Summary (standard 5 when omitted). */
     summary_sampling?: number;
-    /** Phase ①: Reader passes per sample (standard 5 when omitted). */
-    summary_readers?: number;
+    /** Phase ①: Critic passes per sample (standard 5 when omitted). */
+    summary_critics?: number;
 }
 
 /**
@@ -548,8 +838,18 @@ export interface StoryPatch {
     auto_approve?: Cost[];
     /** Phase ①: how many Writer samples one Summary gets (standard 5). */
     summary_sampling?: number;
-    /** Phase ①: how many Readers critique each sample (standard 5). */
-    summary_readers?: number;
+    /** Phase ①: how many Critics critique each sample (standard 5). */
+    summary_critics?: number;
+    /**
+     * R2 — the Setting that lets the Editor lock a SUMMARY GROUP in, on its own judgement over the Critic's
+     * findings for that group and the Reader's score and rationale beside them.
+     *
+     * ABSENT MEANS OFF, which is what keeps every legacy `PATCH` body and every Story written before the
+     * Setting exists behaving exactly as it did: the Editor has no group-lock power, and the Author still
+     * locks and unlocks groups by hand. It is a Story setting rather than a derived fact because the Author
+     * owns the switch — the same reason `auto_approve` and `summary_mode` are settings (D-35, R6).
+     */
+    editor_group_locking?: boolean;
 }
 
 /** §6.3a L-32 — the two backtrack targets; Phase ③ is the current phase, so only ①/② are reachable. */
@@ -671,7 +971,7 @@ export interface AgentRecentRun {
 
 /** One employee on the global roster, with every Story thread it is currently working. */
 export interface AgentStatusRow {
-    /** `writer` | `editor` | `reader` | `checker` — the Storyline role, shared by every Story. */
+    /** `writer` | `editor` | `critic` | `reader` — the Storyline role, shared by every Story. */
     kind: string;
     title: string;
     status: 'idle' | 'running';
@@ -817,9 +1117,50 @@ export interface ApiClient {
      * to revise. It answers the refreshed `view`, which is what the store commits.
      */
     revisePhraseGroup(storyId: string, groupId: string, input: PhraseGroupReviseInput): Promise<PhraseGroupReviseResult>;
+    /**
+     * R1 — the Author locks ONE group in (`POST /stories/:id/phrases/groups/:groupId/lock`).
+     *
+     * Locked content is settled: the group cannot be revised, its own findings are void, and the other groups
+     * adapt to it. The Editor may call the same route when the Story's `editor_group_locking` Setting is on —
+     * that is the Setting's whole effect — and the route answers with the refreshed phrase read on the revise
+     * route's convention.
+     *
+     * The refusals are the Author's next action, so they surface verbatim (`ApiError`, L-13): a group nobody has
+     * written yet cannot be locked in (there is no text to stand behind), and a group a live Writer is replacing
+     * is refused for the same reason revise is (`PhraseGroupRow.writer_busy` is the same read, R4).
+     */
+    lockPhraseGroup(storyId: string, groupId: string): Promise<PhraseGroupLockResult>;
+    /**
+     * R1 — the Author opens a locked group again (`POST /stories/:id/phrases/groups/:groupId/unlock`).
+     *
+     * Only the Author lifts a lock: an Editor that locked a group in cannot release its own decision, so an
+     * unlock that arrives from the crew's leg is the refusal a pane would print, not a retry. Same refreshed
+     * `view` as the lock route.
+     */
+    unlockPhraseGroup(storyId: string, groupId: string): Promise<PhraseGroupLockResult>;
+    /**
+     * D-68 — the Author takes the Reviewed Summary: the clean selection becomes the book in ONE commit.
+     *
+     * It installs the reviewed text of all five groups as their next revision, flips every revision the
+     * choice passed over to the terminal `discarded` state, and records the chosen vector on the Phrase row
+     * — so the Summary tab keeps showing the text the Author took after the pipeline moves on. It does NOT
+     * lock the phase and claims to resolve nothing (R3's closure rule is untouched).
+     *
+     * THREE 409 REFUSALS, each an Author-shaped sentence the pane prints verbatim:
+     *   - a `'sampling'` book has no group catalog, so there is nothing to choose (the import route first);
+     *   - no complete clean selection, naming each group and whether it is unwritten, has `no_clean_revision`,
+     *     or is held by an unresolved issue;
+     *   - a live Writer holds ANY group — the choice writes five texts at once, so one live pass anywhere
+     *     is enough to refuse (R4). `reviewed.writer_busy` is the same read, which is why the control is
+     *     disabled rather than clicked into a refusal.
+     */
+    choosePhraseReviewed(
+        storyId: string,
+        input?: PhraseReviewedChooseInput
+    ): Promise<PhraseReviewedChooseResult>;
     /** The durable knowledge directory for one Story (eight section articles, harness-owned). */
     getStoryKnowledge(storyId: string): Promise<StoryKnowledgeTree>;
-    /** The global employee roster: Writer/Editor/Reader/Checker, their models and live threads. */
+    /** The global employee roster: Writer/Editor/Critic/Reader, their models and live threads. */
     listAgents(): Promise<AgentStatusRow[]>;
     /** U-8 — the provider's model catalog, the roster dropdown's only choices. */
     listAgentModels(): Promise<AgentModelCatalog>;
@@ -1089,6 +1430,22 @@ export const api: ApiClient = {
             storyPath(storyId, `/phrases/groups/${encodeURIComponent(groupId)}/revise`),
             input.note === undefined ? { content: input.content } : { content: input.content, note: input.note }
         ),
+    // R1 — the lock pair. The GROUP is addressed by its UUID in the path, exactly as revise does, so a catalog
+    // reorder cannot move the write onto a sibling row. No body: the verdict is "this text stands", and who made
+    // it is the route's own attribution (the Author, or the Editor while the Setting is on), never a field the
+    // desk asserts about itself.
+    lockPhraseGroup: (storyId, groupId) =>
+        post<PhraseGroupLockResult>(storyPath(storyId, `/phrases/groups/${encodeURIComponent(groupId)}/lock`)),
+    unlockPhraseGroup: (storyId, groupId) =>
+        post<PhraseGroupLockResult>(storyPath(storyId, `/phrases/groups/${encodeURIComponent(groupId)}/unlock`)),
+    // D-68 — the Author's choose. No group id in the path: the choose addresses the WHOLE reviewed
+    // Overview (five installs, one commit), and the note is optional, so an absent one sends no key rather
+    // than an empty string the attribution line would print.
+    choosePhraseReviewed: (storyId, input) =>
+        post<PhraseReviewedChooseResult>(
+            storyPath(storyId, '/phrases/reviewed/choose'),
+            input?.note === undefined || input.note === '' ? {} : { note: input.note }
+        ),
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),
     listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
@@ -1136,7 +1493,7 @@ export const api: ApiClient = {
             storyPath(storyId, `/revisions/${encodeURIComponent(revisionId)}/select`),
             note === undefined ? {} : { note }
         ),
-    // U-13a / D-23. Same task the Checker's `requestMerge` opens; the desk shows one entry either way.
+    // U-13a / D-23. Same task the Reader's `requestMerge` opens; the desk shows one entry either way.
     mergeRevisions: (storyId, request) => post<StoryRow>(storyPath(storyId, '/revisions/merge'), request),
     requestSummaryRevision: (storyId, note) =>
         post<StoryRow>(storyPath(storyId, '/summary/revise'), note === undefined ? {} : { note }),

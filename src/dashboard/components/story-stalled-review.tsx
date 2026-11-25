@@ -26,7 +26,7 @@
 import { useState } from 'react';
 import type { CriterionLevel } from '../../shared/criteria';
 import type { LevelHistoryRow } from '../api';
-import { isLiveRun } from './story-contract';
+import { findingKindLabel, findingKindToken, isLiveRun } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 import type { BacktrackTarget } from './story-contract';
 import type { Finding, StoryPhase } from '../../shared/types';
@@ -159,6 +159,18 @@ export function StalledReview({ view, actions }: StalledReviewProps) {
                     <ul className="sv-stalled-finding-list">
                         {findings.map((finding) => (
                             <li className="sv-stalled-finding" key={finding.id}>
+                                {/* T3 — the claim type, and it matters MORE here than anywhere else: this is the
+                                    list the Author reads while deciding whether to backtrack or wait. A stall whose
+                                    open rows are all Proposals is a book that is finished and being polished; one
+                                    whose rows are all Issues is a book that contradicts its Seed. Costs alone cannot
+                                    tell those two stories apart. */}
+                                <span
+                                    className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                                    data-testid={`finding-${finding.id}-kind`}
+                                >
+                                    {findingKindLabel(finding.kind)}
+                                </span>
+                                {' '}
                                 <span className={`sv-finding-cost sv-cost-${finding.cost}`}>{finding.cost}</span>
                                 <span className="sv-stalled-finding-title">{finding.title}</span>
                                 <span className="sv-stalled-finding-state">{finding.state}</span>

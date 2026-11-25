@@ -84,17 +84,33 @@ export function assignedTemplates(view: ApiStoryView, catalogue: Template[]): Te
  * server's own sentence). Absent `phrase` on its own cannot say whether the route is still in flight or has
  * already answered 503, and a pane that cannot tell draws a loading line over a failure forever; with the
  * sentence threaded through, the Summary area states what failed while the Story payload stays on screen.
+ *
+ * D-68's fifth argument is the CACHED REFUSAL of the Reviewed-Summary choose (`state.ts:reviewedErrors[storyId]`),
+ * threaded the same way for the same reason: the Summary tab is where the Author clicked Choose, so the 409's
+ * own sentence belongs there rather than only in the shell-wide line — and it survives the refresh the refusal
+ * triggers, because the store cached it. Absent means no refusal, which is not the same claim as success: the
+ * pane prints the sentence only when one is on the frame.
+ *
+ * R1's sixth argument is the CACHED REFUSAL SET of the group lock and unlock routes
+ * (`state.ts:groupLockErrors`, keyed `<storyId>:<groupId>`). It rides the frame for the same reason the two above
+ * do — the Author locked THAT GROUP from THIS pane, and a refusal that only reaches the top bar leaves an
+ * unlocked group looking like a click that did nothing — and it is the whole record rather than one Story's
+ * entry because the key carries the Story id, so a refusal from another book can never be looked up here.
  */
 export function storyViewData(
     view: ApiStoryView,
     catalogue: Template[],
     phrase?: PhraseView | null,
-    phraseError?: string | null
+    phraseError?: string | null,
+    reviewedError?: string | null,
+    groupLockErrors?: Record<string, string>
 ): ShellStoryView {
     return {
         ...view,
         ...(phrase ? { phrase } : {}),
         ...(phraseError === undefined ? {} : { phraseError }),
+        ...(reviewedError === undefined ? {} : { reviewedError }),
+        ...(groupLockErrors === undefined ? {} : { groupLockErrors }),
         templates: assignedTemplates(view, catalogue)
     };
 }
@@ -155,7 +171,7 @@ export interface ShellActions {
      */
     approveChapterFindings(storyIdOrChapterId?: string, chapterIdOrWhy?: string, why?: string): Promise<unknown>;
     setAutoApprove(storyId?: string, costs?: Cost[]): Promise<unknown>;
-    setSummaryReview(storyId: string, sampling: number, readers: number): Promise<unknown>;
+    setSummaryReview(storyId: string, sampling: number, critics: number): Promise<unknown>;
     assignTemplates(storyId?: string, templateIds?: string[]): Promise<unknown>;
     createTemplate(input: CreateTemplateInput | Partial<Template>): Promise<unknown>;
     patchTemplate(templateId: string, patch: Partial<Template>): Promise<unknown>;
@@ -194,6 +210,27 @@ export interface ShellActions {
      * a `(groupId, content)` call and the pinned `(storyId, groupId, input)` call both land.
      */
     revisePhraseGroup?(storyIdOrGroupId?: string, groupIdOrInput?: string, input?: PhraseGroupReviseInput): Promise<unknown>;
+    /**
+     * D-68 — the Author takes the Reviewed Summary. One verb, no group: the choice is the whole Overview,
+     * so the only argument the route needs is the Story. The pane calls it pinned `(storyId, note?)`; a
+     * bare `(note)` call is the local shape every other verb here accepts, and the Story stays the shell's
+     * scope (D-29's rule). The three 409s travel back as the store's cached refusal (`state.ts:reviewedErrors`).
+     */
+    chooseReviewedSummary?(storyIdOrNote?: string, note?: string): Promise<unknown>;
+    /**
+     * R1 — the Author locks ONE GROUP in (`POST …/phrases/groups/:groupId/lock`). Like every other verb here,
+     * two call shapes arrive: the pinned `(storyId, groupId)` the group pane uses, and the local `(groupId)` with
+     * the Story being the shell's scope. The group is the addressed thing in both, and a call that names none is
+     * a named refusal rather than a POST to `/phrases/groups/undefined/lock` (L-13).
+     */
+    lockPhraseGroup?(storyIdOrGroupId?: string, groupId?: string): Promise<unknown>;
+    /** R1 — the Author opens a locked group again (`POST …/phrases/groups/:groupId/unlock`). Same two shapes. */
+    unlockPhraseGroup?(storyIdOrGroupId?: string, groupId?: string): Promise<unknown>;
+    /**
+     * R2 — the Story's Editor-locking Setting. Pinned `(storyId, enabled)`; a bare `(enabled)` call is the local
+     * shape every other dial here accepts (D-29's rule — the Story is the shell's scope).
+     */
+    setEditorGroupLocking?(storyIdOrEnabled?: string | boolean, enabled?: boolean): Promise<unknown>;
 }
 
 /**
@@ -359,10 +396,10 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
                 : store.approveChapterFindings(storyId, first as string, second);
         },
         setAutoApprove: (id, costs) => store.setAutoApprove(scopeOf(id), costs ?? []),
-        // Phase ①'s two dials: the sample count and the Reader passes per sample. One write so the
-        // pane can never save a sampling value against a stale reader count.
-        setSummaryReview: (id, sampling, readers) =>
-            store.patchStory(scopeOf(id), { summary_sampling: sampling, summary_readers: readers }),
+        // Phase ①'s two dials: the sample count and the Critic passes per sample. One write so the
+        // pane can never save a sampling value against a stale critic count.
+        setSummaryReview: (id, sampling, critics) =>
+            store.patchStory(scopeOf(id), { summary_sampling: sampling, summary_critics: critics }),
         assignTemplates: (id, templateIds) => store.assignTemplates(scopeOf(id), templateIds ?? []),
         createTemplate: (input) =>
             store.createTemplate(
@@ -447,6 +484,49 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
             }
 
             return store.revisePhraseGroup(storyId, first, local);
-        }
+        },
+        // D-68 — the Author's whole-Summary choose. Two call shapes, as everywhere in this file: the pinned
+        // `(storyId, note)` and the pane-local `(note)` with the Story being the shell's scope. Only an
+        // argument that ACTUALLY names this book is read as the Story — `scopeOf` alone would take a
+        // free-text note and hand it to the route table as an id, which is how L-13's named refusals exist.
+        chooseReviewedSummary: (first, second) => {
+            const view = store.selectedStory();
+            const namesStory =
+                first !== undefined &&
+                (first === storyId ||
+                    first === store.getSnapshot().activeStoryId ||
+                    first === view?.goal.goal.id);
+
+            return store.chooseReviewedSummary(scopeOf(first), second ?? (namesStory ? undefined : first));
+        },
+        // R1 — the lock pair. Both take the pinned `(storyId, groupId)` and the pane-local `(groupId)`, and the
+        // GROUP is what they address, so `scopeOf` is only consulted when a second argument proves the first one
+        // was a Story id. A call naming no group is L-13's named refusal, not a POST to `…/groups/undefined/lock`.
+        lockPhraseGroup: (first, second) => {
+            const groupId = second ?? (typeof first === 'string' && second === undefined ? first : undefined);
+
+            if (!groupId) {
+                return unaddressed('lockPhraseGroup');
+            }
+
+            return store.lockPhraseGroup(second === undefined ? storyId : scopeOf(first), groupId);
+        },
+        unlockPhraseGroup: (first, second) => {
+            const groupId = second ?? (typeof first === 'string' && second === undefined ? first : undefined);
+
+            if (!groupId) {
+                return unaddressed('unlockPhraseGroup');
+            }
+
+            return store.unlockPhraseGroup(second === undefined ? storyId : scopeOf(first), groupId);
+        },
+        // R2 — the Editor-locking dial. `setAutoApprove` above is the sibling: one Story patch, one boolean, and
+        // the Story is the shell's scope when the pane calls it locally. A bare `(storyId)` with no value reads
+        // as ENABLE — the way every other dial in this file reads a call that omits its argument — so the value
+        // the Setting shows afterwards is still the one the server echoed, never the one the call implied.
+        setEditorGroupLocking: (first, second) =>
+            typeof first === 'boolean'
+                ? store.setEditorGroupLocking(storyId, first)
+                : store.setEditorGroupLocking(scopeOf(first), second ?? true)
     };
 }

@@ -238,7 +238,7 @@ export const isPrimaryAction = (tool: string): boolean => (REPORT_TOOLS as reado
 
 /**
  * An agent's primary action = its LAST report call, else its last mutating call. The last
- * report is the answer it chose to give the loop; a checker that filed a finding and then
+ * report is the answer it chose to give the loop; a reader that filed a finding and then
  * submitted its verdict is reporting the verdict, and counting both would double-weight it.
  */
 export const primaryActionOf = (
@@ -256,7 +256,7 @@ export const dissentFieldFor = (tool: string): 'selection_note' | 'detail' | und
     if (tool === 'selectRevision') return 'selection_note';
 
     // D-38 names the finding's `detail` as the other surface; `raiseFinding` is included
-    // because a checker panel's disagreement belongs in the finding it files.
+    // because a reader panel's disagreement belongs in the finding it files.
     if (tool === 'verifyFinding' || tool === 'raiseFinding') return 'detail';
 
     return undefined;

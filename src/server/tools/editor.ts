@@ -8,7 +8,7 @@
  * applied (T-2a) — it is the Author's only window into automated taste (L-17).
  */
 import {
-    DEFAULT_SUMMARY_READERS,
+    DEFAULT_SUMMARY_CRITICS,
     type Chapter,
     type Finding,
     type Idea,
@@ -70,7 +70,7 @@ import type { ToolDefinition, ToolExecutionContext, ToolResult } from './types';
 // (D-33: every cost blocks outside phase ①) and `summaryBlockingCost` is the Summary artifact's bar
 // (critical/major, plus minor while the dial covers it, taste never). `loop/records` imports nothing
 // from the tool layer, so this adds no cycle.
-import { isBlockingCost, summaryBlockingCost } from '../loop/records';
+import { isBlockingCost, openIssueFindings, summaryBlockingCost } from '../loop/records';
 
 /** §4.15's unit kinds, in the order the resolver tries them. */
 const UNIT_COLLECTIONS = ['summaries', 'plotlines', 'chapters'] as const;
@@ -242,34 +242,34 @@ const selectRevision: ToolDefinition = {
         }
 
         // PHASE ① IS A COMPLETE ROUND, THEN A CHOICE. The sweep already withholds the select job
-        // until all Reader passes close, but a directive/verify run can call the tool directly.
+        // until all Critic passes close, but a directive/verify run can call the tool directly.
         // Without this guard, one early Editor turn can install a Summary from a one-draft round
         // and leave the Author with no three-way choice at all.
         if (unitKind === 'summary' && ctx.story.phase === 'summary') {
             const pending = pendingRevisions(store, storyId, 'summary', target.id);
-            const readers = ctx.story.summary_readers ?? DEFAULT_SUMMARY_READERS;
+            const critics = ctx.story.summary_critics ?? DEFAULT_SUMMARY_CRITICS;
             const unreviewed = pending.filter((draft) => {
-                const readerVerdicts = draft.verdict_refs
+                const criticVerdicts = draft.verdict_refs
                     .map((id) => store.verdicts.get(id))
                     .filter((verdict) => {
                         if (verdict === undefined) return false;
                         const run = verdict.run_ref === undefined ? undefined : store.runs.get(verdict.run_ref);
 
-                        return run?.role === 'reader' || /reader/i.test(verdict.template_ref ?? '');
+                        return run?.role === 'critic' || /critic/i.test(verdict.template_ref ?? '');
                     });
 
-                return readerVerdicts.length < readers;
+                return criticVerdicts.length < critics;
             });
 
             if (unreviewed.length > 0) {
                 throw new ToolRefusal(
                     'D-23',
-                    `the Summary round is still being read: ${unreviewed.map((draft) => draft.id).join(', ')} ${unreviewed.length === 1 ? 'has' : 'have'} fewer than ${readers} Reader passes — the choice is the last step`,
+                    `the Summary round is still being read: ${unreviewed.map((draft) => draft.id).join(', ')} ${unreviewed.length === 1 ? 'has' : 'have'} fewer than ${critics} Critic passes — the choice is the last step`,
                     {
                         unit_ref: target.id,
                         unreviewed: unreviewed.map((draft) => draft.id),
-                        readers,
-                        fix: 'wait for the Reader passes to close; then select exactly one draft'
+                        critics,
+                        fix: 'wait for the Critic passes to close; then select exactly one draft'
                     }
                 );
             }
@@ -298,7 +298,7 @@ const selectRevision: ToolDefinition = {
             if (unconfirmed.length > 0) {
                 throw new ToolRefusal(
                     'D-23',
-                    `the Summary round still has ${unconfirmed.length} unconfirmed Reader finding${unconfirmed.length === 1 ? '' : 's'} — the Editor verifies every one before choosing`,
+                    `the Summary round still has ${unconfirmed.length} unconfirmed Critic finding${unconfirmed.length === 1 ? '' : 's'} — the Editor verifies every one before choosing`,
                     {
                         unit_ref: target.id,
                         findings: unconfirmed.map((finding) => finding.id),
@@ -336,9 +336,9 @@ const selectRevision: ToolDefinition = {
                 deleted_drafts: deleted,
                 installed_rev: unitRev,
                 selection_note: note,
-                // T-6c: the hint names a tool that exists — a checker run reports with
+                // T-6c: the hint names a tool that exists — a reader run reports with
                 // `submitVerdict`; the Editor's selection is what makes the single text (D-22).
-                next: `A fresh Writer now sees exactly one text for ${target.id}; a checker run judges it and reports with submitVerdict.`
+                next: `A fresh Writer now sees exactly one text for ${target.id}; a reader run judges it and reports with submitVerdict.`
             },
             winner.rev,
             `Selected ${winner.id} for ${target.id}; ${deleted.length} draft${deleted.length === 1 ? '' : 's'} deleted`
@@ -731,7 +731,7 @@ const reviewSeed: ToolDefinition = {
                 `The structure areas the Seed does not supply: ${SEED_STRUCTURE_AREAS.join(', ')}.`,
                 str('One structure area.')
             ),
-            notes: str('What is weak and what the Author should add — the Reader/Writer brief will not repeat it.'),
+            notes: str('What is weak and what the Author should add — the Critic/Writer brief will not repeat it.'),
             why: whyArg('Why this is the right verdict for this Seed (T-5).')
         },
         required: ['verdict', 'why']
@@ -822,7 +822,7 @@ const reviewSeed: ToolDefinition = {
 // ── the verification gates ──────────────────────────────────────────────────
 
 /**
- * §8.2 `verifyIdea`: the Editor's independent check of a Reader's claim (D-27/C-15) — re-read
+ * §8.2 `verifyIdea`: the Editor's independent check of a Critic's claim (D-27/C-15) — re-read
  * the cited source or find a second one, then the verdict, **and** whether the idea fits the
  * Author's guidelines at all (D-31). Until this exists the Author may not select a sourced Idea.
  */
@@ -924,19 +924,24 @@ const verifyIdea: ToolDefinition = {
 
 /**
  * §8.2 `verifyFinding`: a QUICK validity check (D-33). The Editor marks the suspicion `confirmed`
- * or `disputed` and records the reason; the Reader already supplied the detail and the reference,
+ * or `disputed` and records the reason; the Critic already supplied the detail and the reference,
  * so a rewrite is optional rather than the job (D-34). Only a confirmed finding can be approved,
  * spawn a task, invalidate a chapter, or count toward `pending`.
  *
  * T5: the row's `kind` picks WHICH question the Editor answers. An `issue` is judged by admissibility
- * (quote the commitment, show it broken, or dispute it); a row marked `improvement` is a proposal the
+ * (quote the commitment, show it broken, or dispute it); a row marked `proposal` is an improvement the
  * Seed never had to promise, so the absence rule does not apply and the check is on merit — is the
  * change worth a Writer pass, and does it break what the installed text already says?
+ *
+ * D-34a, and the reason NO cost rule lives in this tool: `raiseFinding` refuses the two off-ladder
+ * pairings (`proposal` + `critical`, `issue` + `taste`), but the Editor's triage is FINAL, so
+ * `verifyFinding` takes any `cost` on any row and never re-checks the pairing — a verify that refused
+ * a re-cost would overrule the one decision §6 says is not appealable.
  */
 const verifyFinding: ToolDefinition = {
     name: 'verifyFinding',
     description:
-        "Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Reader’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass. Two evaluation modes, and the row's `kind` says which applies: an `issue` is judged on admissibility — it must quote a commitment and show the artifact breaking it, and a claim whose whole case is an absence is disputed — while a finding marked `improvement` is a proposal the Seed never promised, judged on whether the change is worth a Writer pass and breaks the installed text, never for being an absence.",
+        "Mark a finding valid (`confirmed`) or invalid (`disputed`) and record the reason. Keep the Critic’s title, detail and cost unless you are deliberately correcting them; a rewrite is optional. A disputed finding costs no Writer pass. Two evaluation modes, and the row's `kind` says which applies: an `issue` is judged on admissibility — it must quote a commitment and show the artifact breaking it, and a claim whose whole case is an absence is disputed — while a finding marked `proposal` is a proposal the Seed never promised, judged on whether the change is worth a Writer pass and breaks the installed text, never for being an absence.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -976,7 +981,7 @@ const verifyFinding: ToolDefinition = {
         }
 
         const verdict = String(ctx.args.verdict ?? '');
-        // Quick check: the Reader already triaged the cost, so an omitted cost keeps it. An
+        // Quick check: the Critic already triaged the cost, so an omitted cost keeps it. An
         // explicit cost is the Editor deliberately correcting it (D-34a).
         const cost =
             typeof ctx.args.cost === 'string' && ctx.args.cost.trim().length > 0
@@ -991,8 +996,8 @@ const verifyFinding: ToolDefinition = {
             title: finding.title,
             detail: finding.detail ?? '',
             cost: finding.cost,
-            // T5: which claim was verified. Verification never rewrites the kind — an Editor weighs an
-            // improvement on merit, it does not relabel one as a defect — so it appears here as read.
+            // T5: which claim was verified. Verification never rewrites the kind — an Editor weighs a
+            // proposal on merit, it does not relabel one as a defect — so it appears here as read.
             kind: finding.kind ?? 'issue',
             evidence: finding.evidence
         };
@@ -1042,7 +1047,7 @@ const verifyFinding: ToolDefinition = {
 const approveFinding: ToolDefinition = {
     name: 'approveFinding',
     description:
-        "Decide a confirmed finding: approve it into a Writer task, discard it with the reason kept, or let the Story's auto-approve switch decide. An unconfirmed finding cannot be approved (D-33).",
+        "Decide a confirmed finding: approve it into a Writer task, discard it with the reason kept, or let the Story's auto-approve switch decide. An unconfirmed finding cannot be approved (D-33). Issues are in focus before anything else: a `proposal` is not approved while any issue is unresolved, because a suggestion does not outrank a defect the crew already agreed to (D-33d) — discarding it is always allowed, and issues are approved whenever else they are ready.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -1124,6 +1129,44 @@ const approveFinding: ToolDefinition = {
             );
         }
 
+        // D-33d — ISSUES ARE IN FOCUS BEFORE ANYTHING ELSE CAN BE DONE, on the approval side of the
+        // same rule the Critic's tool enforces on the filing side (D-33c, `tools/reader.ts`).
+        //
+        // WHY THE EDITOR NEEDS ITS OWN GUARD: D-33c stops a NEW proposal being filed over an open issue,
+        // but a proposal already on the record — raised before the rule, raised in a pass that had no
+        // issues, or re-costed by the Editor's own `verifyFinding` (D-34a makes that triage final) —
+        // reaches this gate anyway, and the dial's `auto` decision would approve it into a Writer task
+        // while a defect the crew already agreed to sat in the same queue. The Author's complaint was
+        // exactly that: the round spent its pass on the wish and left the break in the text.
+        //
+        // Only a PROPOSAL is held, and only an APPROVAL is refused. Discarding a proposal is not an
+        // approval — it is the Editor declining the change, which costs no Writer round and closes the
+        // row (D-34), so it stays available at any time and refusing it would strand the row in the
+        // queue. Issues are untouched, whatever else is open: the gate may not deadlock the book by
+        // refusing to work the very defects that would unlock it.
+        //
+        // `openIssueFindings` is the loop's ONE predicate, shared with the Critic's gate, the dial's
+        // sweep, `engine.approveFinding` and the approve-all route, so all five agree about what "an
+        // issue is still open" means — a proposal approved on one path and refused on another is the
+        // divergence this whole rule set exists to remove.
+        if (decision !== 'discard' && finding.kind === 'proposal') {
+            const openIssues = openIssueFindings(store, storyId);
+
+            if (openIssues.length > 0) {
+                throw new ToolRefusal(
+                    'D-33d',
+                    `proposal ${finding.id} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => `${issue.id} (${issue.cost}, ${issue.state})`).join(', ')}${openIssues.length > 3 ? `, and ${openIssues.length - 3} more` : ''} — because issues are in focus before anything else can be done (D-33d).`,
+                    {
+                        finding_id: finding.id,
+                        kind: 'proposal',
+                        open_issues: openIssues.length,
+                        open_issue_refs: openIssues.map((issue) => issue.id),
+                        fix: 'work the issues first — verify, approve, fix or discard each one — then approve this proposal; or discard it now, which is allowed at any time'
+                    }
+                );
+            }
+        }
+
         const written = (await commitAs(
             ctx,
             'approveFinding',
@@ -1154,7 +1197,7 @@ const approveFinding: ToolDefinition = {
                             detail: [
                                 `${finding.detail ?? ''}`,
                                 `Cost: ${finding.cost}`,
-                                ...(finding.kind === 'improvement' ? ['Kind: improvement'] : []),
+                                ...(finding.kind === 'proposal' ? ['Kind: proposal'] : []),
                                 `Criterion: ${finding.criterion_ref}`,
                                 `Finding: ${finding.id}`,
                                 `Approved by: ${approvedBy}`
@@ -1189,7 +1232,7 @@ const approveFinding: ToolDefinition = {
     }
 };
 
-/** §8.2 `listIdeas`: what the Readers put forward, with their verification state. */
+/** §8.2 `listIdeas`: what the Critics put forward, with their verification state. */
 const listIdeas: ToolDefinition = {
     name: 'listIdeas',
     description:
@@ -1262,7 +1305,7 @@ const delegate: ToolDefinition = {
     inputSchema: {
         type: 'object',
         properties: {
-            role: str('The role name or kind to delegate to (a template role name, or writer/editor/checker/reader).'),
+            role: str('The role name or kind to delegate to (a template role name, or writer/editor/reader/critic).'),
             task: str('What to work out, stated so one answer closes it.')
         },
         required: ['role', 'task']

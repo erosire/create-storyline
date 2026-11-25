@@ -9,12 +9,25 @@
 //   - a refusal is cached PER STORY as the server's own sentence (`phraseErrors`, L-13) while the Story
 //     payload, the queue and the crew stay on screen;
 //   - the group's one write (`revisePhraseGroup`) commits the fresh view the route answers with, then runs
-//     the same re-read choreography every other mutation runs (P1: the server is the only memory).
+//     the same re-read choreography every other mutation runs (P1: the server is the only memory);
+//   - D-68's whole-Summary choose does the same, and its refusals are cached PER STORY (`reviewedErrors`) so
+//     the Summary tab can print the route's own sentence beside the button that raised it.
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDashboardStore } from './state';
-import { ApiError, type ApiClient, type PhraseGroupReviseResult, type StreamKind } from './api';
-import { fakeHarness, groupedPhraseView, storyRow } from './testing/shell-fakes';
+import {
+    ApiError,
+    type ApiClient,
+    type PhraseGroupReviseResult,
+    type PhraseReviewedChooseResult,
+    type StreamKind
+} from './api';
+import {
+    fakeHarness,
+    groupedPhraseView,
+    reviewedPhraseView,
+    storyRow
+} from './testing/shell-fakes';
 
 /**
  * Two books, both group-managed, with the phrase read (and the stream handler) under the test's control.
@@ -22,9 +35,46 @@ import { fakeHarness, groupedPhraseView, storyRow } from './testing/shell-fakes'
  * The fake's DEFAULT phrase is the sampling echo of a legacy book, so a grouped test names the read —
  * that default is what keeps the pre-R6 shell tests reading exactly as they did.
  */
-function harness(overrides: { getPhrase?: ApiClient['getPhrase']; revisePhraseGroup?: ApiClient['revisePhraseGroup'] } = {}) {
+function harness(
+    overrides: {
+        getPhrase?: ApiClient['getPhrase'];
+        revisePhraseGroup?: ApiClient['revisePhraseGroup'];
+        choosePhraseReviewed?: ApiClient['choosePhraseReviewed'];
+    } = {}
+) {
     const stream: { handler: ((kind: StreamKind, storyId?: string) => void) | undefined } = { handler: undefined };
     const getPhrase = vi.fn(overrides.getPhrase ?? (async (storyId: string) => groupedPhraseView(storyId)));
+    // D-68's default answer is the shape the route sends: the install report plus the REFRESHED read, which
+    // the projection reports as `state:'chosen'` (the installed rows carry no clean stamp). A test that wants
+    // a 409 overrides this with a throwing fn.
+    const choosePhraseReviewed = vi.fn(
+        overrides.choosePhraseReviewed ??
+            (async (storyId: string): Promise<PhraseReviewedChooseResult> => ({
+                story_id: storyId,
+                phrase_id: 'phrase_summary_1',
+                revision: 7,
+                vector: Object.fromEntries(groupedPhraseView(storyId).groups.map((group) => [group.id, 1])),
+                vector_hash: 'vh-clean-1',
+                at: '2026-11-09T14:00:00.000Z',
+                overview: 'The five sections the Author took.',
+                installed: groupedPhraseView(storyId).groups.map((group) => ({
+                    group_id: group.id,
+                    group_key: group.key,
+                    revision_id: `rev-${group.key}-1`,
+                    number: 1
+                })),
+                discarded: [{ group_id: 'grp-ending', group_key: 'ending', revision_id: 'rev-ending-3', number: 3 }],
+                sources: groupedPhraseView(storyId).groups.map((group) => ({
+                    group_id: group.id,
+                    group_key: group.key,
+                    source_revision: 1,
+                    source_id: `rev-${group.key}-1`,
+                    installed_revision: 1
+                })),
+                mirror: { summary_id: 'sum_1', fields: groupedPhraseView(storyId).groups.map((g) => g.key), written: true },
+                view: reviewedPhraseView(storyId, 'chosen')
+            }))
+    );
     const revisePhraseGroup = vi.fn(
         overrides.revisePhraseGroup ??
             (async (storyId: string) => ({
@@ -42,9 +92,11 @@ function harness(overrides: { getPhrase?: ApiClient['getPhrase']; revisePhraseGr
         stream,
         getPhrase,
         revisePhraseGroup,
+        choosePhraseReviewed,
         ...fakeHarness([storyRow('s1'), storyRow('s2')], [], {
             getPhrase,
             revisePhraseGroup,
+            choosePhraseReviewed,
             subscribeEvents: vi.fn((handler: (kind: StreamKind, storyId?: string) => void) => {
                 stream.handler = handler;
 
@@ -137,18 +189,31 @@ describe('the store — the phrase read rides the Story lifecycle (R6)', () => {
                 }
 
                 return groupedPhraseView(storyId);
+            },
+            choosePhraseReviewed: async () => {
+                throw new ApiError(
+                    409,
+                    'this Story has no Reviewed Summary to choose: ending (unwritten) — a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).'
+                );
             }
         });
 
         await store.openStory('s1');
         expect(store.getSnapshot().phrases.s1).toBeUndefined();
         expect(store.getSnapshot().phraseErrors.s1).toBe('this Story has no Summary Phrase');
+        // D-68's cache rides the same lifecycle: the choose route refuses THIS book for its own reason, and
+        // that sentence has to leave with the rows.
+        await store.chooseReviewedSummary('s1');
+        expect(store.getSnapshot().reviewedErrors.s1).toBe(
+            'this Story has no Reviewed Summary to choose: ending (unwritten) — a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).'
+        );
 
         await store.deleteStory('s1');
 
         // A Story id can come back (a re-import), and a refusal from the dead book must not outlive it.
         expect(store.getSnapshot().phrases.s1).toBeUndefined();
         expect(store.getSnapshot().phraseErrors.s1).toBeUndefined();
+        expect(store.getSnapshot().reviewedErrors.s1).toBeUndefined();
     });
 });
 
@@ -357,6 +422,128 @@ describe('the store — the group write commits the view the route answers with 
         expect(store.getSnapshot().phrases.s1).toBe(before);
         // The refusal short-circuits `mutate`, so the re-read round never runs — no extra phrase flight.
         expect(phraseCalls(client)).toEqual(['s1']);
+    });
+});
+
+describe('the store — the choose commits the Summary the Author took, and nothing else (D-68)', () => {
+    it('sends the choose for the Story it is told, then lands on the read the server reports', async () => {
+        // The route's own `view` is committed first, and `mutate`'s re-read round then makes the phrase read
+        // authoritative — the same choreography as the group write, because the server is the only memory (P1).
+        // The fake answers like the projection does: `ready` before the choose, `chosen` after it.
+        let reads = 0;
+        const { client, store, choosePhraseReviewed, getPhrase } = harness({
+            getPhrase: async (storyId: string) => reviewedPhraseView(storyId, reads++ === 0 ? 'ready' : 'chosen')
+        });
+
+        await store.openStory('s1');
+        expect(store.getSnapshot().phrases.s1?.reviewed.state).toBe('ready');
+
+        const committed = await store.chooseReviewedSummary('s1');
+
+        expect(client.choosePhraseReviewed).toHaveBeenCalledTimes(1);
+        // No note: the pane's choose is the bare verb, and the store sends an EMPTY input (not `{note:''}`)
+        // so the client omits the key on the wire — an empty note would print a blank attribution line.
+        expect(choosePhraseReviewed.mock.calls[0]).toEqual(['s1', {}]);
+        expect(committed?.discarded.map((row) => [row.group_key, row.number])).toEqual([['ending', 3]]);
+        expect(store.getSnapshot().phrases.s1?.reviewed.state).toBe('chosen');
+        expect(store.getSnapshot().phrases.s1?.reviewed.chosen?.overview).toContain('the text the Author chose.');
+        // One write, one re-read round (P1's rule that a mutation refreshes exactly once).
+        expect(getPhrase.mock.calls.map((call) => call[0])).toEqual(['s1', 's1']);
+        expect(store.getSnapshot().error).toBeNull();
+        expect(store.getSnapshot().reviewedErrors.s1).toBeUndefined();
+    });
+
+    it('carries the Author’s note through to the route', async () => {
+        const { store, choosePhraseReviewed } = harness();
+
+        await store.openStory('s1');
+        await store.chooseReviewedSummary('s1', 'the newer Ending is the one I want');
+
+        expect(choosePhraseReviewed.mock.calls[0]).toEqual([
+            's1',
+            { note: 'the newer Ending is the one I want' }
+        ]);
+    });
+
+    it('keeps the reviewed Summary on screen when the route refuses, and caches the sentence per Story', async () => {
+        // The refusal is CACHED (`reviewedErrors`) as well as raised into the strip, because the three 409
+        // sentences name the groups and runs the Author has to act on — the Summary tab prints it beside the
+        // button that raised it, and a book-wide strip alone would bury that.
+        const refusal =
+            'the Writer is rewriting part of this Summary right now (run_write_groups_1), so choosing the reviewed Overview ' +
+            'would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).';
+        const { client, store } = harness({
+            getPhrase: async (storyId: string) => reviewedPhraseView(storyId, 'ready'),
+            choosePhraseReviewed: async () => {
+                throw new ApiError(409, refusal);
+            }
+        });
+
+        await store.openStory('s1');
+        const before = store.getSnapshot().phrases.s1;
+
+        expect(await store.chooseReviewedSummary('s1')).toBeNull();
+        expect(store.getSnapshot().reviewedErrors.s1).toBe(refusal);
+        expect(store.getSnapshot().error).toBe(refusal);
+        expect(store.getSnapshot().phrases.s1).toBe(before);
+        expect(store.getSnapshot().phrases.s1?.reviewed.state).toBe('ready');
+        // `mutate` short-circuits on the refusal, so the rows were read exactly once — a failed choose
+        // cannot leave the tab showing a book the server never wrote.
+        expect(client.getPhrase).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the cached sentence when a later choose succeeds', async () => {
+        let attempts = 0;
+        const { store } = harness({
+            getPhrase: async (storyId: string) => reviewedPhraseView(storyId, attempts > 0 ? 'chosen' : 'ready'),
+            choosePhraseReviewed: async (storyId: string) => {
+                attempts += 1;
+                if (attempts === 1) {
+                    throw new ApiError(409, 'the Writer is rewriting part of this Summary right now (run_write_groups_1), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).');
+                }
+
+                return {
+                    story_id: storyId,
+                    phrase_id: 'phrase_summary_1',
+                    revision: 8,
+                    vector: {},
+                    vector_hash: 'vh-clean-1',
+                    at: '2026-11-09T15:00:00.000Z',
+                    overview: 'Taken.',
+                    installed: [],
+                    discarded: [],
+                    sources: [],
+                    mirror: { summary_id: 'sum_1', fields: ['premise'], written: true },
+                    view: reviewedPhraseView(storyId, 'chosen')
+                };
+            }
+        });
+
+        await store.openStory('s1');
+        await store.chooseReviewedSummary('s1');
+        expect(store.getSnapshot().reviewedErrors.s1).toBeDefined();
+
+        await store.chooseReviewedSummary('s1');
+
+        expect(store.getSnapshot().reviewedErrors.s1).toBeUndefined();
+        expect(store.getSnapshot().error).toBeNull();
+        expect(store.getSnapshot().phrases.s1?.reviewed.state).toBe('chosen');
+    });
+
+    it('refuses to guess: a choose for a Story with no cached read still commits the route’s view', async () => {
+        // The rail can act on a book whose phrase read is still in flight. The store does not block the write
+        // or patch a half-state; it commits what the route answered and lets the re-read settle the tab.
+        const { store } = harness({
+            getPhrase: async (storyId: string) => reviewedPhraseView(storyId, 'chosen')
+        });
+
+        await store.reload();
+        expect(store.getSnapshot().phrases.s1).toBeUndefined();
+
+        await store.chooseReviewedSummary('s1');
+
+        expect(store.getSnapshot().phrases.s1?.reviewed.state).toBe('chosen');
+        expect(store.getSnapshot().reviewedErrors).toEqual({});
     });
 });
 

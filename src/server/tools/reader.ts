@@ -1,10 +1,10 @@
 /**
- * §8.3 — the checker surface: the report tools. Every one of these WRITES A RECORD and changes
+ * §8.3 — the reader surface: the report tools. Every one of these WRITES A RECORD and changes
  * no story state (D-1): a verdict is a report, a finding is a claim, `markChapterDone` is a
  * recommendation, and only the loop engine or the Author moves a chapter (L-10, P6).
  *
  * §7 line 619 grants `write` on `verdicts`/`findings` to every dispatched kind, so these tools
- * are not checker-only: a Writer may file the defect it sees. What IS checker-only in practice is
+ * are not reader-only: a Writer may file the defect it sees. What IS reader-only in practice is
  * who is asked to, which the template brief decides (D-17a) — not the permission row.
  *
  * T-11 lives here in two places the spec calls out by name: `cost` is a required enum
@@ -20,7 +20,9 @@ import { criterionById } from '../../shared/criteria';
 // one surface (`../phrase`), because `raiseFinding` must apply the SAME reading of an absent
 // `group_refs` that `phrase/findings.ts:findingGroupScope` applies when it decides closure — two
 // copies of that rule is how a finding ends up open against a group nobody was told about.
-import { isGroupManagedStory, phraseGroupsOf } from '../phrase';
+// R1 adds the lock's one predicate to the same import: the tool and the planner read "is this group's
+// text settled?" off one function (`phrase/catalog.ts:isPhraseGroupLocked`).
+import { isGroupManagedStory, isPhraseGroupLocked, phraseGroupsOf } from '../phrase';
 // U-3a: only the ID crosses this boundary — `digest_gap` is the §4.6 open-thread ref D-13 gives a crew
 // for reporting a bad Digest, and the builder is the module that owns the name (src/server/digest).
 import { DIGEST_GAP_CRITERION } from '../digest/digest';
@@ -38,6 +40,14 @@ import {
     stableFingerprint
 } from './artifacts';
 import { COST_ENUM, EXPECTS_ARG, RECOMMENDATION_ENUM, arr, bool, enumOf, num, obj, str, whyArg } from './schema';
+// D-33c/D-33d: "does this Story still hold an unresolved defect?" and "what did THIS pass already
+// file?" are the loop's own questions, not the tool's copies of them. `openIssueFindings` is read by
+// the Critic's gate here, the Editor's `approveFinding`, the dial sweep, `engine.approveFinding` and
+// the approve-all route, so the four cannot disagree about what "an issue is still open" means — the
+// divergence that would let a Critic file a proposal the Editor then refuses to approve.
+// `loop/records.ts` imports nothing from the tool layer, so this adds no cycle (same argument as
+// `tools/editor.ts`'s import of `isBlockingCost`).
+import { findingsRaisedByRun, openIssueFindings } from '../loop/records';
 import {
     buildAttribution,
     clip,
@@ -64,8 +74,8 @@ const TARGET_KINDS = ['stories', 'summaries', 'plotlines', 'chapters'] as const;
 
 /**
  * §6.2a / D-21 / U-13: a VERDICT may also name one competing draft — a `revisions` row of this Story.
- * §6.2a's pipeline is "Checker runs ×M (fresh, read-only) → verdicts per revision", and the loop
- * dispatches one checker per draft (`wi_check_<unit>_<gen>_<revision_id>`, see loop/work.ts); with
+ * §6.2a's pipeline is "Reader runs ×M (fresh, read-only) → verdicts per revision", and the loop
+ * dispatches one reader per draft (`wi_check_<unit>_<gen>_<revision_id>`, see loop/work.ts); with
  * only artifact targets, every one of those verdicts lands on the unit and U-13's side-by-side view
  * has no per-draft verdicts to show. `resolveRef` already accepts a `revisions` ref
  * (tools/artifacts.ts:RESOLVABLE), so this is the only gate that had to widen.
@@ -79,12 +89,29 @@ const VERDICT_TARGET_KINDS = [...TARGET_KINDS, 'revisions'] as const;
 /**
  * T5: the claim type, normalised once at the top of `raiseFinding`.
  *
- * Anything that is not `improvement` is an `issue`. The schema enum already refuses a bad value with
+ * Anything that is not `proposal` is an `issue`. The schema enum already refuses a bad value with
  * T-11, so the only thing that can reach here besides the two words is an OMISSION, which means the
  * §4.10 default — and the same reading a row raised before the field existed carries (its stored
  * `kind` is absent, and `tools/utilities.ts:findingFingerprint` hashes that form as `issue`).
  */
-const kindOf = (value: unknown): FindingKind => (value === 'improvement' ? 'improvement' : 'issue');
+const kindOf = (value: unknown): FindingKind => (value === 'proposal' ? 'proposal' : 'issue');
+
+/**
+ * D-33c's refusal roster: the unresolved issues, named the way every other refusal in this file names
+ * the records it is refusing over — the ids, with the state the crew has to move.
+ *
+ * Capped at three with an explicit count of the rest. A refusal the crew can act on in one turn names
+ * what it can act on; a forty-id list past the point of usefulness is noise the run has to clip, and
+ * the full set rides in the refusal's `open_issue_refs` detail anyway, so nothing is hidden.
+ */
+function issueRoster(findings: Finding[]): string {
+    const named = findings
+        .slice(0, 3)
+        .map((finding) => `${finding.id} (${finding.cost}, ${finding.state})`)
+        .join(', ');
+
+    return findings.length > 3 ? `${named}, and ${findings.length - 3} more` : named;
+}
 
 /** §4.9 → §4.4 vocabulary: the collection a target resolved to becomes the verdict's `target_kind`. */
 function targetKindOf(collection: string): string {
@@ -188,7 +215,7 @@ function verdictTally(
  * reviewer's opinion about what the loop should do next (D-28).
  *
  * §6.2a's "verdicts per revision" is served by the same call with a `revisions` target: the loop's
- * per-draft checker jobs (`wi_check_<unit>_<gen>_<revision_id>`) name the draft in the job line, and
+ * per-draft reader jobs (`wi_check_<unit>_<gen>_<revision_id>`) name the draft in the job line, and
  * filing against it is what gives U-13's side-by-side view a verdict per draft. The criteria engine
  * aggregates per TARGET (criteria/engine.ts:aggregateJudgeWithTargets), so a draft verdict cannot
  * displace the artifact verdict the Goal is measured on — with ONE narrow exception: at the
@@ -237,7 +264,7 @@ const submitVerdict: ToolDefinition = {
     primaryArg: 'target_ref',
     requires: ['target_ref', 'criteria_passed', 'recommendation'],
     async execute(ctx): Promise<ToolResult> {
-        // §6.2a/D-21: a checker pointed at one draft files its verdict against THAT draft, so the
+        // §6.2a/D-21: a reader pointed at one draft files its verdict against THAT draft, so the
         // target set here is the wider {@link VERDICT_TARGET_KINDS} (`revisions` included); a finding
         // stays aimed at an artifact (see the note on that constant).
         const target = await mustResolveRef(ctx, ctx.args.target_ref, 'target_ref', [...VERDICT_TARGET_KINDS]);
@@ -408,11 +435,11 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 /**
  * §8.3 `raiseFinding`: a named claim with evidence, on a criterion, in one of two kinds (T5). An
  * `issue` claims a DEFECT — the artifact fails the criterion — and its admissibility test is a
- * quotation: name the commitment and show it broken. An `improvement` proposes a change the Seed
- * never had to promise; the absence rule does not judge it, and the Editor weighs it on whether the
- * book is better for the pass.
+ * quotation: name the commitment and show it broken. A `proposal` suggests a change the Seed never
+ * had to promise; the absence rule does not judge it, and the Editor weighs it on whether the book
+ * is better for the pass.
  *
- * D-33: a checker's or a Reader's finding starts `unconfirmed` — it is a suspicion until an Editor
+ * D-33: a reader's or a Critic's finding starts `unconfirmed` — it is a suspicion until an Editor
  * confirms it. D-16: the same claim against the same criterion, target and KIND bumps `seen_count`
  * instead of opening a second row, which is what makes "no progress" detectable in an amnesiac system.
  *
@@ -423,23 +450,23 @@ function mergedRelatedRefs(existing: string[] | undefined, incoming: string[]): 
 const raiseFinding: ToolDefinition = {
     name: 'raiseFinding',
     description:
-        "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT, and the proof is a quotation — name the commitment the Seed or the artifact states and show the artifact breaking it; a claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. An `improvement` proposes a change the Seed never had to promise: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass — the Editor weighs it on merit, never on whether the Seed promised it, and `critical` is refused for it because a proposal is not a contradiction. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A checker or reader finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
+        "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story's logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST, in both directions (D-33c): while any issue on this Story is unresolved — only `fixed` or `discarded` closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold — a `kind: proposal` call is refused with the count of open issues, and an `issue` is refused if THIS pass already filed a proposal, because an issue and a proposal never share a review pass: end the pass and file the issue in your next review. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
     inputSchema: {
         type: 'object',
         properties: {
             target_ref: str('The artifact that fails (a chapter, plotline or summary id).'),
             criterion_ref: str('The criterion id it fails (readGoals lists them).'),
-            title: str('The claim in one line, specific enough to act on (P4). For `kind: improvement` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'),
-            detail: str('What is wrong and where — the lines or rows involved. For `kind: improvement`: what to change, and why it is worth a Writer pass.'),
-            evidence: str('The citable proof (D-15): a quote, a line range, a ledger row. For `kind: improvement`, the passage the change would improve.'),
+            title: str('The claim in one line, specific enough to act on (P4). For `kind: proposal` it PROPOSES the change — "let the keeper lie first" — rather than accusing the text of an absence.'),
+            detail: str('What is wrong and where — the lines or rows involved. For `kind: proposal`: what to change, and why it is worth a Writer pass.'),
+            evidence: str('The citable proof (D-15): a quote, a line range, a ledger row. For `kind: proposal`, the passage the change would improve.'),
             cost: COST_ENUM,
             // T5: which of the two claims this is. Optional, so every §8-shaped call still means exactly
             // what it meant — an omitted `kind` is an `issue`, the same reading a row from before the
-            // field carries. `improvement` is the Reader's legitimate outlet for a proposal, and the
+            // field carries. `proposal` is the Critic's legitimate outlet for an improvement, and the
             // marker is what stops the Editor's absence rule from disputing it (see the description).
             kind: enumOf(
                 FINDING_KINDS,
-                '`issue` (the default) claims a defect and must quote a commitment the artifact breaks; `improvement` proposes a change the Seed never promised, which the Editor weighs on merit and may not cost `critical`.'
+                '`issue` (the default) claims a defect and must quote a commitment the artifact breaks, at cost `critical`, `major` or `minor`; `proposal` suggests a change the Seed never promised, which the Editor weighs on merit, at cost `major`, `minor` or `taste`.'
             ),
             // L-11a: cross-chapter propagation. Optional, so §8's call shape is unchanged.
             related_refs: arr(
@@ -496,28 +523,133 @@ const raiseFinding: ToolDefinition = {
         // dedupe and another to the Author's queue.
         const kind = kindOf(ctx.args.kind);
 
-        // T5 — an improvement is a PROPOSAL, and `critical` is the ladder's word for a contradiction the
-        // text cannot live with. The combination is refused rather than quietly re-triaged: `critical`
-        // is on the Author's auto-approve dial by default (D-35), so a Reader that dressed a wish in
-        // `critical` would spend a Writer pass and skip the gate, which is the exact failure the
-        // `improvement` kind exists to make cheap to say honestly instead.
-        if (kind === 'improvement' && cost === 'critical') {
+        // T5/D-33b — the two kinds own opposite ends of the cost ladder, and each end-combination is
+        // REFUSED rather than quietly re-triaged.
+        //
+        // (a) `proposal` + `critical`: `critical` is the ladder's word for a contradiction the text
+        //     cannot live with, and it sits on the Author's auto-approve dial by default (D-35), so a
+        //     Critic that dressed a wish in `critical` would spend a Writer pass and skip the gate —
+        //     the exact failure the `proposal` kind exists to make cheap to say honestly instead.
+        // (b) `issue` + `taste` (the mirror, and the half that keeps (a) from being one-sided): "this is
+        //     merely a preference" IS the definition of a Proposal, so a row that claims to be a defect
+        //     while costing the ladder's preference rung has contradicted itself. Without this rule the
+        //     taxonomy leaks the long way round — a Critic files a word-choice wish as a `taste` ISSUE,
+        //     it reads as a defect in the Author's queue, and the Editor's absence gate then disputes a
+        //     claim that should never have been called a defect.
+        //
+        // Neither rule touches the Editor: `verifyFinding` may re-cost a row to any rung it can justify,
+        // because D-34a makes that triage final (see `tools/editor.ts`, which stays kind- and cost-neutral).
+        if (kind === 'proposal' && cost === 'critical') {
             throw new ToolRefusal(
-                'D-33',
-                'a `kind: improvement` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.',
+                'D-33b',
+                'a `kind: proposal` finding cannot be `critical`: `critical` is a contradiction the text cannot live with — of itself, of the Seed, or of critical Knowledge — and a proposal the Seed never promised is not one.',
                 {
                     field: 'cost',
                     expected: ['major', 'minor', 'taste'],
-                    fix: "call raiseFinding again with cost `major` at most and kind `improvement`, or with kind `issue` if the draft contradicts something it states"
+                    fix: "call raiseFinding again with cost `major` at most and kind `proposal`, or with kind `issue` if the draft contradicts something it states"
                 }
             );
+        }
+
+        if (kind === 'issue' && cost === 'taste') {
+            throw new ToolRefusal(
+                'D-33b',
+                'an `issue` cannot be `taste`: an Issue is rated `critical`, `major` or `minor` — a preference is a Proposal (`kind: proposal`), not a defect.',
+                {
+                    field: 'cost',
+                    expected: ['critical', 'major', 'minor'],
+                    fix: "call raiseFinding again with kind `proposal` and cost `taste` when this is a preference, or with cost `minor` at least when it really is a defect"
+                }
+            );
+        }
+
+        // D-33c — ISSUES BEFORE PROPOSALS, in the reviewer's own tool, both directions.
+        //
+        // WHY HERE AND NOT IN THE PROMPT: the Author's loop was reviewing a book whose defects were still
+        // on the table. A Critic that filed one Proposals-with-a-capital-P while three `critical` issues
+        // sat unresolved spent the round on a wish, and the Editor had no way to say "answer the defects
+        // first" — the pair of claims were two perfectly legal calls and the dial approved whichever cost
+        // it covered. These two refusals are the durable fix, and they sit at the gate for the same reason
+        // D-33b's pair does: a rule the crew can walk past is a rule the round pays for.
+        //
+        // Both read the loop's ONE predicate (`loop/records.ts:openIssueFindings`), so this tool, the
+        // Editor's `approveFinding` (D-33d), the dial sweep, `engine.approveFinding` and the approve-all
+        // route cannot drift apart about what "an issue is still open" means.
+        //
+        // (a) G1 — a PROPOSAL WAITS FOR THE ISSUES. Every issue has to reach `fixed` or `discarded`
+        //     before a proposal can be filed. This covers the SAME-PASS case for free: an issue raised
+        //     moments ago in this run is open, so the proposal that follows it is refused here rather
+        //     than by a second rule. An issue stays open while `unconfirmed`, `confirmed`, `approved` or
+        //     `disputed` — the first three because the repair has not landed, and `disputed` because
+        //     "the Editor thinks that is not a defect" is a decision the Author can still overturn, and
+        //     until the row closes the record still calls the book defective.
+        //
+        //     Placed BEFORE the D-16 dedupe on purpose (the same reasoning as the phase-① draft rule
+        //     below): a call this rule refuses must not even bump `seen_count` on an older proposal row,
+        //     because that would let a proposal advance the loop's "no progress" ledger without being
+        //     admissible. It also means a re-sighting of an OPEN proposal is refused while issues are
+        //     open — the row the crew wants bumped already exists, so nothing is lost but a count.
+        //
+        //     Issues themselves are gated by NOTHING here (except (b)): the release valve stays open, and
+        //     a proposal becomes filable the instant every issue closes. That is the property a later
+        //     "clean revision" feature depends on, so it is written down rather than left to inference.
+        if (kind === 'proposal') {
+            const openIssues = openIssueFindings(ctx.store, ctx.storyId);
+
+            if (openIssues.length > 0) {
+                throw new ToolRefusal(
+                    'D-33c',
+                    `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${issueRoster(openIssues)} — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach \`fixed\` or \`discarded\` before a proposal can be filed (D-33c).`,
+                    {
+                        field: 'kind',
+                        expected: ['issue'],
+                        open_issues: openIssues.length,
+                        open_issue_refs: openIssues.map((finding) => finding.id),
+                        fix: 'resolve every open issue first (verify, approve, fix or discard it), then call raiseFinding again with kind `proposal` — or file this as `kind: issue` if the draft actually breaks something'
+                    }
+                );
+            }
+        }
+
+        // (b) G2 — AN ISSUE AND A PROPOSAL NEVER SHARE A PASS. One review pass answers ONE question:
+        //     "what is broken here?" or "what would make this better?". Mixing them is what made the
+        //     round unreadable — the Editor's queue arrived as one undifferentiated pile, and the
+        //     Proposals rode the dial while the defects were still being argued.
+        //
+        // The direction the refusal has to cover is the awkward one: the PROPOSAL came first, so (a) has
+        // nothing to say about the issue that follows it (an issue is always filable). Attribution goes
+        // through the journal (`loop/records.ts:findingsRaisedByRun`), because §4.10 has no `run_ref`
+        // field and `related_refs` names what a finding is ABOUT, not who filed it — the same reasoning
+        // `revisionReviewFindings` records.
+        //
+        // The OTHER direction needs no refusal at all: an issue filed first is open, so (a) refuses the
+        // proposal that follows it. The two halves are not symmetric by accident.
+        if (kind === 'issue') {
+            const siblingProposals = findingsRaisedByRun(ctx.store, ctx.storyId, ctx.runId).filter(
+                (finding) => finding.kind === 'proposal'
+            );
+
+            if (siblingProposals.length > 0) {
+                throw new ToolRefusal(
+                    'D-33c',
+                    `this pass already filed ${siblingProposals.map((finding) => finding.id).join(', ')} as \`kind: proposal\`, and an issue cannot share a review pass with a proposal (D-33c).`,
+                    {
+                        field: 'kind',
+                        expected: ['proposal'],
+                        proposal_refs: siblingProposals.map((finding) => finding.id),
+                        fix: "this pass filed a proposal; an issue and a proposal cannot share a pass. End the pass; file the issue in your next review"
+                    }
+                );
+            }
         }
 
         // L-11a: normalised before the dedupe lookup, so a repeat that only adds refs is still
         // recognised as the same finding (the fingerprint never looks at them).
         const relatedRefs = relatedRefsOf(ctx.args.related_refs);
-        // SUMMARY PHRASE R3: the groups this defect is about, normalised the same way.
-        const groupRefs = groupRefsOf(ctx.args.group_refs);
+        // SUMMARY PHRASE R3: the groups this defect is about, normalised the same way. `let` because the
+        // group-lock rule below NARROWS it: a locked group is never added to a claim's scope, so what is
+        // stored is the part of the reporter's scope that can still be rewritten (R1).
+        let groupRefs = groupRefsOf(ctx.args.group_refs);
         // The book's own group rows, read ONCE and used twice: to refuse an id the Story does not have,
         // and to tell the reporter which ids it may name. A non-group book has none, and every group
         // rule below is inert for it (R6: a legacy Story's finding keeps its old meaning).
@@ -614,6 +746,67 @@ const raiseFinding: ToolDefinition = {
             }
         }
 
+        // GROUP LOCK (R1) — a claim cannot be filed against text that has already been signed off.
+        //
+        // A locked group is SETTLED CONTENT: no install may rewrite it (`revisions.ts:installGroupRevisions`
+        // refuses the target), and the lock's own voiding rule (`locks.ts:lockPhraseGroup`) discards the
+        // claims whose whole scope just stopped being writable. Filing a NEW claim into that state from a run
+        // would be the same dead end dressed up as work: the row would sit open, the planner would offer no
+        // group for it, and the round would wait on a text nobody may touch. Two answers, one rule:
+        //
+        //   * WHOLLY LOCKED (every id named is locked) → REFUSE. The claim has no text left to rewrite, and
+        //     silently filing a void row is the "quiet no-op" this package refuses elsewhere: the crew has to
+        //     hear that its finding is aimed at settled prose, because the action is the Author's (unlock) or
+        //     the finding's own re-scoping, not another pass;
+        //   * MIXED (some locked, some open) → the locked ids come OFF the stored scope and the claim stays
+        //     the reporter's own, for the groups that CAN move. This is the read the domain already applies
+        //     (`findings.ts:findingActionableScope` subtracts the locked part before R3's closure join), so
+        //     storing the unlocked subset is not a rewrite of the claim — it is the same scope, stated in the
+        //     form the planner and the rail act on. A cross-group defect therefore survives a neighbour's
+        //     lock intact; what it may no longer do is demand an edit to the group that stands.
+        //
+        // UNSCOPED CLAIMS ARE UNTOUCHED, deliberately. An absent `group_refs` means "the whole Overview"
+        // (R3's legacy reading, spelled out in `findingGroupScope`), and its scope is a READ of the group
+        // rows, not a list the reporter typed; narrowing it here would invent an attribution the crew never
+        // made. A whole-Overview claim on a book whose LAST group has just locked is void on the domain's
+        // read (`findingActionableScope.voided`) and was voided at lock time if it existed then — which is
+        // the domain's job, not this tool's.
+        //
+        // A non-group book has no rows in `ownedGroups`, so `lockedNamed` is empty and every line here is
+        // inert — the legacy filing behaves exactly as it did (R6).
+        const lockedGroups = ownedGroups.filter((group) => isPhraseGroupLocked(group));
+        const keyOfGroup = new Map(ownedGroups.map((group) => [group.id, group.key]));
+        const namedGroups = (ids: string[]) =>
+            ids.map((id) => `${keyOfGroup.get(id) ?? id}=${id}`).join(', ');
+        const lockedNamed = groupRefs.filter((ref) => lockedGroups.some((group) => group.id === ref));
+
+        if (lockedNamed.length > 0 && lockedNamed.length === groupRefs.length) {
+            const openGroups = ownedGroups.filter((group) => !isPhraseGroupLocked(group));
+
+            throw new ToolRefusal(
+                'R1',
+                `${namedGroups(lockedNamed)} ${lockedNamed.length === 1 ? 'is' : 'are'} locked, so this claim is aimed at settled content — a locked group has no next revision to answer it, and a finding no Writer may act on holds the round open over text the Author has signed off (R1).`,
+                {
+                    field: 'group_refs',
+                    locked_group_refs: lockedNamed,
+                    expected: openGroups.map((group) => group.id),
+                    fix:
+                        openGroups.length === 0
+                            ? // Every group stands: the whole Overview is settled, so there is genuinely
+                              // nothing this pass can file as work. Saying so beats offering a re-scope that
+                              // would name the same locked rows under another name.
+                              'file nothing against the Summary — every group of this Overview is locked; only the Author lifts a lock (POST …/phrases/groups/:groupId/unlock)'
+                            : `call raiseFinding again with group_refs naming the groups the defect crosses that are NOT locked (${namedGroups(openGroups.map((group) => group.id))}), or ask the Author to unlock the group first`
+                }
+            );
+        }
+
+        // MIXED: the locked part comes off, and the reporter is TOLD in the result it reads — a scope that
+        // quietly shrinks between what it sent and what is stored is how a crew starts re-filing the same
+        // claim every pass, hunting for the group it cannot name.
+        const droppedLockedGroups = lockedNamed;
+        groupRefs = groupRefs.filter((ref) => !lockedNamed.includes(ref));
+
         if (
             ownedGroups.length > 0 &&
             ctx.story.phase === 'summary' &&
@@ -688,13 +881,13 @@ const raiseFinding: ToolDefinition = {
             );
         }
 
-        // D-30: a Reader's finding is the Editor's input, so it has to carry the what-and-where
+        // D-30: a Critic's finding is the Editor's input, so it has to carry the what-and-where
         // line. Evidence alone names the proof; `detail` is what lets the Editor check the claim
         // against the passage without re-reading the draft — the quick verdict the phase needs.
-        if (ctx.role === 'reader' && detail.trim().length === 0) {
+        if (ctx.role === 'critic' && detail.trim().length === 0) {
             throw new ToolRefusal(
                 'D-30',
-                `a Reader finding needs \`detail\`: what is wrong and where (section, paragraph or lines), so the Editor can check it against the passage without re-reading the draft`,
+                `a Critic finding needs \`detail\`: what is wrong and where (section, paragraph or lines), so the Editor can check it against the passage without re-reading the draft`,
                 {
                     field: 'detail',
                     fix: 'call raiseFinding again with detail naming the passage; add related_refs when the defect touches another record'
@@ -705,6 +898,15 @@ const raiseFinding: ToolDefinition = {
         // D-33: only an Editor's own finding starts `confirmed` — the Editor is the one who
         // confirms, so confirming its own report is not a rubber stamp of someone else's claim.
         const editorIssued = ctx.role === 'editor';
+        // R1 — the note a narrowed scope owes the reporter (see the group-lock rule above). It rides on the
+        // result of BOTH roles: an Editor that filed over a locked group needs the same sentence, and the
+        // echoed `group_refs` alone would read as the tool losing an id it was given.
+        const lockNotes =
+            droppedLockedGroups.length === 0
+                ? []
+                : [
+                      `Locked groups are settled content: ${namedGroups(droppedLockedGroups)} came off this finding's scope, which now names only the groups a Writer may still rewrite (R1). Only the Author lifts a lock.`
+                  ];
         const written = (await commitAs(
             ctx,
             'raiseFinding',
@@ -762,6 +964,12 @@ const raiseFinding: ToolDefinition = {
                 // "the whole Overview" — which on a group-managed book the handler has just refused, so
                 // the only way a caller sees `[]` is a phase ②/③ finding or a legacy Summary one.
                 group_refs: written.group_refs ?? [],
+                // R1: only present when the lock narrowed this claim, so every other filing keeps the exact
+                // result payload it had. What was dropped is reported rather than hidden, because the crew
+                // that named three groups and stored two has to know which neighbour stands.
+                ...(droppedLockedGroups.length === 0
+                    ? {}
+                    : { locked_group_refs_dropped: droppedLockedGroups }),
                 // D-34: the cost the Author's dial auto-approves starts work without a gate.
                 auto_approved_cost: ctx.story.auto_approve.includes(written.cost),
                 current_rev: written.rev
@@ -771,17 +979,20 @@ const raiseFinding: ToolDefinition = {
             {
                 finding_id: written.id,
                 notes: editorIssued
-                    ? undefined
+                    ? lockNotes.length === 0
+                        ? undefined
+                        : lockNotes
                     : [
                           'Unconfirmed until an Editor confirms, disputes or rewrites it (D-33). Nothing is repaired yet (D-34).',
-                          // T5: an improvement is judged by the OPPOSITE test from a defect claim, and
+                          // T5: a proposal is judged by the OPPOSITE test from a defect claim, and
                           // saying so in the result the Reporter reads keeps it from re-filing a proposal
                           // as a defect the round after the first one is disputed.
-                          ...(written.kind === 'improvement'
+                          ...(written.kind === 'proposal'
                               ? [
-                                    'This is an improvement, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
+                                    'This is a proposal, not a defect: the Editor weighs it on whether the book is better for a Writer pass, never on whether the Seed promised the change.'
                                 ]
-                              : [])
+                              : []),
+                          ...lockNotes
                       ]
             }
         );
@@ -790,21 +1001,21 @@ const raiseFinding: ToolDefinition = {
 
 // ── 3. confirmFinding (phase ①'s independent second look) ───────────────────
 
-/** The states a Reader may still confirm: after the Editor's verify, before the fix has closed it. */
+/** The states a Critic may still confirm: after the Editor's verify, before the fix has closed it. */
 const CONFIRMABLE_FINDING_STATES: Array<Finding['state']> = ['confirmed', 'approved'];
 
 /**
- * Phase ①'s granular second look. The Editor's `verifyFinding` confirms a Reader's suspicion;
- * this tool is the Reader's OWN independent pass over that same single finding, after the Editor
+ * Phase ①'s granular second look. The Editor's `verifyFinding` confirms a Critic's suspicion;
+ * this tool is the Critic's OWN independent pass over that same single finding, after the Editor
  * has approved it. A `confirm` is what lets the Writer spend a round on the defect
- * (`reader_confirmed`), and a `dispute` withdraws the queued fix so no Writer acts on a claim the
- * Reader no longer believes. It writes one finding — never a batch — so each thread carries one
+ * (`critic_confirmed`), and a `dispute` withdraws the queued fix so no Writer acts on a claim the
+ * Critic no longer believes. It writes one finding — never a batch — so each thread carries one
  * decision and one piece of evidence.
  */
 const confirmFinding: ToolDefinition = {
     name: 'confirmFinding',
     description:
-        "Record the Reader's independent second look at an Editor-approved finding: `confirm` when the defect holds (the Writer's fix is then allowed), or `dispute` when it does not (the queued fix is withdrawn). This thread confirms exactly one finding and rewrites nothing else.",
+        "Record the Critic's independent second look at an Editor-approved finding: `confirm` when the defect holds (the Writer's fix is then allowed), or `dispute` when it does not (the queued fix is withdrawn). This thread confirms exactly one finding and rewrites nothing else.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -812,7 +1023,7 @@ const confirmFinding: ToolDefinition = {
             verdict: {
                 type: 'string',
                 enum: ['confirm', 'dispute'],
-                description: 'confirm = the defect is real; dispute = the Reader does not believe it.'
+                description: 'confirm = the defect is real; dispute = the Critic does not believe it.'
             },
             evidence: str('What this independent check read and what it showed (required — no verdict without evidence).'),
             why: whyArg('Why this is the right verdict for this finding (T-5).'),
@@ -827,10 +1038,10 @@ const confirmFinding: ToolDefinition = {
     // A report-style decision, like `verifyFinding`: the row it checks is named by the brief and
     // the call carries its evidence, so it does not need a separate `expects` read (T-4).
     expectsArg: false,
-    // Phase ①'s confirmation is a READER act: the Editor verified, the Reader re-checks it. The
-    // grant is explicit so the §7 row's `write` level for a Reader does not have to be widened.
-    kinds: ['reader'],
-    onlyKinds: ['reader'],
+    // Phase ①'s confirmation is a CRITIC act: the Editor verified, the Critic re-checks it. The
+    // grant is explicit so the §7 row's `write` level for a Critic does not have to be widened.
+    kinds: ['critic'],
+    onlyKinds: ['critic'],
     requires: ['finding_id', 'verdict', 'evidence', 'why'],
     async execute(ctx, expects): Promise<ToolResult> {
         const target = await mustResolveRef(ctx, ctx.args.finding_id, 'finding_id', ['findings']);
@@ -850,11 +1061,11 @@ const confirmFinding: ToolDefinition = {
         if (!CONFIRMABLE_FINDING_STATES.includes(finding.state)) {
             throw new ToolRefusal(
                 'D-33',
-                `finding ${finding.id} is ${finding.state}, so there is nothing for the Reader to confirm — only an Editor-confirmed or approved finding reaches this pass`,
+                `finding ${finding.id} is ${finding.state}, so there is nothing for the Critic to confirm — only an Editor-confirmed or approved finding reaches this pass`,
                 {
                     finding_id: finding.id,
                     state: finding.state,
-                    fix: 'the Editor confirms a suspicion first (verifyFinding); the Reader confirms that confirmation'
+                    fix: 'the Editor confirms a suspicion first (verifyFinding); the Critic confirms that confirmation'
                 }
             );
         }
@@ -871,7 +1082,7 @@ const confirmFinding: ToolDefinition = {
             );
         }
 
-        const appended = `${finding.evidence}\n\nReader confirmation: ${evidence}`;
+        const appended = `${finding.evidence}\n\nCritic confirmation: ${evidence}`;
         const written = (await commitAs(
             ctx,
             'confirmFinding',
@@ -880,8 +1091,8 @@ const confirmFinding: ToolDefinition = {
                     finding.id,
                     {
                         state: verdict === 'confirm' ? finding.state : 'disputed',
-                        reader_confirmed: verdict === 'confirm',
-                        reader_confirmed_by: ctx.actorLabel,
+                        critic_confirmed: verdict === 'confirm',
+                        critic_confirmed_by: ctx.actorLabel,
                         evidence: appended
                     },
                     buildAttribution(ctx, why),
@@ -889,7 +1100,7 @@ const confirmFinding: ToolDefinition = {
                 );
 
                 // A disputed finding must not leave a Writer task standing: the approval created
-                // the queue entry, so the Reader's veto withdraws it in the same commit.
+                // the queue entry, so the Critic's veto withdraws it in the same commit.
                 if (verdict === 'dispute') {
                     for (const task of ctx.store.tasks.list()) {
                         if (task.story_id !== ctx.storyId || task.finding_ref !== finding.id) continue;
@@ -900,7 +1111,7 @@ const confirmFinding: ToolDefinition = {
                             { state: 'wontfix' },
                             buildAttribution(
                                 ctx,
-                                `${finding.id} was disputed by the Reader's independent check, so its fix task is withdrawn`
+                                `${finding.id} was disputed by the Critic's independent check, so its fix task is withdrawn`
                             )
                         );
                     }
@@ -916,7 +1127,7 @@ const confirmFinding: ToolDefinition = {
                 id: written.id,
                 state: written.state,
                 verdict,
-                reader_confirmed: written.reader_confirmed === true,
+                critic_confirmed: written.critic_confirmed === true,
                 current_rev: written.rev,
                 next:
                     verdict === 'confirm'
@@ -924,7 +1135,7 @@ const confirmFinding: ToolDefinition = {
                         : `the fix work for ${written.id} is withdrawn; the finding stays disputed for the audit trail (D-33)`
             },
             written.rev,
-            `Finding ${written.id} ${verdict === 'confirm' ? 'confirmed' : 'disputed'} by the Reader`
+            `Finding ${written.id} ${verdict === 'confirm' ? 'confirmed' : 'disputed'} by the Critic`
         );
     }
 };
@@ -932,7 +1143,7 @@ const confirmFinding: ToolDefinition = {
 // ── 4. createTask (D-11/P4/P12) ─────────────────────────────────────────────
 
 /**
- * §8.3 `createTask`: the fix a checker wants, handed to the queue rather than to an agent
+ * §8.3 `createTask`: the fix a reader wants, handed to the queue rather than to an agent
  * (D-17c's alternative). Everything the next run needs goes in the text, because it starts with
  * nothing (P4). `kind` is not an argument: §8 fixes this tool as the fix-request path, and P15
  * keeps `Task.kind` free text so a new kind of work needs no schema change — the other kinds
@@ -950,7 +1161,7 @@ const createTask: ToolDefinition = {
             owner_role: enumOf(
                 // `researcher` is a dispatched kind (§7.2): a Researcher may queue the research
                 // work it cannot do here, and any kind may route a fact-check to it.
-                ['writer', 'editor', 'reader', 'checker', 'researcher', 'author'],
+                ['writer', 'editor', 'critic', 'reader', 'researcher', 'author'],
                 'The kind that should do the work.'
             ),
             criterion_ref: str('The criterion this closes, when it is a criterion queue entry (P12).'),
@@ -1016,7 +1227,7 @@ const createTask: ToolDefinition = {
         );
 
         const task = filed.task;
-        // The claim path exists so a checker that intends to do the work itself does not have the
+        // The claim path exists so a reader that intends to do the work itself does not have the
         // sweep hand the same entry to another run.
         if (filed.reused)
             return repeatResult(
@@ -1088,7 +1299,7 @@ const editTask: ToolDefinition = {
             state: enumOf(['open', 'claimed', 'blocked', 'done', 'wontfix'], 'The new queue state.'),
             detail: str('The note for whoever picks this up next (P4).'),
             owner_role: enumOf(
-                ['writer', 'editor', 'reader', 'checker', 'researcher', 'author'],
+                ['writer', 'editor', 'critic', 'reader', 'researcher', 'author'],
                 'Who does the work now.'
             ),
             priority: num('Higher is picked up first.'),
@@ -1384,7 +1595,7 @@ const markChapterDone: ToolDefinition = {
 };
 
 /** §8.3's six report tools. */
-export const checkerTools: ToolDefinition[] = [
+export const readerTools: ToolDefinition[] = [
     submitVerdict,
     raiseFinding,
     confirmFinding,
@@ -1395,4 +1606,4 @@ export const checkerTools: ToolDefinition[] = [
 ];
 
 /** Exported for the tests that pin the queue vocabulary this layer files. */
-export const CHECKER_TASK_KINDS: Task['kind'][] = ['fix', 'escalation', 'signoff'];
+export const READER_TASK_KINDS: Task['kind'][] = ['fix', 'escalation', 'signoff'];

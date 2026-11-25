@@ -5,7 +5,7 @@
 // selection commit is a page of record writes, and burying the ranking in it would make the one
 // decision the Author needs to trust (P6: no quality score, no model) the hardest thing to read.
 //
-// THERE IS NO QUALITY SCORE, BY DESIGN. Every key below is a count a deterministic screening Reader
+// THERE IS NO QUALITY SCORE, BY DESIGN. Every key below is a count a deterministic screening Critic
 // already produced, or a diff between two stored texts. Nothing here asks a model which draft it
 // likes: the selector chooses, the Author judges (P6).
 //
@@ -168,7 +168,7 @@ const sortedIds = (ids: Iterable<string>): string[] =>
  *     certainly a pass that can be graded on it.
  *
  * A pass that carries neither is silent because it was never asked (a task confirmed mid-round, after
- * this Reader was dispatched), so it cannot veto the certificate.
+ * this Critic was dispatched), so it cannot veto the certificate.
  */
 const carryingFix = (review: SampleReview, fixRef: string): boolean =>
     (review.fix_refs ?? []).includes(fixRef) ||
@@ -178,7 +178,7 @@ const carryingFix = (review: SampleReview, fixRef: string): boolean =>
  * Did THIS pass certify THIS fix?
  *
  * Three things must all hold, and each one removes a way a fix could "close" without being done:
- *   * the verdict names the fix and says `resolved` — `unknown` is the Reader admitting it cannot
+ *   * the verdict names the fix and says `resolved` — `unknown` is the Critic admitting it cannot
  *     tell, which is not a pass (R2);
  *   * it carries a non-empty `evidence` line (D-15: an unevidenced verdict is not a verdict);
  *   * the review itself is `valid` — a schema-repair failure persisted an answer nobody read, so it
@@ -199,7 +199,7 @@ const certifiesFix = (review: SampleReview, fixRef: string): boolean =>
 /**
  * Is this blocking issue a REGRESSION in this candidate — something the accepted text did not have?
  *
- * `inherited` is the only answer that is not: the Reader is saying "I saw this in the draft I was told
+ * `inherited` is the only answer that is not: the Critic is saying "I saw this in the draft I was told
  * to revise", and the round must not reject a candidate for carrying a defect the Author already
  * accepted (a rewrite that keeps a known flaw is not a new flaw, and rejecting it would make every
  * draft unselectable). `introduced`, `unknown` and an absent field all count as introduced, and the
@@ -287,8 +287,8 @@ export function minimalityOf(base: unknown, candidate: unknown): SampleMinimalit
  * unclassified blocking issue is then a regression) and the minimality keys; omitting it keeps §6.5's
  * first-round semantics exactly (R5).
  *
- * The unanimity rule is deliberate: with `summary_readers` = 5, five independent Readers were bought,
- * and one Reader marking the fix `unresolved` is a live disagreement the loop must resolve by
+ * The unanimity rule is deliberate: with `summary_critics` = 5, five independent Critics were bought,
+ * and one Critic marking the fix `unresolved` is a live disagreement the loop must resolve by
  * resampling, not by averaging (P6: pass/fail, never a score).
  */
 export function scoreSample(input: {

@@ -6,11 +6,11 @@
 // round (its numbers were never produced), and a sampling book must not be shown five groups it does not
 // have. Neither pane carries a branch for the other; `StoryView` chooses, on `story.summary_mode`.
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import { StoryView } from './StoryView';
 import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
-import { groupedPhraseView } from '../testing/shell-fakes';
+import { groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
 import { NOW } from './story-fixtures';
 import type { PhraseView } from '../api';
 import type { StoryViewData } from './story-contract';
@@ -82,6 +82,33 @@ describe('StoryView — a group-managed book gets the grouped Overview, not the 
         expect(container.querySelectorAll('input[type="number"]')).toHaveLength(0);
         // …and the verb the sampler needed is gone from the gate under it (U3).
         expect(screen.queryByRole('button', { name: 'Request another revision round' })).toBeNull();
+    });
+
+    it('hands the Overview the action object, so the Author\'s choose is a live verb (D-68)', () => {
+        // The pane's Choose button is enabled only when `actions.chooseReviewedSummary` exists — so this is
+        // the one place that can tell "the shell bound the verb" from "the pane rendered a dead button".
+        // `reviewedPhraseView(…, 'ready')`, not the mid-review fixture: the fixture's reviewed block is
+        // `pending`, and a pending book offers no Choose at all (D-67).
+        const { calls, container } = renderView({}, groupedView(reviewedPhraseView('s1', 'ready')));
+        const submit = container.querySelector('[data-testid="reviewed-choose-submit"]') as HTMLButtonElement;
+
+        expect(submit.disabled).toBe(false);
+
+        // Clicking arms the confirmation step first; only the confirm reaches the verb (D-68).
+        fireEvent.click(submit);
+        fireEvent.click(screen.getByTestId('reviewed-choose-confirm'));
+
+        expect(calls.chooseReviewedSummary).toEqual([['s1']]);
+    });
+
+    it('leaves the choose bound to nothing when the shell hands down no actions, and the pane says so', () => {
+        const { container } = render(
+            <StoryView view={groupedView(reviewedPhraseView('s1', 'ready'))} actions={undefined} now={NOW} />
+        );
+        const submit = container.querySelector('[data-testid="reviewed-choose-submit"]') as HTMLButtonElement;
+
+        expect(submit.disabled).toBe(true);
+        expect(submit.getAttribute('title')).toBe('The reviewed-Summary choose route is not available in this shell.');
     });
 
     it('keeps the phase gate on the Overview only, and only once (U5)', () => {

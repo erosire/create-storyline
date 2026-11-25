@@ -1,4 +1,4 @@
-// The screening Reader's answer contract (documents/phase-1-research-pipeline.md §4.3).
+// The screening Critic's answer contract (documents/phase-1-research-pipeline.md §4.3).
 //
 // Same rule as `./summary-sample`: plain draft-07-compatible JSON Schema data, no library, no new
 // dependency, so the LLM transport can serialise it straight into
@@ -62,7 +62,7 @@ export const IssueListSchema = {
                     // screening `high` = finding `major`.
                     severity: { type: 'string', enum: ['critical', 'high'] },
                     // Where the issue came from, relative to the accepted draft the candidate
-                    // replaces. `unknown` is the Reader admitting it cannot tell, and the selector
+                    // replaces. `unknown` is the Critic admitting it cannot tell, and the selector
                     // treats it exactly as `introduced`.
                     origin: { type: 'string', enum: ['introduced', 'inherited', 'unknown'] },
                     criterion: { type: 'string' },

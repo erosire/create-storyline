@@ -47,6 +47,10 @@ import { BUILT_IN_CRITERIA, defaultGoal } from '../../shared/criteria';
 // HARDENING (R6): the mock crew implements the SAME contract as `tools/writer.ts:editSummary`,
 // and a group-managed book must not get its mirror written through the double either.
 import { isGroupManagedStory } from '../phrase';
+// D-33c/D-33d: the scripted crew files and approves under the loop's OWN issues-first predicate, so
+// an integration test cannot exercise a finding flow the product refuses. `loop/records.ts` imports
+// nothing from `run/`, so this adds no cycle.
+import { findingsRaisedByRun, openIssueFindings } from '../loop/records';
 // The Seed's change-detector hash, shared with `structureSeed` (tools/knowledge.ts) so the mock's
 // P5 refusal fires on exactly the value the real tool would compare (documents/…§3.3).
 import { seedHashOf } from '../../shared/seed-hash';
@@ -304,7 +308,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                 : { ok: true, data: schema.function };
         },
 
-        // -- §8.4 plumbing: what the checkers live on -------------------------------------------
+        // -- §8.4 plumbing: what the readers live on -------------------------------------------
         submitVerdict: async (ctx, args, runtime) => {
             const criteria = Array.isArray(args.criteria) ? (args.criteria as VerdictCriterion[]) : [];
             const hardIds = new Set(
@@ -339,9 +343,49 @@ function defaultTools(): Record<string, MockToolHandler> {
             // T5: the mock is KIND-TOLERANT. An omitted or unknown `kind` is an `issue`, the same reading
             // the real tool normalises to, and the dedupe key follows `utilities.ts:findingFingerprint`'s
             // rule: `issue` keeps the pre-field two-part key (so a scripted repeat still matches), and an
-            // `improvement` marks itself so a proposal does not collapse into the defect beside it.
-            const kind: Finding['kind'] = str(args.kind) === 'improvement' ? 'improvement' : 'issue';
-            const fingerprint = kind === 'improvement' ? `${criterionRef}|${targetRef}|improvement` : `${criterionRef}|${targetRef}`;
+            // `proposal` marks itself so a proposal does not collapse into the defect beside it.
+            const kind: Finding['kind'] = str(args.kind) === 'proposal' ? 'proposal' : 'issue';
+            const fingerprint = kind === 'proposal' ? `${criterionRef}|${targetRef}|proposal` : `${criterionRef}|${targetRef}`;
+
+            // D-33c — the mock crew files under the SAME issues-first rules the real tool enforces,
+            // because an integration test that ran the loop through this double would otherwise exercise
+            // a flow the product no longer allows (issue + proposal in one pass, a proposal approved over
+            // an open defect) and report green for a sequence the server refuses. Same predicate, same
+            // rule ids, same two directions as `tools/reader.ts:raiseFinding`:
+            //   (a) a `proposal` waits while the Story has an unresolved issue — which also covers the
+            //       same-pass case, since an issue filed moments ago is open;
+            //   (b) an `issue` is refused when THIS run already filed a proposal, read from the journal
+            //       by `run_ref` the way the real tool reads it.
+            // The refusal shape is this double's own (`{ok:false, refused, message}`), not a thrown
+            // `ToolRefusal`, because that is what the run layer's transcript reads.
+            if (kind === 'proposal') {
+                const openIssues = openIssueFindings(runtime.store, ctx.storyId);
+
+                if (openIssues.length > 0) {
+                    return {
+                        ok: false,
+                        refused: 'D-33c',
+                        message: `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because a suggestion about a book that still has defects is not what the round is for. Every issue has to reach \`fixed\` or \`discarded\` before a proposal can be filed (D-33c).`,
+                        open_issues: openIssues.length,
+                        open_issue_refs: openIssues.map((issue) => issue.id)
+                    };
+                }
+            }
+
+            if (kind === 'issue') {
+                const siblingProposals = findingsRaisedByRun(runtime.store, ctx.storyId, ctx.runRef).filter(
+                    (row) => row.kind === 'proposal'
+                );
+
+                if (siblingProposals.length > 0) {
+                    return {
+                        ok: false,
+                        refused: 'D-33c',
+                        message: `this pass already filed ${siblingProposals.map((row) => row.id).join(', ')} as \`kind: proposal\`, and an issue cannot share a review pass with a proposal (D-33c).`,
+                        proposal_refs: siblingProposals.map((row) => row.id)
+                    };
+                }
+            }
 
             // D-16/D-32: the dedupe lives in the tool layer, and the ANSWER names the existing
             // record — a fresh context that is told `repeat` can stop, which is the mechanism that
@@ -639,6 +683,28 @@ function defaultTools(): Record<string, MockToolHandler> {
             // that path and leave the finding approved with no work behind it.
             if (decision === 'auto') return { ok: true };
 
+            // D-33d — the mirror of `tools/editor.ts:approveFinding`: issues are in focus before
+            // anything else can be done, so a `proposal` is not approved while the Story carries an
+            // unresolved issue, and only a DISCARD is exempt (declining a change is not an approval).
+            // `auto` is exempt here for the reason above — the sweep performs that approval, and the
+            // sweep itself skips proposals (engine's `loop_auto_approve`), which is where the real
+            // tool's `auto` refusal is mirrored.
+            const row = scopedGet(runtime.store.findings, ctx.storyId, findingId);
+
+            if (decision !== 'discard' && row?.kind === 'proposal') {
+                const openIssues = openIssueFindings(runtime.store, ctx.storyId);
+
+                if (openIssues.length > 0) {
+                    return {
+                        ok: false,
+                        refused: 'D-33d',
+                        message: `proposal ${findingId} cannot be approved while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because issues are in focus before anything else can be done (D-33d).`,
+                        open_issues: openIssues.length,
+                        open_issue_refs: openIssues.map((issue) => issue.id)
+                    };
+                }
+            }
+
             try {
                 const updated = runtime.store.findings.update(
                     findingId,
@@ -664,7 +730,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                 return {
                     ok: false,
                     refused: 'D-33',
-                    message: `finding ${findingId} is ${finding.state}; only an Editor-confirmed finding reaches the Reader's confirmation`
+                    message: `finding ${findingId} is ${finding.state}; only an Editor-confirmed finding reaches the Critic's confirmation`
                 };
 
             const dispute = str(args.verdict) === 'dispute';
@@ -674,9 +740,9 @@ function defaultTools(): Record<string, MockToolHandler> {
                     findingId,
                     {
                         state: dispute ? 'disputed' : finding.state,
-                        reader_confirmed: !dispute,
-                        reader_confirmed_by: ctx.runRef,
-                        evidence: `${finding.evidence}\n\nReader confirmation: ${str(args.evidence)}`
+                        critic_confirmed: !dispute,
+                        critic_confirmed_by: ctx.runRef,
+                        evidence: `${finding.evidence}\n\nCritic confirmation: ${str(args.evidence)}`
                     } satisfies UpdatePatch<Finding>,
                     attrFor(ctx, args),
                     expectsOf(args)
@@ -772,7 +838,7 @@ function defaultTools(): Record<string, MockToolHandler> {
             }
         },
         proposeIdea: async (ctx, args, runtime) => {
-            // D-26/D-28: a Reader proposes, the row starts `proposed`, and nothing else happens —
+            // D-26/D-28: a Critic proposes, the row starts `proposed`, and nothing else happens —
             // the pick is the Author's (P10).
             const created = await inCommit(runtime.store, 'propose_idea', () =>
                 runtime.store.ideas.create(
@@ -1075,7 +1141,7 @@ export class MockToolRuntime implements ToolRuntime {
             runRef: session.runRef ?? '',
             templateRef: session.templateRef ?? '',
             roleName: session.roleName ?? '',
-            roleKind: session.roleKind ?? 'checker',
+            roleKind: session.roleKind ?? 'reader',
             services: {
                 // The run layer's hook may answer synchronously; T3's service contract is a promise.
                 delegate:
@@ -1300,7 +1366,7 @@ export function seedIdea(
             unit_ref: init.unit_ref,
             body: init.body ?? 'the steeple bell should ring under the water',
             kind: init.kind ?? 'direction',
-            author: init.author ?? 'reader-continuity',
+            author: init.author ?? 'critic-continuity',
             sources: init.sources ?? [],
             fingerprint: init.fingerprint ?? 'steeple-bell',
             seen_count: init.seen_count ?? 1,
@@ -1335,8 +1401,8 @@ export function seedFinding(
             state: init.state ?? 'unconfirmed',
             seen_count: init.seen_count ?? 1,
             related_refs: init.related_refs,
-            ...(init.reader_confirmed === undefined ? {} : { reader_confirmed: init.reader_confirmed }),
-            ...(init.reader_confirmed_by === undefined ? {} : { reader_confirmed_by: init.reader_confirmed_by })
+            ...(init.critic_confirmed === undefined ? {} : { critic_confirmed: init.critic_confirmed }),
+            ...(init.critic_confirmed_by === undefined ? {} : { critic_confirmed_by: init.critic_confirmed_by })
         },
         AUTHOR_ATTR
     );

@@ -45,7 +45,7 @@ function seedIdea(store: Store, storyId: string, phase: StoryPhase, state: IdeaS
             phase,
             body: `A ${state} proposal for ${phase}.`,
             kind: 'direction',
-            author: 'reader_1',
+            author: 'critic_1',
             sources: [],
             fingerprint: `fp_${phase}_${state}`,
             seen_count: 1,

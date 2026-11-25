@@ -14,7 +14,7 @@
 //        is not, or a `blocked` row the Author already answered keeps every later phase in "the crew
 //        asked you" and the drain can never be met.
 //   T8   The deep review is owed for the CURRENT round's selection — the same condition the work queue
-//        dispatches on. An Author who selects an older-round draft was owed `summary_readers` passes the
+//        dispatches on. An Author who selects an older-round draft was owed `summary_critics` passes the
 //        queue would never offer: an un-payable debt in the drain and a sign-off that waits forever.
 //
 // Nothing here re-derives the pipeline: each case starts from the rig's own completed round, so the
@@ -186,7 +186,7 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
     }
 
     it('gives finding_10 its own row when finding_10 escalates first', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
         const ids = seedElevenFindings(rig);
 
         expect(ids).toEqual(Array.from({ length: 11 }, (_, index) => `finding_${index}`));
@@ -221,7 +221,7 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
     });
 
     it('gives each finding its own row when finding_1 escalates first (the other order)', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         seedElevenFindings(rig);
         exhaustVerifyFamily(rig, 'finding_1', false);
@@ -249,7 +249,7 @@ describe('T10/F2 — one stalled finding, one escalation, whatever the id prefix
 
 describe('T10/F3 — the Author is asked only after the last bought pass has closed', () => {
     it('holds the escalation while the final verification pass is live, and opens it once it closes', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -310,7 +310,7 @@ describe('T10/F3 — the Author is asked only after the last bought pass has clo
     });
 
     it('lets a valid final Editor decision resolve the finding with no escalation at all', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -345,7 +345,7 @@ describe('T10/F3 — the Author is asked only after the last bought pass has clo
 
 describe('T10/F4 — a resolved Phase-① stall row closes after the phase advances', () => {
     it('closes the blocked question once the Story has left phase ①, so later phases can drain', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -394,7 +394,7 @@ describe('T10/F4 — a resolved Phase-① stall row closes after the phase advan
 
 describe('T8 — the deep review is owed for the current round’s selection only', () => {
     it('owes every configured pass for a fresh current-round selection, and none for an older-round one', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 2 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 2 });
 
         const { first, second } = await twoRounds(rig);
 
@@ -407,7 +407,7 @@ describe('T8 — the deep review is owed for the current round’s selection onl
         for (const run of rig.store.runs.list().filter((row) => (row.work_item_ref ?? '').startsWith('wi_review_')))
             rig.store.runs.delete(run.id, { run_ref: null, why: 'test: the deep review has not run yet (§6.4 step 6)' });
 
-        // (a) The carried draft IS the current round's selection: it owes all `summary_readers` passes,
+        // (a) The carried draft IS the current round's selection: it owes all `summary_critics` passes,
         // and the queue offers exactly those keys.
         const current = rig.store.revisions.require(second);
 

@@ -10,6 +10,9 @@
 //   U2/U6 — the pane is addressed by the group's UUID; a ref that names no live group falls back to a
 //        line that says so, never to a blank pane that looks like an unwritten group.
 //   U7 — every control has an honest accessible name, and the row text a reader hears is spaced.
+//   D-67 — the `Clean` stamp sits on the ONE revision a cross-group pass closed on, and a written group with
+//        no score names the wait rather than printing `0%` (the Reader reads the clean vector, not the newest
+//        draft, so an unscored section is the normal mid-review shape).
 //
 // The expected strings are read off the fixture the test builds (`fixturePhrase()` documents its own
 // state), not off a screenshot: Premise is written three times with two superseded rows, Promise is
@@ -20,7 +23,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 
 import { SummaryGroupPane } from './SummaryGroupPane';
 import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
-import { click, groupedPhraseView } from '../testing/shell-fakes';
+import { click, groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
 import { phraseGroupDefinition } from '../../shared/phrase';
 import type { PhraseView } from '../api';
 
@@ -32,6 +35,21 @@ function midReviewView() {
 /** A grouped view over `groupedPhraseView`'s clean five rows, for the states the fixture omits. */
 function groupedView(phrase: Partial<PhraseView> = {}) {
     return fixtureView({ phrase: groupedPhraseView('s1', phrase) });
+}
+
+/**
+ * The D-67 shape the DEFAULT fixtures do not hold: Ending's newest revision (r3) is NOT the clean one — the
+ * clean stamp sits on the archived r2 — which is exactly what `reviewedPhraseView(…, 'ready')` models.
+ */
+function reviewedReadyView() {
+    return fixtureView({ phrase: reviewedPhraseView('s1', 'ready') });
+}
+
+/** The same five clean rows with Tone's scoring trail emptied: a written group the Reader never scored. */
+function unscoredToneRows() {
+    return groupedPhraseView('s1').groups.map((group) =>
+        group.key === 'tone' ? { ...group, scores: [] } : group
+    );
 }
 
 /**
@@ -192,11 +210,11 @@ describe('SummaryGroupPane — the findings a group owes, and the groups they sp
 
         const row = container.querySelector('[data-testid="finding-f-cross"]') as HTMLElement;
 
-        // The whole row, in reading order, with real word boundaries between its spans: cost, the sentence
-        // the Reviewer wrote, how often it had to be raised, the other group it aims at, and the group whose
-        // text has not answered it yet (R3).
+        // The whole row, in reading order, with real word boundaries between its spans: the claim type (T3),
+        // the cost, the sentence the Reviewer wrote, how often it had to be raised, the other group it aims at,
+        // and the group whose text has not answered it yet (R3).
         expect(row.textContent).toBe(
-            'critical the promise names a cost the premise never sets up raised 3× also Theme still missing on Theme'
+            'Issue critical the promise names a cost the premise never sets up raised 3× also Theme still missing on Theme'
         );
         expect(
             (container.querySelector('[data-testid="finding-f-cross-groups"]') as HTMLElement).textContent
@@ -226,7 +244,7 @@ describe('SummaryGroupPane — the findings a group owes, and the groups they sp
         // `approved` is still an OPEN state (it awaits the Writer), and the row says which wait it is. The
         // finding is scoped to Promise alone, so it carries no cross-group chips.
         expect(minor.textContent).toBe(
-            'minor the promise restates the premise in other words approved — awaiting its revision'
+            'Proposal minor the promise restates the premise in other words approved — awaiting its revision'
         );
         expect(minor.querySelector('[data-testid="finding-f-minor-groups"]')).toBeNull();
     });
@@ -566,5 +584,235 @@ describe('SummaryGroupPane — a reader hears the pane the author sees (U7)', ()
         for (const internal of ['grp-', '[object', 'undefined', 'writer_busy', 'unscoped', 'seen_count']) {
             expect(text.includes(internal), internal).toBe(false);
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// T3 — the two facts the wire added to a group row.
+//
+// (a) WHAT a finding claims. `cost` has always said what repairing a row costs; `kind` says whether the Critic
+// is calling the text BROKEN or only calling it IMPROVABLE, and the Author's answer is a different decision —
+// one has to be repaired before the draft can stand, the other is weighed against the book the Seed promises.
+// A findings list that prints only costs reads both in the same voice, which is how a preference gets approved
+// as an emergency. The word is text, first in the row, so the linear read and a screen reader both get it
+// before the price, and a row that names NO kind (the legacy case, `f-wide`) says `Issue` rather than blank.
+//
+// (b) The group's SCORE. The rail shows one number per group; this pane is where the number is explained — the
+// mark the CURRENT clean revision carries and the mark it moved from, each with the Critic's own sentence when
+// the pass wrote one. T5 replaced the dated pass-by-pass trail with those two rows: the Author's question is
+// what this section scores NOW and what it scored the last time the Reader read it, and a timestamp beside a
+// percentage answers neither. Both rows come from the same `PhraseGroupRow.scores` array the rail reads, so a
+// pane and a row cannot disagree, and an unscored group renders NOTHING rather than a `0%` that claims a review
+// that never ran.
+// ---------------------------------------------------------------------------
+describe('SummaryGroupPane — the claim type on a finding, and the group’s score (T3)', () => {
+    it('says what each finding claims, in front of what it costs, and reads an unmarked row as an Issue (T3)', () => {
+        const { container } = renderGroup('grp-promise');
+
+        const rows = Array.from(container.querySelectorAll('li[data-testid^="finding-f"]'));
+
+        // One chip per row, the row's FIRST words, and the class hook carries the same decision the text does
+        // (the stylesheet may colour it, but it can never be the only carrier).
+        expect(
+            rows.map((row) => {
+                const chip = row.querySelector<HTMLElement>('[data-testid$="-kind"]')!;
+
+                return [
+                    row.getAttribute('data-testid'),
+                    chip.textContent,
+                    chip.className,
+                    // The first word of the row as a reader hears it — the chip, not the cost.
+                    String(row.textContent).split(' ')[0]
+                ];
+            })
+        ).toEqual([
+            ['finding-f-cross', 'Issue', 'sv-finding-kind sv-finding-kind--issue', 'Issue'],
+            ['finding-f-wide', 'Issue', 'sv-finding-kind sv-finding-kind--issue', 'Issue'],
+            ['finding-f-minor', 'Proposal', 'sv-finding-kind sv-finding-kind--proposal', 'Proposal']
+        ]);
+
+        // The Proposal is the one row asking for a WORD change ("the promise restates the premise in other
+        // words"), and it is the one row the Story's dial may auto-approve — the two facts belong together.
+    });
+
+    /**
+     * T5 — a Premise row with `count` Reader passes, newest first. Three is enough to pin the rule: the pane
+     * renders the current mark and the one it moved from, and the third pass is history rather than a row.
+     */
+    function premiseWithScores(count: number) {
+        const phrase = fixturePhrase();
+        const scores = [
+            { value: 91, vector_hash: 'vh-4', at: '2026-11-12T10:00:00.000Z', run_ref: 'run_critic_vh-4' },
+            { value: 84, vector_hash: 'vh-3', at: '2026-11-11T10:00:00.000Z', run_ref: 'run_critic_vh-3' },
+            { value: 78, vector_hash: 'vh-2', at: '2026-11-10T10:00:00.000Z', run_ref: 'run_critic_vh-2' }
+        ].slice(0, count);
+        const groups = phrase.groups.map((group) => (group.key === 'premise' ? { ...group, scores } : group));
+
+        return fixtureView({ phrase: { ...phrase, groups } });
+    }
+
+    it('prints the current clean mark and the mark it moved from, with no date on either (T5)', () => {
+        const { container } = renderGroup('grp-premise');
+
+        expect(container.querySelector('[data-testid="group-score"]')).toBeTruthy();
+        expect(container.querySelector('[data-testid="group-score-value"]')?.textContent).toBe('Score 84%');
+        expect(container.querySelector('[data-testid="group-score-delta"]')?.textContent).toBe('(up 6 from 78%)');
+        expect(container.querySelector('[data-testid="group-score-rationale"]')?.textContent).toBe(
+            'the lie is set up in the first sentence and paid for in the last'
+        );
+
+        // T5 — TWO marks, and only two. The dated trail this pane used to print is gone: a reader comparing
+        // percentages is not asking WHEN the earlier one ran, and a timestamp beside a score competes with the
+        // revision number that actually identifies the text. The words `Current clean revision` / `Previous
+        // mark` carry which is which (D-67 put the Reader's verdict on the clean vector, which is why the
+        // current one is named for the text it judged); the row's `title` still holds the pass's run and vector,
+        // because one Reader pass scores all five groups against one text vector and a mark from a DIFFERENT
+        // vector is a different book.
+        expect(
+            Array.from(container.querySelectorAll('li.sv-group-score-mark')).map((row) => [
+                String(row.textContent).replace(/\s+/g, ' ').trim(),
+                row.getAttribute('data-mark'),
+                row.getAttribute('title')
+            ])
+        ).toEqual([
+            [
+                'Current clean revision 84% the lie is set up in the first sentence and paid for in the last',
+                'current',
+                'run run_critic_vh-3 · vector vh-3'
+            ],
+            ['Previous mark 78%', 'previous', 'run run_critic_vh-2 · vector vh-2']
+        ]);
+
+        // No date, in either row or anywhere in the score block, and the trail element itself is gone.
+        expect(String(container.querySelector('[data-testid="group-score-marks"]')?.textContent)).not.toContain(
+            '2026'
+        );
+        expect(container.querySelector('[data-testid="group-score-history"]')).toBeNull();
+        // The Critic's sentence is printed ONCE — the headline line and the list cannot both claim it.
+        expect(container.querySelectorAll('[data-testid="group-score-rationale"]')).toHaveLength(1);
+    });
+
+    it('says when a rewrite went backwards, says nothing when there is no previous mark, and prints no rationale the Critic never wrote (T3)', () => {
+        // Tone is the regression: the group's first own revision replaced text the vh-2 pass rated 64, and the
+        // vh-3 pass rated the replacement 58. The pane admits it in words, not in a colour alone.
+        const tone = renderGroup('grp-tone').container;
+
+        expect(tone.querySelector('[data-testid="group-score-value"]')?.textContent).toBe('Score 58%');
+        expect(tone.querySelector('[data-testid="group-score-delta"]')?.textContent).toBe('(down 6 from 64%)');
+        expect(tone.querySelector('.sv-group-score-delta')?.className).toContain('sv-group-score-delta--down');
+        expect(
+            Array.from(tone.querySelectorAll('li.sv-group-score-mark')).map((row) =>
+                String(row.textContent).replace(/\s+/g, ' ').trim()
+            )
+        ).toEqual([
+            'Current clean revision 58% two authorial winks survive in the middle paragraph',
+            'Previous mark 64%'
+        ]);
+
+        // Theme has ONE pass, so there is nothing to move from — and inventing a zero to subtract would turn
+        // "never scored before" into "was scored zero". No delta node, no previous row, no rationale node.
+        const theme = renderGroup('grp-theme').container;
+
+        expect(theme.querySelector('[data-testid="group-score-value"]')?.textContent).toBe('Score 71%');
+        expect(theme.querySelector('[data-testid="group-score-delta"]')).toBeNull();
+        expect(theme.querySelector('[data-testid="group-score-rationale"]')).toBeNull();
+        expect(theme.querySelectorAll('li.sv-group-score-mark')).toHaveLength(1);
+        expect(theme.querySelector('[data-testid="group-score-mark-previous"]')).toBeNull();
+
+        // Promise has two passes and no rationale on either: the number and the movement, and nothing invented.
+        const promise = renderGroup('grp-promise').container;
+
+        expect(promise.querySelector('[data-testid="group-score-value"]')?.textContent).toBe('Score 62%');
+        expect(promise.querySelector('[data-testid="group-score-delta"]')?.textContent).toBe('(up 7 from 55%)');
+        expect(promise.querySelector('.sv-group-score-delta')?.className).toContain('sv-group-score-delta--up');
+        expect(promise.querySelector('[data-testid="group-score-rationale"]')).toBeNull();
+        expect(
+            Array.from(promise.querySelectorAll('li.sv-group-score-mark')).map((row) =>
+                String(row.textContent).replace(/\s+/g, ' ').trim()
+            )
+        ).toEqual(['Current clean revision 62%', 'Previous mark 55%']);
+    });
+
+    it('keeps the comparison at two marks however many passes the Reader has run (T5)', () => {
+        // Three passes on one group: the current mark and the mark it moved from are the report, and the third
+        // is history. A pane that printed all three turned a comparison into a changelog, which is what this
+        // change replaced — and the header average and the rail row read the SAME newest pair.
+        const { container } = renderGroup('grp-premise', { view: premiseWithScores(3) });
+
+        expect(container.querySelector('[data-testid="group-score-value"]')?.textContent).toBe('Score 91%');
+        expect(container.querySelector('[data-testid="group-score-delta"]')?.textContent).toBe('(up 7 from 84%)');
+        expect(
+            Array.from(container.querySelectorAll('li.sv-group-score-mark')).map((row) => [
+                String(row.textContent).replace(/\s+/g, ' ').trim(),
+                row.getAttribute('data-mark')
+            ])
+        ).toEqual([
+            ['Current clean revision 91%', 'current'],
+            ['Previous mark 84%', 'previous']
+        ]);
+    });
+
+    it('shows no score block at all for a group the pass never scored (T3)', () => {
+        // Ending has no `scores` key on the wire and no text to score. The pane keeps saying what it always
+        // said — `No revision yet`, `not written`, the purpose line — and adds no number, because a `0%` there
+        // would be the desk claiming a review the Critic never ran.
+        const { container } = renderGroup('grp-ending');
+
+        expect(container.querySelector('[data-testid="group-score"]')).toBeNull();
+        expect(container.querySelector('[data-testid="group-score-history"]')).toBeNull();
+        expect(String(container.textContent)).not.toContain('Score');
+        expect(container.querySelector('[data-testid="group-status"]')?.textContent).toBe('not written');
+    });
+});
+
+describe('SummaryGroupPane — the clean stamp and the score a clean pass has not earned yet (D-67)', () => {
+    it('stamps the revision a cross-group pass closed clean on, naming the run that judged it', () => {
+        // `groupedPhraseView`'s single history row IS the clean one (it is the row the default reviewed block
+        // selects), so the badge belongs on it — and ONLY on it. The stamp is an audit fact (P11): this exact
+        // text closed a Critic pass with no unresolved defect, which is what makes it selectable into the
+        // reviewed Summary.
+        const { container } = renderGroup('grp-premise', { view: groupedView({}) });
+
+        expect(container.querySelector('[data-testid="group-clean"]')?.textContent).toBe('Clean');
+        expect(container.querySelector('[data-testid="group-clean"]')?.getAttribute('title')).toBe(
+            'A cross-group Critic pass closed clean on this revision (run run_clean_premise) — it is the revision the reviewed Summary can stand behind.'
+        );
+        // The stamp is a BADGE, not the state line: `Revision 1 · 48 chars` is the Writer's fact (the row's
+        // own number and length), `Clean` is a Reviewer's, and the pane keeps them in separate elements.
+        expect(container.querySelector('[data-testid="group-status"]')?.textContent).toBe('Revision 1 · 48 chars');
+        expect(container.querySelector('[data-testid="group-status"]')?.textContent ?? '').not.toContain('clean');
+        // And a badge, not a button: the Author chooses the reviewed Summary once, whole (D-68), not per stamp.
+        expect(container.querySelectorAll('[data-testid="group-clean"] button')).toHaveLength(0);
+    });
+
+    it('says nothing about clean when the newest revision never closed a pass, even if an older one did', () => {
+        // The stamp describes the ONE row on screen. An archived row may be the clean one (the `ready` fixture
+        // is exactly that: Ending reviewed at r2, newest r3), and then the pane the Author is standing on must
+        // not claim the newest text was read.
+        const { container } = renderGroup('grp-ending', { view: reviewedReadyView() });
+
+        expect(container.querySelector('[data-testid="group-clean"]')).toBeNull();
+        // r3 is the newest text and nobody has passed it; the char count is the row's, not a verdict.
+        expect(container.querySelector('[data-testid="group-status"]')?.textContent).toBe(
+            'Revision 3 · 76 chars'
+        );
+    });
+
+    it('names the wait when a written group has no score, instead of printing 0% or nothing at all', () => {
+        // D-67 moved the scoring join onto the CLEAN vector, so an empty `scores` list on a written section is
+        // the normal mid-review shape. `0%` would claim a pass that never ran; silence would read as a broken
+        // wire; the line names the wait. (An UNWRITTEN group stays silent — that test is above.)
+        const { container } = renderGroup('grp-tone', { view: groupedView({ groups: unscoredToneRows() }) });
+
+        expect(container.querySelector('[data-testid="group-score"]')).toBeNull();
+        expect(String(container.textContent)).not.toContain('Score 0%');
+        expect(
+            container.querySelector('[data-testid="group-score-none"]')?.textContent?.replace(/\s+/g, ' ').trim()
+        ).toBe(
+            'No Reader score for this section yet — the pass reads a section once the crew has a clean revision of it to stand behind.'
+        );
+        // The line is about the SCORE only: the group's own state line keeps saying what the Writer did.
+        expect(container.querySelector('[data-testid="group-status"]')?.textContent).toBe('Revision 1 · 48 chars');
+        expect(container.querySelector('[data-testid="group-clean"]')?.textContent).toBe('Clean');
     });
 });

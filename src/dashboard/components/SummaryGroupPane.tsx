@@ -22,17 +22,61 @@
 // THE MODEL IT READS is `StoryViewData` plus the group's UUID from the rail's selection ref. The group is looked
 // up by id (`phraseGroupById`), never by index or `order`, so a refetch, a reorder or a retired group cannot move
 // the pane to a different group (U2/U6).
+//
+// T3 ADDS TWO THINGS, AND BOTH OF THEM ARE THE WIRE'S. Each finding row now says WHAT it claims (`issue` or
+// `proposal`) before it says what repairing it costs, because the Author's answer to "this is broken" and to
+// "this could be better" are different decisions; and the pane prints the Critic's percentage for THIS group with
+// the pass it moved from and the whole trail behind it, which is the group-level version of the rail's single
+// number. Both are absent-tolerant by rule: an unscored group and an unscoped kind mean Issue, and neither draws
+// a placeholder.
+//
+// R1 ADDS THE LOCK, AND THE PANE IS WHERE IT IS DECIDED. A group's text can be locked in — by the Author from
+// here, or by the Editor when the Story's `editor_group_locking` Setting is on — and locked content is settled:
+// it cannot be revised, the findings aimed at it are void, and the other groups adapt to it. The pane therefore
+// carries three new things and one removed one: the locked BADGE (the revision the lock stands on and who made
+// it), the Author's lock/unlock pair (locking armed behind a confirmation because it voids findings and binds the
+// other groups; unlocking immediate because it destroys nothing), and the server's own refusal printed beside the
+// button that raised it (`story-contract.groupLockError`, the store's per-group cache — a refusal never paints a
+// locked badge on a group the route kept open). What is removed is the revise field's availability: a locked group
+// is never editable, so the field is shut with the reason next to it rather than left to 409 in the author's
+// face. All of it is read through `story-contract`'s lock selectors, so the rail's mark and this pane cannot
+// disagree, and `locked` ABSENT means open — a payload from before the lock keeps the pane it had.
+//
+// T5 REPLACES THE DATED TRAIL WITH TWO MARKS. The score list used to print every Reader pass with a date and a
+// run ref, which is a changelog; the Author's question is two facts wide — what does this section score now, and
+// what did it score the last time the Reader read it. So the pane now renders at most two rows, `Current clean
+// revision` and `Previous mark`, each with its percentage and the Critic's sentence when the pass wrote one, and
+// NO date and no timestamp anywhere in the text. Three passes or thirteen, two rows appear: the third mark is
+// history, and history is not this pane's claim. The numbers themselves are unchanged — same rows, same selectors,
+// same normalizer the rail's percentage uses.
 
 import { useState } from 'react';
 import type { PhraseFindingRow, PhraseGroupRow } from '../api';
 import type { StoryActions, StoryViewData } from './story-contract';
 import { RevisionDiff } from './RevisionDiff';
 import {
+    canAuthorLockGroup,
+    canAuthorUnlockGroup,
     findingGroups,
+    findingKindLabel,
+    findingKindToken,
     groupArchivedRevisions,
     groupBlockingFindings,
     groupLatestRevision,
+    groupLockActor,
+    groupLockActorLabel,
+    groupLockBadge,
+    groupLockError,
+    groupLockRefusal,
+    groupLockStatement,
+    groupLockTooltip,
     groupOpenFindings,
+    groupPreviousScorePercent,
+    groupScoreMarks,
+    groupScorePercent,
+    groupUnlockRefusal,
+    isEditorGroupLockingEnabled,
+    isGroupLocked,
     isGroupSummary,
     isGroupWriterBusy,
     isGroupWritten,
@@ -49,6 +93,26 @@ export interface SummaryGroupPaneProps {
     /** The group the rail's selection addresses — its UUID, never its index or `order` (U2). */
     groupId?: string;
     onSelect?: (selection: StorySelection) => void;
+}
+
+/**
+ * T3 — the movement between a group's LATEST score and the pass before it, in words.
+ *
+ * A delta printed as `+6` leans on a sign and a colour; a reader who cannot see the colour still needs the
+ * sentence. `undefined` on a first pass is the honest answer — "never scored" and "scored zero" are different
+ * claims, so the pane does not subtract an invented zero. `flat` says `unchanged`, because `up 0` is not a
+ * sentence anyone would write.
+ */
+function scoreDelta(
+    score: number,
+    previousScore?: number
+): { tone: 'up' | 'down' | 'flat'; text: string } | undefined {
+    if (previousScore === undefined) return undefined;
+    if (previousScore === score) return { tone: 'flat', text: `unchanged from ${previousScore}%` };
+
+    return previousScore < score
+        ? { tone: 'up', text: `up ${score - previousScore} from ${previousScore}%` }
+        : { tone: 'down', text: `down ${previousScore - score} from ${previousScore}%` };
 }
 
 /**
@@ -80,6 +144,19 @@ function FindingRow({
         <li className="sv-group-finding" data-cost={finding.cost} data-state={finding.state} data-testid={`finding-${finding.id}`}>
             {/* The cost word and the sentence the Reviewer wrote are two spans, and an accessible/linear read
                 concatenates spans: the separator keeps them two words instead of "criticalthe promise…". */}
+            {/* T3 — WHAT the row claims, said before what repairing it costs. `cost` is the repair bill; this is
+                the claim type: an Issue is the text contradicting a commitment the Seed made, a Proposal is the
+                text being merely improvable (word change, new element, a twist linked up). The Author's answer
+                differs — one has to be repaired, the other is weighed on merit — so a findings list that prints
+                only costs cannot tell the two apart. Absence means Issue (the legacy reading, pinned in
+                `api.ts:PhraseFindingRow`), and the word is TEXT rather than colour so it survives greyscale. */}
+            <span
+                className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                data-testid={`finding-${finding.id}-kind`}
+            >
+                {findingKindLabel(finding.kind)}
+            </span>
+            {' '}
             <span className={`sv-cost-${finding.cost}`}>{finding.cost}</span>
             {' '}
             <span className="sv-group-finding-title">{finding.title}</span>
@@ -130,11 +207,16 @@ function FindingRow({
 }
 
 export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: SummaryGroupPaneProps) {
-    // The pane's only local state: the Author's draft and the note that goes with it. It is a draft of a WRITE,
-    // never a claim about the record, so a poll landing under the Author's fingers cannot corrupt the record —
-    // and sending drops the draft, so what appears next is what the server returned.
+    // The pane's local state, all three of it about a WRITE in progress and none of it about the record:
+    //   - `draft`/`note` are the Author's pending revise body, dropped on send so what appears next is the
+    //     server's answer;
+    //   - `lockArmed` is only the confirmation STEP the lock sits on (R1) — the same shape the Reviewed-Summary
+    //     choose uses in `SummaryOverviewPane`, and never a claim that the group is locked. The badge below reads
+    //     `group.locked` off the phrase rows, so a refused lock leaves the pane saying `unlocked` in the same
+    //     frame it prints the refusal.
     const [draft, setDraft] = useState<string | null>(null);
     const [note, setNote] = useState('');
+    const [lockArmed, setLockArmed] = useState(false);
 
     // A sampling book has no groups. Its rail cannot select one, so this is the defensive answer, not a branch
     // the shell produces.
@@ -209,24 +291,52 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
     const previous = group.previous_content;
     const busy = isGroupWriterBusy(group);
     const written = isGroupWritten(group);
-    // The Author's one write against a group. R-T2/F6: the pane shows the group's text ONCE — the prose
+    // R1 — THE LOCK, read through the contract's selectors (`story-contract`), so the rail's mark, this pane's
+    // badge and the two controls underneath it are four readings of ONE rule. `locked` absent means open, and the
+    // four refusals below are the wire's own states — the shell's missing verb, the Writer holding the text
+    // (R4's `writer_busy`, the same read the revise route refuses with), a group with no revision to commit
+    // (R1's `revision: 0`), or a lock already standing — never a guess from run rows.
+    const locked = isGroupLocked(group);
+    const lockError = groupLockError(view, group.id);
+    const lockRefusal = groupLockRefusal(group, actions.lockPhraseGroup !== undefined);
+    const unlockRefusal = groupUnlockRefusal(group, actions.unlockPhraseGroup !== undefined);
+    const canLock = canAuthorLockGroup(group, actions.lockPhraseGroup !== undefined);
+    const canUnlock = canAuthorUnlockGroup(group, actions.unlockPhraseGroup !== undefined);
+    // T3/T5 — the group's Reader marks, read through the contract's selectors (the SAME read that drives the
+    // rail's percentage and the phrase header's average, so no surface rounds or orders it its own way).
+    // `marks` is AT MOST TWO rows — the current clean mark and the mark immediately before it — which is the
+    // whole comparison the Author asks for; the dated trail the pane used to print is gone (see
+    // `story-contract.groupScoreMarks` for why). An empty list means the pass has never run over this group, and
+    // the pane prints NOTHING rather than a `0%` that claims a review.
+    const marks = groupScoreMarks(group);
+    const score = groupScorePercent(group);
+    const previousScore = groupPreviousScorePercent(group);
+    // The movement in words (`up 6 from 78%`) — the two percentages the marks list is already showing, said as a
+    // sentence. `undefined` on a first mark is the honest answer: "never scored" and "scored zero" are different
+    // claims, so nothing subtracts an invented zero.
+    const delta = score === undefined ? undefined : scoreDelta(score, previousScore);
+    // The Author's one prose write against a group. R-T2/F6: the pane shows the group's text ONCE — the prose
     // region above is the reading copy — and the field below is an EDIT that starts empty and says what it
     // replaces. Prefilling the field with the whole current text announced the same paragraphs twice to a
     // screen reader (the prose region, then the field's value), which is noise on the one surface where the
     // Author is meant to read the book.
     const text = draft ?? '';
     // U-16: a disabled control states its reason, and the reason is the wire's own state (or the shell's missing
-    // binding), never a guess from run rows.
+    // binding), never a guess from run rows. R1 puts the LOCK first: a locked group is settled content, so the
+    // revise route refuses it whatever else is true of it, and an author who sees "the Writer is busy" on a locked
+    // group would be waiting for a busy-flag that was never the blocker.
     const trimmed = text.trim();
     const refuse =
         actions.revisePhraseGroup === undefined
             ? 'The group revise route is not available in this shell.'
-            : busy
-              ? 'The Writer is rewriting this group right now — the revise route refuses the write until it lands (R4).'
-              : trimmed.length === 0
-                ? 'Write the new text above first — the route refuses an empty group text (R2), so there is nothing to send yet.'
-                : '';
-    const canRevise = actions.revisePhraseGroup !== undefined && !busy && trimmed.length > 0;
+            : locked
+              ? `${group.title} is locked in — locked content is settled and cannot be revised (R1). Unlock it first to write a new revision.`
+              : busy
+                ? 'The Writer is rewriting this group right now — the revise route refuses the write until it lands (R4).'
+                : trimmed.length === 0
+                  ? 'Write the new text above first — the route refuses an empty group text (R2), so there is nothing to send yet.'
+                  : '';
+    const canRevise = actions.revisePhraseGroup !== undefined && !locked && !busy && trimmed.length > 0;
 
     const submit = () => {
         if (!canRevise) {
@@ -239,6 +349,36 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
         });
         setDraft(null);
         setNote('');
+    };
+
+    /**
+     * R1 — sends the lock. The confirmation step drops FIRST, exactly as the Reviewed-Summary choose does in
+     * `SummaryOverviewPane`: the pane keeps no lock state of its own, so what appears next is the phrase read the
+     * server answered with — the badge if the route accepted it, and the refusal line if it did not.
+     */
+    const lock = () => {
+        if (!canLock) {
+            return;
+        }
+
+        setLockArmed(false);
+        void actions.lockPhraseGroup?.(view.story.id, group.id);
+    };
+
+    /**
+     * R1 — opens a locked group again, and the Author's one verb on a lock the Editor made.
+     *
+     * NO CONFIRMATION STEP, unlike locking: unlocking destroys nothing. The text stands, the findings stay void
+     * until the next revision moves the group, and the only consequence is that the Author may write again — so
+     * a second click here would be friction on the exit out of a decision that was already confirmed.
+     */
+    const unlock = () => {
+        if (!canUnlock) {
+            return;
+        }
+
+        setLockArmed(false);
+        void actions.unlockPhraseGroup?.(view.story.id, group.id);
     };
 
     return (
@@ -265,6 +405,21 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
                         Writer busy
                     </span>
                 ) : null}
+                {/* R1 — THE LOCKED BADGE, and it is the head's only claim about a decision someone made. Both
+                    halves are the request: the revision the lock stands on (`groupLockRevision`, which is the
+                    locked text's number rather than whatever the loop has installed since) and WHO made it, the
+                    fact that explains why the write below is shut and why the desk's only way out is the Author's
+                    unlock. It is a badge and not the status line for the same reason the Clean stamp is: the
+                    status row is the Writer's account of the text, and this is a person's decision about it. */}
+                {locked ? (
+                    <span
+                        className="sv-badge sv-badge-locked"
+                        data-testid="group-locked"
+                        title={groupLockTooltip(group)}
+                    >
+                        {groupLockBadge(group)}
+                    </span>
+                ) : null}
             </div>
 
             {/* The purpose line: what the group is for, in the catalog's own words. It is the difference between
@@ -278,6 +433,126 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
                     The Writer is replacing this text right now. The pane shows the new revision when it lands.
                 </p>
             ) : null}
+
+            {/* R1 — the locked state stated in words, not only in a badge: a reader who lands on this pane needs
+                the consequence, not the decoration. The third clause is the one an Author is least likely to
+                expect from a lock button — the OTHER groups start adapting to this text — and the last is the
+                way out, which is the difference between a lock and a dead end. */}
+            {locked ? (
+                <p className="sv-group-notice" data-testid="group-locked-notice">
+                    {`This group is locked in by ${groupLockActorLabel(groupLockActor(group)).toLowerCase()}: the text is settled content, it cannot be revised from this pane, and the findings aimed at it are void. The other groups adapt to it. Only the Author can unlock it.`}
+                </p>
+            ) : null}
+
+            {/* R1 — a refusal the server sent, verbatim, beside the button that raised it (`state.ts` caches it
+                per group: `story-contract.groupLockError`). It says WHICH verb was refused, so a lock refusal and
+                an unlock refusal cannot be read as each other, and the pane still shows the group as the phrase
+                read describes it — the refusal never paints a locked badge over a group the route kept open. */}
+            {lockError === undefined ? null : (
+                <p className="sv-group-notice sv-group-notice--warn" role="alert" data-testid="group-lock-error">
+                    {lockError}
+                </p>
+            )}
+
+            {/* T5 — THE GROUP'S TWO READER MARKS. The score sits under the purpose line and above the text on
+                purpose: it is the Reviewer's verdict on how well this group does what it is FOR, and the prose
+                below is what produced it.
+
+                WHAT CHANGED, AND WHY IT IS NOW TWO ROWS. The pane used to print the whole dated trail — every pass
+                with a date and a run ref — which is a changelog, and a changelog answers a question nobody in the
+                desk is asking. The Author's question is two facts wide: what does this section score NOW, and what
+                did it score the last time the Reader read it? So the list is at most two rows, labelled
+                `Current clean revision` and `Previous mark`, with the Critic's sentence for each and NO date and no
+                run timestamp anywhere in the text (D-67 put the Reader's verdict on the clean vector, which is why
+                the current row is named for the revision it judged rather than for the clock). Three passes or
+                thirteen, the pane still renders two rows — the third mark is history, and history is not this
+                pane's claim.
+
+                The two rows come from `story-contract.groupScoreMarks`, the same selectors the rail's percentage
+                and the delta sentence are built from, so a rail row, this pane and the phrase header's average
+                cannot print three different pairs. A group nobody has scored prints NOTHING — the pane already
+                says `not written`/`No revision yet`, and a `0%` would claim a pass that never ran. */}
+            {score === undefined ? (
+                /* D-67 — an EMPTY `scores` list on a WRITTEN group is now the normal state, and the pane says why.
+                   The Reader pass reads the sections once the crew has a CLEAN revision of them to read (D-67
+                   moved the scoring join onto the clean vector), so a section whose group has no clean verdict
+                   carries no number at all. Printing `0%` there would claim a review that never ran, and
+                   printing nothing would read like the wire broke — so the line names the wait, in the same
+                   quiet voice an unwritten group already uses. */
+                written ? (
+                    <p className="sv-group-quiet" data-testid="group-score-none">
+                        No Reader score for this section yet — the pass reads a section once the crew has a clean
+                        revision of it to stand behind.
+                    </p>
+                ) : null
+            ) : (
+                <div className="sv-group-score" data-testid="group-score">
+                    <p className="sv-group-score-line">
+                        <span className="sv-group-score-value" data-testid="group-score-value">
+                            {`Score ${score}%`}
+                        </span>
+                        {/* The same word boundary the rail's rows pin: an accessible/linear read concatenates
+                            spans, so without it the pane announces "Score 84%(up 6 from 78%)". The WORDS are the
+                            carrier ("up 6 from 78%"), so the delta keeps its colour as speed only and survives
+                            greyscale and a screen reader. */}
+                        {' '}
+                        {delta === undefined ? null : (
+                            <span
+                                className={`sv-group-score-delta sv-group-score-delta--${delta.tone}`}
+                                data-testid="group-score-delta"
+                            >
+                                {`(${delta.text})`}
+                            </span>
+                        )}
+                    </p>
+
+                    {/* The comparison itself. `vector_hash` still rides the TOOLTIP rather than the text: one
+                        Reader pass scores all five groups against one text vector, so a row here and the same row
+                        in four other panes are one event — and a mark from a DIFFERENT vector is a different book,
+                        which is the thing a hover is for. A row with no `rationale` prints no sentence: the pass
+                        recorded none, and the pane does not write one. */}
+                    <ul
+                        className="sv-group-score-marks"
+                        aria-label="The Reader marks for this section — the current clean revision and the mark before it"
+                        data-testid="group-score-marks"
+                    >
+                        {marks.map((mark) => (
+                            <li
+                                key={`${mark.role}:${mark.pass.vector_hash}`}
+                                className="sv-group-score-mark"
+                                data-mark={mark.role}
+                                data-testid={`group-score-mark-${mark.role}`}
+                                title={`run ${mark.pass.run_ref} · vector ${mark.pass.vector_hash}`}
+                            >
+                                <span className="sv-group-score-mark-label" data-testid={`group-score-mark-${mark.role}-label`}>
+                                    {mark.label}
+                                </span>
+                                {/* The word boundary again: without it the row reads "Current clean revision84%". */}
+                                {' '}
+                                <span className="sv-group-score-mark-value">{`${mark.percent}%`}</span>
+                                {mark.rationale ? (
+                                    <>
+                                        {' '}
+                                        {/* The current mark keeps the established `group-score-rationale` id; the
+                                            older mark gets its own, so a test can pin WHICH pass said WHICH
+                                            sentence instead of trusting document order. */}
+                                        <span
+                                            className="sv-group-score-rationale sv-group-score-mark-why"
+                                            data-testid={
+                                                mark.role === 'current'
+                                                    ? 'group-score-rationale'
+                                                    : 'group-score-previous-rationale'
+                                            }
+                                        >
+                                            {mark.rationale}
+                                        </span>
+                                    </>
+                                ) : null}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
             <p className="sv-pane-label">
                 Current content
@@ -331,6 +606,25 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
                                 {`${archived.length} archived`}
                             </span>
                         ) : null}
+                        {/* D-67 — the Clean stamp, on the one row it describes. `history[].clean` is P11's audit
+                            of a verdict (this text closed a cross-group Critic pass with no unresolved defect),
+                            which is the only thing that makes a revision selectable into the reviewed Summary.
+                            It is a BADGE, not a state word: the pane's state line is the Writer's business, and
+                            this says something different — that a Reviewer has read exactly this text. The run
+                            that earned it travels in the title because every verdict names its run (P11). */}
+                        {latest?.clean === true ? (
+                            <span
+                                className="sv-badge sv-badge-assigned"
+                                data-testid="group-clean"
+                                title={
+                                    latest.clean_run_ref
+                                      ? `A cross-group Critic pass closed clean on this revision (run ${latest.clean_run_ref}) — it is the revision the reviewed Summary can stand behind.`
+                                      : 'A cross-group Critic pass closed clean on this revision, so it is selectable into the reviewed Summary.'
+                                }
+                            >
+                                Clean
+                            </span>
+                        ) : null}
                         {written && group.updated_by !== null ? (
                             <span className="sv-summary-flag">{`last written by ${group.updated_by}`}</span>
                         ) : null}
@@ -370,21 +664,113 @@ export function SummaryGroupPane({ view, actions = {}, groupId, onSelect }: Summ
                 </p>
             )}
 
+            {/* R1 — THE AUTHOR'S TWO VERBS ON THIS GROUP'S LOCK. They sit with the write controls, not up in the
+                head with the badge, because the decision and its consequence belong in one place: the pane says
+                what the text is worth, then asks whether the Author is committing to it.
+
+                LOCKING is armed, not fired: the first click puts the sentence above the verb, because a lock
+                freezes the text, voids the group's own findings, and promises this text to the other four groups —
+                three consequences an Author should read before the commit rather than discover after it (the same
+                inline-confirm discipline the Reviewed-Summary choose uses; `window.confirm` would style none of
+                it and assert none of it in a test). UNLOCKING has no such step: it destroys nothing — the text
+                stands and the next revision may change it — and a confirm on the way OUT of a decision is
+                friction on the only exit the Editor's lock has.
+
+                Both controls state their reason when they are shut (U-16), and the reasons are the wire's own
+                states: an unwritten group has nothing to commit (R1's `revision: 0`), a Writer-held group's text
+                is about to move (R4's `writer_busy`, the same read the routes refuse with), a locked group is not
+                asking to be locked again, and a shell with no verb says so on the spot. */}
+            <div className="sv-group-lock" data-testid="group-lock-controls">
+                {locked ? (
+                    <button
+                        type="button"
+                        className="sv-group-unlock-button"
+                        data-testid="group-unlock"
+                        disabled={!canUnlock}
+                        title={
+                            canUnlock
+                              ? 'Lift the lock so this group can be revised again (R1). Only the Author can do this, whoever made the lock.'
+                              : unlockRefusal
+                        }
+                        onClick={unlock}
+                    >
+                        Unlock this group
+                    </button>
+                ) : (
+                    <>
+                        <button
+                            type="button"
+                            className="sv-group-lock-button"
+                            data-testid="group-lock"
+                            disabled={!canLock || lockArmed}
+                            title={canLock ? 'Commit this text: it stops being editable and the other groups adapt to it (R1).' : lockRefusal}
+                            onClick={() => setLockArmed(true)}
+                        >
+                            Lock this group in
+                        </button>
+                        {lockArmed ? (
+                            <div className="sv-group-lock-confirm" data-testid="group-lock-confirm-block">
+                                <p className="sv-group-notice sv-group-notice--warn" data-testid="group-lock-note">
+                                    {groupLockStatement(group)}
+                                </p>
+                                <div className="sv-summary-actions">
+                                    <button
+                                        type="button"
+                                        className="sv-group-lock-confirm-yes"
+                                        data-testid="group-lock-confirm"
+                                        disabled={!canLock}
+                                        title={canLock ? 'Send the lock (R1).' : lockRefusal}
+                                        onClick={lock}
+                                    >
+                                        Lock it in
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="sv-group-lock-confirm-no"
+                                        data-testid="group-lock-cancel"
+                                        onClick={() => setLockArmed(false)}
+                                    >
+                                        Leave it open
+                                    </button>
+                                </div>
+                            </div>
+                        ) : null}
+                    </>
+                )}
+                {/* R2 — one line saying who else may lock this group, so the Author is not surprised by a lock
+                    they did not make. It is the Setting's effect, stated where the lock lives. */}
+                <p className="sv-group-quiet" data-testid="group-lock-who">
+                    {isEditorGroupLockingEnabled(view.story)
+                        ? 'This Story lets the Editor lock a group in too, on its own judgement over the Critic findings and the Reader score for it. Only you can unlock one.'
+                        : 'Only the Author locks a group in on this Story — the Editor-locking Setting is off in Settings.'}
+                </p>
+            </div>
+
             {/* The Author's one write against a group. The field starts as the current content, so the control is
                 an edit of the book rather than a blank page that silently replaces it. */}
             <div className="sv-group-note" data-testid="group-revise">
+                {/* R1 — a locked group is not editable, so the whole edit block is shut rather than hidden: the
+                    Author still needs to see the write that used to be here and read WHY it is not available (the
+                    pane's rule for every shut control), and the field's own `title` carries the same sentence the
+                    submit button states. */}
+                {locked ? (
+                    <p className="sv-group-quiet" data-testid="group-revise-locked">
+                        {`Locked content is settled and cannot be revised (R1). Unlock ${group.title} to write the next revision.`}
+                    </p>
+                ) : null}
                 <textarea
                     aria-label={`Rewrite ${group.title}`}
                     placeholder={`Write the new ${group.title} text — the current revision is above`}
                     value={text}
-                    disabled={busy}
+                    disabled={busy || locked}
+                    title={locked ? refuse : undefined}
                     onChange={(event) => setDraft(event.currentTarget.value)}
                 />
                 <input
                     aria-label="Note for the Editor"
                     placeholder="Why this change"
                     value={note}
-                    disabled={busy}
+                    disabled={busy || locked}
                     onChange={(event) => setNote(event.currentTarget.value)}
                 />
                 <button

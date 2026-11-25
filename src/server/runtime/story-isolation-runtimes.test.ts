@@ -33,6 +33,20 @@ import type { StoryThreadRecord } from '../run/thread-log';
 import { ServerConfig } from './server-config';
 import { SHARED_STORE_ID, StoryRuntimes } from './story-runtimes';
 
+/**
+ * The app book's template ids, DERIVED rather than literal.
+ *
+ * `seedCatalogue` creates the built-ins through `Collection.create`, which mints `template_0 …` in
+ * catalogue order and ignores each row's slug-shaped `id` — so the app catalogue's ids are exactly the
+ * first `BUILT_IN_TEMPLATES.length` counter ids, the last built-in is `template_${N-1}`, and the first row
+ * an Author adds is `template_${N}`. R-lock (D-69) added the `editor-group-lock` crew, which moved every
+ * literal in this file by one; the rule is pinned HERE once so the next built-in costs no test edit, while
+ * the catalogue's shape and order stay pinned by `templates/templates.test.ts`.
+ */
+const BUILT_IN_APP_IDS = BUILT_IN_TEMPLATES.map((_, index) => `template_${index}`);
+const LAST_BUILT_IN_APP_ID = `template_${BUILT_IN_TEMPLATES.length - 1}`;
+const FIRST_AUTHOR_MINTED_ID = `template_${BUILT_IN_TEMPLATES.length}`;
+
 // --------------------------------------------------------------------------------
 // The fixtures
 // --------------------------------------------------------------------------------
@@ -89,7 +103,7 @@ function runInit(storyId: string, index: number): Omit<Run, 'id' | 'rev' | 'crea
     return {
         story_id: storyId,
         work_item_ref: `wi_review_summary_a${index}`,
-        role: 'reader',
+        role: 'critic',
         state: 'working',
         started_at: '2026-11-24T10:00:00.000Z',
         tokens: 1000 * index,
@@ -195,8 +209,8 @@ function threadRecord(storyId: string, threadId: string): StoryThreadRecord {
         story_id: storyId,
         story_title: 'Lighthouse',
         phase: 'summary',
-        role: 'reader',
-        role_name: 'reader',
+        role: 'critic',
+        role_name: 'critic',
         title: 'Read the Summary against the Goal',
         state: 'torn_down',
         started_at: '2026-11-24T10:00:00.000Z',
@@ -464,7 +478,7 @@ describe('The app book configures every Story book', () => {
             // fork the roster: `assignTemplates` reports the ids the Author reads in the app catalogue.
             const appIds = appRows.map((row) => row.id);
 
-            expect(appIds).toEqual(['template_0', 'template_1', 'template_2', 'template_3', 'template_4', 'template_5', 'template_6', 'template_7', 'template_8', 'template_9', 'template_10', 'template_11', 'template_12']);
+            expect(appIds).toEqual(BUILT_IN_APP_IDS);
 
             for (const storyId of [ID_A, ID_B]) {
                 const store = runtimes.storeFor(storyId) as Store;
@@ -482,7 +496,7 @@ describe('The app book configures every Story book', () => {
                 AUTHOR
             );
 
-            expect(crew.id).toBe('template_13');
+            expect(crew.id).toBe(FIRST_AUTHOR_MINTED_ID);
             expect(runtimes.syncConfig()).toEqual([ID_A, ID_B]);
 
             for (const storyId of [ID_A, ID_B]) {
@@ -490,7 +504,7 @@ describe('The app book configures every Story book', () => {
                 const copy = store.templates.get(crew.id);
 
                 expect([copy?.id, copy?.name, copy?.title, copy?.rev]).toEqual([
-                    'template_13',
+                    FIRST_AUTHOR_MINTED_ID,
                     'author-cartographers',
                     appRows[0].title,
                     1
@@ -526,7 +540,7 @@ describe('The app book configures every Story book', () => {
                 { ...AUTHOR, why: 'this Story renamed the crew it was assigned' }
             );
 
-            expect([forked.id, forked.name, forked.rev]).toEqual(['template_12', 'lighthouse-only', 2]);
+            expect([forked.id, forked.name, forked.rev]).toEqual([LAST_BUILT_IN_APP_ID, 'lighthouse-only', 2]);
             expect(runtimes.syncConfig()).toEqual([]);
 
             const copyA = (runtimes.storeFor(ID_A) as Store).templates.get(appIds[appIds.length - 1]);
@@ -636,7 +650,7 @@ describe('The app book is durable configuration, not a second story log', () => 
             const before = config.templates().map((row) => [row.id, row.name, row.rev]);
 
             expect(before.length).toBe(BUILT_IN_TEMPLATES.length + 1);
-            expect(before[before.length - 1]).toEqual(['template_13', 'author-cartographers', 1]);
+            expect(before[before.length - 1]).toEqual([FIRST_AUTHOR_MINTED_ID, 'author-cartographers', 1]);
 
             await config.persist();
             await config.close();

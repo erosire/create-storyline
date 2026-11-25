@@ -2,7 +2,7 @@
  * §7 as data: the permission table, the guards the matrix cannot express as a level, and the
  * refusal wording (§12 W2, T-1, T-1a).
  *
- * §7's columns are Author | Assistant | **Writer** | **Editor** | Checker/**Reader**, and
+ * §7's columns are Author | Assistant | **Writer** | **Editor** | Reader/**Critic**, and
  * `documents/phase-1-research-pipeline.md` §7.2 appends a **Researcher** column. The Author and
  * the Assistant are not dispatched kinds, so this file pins the five columns the tool layer
  * enforces — cell for cell, in §7's row order, with the three Phase-1 rows appended — and then the rules the table cannot say as a
@@ -88,7 +88,7 @@ const SPEC_PERMISSION_MATRIX: Array<
     ['templates, recipes', 'templates', 'read', 'read', 'read', 'read', 'read'],
     ['directives', 'directives', 'read', 'read', 'read', 'read', 'read'],
     // T12/F2: the Researcher writes `knowledge` and `tasks` only, so its proposals cell is `read` —
-    // it is not the Checker's `write` any more (documents/phase-1-research-pipeline.md §7.2).
+    // it is not the Reader's `write` any more (documents/phase-1-research-pipeline.md §7.2).
     ['proposals', 'proposals', 'write', 'write', 'write', 'write', 'read'],
     ['sub_agent_runs', 'runs', 'recommend', 'recommend', 'recommend', 'recommend', 'recommend'],
     ['runs', 'runs', 'read', 'read', 'read', 'read', 'read'],
@@ -102,21 +102,21 @@ const SPEC_PERMISSION_MATRIX: Array<
 
 /**
  * The rows whose refusal must name a rule other than P10. §12 W2 names three of them outright
- * (a Reader's prose write as P10, an Editor's as L-19, a locked Summary as P5); §8 adds T-3c and
+ * (a Critic's prose write as P10, an Editor's as L-19, a locked Summary as P5); §8 adds T-3c and
  * D-12a, and §7's Author-span row is P9.
  */
 const SPEC_REFUSAL_RULES: Record<string, Partial<Record<RoleKind, string>>> = {
-    // §7.2: a Researcher's story-artifact write is refused naming P10, exactly like a Reader's.
-    'chapters.content (agent-written)': { editor: 'L-19', checker: 'P10', reader: 'P10', researcher: 'P10' },
+    // §7.2: a Researcher's story-artifact write is refused naming P10, exactly like a Critic's.
+    'chapters.content (agent-written)': { editor: 'L-19', reader: 'P10', critic: 'P10', researcher: 'P10' },
     // The lock guard below is the one W2 names (P5); this is the phase guard, which is what fires
     // while the Summary is still unlocked (§8.1: "phase `summary` only").
     'summaries (prose)': { writer: 'T-3c' },
     'chapters.content (Author-written span)': { writer: 'P9' },
     // The Digest is engine-derived for every kind, the Researcher included (D-12a).
-    digests: { writer: 'D-12a', editor: 'D-12a', checker: 'D-12a', reader: 'D-12a', researcher: 'D-12a' }
+    digests: { writer: 'D-12a', editor: 'D-12a', reader: 'D-12a', critic: 'D-12a', researcher: 'D-12a' }
 };
 
-const KINDS: RoleKind[] = ['writer', 'editor', 'checker', 'reader'];
+const KINDS: RoleKind[] = ['writer', 'editor', 'reader', 'critic'];
 
 /** The guards read `store`, `story`, `storyId` and `role`; the rest of the context is irrelevant. */
 function guardContext(store: Store, story: Story, role: RoleKind, storyId: string): ToolExecutionContext {
@@ -158,8 +158,8 @@ describe('the §7 permission table', () => {
                         row.collection,
                         row.writer,
                         row.editor,
-                        row.checker,
                         row.reader,
+                        row.critic,
                         // §7.2's fifth column, read from the same row object a call is judged on.
                         row.researcher
                     ] as (string | PermissionLevel)[]
@@ -201,20 +201,20 @@ describe('the §7 permission table', () => {
             true
         ]);
         // `verify` is the Editor's fact-check right (D-31). It is NOT a write, and a `write` does
-        // not satisfy it, which is what stops a checker from verifying what it read.
+        // not satisfy it, which is what stops a reader from verifying what it read.
         expect(checkPermission('editor', 'ideas', 'verify')).toEqual({
             allowed: true,
             level: 'verify',
             row: permissionRow('ideas')
         });
-        expect(checkPermission('checker', 'ideas', 'verify').allowed).toBe(false);
+        expect(checkPermission('reader', 'ideas', 'verify').allowed).toBe(false);
         expect(checkPermission('editor', 'ideas', 'write').allowed).toBe(false);
         // `write_verify` satisfies both `write` and `verify`: the Editor's cell on findings, which
         // is how §8.2's `verifyFinding` (D-33) and `approveFinding` (D-34) pair is one row.
         expect(checkPermission('editor', 'findings', 'write').allowed).toBe(true);
         expect(checkPermission('writer', 'findings', 'write_verify').allowed).toBe(false);
         // `recommend` is the Editor's `markChapterDone` cell (L-10): a writer may recommend, a
-        // reader-holds-only-read may not.
+        // critic-holds-only-read may not.
         expect(checkPermission('editor', 'runs', 'recommend').allowed).toBe(true);
         expect(checkPermission('writer', 'chapters', 'recommend').allowed).toBe(true);
         expect(checkPermission('writer', 'stories', 'recommend').allowed).toBe(false);
@@ -237,13 +237,13 @@ describe('the §7 permission table', () => {
         expect(levelFor('editor', 'seed_briefs')).toBe('write');
         expect(levelFor('researcher', 'seed_briefs')).toBe('read');
         expect(levelFor('researcher', 'sample_reviews')).toBe('read');
-        // It does not judge prose, so the report rows are reads for it even where a Checker writes.
+        // It does not judge prose, so the report rows are reads for it even where a Reader writes.
         expect(levelFor('researcher', 'verdicts')).toBe('read');
         expect(levelFor('researcher', 'findings')).toBe('read');
         expect(levelFor('researcher', 'ideas')).toBe('read');
         // D-11 still lets it file the task it cannot do itself.
         expect(levelFor('researcher', 'tasks')).toBe('write');
-        // T12/F2: `proposals` was inherited from the Checker's `write` and is now `read` — a research
+        // T12/F2: `proposals` was inherited from the Reader's `write` and is now `read` — a research
         // run files no §4.16 proposal, because a proposal is an opinion about a story artifact and
         // §7.2 says the Researcher does not judge those. It reads the tray like `ideas`.
         expect(levelFor('researcher', 'proposals')).toBe('read');
@@ -267,14 +267,14 @@ describe('the §7 permission table', () => {
         ).toEqual([
             { role: 'writer', allowed: false, level: 'read' },
             { role: 'editor', allowed: false, level: 'read' },
-            { role: 'checker', allowed: false, level: 'read' },
-            { role: 'reader', allowed: false, level: 'read' }
+            { role: 'reader', allowed: false, level: 'read' },
+            { role: 'critic', allowed: false, level: 'read' }
         ]);
     });
 
     it('grants what §7 grants and only what §7 grants, tool by tool (P10, T-1b)', () => {
-        // T-1b: a Reader's extra right is exactly one — `proposeIdea` — and it is not a write. The
-        // checker holds the same `write` cell on `ideas`, so it may report one too.
+        // T-1b: a Critic's extra right is exactly one — `proposeIdea` — and it is not a write. The
+        // reader holds the same `write` cell on `ideas`, so it may report one too.
         expect(KINDS.map((role) => mayCallKind(role, TOOL_BY_NAME.get('proposeIdea')!))).toEqual([
             false,
             false,
@@ -375,24 +375,24 @@ describe('the §7 permission table', () => {
 
     it('renders a refusal naming the rule, the artifact, the level held, and the way out (T-1a)', () => {
         const editChapter: ToolDefinition = TOOL_BY_NAME.get('editChapter')!;
-        // §12 W2: a Reader's prose write is refused naming P10. The projection is the whole
+        // §12 W2: a Critic's prose write is refused naming P10. The projection is the whole
         // contract — `rule` becomes `refused` for T-1b's tally, `message` is what the model reads,
         // and `details` is what it re-sends. (`message` is non-enumerable on an Error, so the three
         // fields are named rather than spread.)
-        const readerRefusal = permissionRefusal(
-            { role: 'reader', storyId: 'story_1' },
+        const criticRefusal = permissionRefusal(
+            { role: 'critic', storyId: 'story_1' },
             editChapter,
             'read',
             permissionRow('chapters')
         );
-        expect({ rule: readerRefusal.rule, message: readerRefusal.message, details: readerRefusal.details }).toEqual({
+        expect({ rule: criticRefusal.rule, message: criticRefusal.message, details: criticRefusal.details }).toEqual({
             rule: 'P10',
             message:
-                'a reader may not editChapter on chapters.content (agent-written): §7 gives a reader "read" there. Route the job to a writer',
+                'a critic may not editChapter on chapters.content (agent-written): §7 gives a critic "read" there. Route the job to a writer',
             details: {
                 story_id: 'story_1',
                 artifact: 'chapters.content (agent-written)',
-                role: 'reader',
+                role: 'critic',
                 level: 'read',
                 required: 'write',
                 criterion_refs: ['L-19', 'D-37', 'P7'],
@@ -523,8 +523,8 @@ describe('the §7 permission table', () => {
         expect(guardAuthorSpans(ctx('writer'), ['section_2'], ['section_2'], 'chapters:chapter_1')).toBe('propose');
         // The report kinds hold no write on chapters at all, so the ROW refuses them first and this
         // guard abstains — two refusals for one call would teach the wrong lesson (T-1a).
-        expect(guardAuthorSpans(ctx('checker'), ['section_2'], ['section_2'], 'chapters:chapter_1')).toBeNull();
         expect(guardAuthorSpans(ctx('reader'), ['section_2'], ['section_2'], 'chapters:chapter_1')).toBeNull();
+        expect(guardAuthorSpans(ctx('critic'), ['section_2'], ['section_2'], 'chapters:chapter_1')).toBeNull();
         // The Editor is the case the row cannot express: its `chapters.title/summary` cell is a read
         // for prose, but a title change touching an Author span is P9, not a generic refusal.
         const spanRefusal = guardAuthorSpans(
@@ -589,20 +589,20 @@ describe('the §7 permission table', () => {
 
     it('validates the body before the row, and guards the Story state after it (T-11, P8, D-2a)', async () => {
         const runtime = createToolRuntime(store);
-        const reader: RunToolContext = runtime.createContext({
+        const critic: RunToolContext = runtime.createContext({
             storyId: story.id,
-            roleKind: 'reader',
-            roleName: 'reader_1',
-            runId: 'run_reader'
+            roleKind: 'critic',
+            roleName: 'critic_1',
+            runId: 'run_critic'
         });
 
         // A malformed call is refused naming the field BEFORE the permission row, or an agent gets
         // a permission lesson it cannot act on yet (T-11). The result carries the field-by-field
         // issues and `describeTool`'s shape, so the fix costs one turn (T-6c).
-        const malformed = await runtime.execute(reader, 'editChapter', {
+        const malformed = await runtime.execute(critic, 'editChapter', {
             section_id: 'section_1',
             content: 'x',
-            why: 'A reader tries.',
+            why: 'A critic tries.',
             expects: []
         });
         expect({ refused: malformed.refused, tool: malformed.tool, issues: malformed.issues }).toEqual({

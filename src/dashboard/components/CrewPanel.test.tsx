@@ -65,7 +65,7 @@ describe('CrewPanel — the harnesses and what they are doing (U-7, D-18, S-3, S
 
         // S-7 / T-2b: the delegated sub-context is nested — no row, no cord of its own.
         const nested = row.querySelector('.sv-delegated') as HTMLElement;
-        expect(within(nested).getByText('checker')).toBeTruthy();
+        expect(within(nested).getByText('reader')).toBeTruthy();
         expect(within(nested).getByText('check C-8 against the plotline')).toBeTruthy();
         expect(
             within(nested).getByText('1 of 3 preferred the earlier cut — dissent recorded in the selection note.')

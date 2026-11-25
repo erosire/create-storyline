@@ -7,7 +7,7 @@
  * evidence: a claim that reaches a locked artifact needs an Editor's verdict (C-15), whoever
  * fetched it." So the two web tools write nothing and are refused by nobody, and the tool that
  * DOES write (`proposeIdea`) is governed by the §7 `ideas` row, which §7 labels
- * "**write** (`proposeIdea`)" for the checker/Reader column.
+ * "**write** (`proposeIdea`)" for the reader/Critic column.
  *
  * T-10 fixes the citation shape: every `sources[]` entry records `url_or_title`, the specific
  * `claim` it supports, and when it was accessed. A page cited for a claim it does not make gets
@@ -154,7 +154,7 @@ function noProviderResult(tool: string): ToolResult {
 // ── searchWeb ───────────────────────────────────────────────────────────────
 
 /**
- * §8.5 `searchWeb`: "leads, not facts" — the result set is untrusted excerpts, and the Reader
+ * §8.5 `searchWeb`: "leads, not facts" — the result set is untrusted excerpts, and the Critic
  * cites while the Editor judges (D-27). No answer synthesis is done here on purpose: an answer
  * without a URL is exactly the improvised claim T-10 exists to prevent.
  */
@@ -309,8 +309,8 @@ const fetchPage: ToolDefinition = {
 // ── proposeIdea ─────────────────────────────────────────────────────────────
 
 /**
- * §8.5 `proposeIdea`: "a Reader's only contribution mechanism (D-26). Never an edit." §7's
- * `ideas` row puts "**write** (`proposeIdea`)" in the Checker/Reader column, so a Writer or an
+ * §8.5 `proposeIdea`: "a Critic's only contribution mechanism (D-26). Never an edit." §7's
+ * `ideas` row puts "**write** (`proposeIdea`)" in the Reader/Critic column, so a Writer or an
  * Editor that calls it is refused naming P10 — which is the correct outcome, not an oversight:
  * the Editor's move on an Idea is `verifyIdea`, and the Writer's is to read the decided list
  * (D-32).
@@ -322,7 +322,7 @@ const fetchPage: ToolDefinition = {
 const proposeIdea: ToolDefinition = {
     name: 'proposeIdea',
     description:
-        "Put forward an Idea without editing anything — the Reader's only contribution, and a checker's too (D-26, D-32). Cite what you read in sources; the Editor verifies a claim before it can be selected (C-15).",
+        "Put forward an Idea without editing anything — the Critic's only contribution, and a reader's too (D-26, D-32). Cite what you read in sources; the Editor verifies a claim before it can be selected (C-15).",
     inputSchema: {
         type: 'object',
         properties: {

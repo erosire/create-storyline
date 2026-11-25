@@ -63,7 +63,7 @@ const errorOf = (reply: Reply): string => (reply.body as { error: string }).erro
 function seedFinding(
     store: Store,
     storyId: string,
-    over: Partial<Pick<Finding, 'target_ref' | 'related_refs' | 'state' | 'cost' | 'criterion_ref'>>
+    over: Partial<Pick<Finding, 'target_ref' | 'related_refs' | 'state' | 'cost' | 'criterion_ref' | 'kind'>>
 ): Finding {
     return store.findings.create(
         {
@@ -73,6 +73,9 @@ function seedFinding(
             title: 'The scene dodges the promise',
             evidence: 'The ridge is named, never seen (C-6).',
             cost: over.cost ?? 'major',
+            // D-33d: `kind` is the only way this fixture can ask for a PROPOSAL row, and it stays
+            // optional so every existing row in this file keeps the `issue` reading it always had.
+            ...(over.kind === undefined ? {} : { kind: over.kind }),
             fingerprint: `fp_${store.findings.count() + 1}`,
             state: over.state ?? 'confirmed',
             seen_count: 1,
@@ -200,5 +203,144 @@ describe('U-10b — approving a whole chapter worth of findings', () => {
 
         expect(unknown.status).toBe(404);
         expect(errorOf(unknown)).toBe('no chapter named chapter_8 is in the book (P1: the store is the memory)');
+    });
+});
+
+// ── D-33c/D-33d at the Author's queue ──────────────────────────────────────────────────────────
+//
+// WHY THESE ROWS EXIST: the tool refuses an approval over an open issue, and the Author's two approve
+// buttons do not go through the tool — the single approve lands on `engine.approveFinding` and the bulk
+// one loops over it. Before this rule, both funnels were the hole: the same proposal the Editor was
+// refused was one click away from a Writer round. And the bulk route had a second failure the shape of
+// its answer hides: `approved` is not `resolved`, so approving a chapter's ISSUES in one batch must not
+// unlock that chapter's PROPOSALS in the same batch.
+describe('D-33d — the Author cannot approve a proposal over an unresolved issue', () => {
+    it('the single approve refuses a proposal, names the issues, and moves nothing', async () => {
+        const world = await seedWorld();
+        const { store } = world;
+
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0' }); // finding_0 — the issue
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' }); // finding_1 — the proposal
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/findings/finding_1/approve', {
+            why: 'worth a pass'
+        });
+
+        expect(reply.status).toBe(409);
+        // L-13: the body is the sentence the Author reads, and it has to say WHICH rule and WHICH rows.
+        expect(errorOf(reply)).toBe(
+            'proposal finding_1 cannot be approved while 1 issue is unresolved — finding_0 (major, confirmed) — because issues are in focus before anything else can be done. Resolve them, or discard the proposal (D-33d).'
+        );
+        expect(board(store)).toEqual([
+            ['finding_0', 'confirmed', undefined],
+            ['finding_1', 'confirmed', undefined]
+        ]);
+        // The commit rolled back, so no Writer work leaked in behind the refusal either.
+        expect(store.tasks.list()).toEqual([]);
+    });
+
+    it('the single approve goes through once the issue is resolved', async () => {
+        const world = await seedWorld();
+        const { store } = world;
+
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0' });
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' });
+
+        const issue = store.findings.require('finding_0');
+
+        store.findings.update('finding_0', { state: 'fixed' }, { why: 'seed: the repair landed' }, [
+            { id: issue.id, rev: issue.rev }
+        ]);
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/findings/finding_1/approve', {
+            why: 'worth a pass'
+        });
+
+        expect(reply.status).toBe(200);
+        expect(board(store)).toEqual([
+            ['finding_0', 'fixed', undefined],
+            ['finding_1', 'approved', 'author']
+        ]);
+    });
+
+    it('the discard route still closes a proposal over an open issue (D-33d)', async () => {
+        const world = await seedWorld();
+        const { store } = world;
+
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0' });
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' });
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/findings/finding_1/discard', {
+            why: 'the book is better without the flourish'
+        });
+
+        expect(reply.status).toBe(200);
+        // Declining a change is not an approval and creates no Writer work, so the rule that sequences
+        // approvals has no business refusing it — and closing the row is what L-15a/L-16a read.
+        expect(board(store)).toEqual([
+            ['finding_0', 'confirmed', undefined],
+            ['finding_1', 'discarded', undefined]
+        ]);
+    });
+
+    it('approve-all takes the chapter\u2019s issues and SKIPS its proposals, because approving an issue is not resolving it (U-10b, D-33d)', async () => {
+        const world = await seedWorld();
+        const { store } = world;
+
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0' }); // finding_0 — issue
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' }); // finding_1 — proposal
+        seedFinding(store, 'story_0', { target_ref: 'chapter_1', related_refs: ['chapter_0'] }); // finding_2 — issue, via L-11a
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/chapters/chapter_0/findings/approve-all', {
+            why: 'clear the ridge, leave the flourish for later'
+        });
+
+        expect(reply.status).toBe(200);
+        // The two issues moved and the proposal did NOT, even though its own chapter-mates were approved
+        // in the same batch: `approved` opens a Writer task, it does not resolve anything, so the batch
+        // that clears the defects is the batch AFTER which the proposal becomes approvable.
+        expect(board(store)).toEqual([
+            ['finding_0', 'approved', 'author'],
+            ['finding_1', 'confirmed', undefined],
+            ['finding_2', 'approved', 'author']
+        ]);
+        // The route keeps its shape: one journaled approve per finding it APPROVED, and no anonymous
+        // bulk write. The skipped row simply has no event.
+        expect(
+            store.journal
+                .filter((event) => event.commit_label === 'approve_finding' && event.collection === 'findings')
+                .map((event) => event.id)
+        ).toEqual(['finding_0', 'finding_2']);
+        // A SECOND batch, fired right after the first, still skips it: `approved` opens Writer work, it is
+        // not `fixed`, so the issues the proposal was waiting on are not resolved yet. The release comes
+        // from the repair landing (the `fixed` case above), never from the Author clicking twice.
+        const again = await call(world.app, 'POST', '/stories/story_0/chapters/chapter_0/findings/approve-all', {
+            why: 'and the flourish, now?'
+        });
+
+        expect(again.status).toBe(200);
+        expect(board(store)).toEqual([
+            ['finding_0', 'approved', 'author'],
+            ['finding_1', 'confirmed', undefined],
+            ['finding_2', 'approved', 'author']
+        ]);
+    });
+
+    it('approve-all approves the proposals too, once the Story has no issue left (D-33d)', async () => {
+        const world = await seedWorld();
+        const { store } = world;
+
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' });
+        seedFinding(store, 'story_0', { target_ref: 'chapter_0', kind: 'proposal' });
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/chapters/chapter_0/findings/approve-all', {
+            why: 'no defects left in this chapter, so the improvements can go'
+        });
+
+        expect(reply.status).toBe(200);
+        expect(board(store)).toEqual([
+            ['finding_0', 'approved', 'author'],
+            ['finding_1', 'approved', 'author']
+        ]);
     });
 });

@@ -167,20 +167,20 @@ describe('makeRecorder', () => {
             }
         ];
 
-        expect(await request.client.complete({ model: 'crew/reader', messages, tools })).toEqual({
+        expect(await request.client.complete({ model: 'crew/critic', messages, tools })).toEqual({
             message: { content: 'ok' }
         });
 
-        expect(request.requests).toEqual([{ model: 'crew/reader', messages, tools }]);
+        expect(request.requests).toEqual([{ model: 'crew/critic', messages, tools }]);
 
         await request.client.complete({
-            model: 'crew/reader',
+            model: 'crew/critic',
             messages: [...messages, { role: 'tool', content: '{"ok":true}', tool_call_id: 'call_1' }]
         });
 
         expect(request.requests.length).toBe(2);
         expect(request.requests[1]).toEqual({
-            model: 'crew/reader',
+            model: 'crew/critic',
             messages: [messages[0], { role: 'tool', content: '{"ok":true}', tool_call_id: 'call_1' }]
         });
     });

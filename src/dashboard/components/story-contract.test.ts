@@ -43,7 +43,7 @@ import type { StoryViewData } from './story-contract';
 import type { SamplingView } from '../api';
 // The same default the loop dispatches the deep review by (`records.ts:screeningSizeOf`), so the clean
 // baselines spell out the pass count the engine actually owes rather than a number this file picked.
-import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
+import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
 import type { Cost, Finding, FindingState, Revision, Run, Story } from '../../shared/types';
 
 describe('story-contract — phases, locks and backtrack (U-16, L-31, L-32)', () => {
@@ -346,7 +346,7 @@ function draft(id: string, state: Revision['state'], created = AT, round = 1): R
 }
 
 /**
- * A Reader finding. PASSING NO `related` reproduces the legacy/whole-artifact spelling (`target_ref`
+ * A Critic finding. PASSING NO `related` reproduces the legacy/whole-artifact spelling (`target_ref`
  * only, no L-11a refs) — the shape whose old mismatch produced "no findings" beside a blocking reason.
  * T11/F4: refs that name a NON-draft id (the Summary row, a Seed Brief, a criterion) are the same
  * whole-artifact answer, and a case passes them to pin that.
@@ -379,8 +379,8 @@ function reviewRun(revisionId: string, pass: number, state: Run['state'] = 'torn
         updated_at: AT,
         story_id: 's1',
         work_item_ref: `wi_review_${revisionId}_a${pass}`,
-        template_ref: 't-reader',
-        role: 'reader',
+        template_ref: 't-critic',
+        role: 'critic',
         state,
         started_at: AT,
         ended_at: state === 'working' ? null : AT,
@@ -428,7 +428,7 @@ function gateView(overrides: GateOverrides = {}): StoryViewData {
         // T11/F1: an honest clean projection shows the review having RUNN. `runs` is required and uncapped
         // (`api.ts:StoryView`, `server/api/projections.ts`), so the shipped server carries these five
         // closed claims; `runs: []` would be a Summary nobody read, and the gate owes all five passes.
-        runs: closedPasses('revision_sel', DEFAULT_SUMMARY_READERS),
+        runs: closedPasses('revision_sel', DEFAULT_SUMMARY_CRITICS),
         // §10: the shipped server always sends the slice, and BOTH round numbers (T12/P1). The drafts
         // above carry round 1 and one of them is `selected`, so round 1 is the COMPLETED round the deep
         // review is owed for (`round`), and round 2 is the one in flight (`active_round`) — the number the
@@ -521,13 +521,13 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
     it('names the two sign-off waits the loop enforces, from the projected state (D-33, §6.4 step 6)', () => {
         const gate = lockCheck(
             gateView({
-                story: { summary_readers: 3 },
+                story: { summary_critics: 3 },
                 findings: [findingOn('f-open', 'major', 'unconfirmed', ['revision_sel'])],
                 runs: [reviewRun('revision_sel', 1), reviewRun('revision_sel', 2, 'working')]
             })
         );
 
-        // 3 passes are owed in total (the Author's own `summary_readers`); pass 1 is closed, pass 2 is
+        // 3 passes are owed in total (the Author's own `summary_critics`); pass 1 is closed, pass 2 is
         // alive, so exactly one more is owed — and the reason says which wait it is, not "another round".
         expect(gate.reasons).toEqual([
             '1 critical/major finding on the Summary still unconfirmed — the phase cannot sign off while a suspicion is undecided (D-33)',
@@ -563,7 +563,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         const gate = lockCheck(gateView({ findings: [findingOn('f-legacy', 'critical', 'confirmed')] }));
 
         // The pane shows the same row on this revision (`story-nav.test.ts` pins the pair), so the
-        // screenshot's "No Reader findings on this revision yet" cannot stand beside this reason.
+        // screenshot's "No Critic findings on this revision yet" cannot stand beside this reason.
         expect(gate.canLock).toBe(false);
         expect(gate.reasons).toEqual([
             '1 critical/major finding on the selected Summary awaiting your approval — nothing is queued until the Author decides (D-34)'
@@ -688,7 +688,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
             ],
             // The round that closed is the one whose winner's review is dispatchable, so the clean
             // baseline owes it all five closed passes (T11/F1).
-            runs: closedPasses('revision_sel', DEFAULT_SUMMARY_READERS)
+            runs: closedPasses('revision_sel', DEFAULT_SUMMARY_CRITICS)
         };
         const view = gateView(rounds);
         const context = summaryScopeContext(view);
@@ -738,7 +738,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
     it('holds Accept over a fresh selection whose review has not dispatched a single pass (T11/F1)', () => {
         const gate = lockCheck(
             gateView({
-                story: { summary_readers: 5 },
+                story: { summary_critics: 5 },
                 // Present-but-empty review family: the ONLY rows are another family (the round's sampling).
                 runs: [{ ...fixtureRuns()[0], work_item_ref: 'wi_sample_sum1_r1_a1' }]
             })
@@ -753,7 +753,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
     it('holds Accept over a partly reviewed winner, and counts the pass still running', () => {
         const gate = lockCheck(
             gateView({
-                story: { summary_readers: 4 },
+                story: { summary_critics: 4 },
                 runs: [...closedPasses('revision_sel', 2), reviewRun('revision_sel', 3, 'working')]
             })
         );
@@ -765,9 +765,9 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
     });
 
     it('releases Accept once every configured pass has a closed run (the clean projection)', () => {
-        const gate = lockCheck(gateView({ story: { summary_readers: 3 }, runs: closedPasses('revision_sel', 5) }));
+        const gate = lockCheck(gateView({ story: { summary_critics: 3 }, runs: closedPasses('revision_sel', 5) }));
 
-        // Extra closed rows do not create a debt, and a dial set to fewer readers than the ledger carries
+        // Extra closed rows do not create a debt, and a dial set to fewer critics than the ledger carries
         // is satisfied by its own numbered passes.
         expect(gate.canLock).toBe(true);
         expect(gate.reasons).toEqual([]);
@@ -777,7 +777,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         const selected = SELECTED();
 
         // T11/F1: a PRESENT but empty review family is evidence, not silence — all five passes are owed.
-        expect(deepReviewProgress(gateView({ story: { summary_readers: 5 }, runs: [] }), selected)).toEqual({
+        expect(deepReviewProgress(gateView({ story: { summary_critics: 5 }, runs: [] }), selected)).toEqual({
             closed: 0,
             live: 0,
             owed: 5
@@ -785,14 +785,14 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
 
         // A review family of ANOTHER draft's rows says nothing about this one; the passes stay owed.
         expect(
-            deepReviewProgress(gateView({ story: { summary_readers: 5 }, runs: [reviewRun('revision_old', 1)] }), selected)
+            deepReviewProgress(gateView({ story: { summary_critics: 5 }, runs: [reviewRun('revision_old', 1)] }), selected)
         ).toEqual({ closed: 0, live: 0, owed: 5 });
 
         // A suffixed or extra key is not a numbered pass and cannot substitute for one.
         expect(
             deepReviewProgress(
                 gateView({
-                    story: { summary_readers: 5 },
+                    story: { summary_critics: 5 },
                     runs: [
                         { ...reviewRun('revision_sel', 1), work_item_ref: 'wi_review_revision_sel_a1x' },
                         { ...reviewRun('revision_sel', 11), work_item_ref: 'wi_review_revision_sel_a11' }
@@ -807,7 +807,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         expect(
             deepReviewProgress(
                 gateView({
-                    story: { summary_readers: 5 },
+                    story: { summary_critics: 5 },
                     runs: [
                         reviewRun('revision_sel', 1),
                         reviewRun('revision_sel', 1, 'failed'),
@@ -823,12 +823,12 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         // Complete: every pass has a closed run, so the round's evidence is in.
         expect(
             deepReviewProgress(
-                gateView({ story: { summary_readers: 2 }, runs: [reviewRun('revision_sel', 1), reviewRun('revision_sel', 2)] }),
+                gateView({ story: { summary_critics: 2 }, runs: [reviewRun('revision_sel', 1), reviewRun('revision_sel', 2)] }),
                 selected
             )
         ).toEqual({ closed: 2, live: 0, owed: 0 });
 
-        // The pass count is the Author's `summary_readers` (§16.1 job 5); an unset Story falls back to the
+        // The pass count is the Author's `summary_critics` (§16.1 job 5); an unset Story falls back to the
         // SHARED default (5), the same one the loop dispatches by.
         expect(deepReviewProgress(gateView({ runs: [reviewRun('revision_sel', 1)] }), selected)).toEqual({
             closed: 1,
@@ -848,7 +848,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         // `(selected.round ?? 1) === (view.sampling?.round ?? 1)` — can have its review dispatched.
         const olderRound = draft('revision_sel', 'selected', AT, 1);
         const view = gateView({
-            story: { summary_readers: 5 },
+            story: { summary_critics: 5 },
             // Round 3 is the COMPLETED round (`round`), so `active_round` is 4. The deep-review guard is
             // made against the completed round — `records.ts:deepReviewRoundOf` — NOT the in-flight one:
             // a pass bought for a draft the loop moved past would be answered by nobody (T10/F7).
@@ -870,7 +870,7 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
         // And the gate shows it: an older-round override is not held by work the loop will never run.
         const gate = lockCheck(
             gateView({
-                story: { summary_readers: 5 },
+                story: { summary_critics: 5 },
                 sampling: { round: 3, active_round: 4, history: [] } satisfies SamplingView,
                 revisions: [draft('revision_old', 'discarded', '2026-11-11T11:01:00.000Z', 1), olderRound],
                 runs: []

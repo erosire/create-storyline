@@ -18,6 +18,7 @@
 
 import { useState } from 'react';
 import { useDashboard, useDashboardStore } from '../state';
+import { findingKindLabel, findingKindToken } from './story-contract';
 import type { QueueItem } from '../api';
 
 /** One click, one decision. `why` is the audit line P11 demands on every write (T-5). */
@@ -169,6 +170,21 @@ export function AuthorQueue() {
                                             <span className="queue-item__evidence-text">{item.evidence}</span>
                                         </p>
                                         <p className="queue-item__meta">
+                                            {/* T3 — the claim type, next to the cost it deserves. The queue is the
+                                                Author's front page and every row on it is waiting for a decision,
+                                                so this is the surface where the distinction pays: an Issue is a
+                                                repair the book needs, a Proposal is a change worth a Writer pass,
+                                                and the dial auto-approves the two at different costs. The field
+                                                arrives on the finding rows only (`api.ts:QueueItem.finding_kind`);
+                                                absence means Issue, the same reading as everywhere else. */}
+                                            <span
+                                                className={`kind-chip kind-chip--${findingKindToken(item.finding_kind)}`}
+                                                data-kind={findingKindToken(item.finding_kind)}
+                                                data-testid={`finding-${item.id}-kind`}
+                                            >
+                                                {findingKindLabel(item.finding_kind)}
+                                            </span>
+                                            {' '}
                                             <span className="cost-chip" data-cost={item.cost ?? ''}>
                                                 {item.cost ?? 'unpriced'}
                                             </span>

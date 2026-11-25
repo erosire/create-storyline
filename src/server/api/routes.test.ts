@@ -190,17 +190,17 @@ describe('§10.2 U-1 — the Stories panel', () => {
         // to ask for ten Writer samples without editing a built-in template (D-17, D-17d).
         const counts = await call(app, 'PATCH', '/stories/story_0', {
             summary_sampling: 10,
-            summary_readers: 7
+            summary_critics: 7
         });
 
         expect(counts.status).toBe(200);
         expect(
             (
                 (await call(app, 'GET', '/stories/story_0')).body as {
-                    story: { summary_sampling: number; summary_readers: number };
+                    story: { summary_sampling: number; summary_critics: number };
                 }
             ).story
-        ).toMatchObject({ summary_sampling: 10, summary_readers: 7 });
+        ).toMatchObject({ summary_sampling: 10, summary_critics: 7 });
 
         // D-3c: growing creates `outlined` chapters and shrinking drops the extras. The confirm is the
         // DASHBOARD's gate (it asks before sending), so the route always grants it — `loop/engine.test.ts`
@@ -252,7 +252,7 @@ describe('§10.2 U-1 — the Stories panel', () => {
 
         expect(nothing.status).toBe(400);
         expect(errorOf(nothing)).toBe(
-            'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_readers (D-35, D-17d).'
+            'PATCH /stories/:id got no field it knows: title, idea, chapter_count, auto_approve, summary_sampling, summary_critics (D-35, D-17d).'
         );
 
         expect([
@@ -262,8 +262,8 @@ describe('§10.2 U-1 — the Stories panel', () => {
             (await call(app, 'PATCH', '/stories/story_0', { chapter_count: 1.5 })).status,
             (await call(app, 'PATCH', '/stories/story_0', { auto_approve: ['enjoyable'] })).status,
             (await call(app, 'PATCH', '/stories/story_0', { summary_sampling: 0 })).status,
-            (await call(app, 'PATCH', '/stories/story_0', { summary_readers: 21 })).status,
-            (await call(app, 'PATCH', '/stories/story_0', { summary_readers: 2.5 })).status
+            (await call(app, 'PATCH', '/stories/story_0', { summary_critics: 21 })).status,
+            (await call(app, 'PATCH', '/stories/story_0', { summary_critics: 2.5 })).status
         ]).toEqual([400, 400, 400, 400, 400, 400, 400, 400]);
 
         const missing = await call(app, 'PATCH', '/stories/story_missing', { title: 'Nowhere' });
@@ -780,7 +780,7 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
                 id: 'idea_0',
                 title: 'let the keeper lie',
                 detail: 'direction · phase summary',
-                evidence: 'reader-continuity'
+                evidence: 'critic-continuity'
             },
             {
                 kind: 'escalation',
@@ -813,7 +813,7 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
             cost: 'major',
             // D-33b: a PROPOSAL on the desk. `critical` is refused at the tool for this kind, so `major`
             // is also the honest top of a proposal's ladder.
-            kind: 'improvement',
+            kind: 'proposal',
             title: 'let the keeper lie first',
             detail: 'chapter_1 sec_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
             evidence: 'ch1 sec_1: "he told them the truth"',
@@ -834,7 +834,7 @@ describe('§10.2 U-10 — the queue is the home screen', () => {
                 story_title: 'First Book',
                 id: 'finding_0',
                 title: 'let the keeper lie first',
-                finding_kind: 'improvement',
+                finding_kind: 'proposal',
                 detail: 'chapter_1 sec_1 has him tell the truth at once; opening on the lie gives chapter 2 its tension',
                 evidence: 'ch1 sec_1: "he told them the truth"',
                 cost: 'major'
@@ -1223,11 +1223,11 @@ describe('§10.2 U-8 — the template catalogue', () => {
     /** A §4.12 template that passes T-0, and the same one with its prompt removed. */
     const goodTemplate = (name: string): Record<string, unknown> => ({
         name,
-        title: 'Colder Checker',
+        title: 'Colder Reader',
         roles: [
             {
-                name: 'checker-cold',
-                kind: 'checker',
+                name: 'reader-cold',
+                kind: 'reader',
                 prompt: 'Judge only whether the prose is cold, and cite the line.'
             }
         ],
@@ -1255,10 +1255,10 @@ describe('§10.2 U-8 — the template catalogue', () => {
     it('creates a template, duplicates a built-in, and refuses editing the built-in (D-17)', async () => {
         const { app, store } = makeApp();
 
-        const created = await call(app, 'POST', '/templates', { template: goodTemplate('checker-cold') });
+        const created = await call(app, 'POST', '/templates', { template: goodTemplate('reader-cold') });
 
         expect(created.status).toBe(200);
-        expect((created.body as { name: string; builtin: boolean }).name).toBe('checker-cold');
+        expect((created.body as { name: string; builtin: boolean }).name).toBe('reader-cold');
 
         const duplicate = await call(app, 'POST', '/templates', { duplicate_of: 'assistant' });
 
@@ -1274,7 +1274,7 @@ describe('§10.2 U-8 — the template catalogue', () => {
         const edited = await call(
             app,
             'PATCH',
-            `/templates/${store.templates.list().find((row) => row.name === 'checker-cold')?.id}`,
+            `/templates/${store.templates.list().find((row) => row.name === 'reader-cold')?.id}`,
             { attempts: 4 }
         );
 
@@ -1286,14 +1286,14 @@ describe('§10.2 U-8 — the template catalogue', () => {
         const { app } = makeApp();
 
         const broken = {
-            ...goodTemplate('checker-no-prompt'),
-            roles: [{ name: 'checker-no-prompt', kind: 'checker', prompt: '' }]
+            ...goodTemplate('reader-no-prompt'),
+            roles: [{ name: 'reader-no-prompt', kind: 'reader', prompt: '' }]
         };
         const reply = await call(app, 'POST', '/templates', { template: broken });
 
         expect(reply.status).toBe(409);
         expect(errorOf(reply)).toContain('(T-0)');
-        expect(errorOf(reply)).toContain('checker-no-prompt');
+        expect(errorOf(reply)).toContain('reader-no-prompt');
     });
 
     it('refuses a template name the catalogue already holds (D-17)', async () => {

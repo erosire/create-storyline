@@ -240,3 +240,46 @@ describe('shell-binding — the wire shape becomes panel props', () => {
         });
     });
 });
+
+describe('shell-binding — the Reviewed Summary reaches the pane as props, not as a guess (D-67, D-68)', () => {
+    it('threads the cached choose refusal onto the rail payload, and says NOTHING when there is none', () => {
+        const view = storyView(storyRow('story_1'));
+        const refusal =
+            'this Story has no Reviewed Summary to choose: ending (unwritten) — a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).';
+
+        // The refusal is a SENTENCE, not a flag: `reviewedError: ''` would be an empty paragraph in the pane,
+        // and `undefined` must stay absent so the pane's `reviewedChooseError` reads "no refusal".
+        expect(storyViewData(view, [], undefined, undefined, refusal).reviewedError).toBe(refusal);
+        expect('reviewedError' in storyViewData(view, [], undefined, undefined)).toBe(false);
+        expect('reviewedError' in storyViewData(view, [], undefined, undefined, undefined)).toBe(false);
+        // A null is a deliberate "no refusal" from the store, and travels as itself (the pane tests both).
+        expect(storyViewData(view, [], undefined, null, null).reviewedError).toBeNull();
+        // The two error slots are independent: a failed phrase READ does not silence a choose refusal, and
+        // one does not overwrite the other.
+        const both = storyViewData(view, [], undefined, 'this Story has no Summary Phrase', refusal);
+
+        expect(both.phraseError).toBe('this Story has no Summary Phrase');
+        expect(both.reviewedError).toBe(refusal);
+    });
+
+    it('routes the choose from the pinned shape, the local shape, and a note that is not a story id (D-68)', async () => {
+        const { actions, client } = await bound();
+
+        // The pane's pinned call: (storyId, note).
+        await actions.chooseReviewedSummary?.('story_1', 'the newer Ending');
+        expect(client.choosePhraseReviewed).toHaveBeenLastCalledWith('story_1', { note: 'the newer Ending' });
+
+        // The shell-local call: (note), with the Story being the shell's scope (D-29). The note is FREE
+        // TEXT, so `scopeOf` alone would hand it to the route table as an id — `namesStory` is the guard.
+        await actions.chooseReviewedSummary?.('the newer Ending');
+        expect(client.choosePhraseReviewed).toHaveBeenLastCalledWith('story_1', { note: 'the newer Ending' });
+
+        // A bare call is the verb with nothing attached, which is what the Summary tab sends.
+        await actions.chooseReviewedSummary?.();
+        expect(client.choosePhraseReviewed).toHaveBeenLastCalledWith('story_1', {});
+
+        // And a first argument that DOES name the book, in the second position: still this Story, no note.
+        await actions.chooseReviewedSummary?.('story_1');
+        expect(client.choosePhraseReviewed).toHaveBeenLastCalledWith('story_1', {});
+    });
+});

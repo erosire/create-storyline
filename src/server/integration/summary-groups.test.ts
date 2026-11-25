@@ -20,14 +20,27 @@
 // (`phrase/findings.ts:closeFindingWhenGroupsResolved`'s state gate, D-34). The install-time close
 // therefore declines almost ALWAYS on a group book, and what closes the finding one sweep later is the
 // reconciliation at `loop/engine.ts`'s `loop_reconcile_findings` commit. Pinned below: the finding
-// reads `approved` with its debt visible while the second group is unwritten, and `fixed` — with the
-// fix task consumed — only once every group it names carries a resolving revision.
+// reads `approved` with its whole debt already paid — every group it names carries a resolving revision —
+// and `fixed`, with the fix task consumed, on the sweep that reconciliation runs.
+//
+// WHAT D-66 TOOK AWAY, and it is the reason the second case reads the way it does. A defect naming TWO
+// groups on a book whose batch dial is 1 used to be TWO passes, and this file was the only place that
+// could read the moment between them: premise at number 2, ending at number 1, `owed_by_findings` on one
+// group and not the other. The dial caps BATCHES, not DEFECTS, so the pair goes out as one pass
+// (`phrase/exclusion.ts:planGroupDraftBatch`) and that half-answered state no longer exists on a Story the
+// loop drives. What the second case pins instead is the shape of the single pass: one Run row over both
+// groups under the SET's claim key, two number-2 Group Revisions naming that same run and the same
+// `finding_refs`, and no second attempt anywhere in the family.
 //
 // WHAT IS PINNED AS A NUMBER AND WHY IT MAY BE ONE: the Story's `phrase_groups.id`s are real UUIDs
 // issued per boot, so every claim key below is RECOMPUTED from the store's rows through the same
-// `groupVectorHash` the planner uses — no hash is hardcoded. Run ids (`run_2`, `run_6`) are
+// `groupVectorHash` the planner uses — no hash is hardcoded. Run ids (`run_2`, `run_7`) are
 // creation-ordered and stable, and dispatch is one run per sweep (the S-5 ceiling's default), which is
-// what makes the mid-state of the second case reachable at all.
+// what makes the mid-state of the second case reachable at all. D-65's scoring pass is one of those
+// runs: it takes the slot immediately after each install that completes the Overview, so every id after
+// the first score row is one higher than it was before that decision. The ids are pinned, not derived,
+// precisely so that a seat which quietly stopped running — or a scoring pass that started gating sign-off
+// — shows up here as a hole in the ledger.
 import { describe, expect, it } from 'vitest';
 import {
     bootStoryline,
@@ -98,18 +111,27 @@ const draftFamily = (fixture: StorylineFixture, storyId: string, keys: readonly 
  * The `review_groups` seat / `group_check` claim for the vector these keys are AT the given revision.
  * R5 replaced "screen N candidates" with "read the installed Overview at one vector", so the vector —
  * not a draft id — is the claim's identity.
+ *
+ * D-65's scoring seat is keyed the same way (one `wi_summary_score_<vector>` claim per vector, no pass
+ * number), and it is returned here for the same reason the two seats are: the hash is recomputed from
+ * the group ids and revisions the book holds, never copied off a run.
  */
 const vectorFamily = (
     fixture: StorylineFixture,
     storyId: string,
     keys: readonly string[],
     revisions: Record<string, number>
-): { seat: string; check: string } => {
+): { seat: string; check: string; score: string; hash: string } => {
     const hash = groupVectorHash(
         Object.fromEntries(keys.map((key) => [groupIdOf(fixture, storyId, key), revisions[key]]))
     );
 
-    return { seat: `wi_review_groups_${hash}`, check: `wi_group_check_${hash}` };
+    return {
+        seat: `wi_review_groups_${hash}`,
+        check: `wi_group_check_${hash}`,
+        score: `wi_summary_score_${hash}`,
+        hash
+    };
 };
 
 /** Every key at one revision — the shape a freshly-written Overview's vector has. */
@@ -128,21 +150,21 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
         // The batch dial at 5 means the first Writer pass covers the whole Overview at once (R5's
         // "one structured pass", not N competing samples), and the fix pass may still address one group.
         const fixture = await bootStoryline({
-            readerIdeas: 0,
-            // R3: the deep review's finding carries `group_refs`, and the Checker REFUSES a phase-①
+            criticIdeas: 0,
+            // R3: the deep review's finding carries `group_refs`, and the Reader REFUSES a phase-①
             // Summary defect that names no group on a group book. One group is the case the routing
             // exists for: the fix batch is cut against premise alone.
-            readerGroupRefs: (ctx) => groupIdsIn(ctx.store, ctx.story?.id ?? '', ['premise']),
+            criticGroupRefs: (ctx) => groupIdsIn(ctx.store, ctx.story?.id ?? '', ['premise']),
             // The defect is a ONE-ROUND event: as soon as premise carries a second revision the scripted
             // review is clean, so the loop stops at the sign-off instead of grinding to the attempt cap.
-            readerFinds: (ctx) => {
+            criticFinds: (ctx) => {
                 const premise = ctx.store.phraseGroups.list().find((row) => row.story_id === ctx.story?.id && row.key === 'premise');
 
                 return premise !== undefined && premise.revision >= 2 ? undefined : 'critical';
             }
         });
 
-        const storyId = await createSliceStory(fixture, 1, { mode: 'groups', sampling: 5, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { mode: 'groups', sampling: 5, critics: 1 });
 
         try {
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 60);
@@ -151,13 +173,19 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
             const firstVector = vectorFamily(fixture, storyId, ALL_KEYS, atRevision(ALL_KEYS, 1));
 
             // THE LEDGER, in dispatch order, and nothing else: gates → one pass over five groups → the
-            // seat over the installed Overview → the deep review that FILES the defect → the Editor's
-            // verification that APPROVES it → the fix pass over premise → the seat and the deep review of
-            // the NEW vector. There is no `wi_sample_` claim and no selection step anywhere (R5 removed
-            // them from this path).
+            // Reader scoring that installed Overview → the seat over the installed Overview → the deep
+            // review that FILES the defect → the Editor's verification that APPROVES it → the fix pass
+            // over premise → the scoring pass for the NEW vector → the seat and the deep review of that
+            // vector. There is no `wi_sample_` claim and no selection step anywhere (R5 removed them from
+            // this path).
+            //
+            // The two `wi_summary_score_` lines are D-65: one Reader pass per group vector, ranked ahead
+            // of the Critic seats so the score describes the text while it is the installed one. It
+            // neither spends a group's Writer allowance nor holds sign-off — the list still ends at the
+            // seats the gate counts, and the sweep still parks at `phase_signoff` after them.
             //
             // The two lines after the fix are the hardening: the fix installed a new group vector, and a
-            // vector's Reader seats are owed until they report. Before this pass the sweep handed the
+            // vector's Critic seats are owed until they report. Before this pass the sweep handed the
             // Author the lock over the rewritten Overview WITHOUT reading it (the sign-off's only review
             // read was the legacy `deepReviewPassesOwed(selectedSummaryRevision)`, which is vacuous on a
             // book that has no selected Summary revision) — which is both the sign-off defect and the
@@ -168,19 +196,26 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
             await expect(runLines(fixture, storyId)).resolves.toEqual([
                 ...GATE_LINES,
                 `${draftFamily(fixture, storyId, ALL_KEYS)}_1[writer-summary-sampler/writer]=torn_down`,
-                `${firstVector.seat}_1[reader-screening/reader]=torn_down`,
-                `${firstVector.check}_1[reader-genre/reader]=torn_down`,
+                // D-67: no `wi_summary_score_…` row anywhere in this ledger. The deep pass files a premise
+                // defect on the first vector (and on the second), so the Selection never becomes complete,
+                // and the Reader is never offered a Summary the crew is still rejecting. The scoring pass
+                // itself — its gate, its rank, its refusal re-arm — is pinned in `loop/section-scores.test.ts`.
+                `${firstVector.seat}_1[critic-screening/critic]=torn_down`,
+                `${firstVector.check}_1[critic-genre/critic]=torn_down`,
                 'wi_verify_finding_finding_0_1[editor-general/editor]=torn_down',
                 `${draftFamily(fixture, storyId, ['premise'])}_1[writer-summary-sampler/writer]=torn_down`,
-                `${secondVector.seat}_1[reader-screening/reader]=torn_down`,
-                `${secondVector.check}_1[reader-genre/reader]=torn_down`
+                `${secondVector.seat}_1[critic-screening/critic]=torn_down`,
+                `${secondVector.check}_1[critic-genre/critic]=torn_down`
             ]);
 
             const groups = groupsOf(fixture, storyId);
 
             // ONLY premise moved, and it moved to its OWN next number (R2). The four siblings keep
             // number 1 and the run that wrote them, and none of them was rewritten to answer a defect
-            // nobody attributed to it.
+            // nobody attributed to it. The fix's run id is `run_6` rather than the `run_7` it was under
+            // D-65: the scoring pass no longer opens a row in this ledger (no Clean verdict on a vector
+            // whose deep review filed a finding), so every id downstream of the first draft batch is one
+            // lower — the same shift the run ledger above pins.
             expect(groups.map((row) => [row.key, row.revision, row.updated_by])).toEqual([
                 ['premise', 2, 'run_6'],
                 ['promise', 1, 'run_2'],
@@ -244,7 +279,7 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
 
             // R5's review product: one structured seat per VECTOR that ever existed over this Overview —
             // the first vector's seat (which produced the deep review's finding) and the fix's NEW vector's
-            // seat, both valid with nothing to report (`readerFinds` goes clean once premise is at 2). The
+            // seat, both valid with nothing to report (`criticFinds` goes clean once premise is at 2). The
             // second row is the hardening: the sign-off no longer walks past an unread vector.
             expect(fixture.store.sampleReviews.list().map((row) => [row.id, row.valid, row.issues.length])).toEqual([
                 ['sample_review_0', true, 0],
@@ -252,7 +287,9 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
             ]);
             // The deep review's verdicts, one per vector too: `run_4` read the first Overview and filed the
             // premise defect; `run_8` read the REWRITTEN one and advanced it — the evidence the sign-off
-            // this test settles on now waits for.
+            // this test settles on now waits for. D-67 moved both ids down (one, then two): the scoring
+            // pass takes NO Run row on a vector nobody stamped clean, and the slot it used to occupy ahead of
+            // each vector's seats is what pushed the later ids up under D-65.
             expect(fixture.store.verdicts.list().map((row) => [row.id, row.target_ref, row.recommendation, row.run_ref])).toEqual([
                 ['verdict_0', 'summary_0', 'advance', 'run_4'],
                 ['verdict_1', 'summary_0', 'advance', 'run_8']
@@ -288,6 +325,22 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 [[1, 'latest', 'run_2', []]],
                 [[1, 'latest', 'run_2', []]],
                 [[1, 'latest', 'run_2', []]]
+            ]);
+
+            // D-65 ON THE AUTHOR'S READ — D-67 then moved the rail's SOURCE. `scores` is still the pinned
+            // wire field (`api/projections.ts:PhraseGroupScoreRow`), but the pass now answers for the
+            // compiled REVIEWED vector only, and nothing in this book is a reviewed selection: premise's
+            // fix left an OPEN finding on its own vector, so no Clean stamp exists, the selection is
+            // incomplete, and no score pass runs at all. Hence an empty rail on every group — which is
+            // itself the proof that the gate holds (a row here would mean a vector had been scored that
+            // no cross-group pass ever blessed). `loop/section-scores.test.ts` owns the pass firing, and
+            // `api/phrase-routes.test.ts` ("Reviewed Summary on the wire") owns the populated rail.
+            expect((view.body.groups as any[]).map((row) => [row.key, row.scores])).toEqual([
+                ['premise', []],
+                ['promise', []],
+                ['theme', []],
+                ['tone', []],
+                ['ending', []]
             ]);
 
             // The rail carries the CLOSED finding with its join computed — `resolved_all: true` and an
@@ -328,7 +381,7 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 levels: { summary: '2/2' }
             });
 
-            // And the pipeline got there without a single tool refusal — including the Checker's group
+            // And the pipeline got there without a single tool refusal — including the Reader's group
             // attribution rule, which the deep review satisfied by naming `group_refs` (R3).
             expect(fixture.refusals).toEqual([]);
         } finally {
@@ -336,23 +389,26 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
         }
     });
 
-    it('holds a two-group defect open until BOTH groups are rewritten, then closes it and spends the task', async () => {
-        // The batch dial at ONE is the point: a defect on premise AND ending cannot be answered in one
-        // pass, so the loop owes TWO batches, and R3's rule — a partial fix is never a partial close —
-        // becomes observable instead of merely asserted.
+    it('answers a two-group defect in ONE pass over BOTH groups, then closes it and spends the task', async () => {
+        // The batch dial at ONE, and a defect naming premise AND ending. Before D-66 that pair was two
+        // batches, and the slice below used to read the book in the middle of it — premise rewritten, ending
+        // still wrong, the finding `approved` and open. D-66 removes that moment: the dial caps BATCHES, not
+        // DEFECTS, so the pair goes out as one pass and the Author's book never shows the defect half
+        // answered. R3's join is still what closes the row (phrase/findings.ts), but the partial state this
+        // test used to pin is no longer a state the loop can reach.
         const fixture = await bootStoryline({
-            readerIdeas: 0,
-            readerGroupRefs: (ctx) => groupIdsIn(ctx.store, ctx.story?.id ?? '', ['premise', 'ending']),
+            criticIdeas: 0,
+            criticGroupRefs: (ctx) => groupIdsIn(ctx.store, ctx.story?.id ?? '', ['premise', 'ending']),
             // The defect clears once the FIRST named group has its second revision; the loop still owes
             // the second one, and the finding may not close until the second lands.
-            readerFinds: (ctx) => {
+            criticFinds: (ctx) => {
                 const premise = ctx.store.phraseGroups.list().find((row) => row.story_id === ctx.story?.id && row.key === 'premise');
 
                 return premise !== undefined && premise.revision >= 2 ? undefined : 'critical';
             }
         });
 
-        const storyId = await createSliceStory(fixture, 1, { mode: 'groups', sampling: 1, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { mode: 'groups', sampling: 1, critics: 1 });
 
         try {
             await fixture.settle(() => groupsOf(fixture, storyId).some((row) => row.key === 'premise' && row.revision >= 2), 40);
@@ -360,9 +416,16 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
             const premise = groupIdOf(fixture, storyId, 'premise');
             const ending = groupIdOf(fixture, storyId, 'ending');
 
-            // ONE GROUP AT A TIME, in catalog order: five first-draft passes, then the fix pass over the
-            // group the finding still owed FIRST. Each claim is the family for one group, so premise's
-            // fix is attempt 2 of premise's own family — the family is the group set, not the attempt.
+            // ONE GROUP AT A TIME for the first drafts, in catalog order — and then the fix, which is NOT
+            // one group at a time: the pair goes out together. Each first draft is the family for one group;
+            // the fix pass is the family for the SET the finding named, at its own attempt 1, because no
+            // pass has ever claimed `{premise, ending}` before (`loop/work.ts:planGroupDraftBatch`).
+            //
+            // The row ids are the store's own counter, and D-67 is the only reason they are not all one
+            // higher than the draft ids: the scoring pass opens NO Run row in this rig, because the deep
+            // cross-group review files a finding on the fifth install and a group with an unresolved defect
+            // never carries a Clean verdict (`phrase/reviewed.ts:cleanSelectionOf` is the seat's gate). The
+            // five first-draft ids are untouched either way: a half-written Overview has no selection at all.
             expect(
                 fixture.store.runs
                     .list()
@@ -374,7 +437,7 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 ['run_5', `${draftFamily(fixture, storyId, ['theme'])}_1`, 1],
                 ['run_7', `${draftFamily(fixture, storyId, ['tone'])}_1`, 1],
                 ['run_9', `${draftFamily(fixture, storyId, ['ending'])}_1`, 1],
-                ['run_14', `${draftFamily(fixture, storyId, ['premise'])}_2`, 1]
+                ['run_14', `${draftFamily(fixture, storyId, ['premise', 'ending'])}_1`, 2]
             ]);
 
             expect(groupsOf(fixture, storyId).map((row) => [row.key, row.revision])).toEqual([
@@ -382,20 +445,25 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 ['promise', 1],
                 ['theme', 1],
                 ['tone', 1],
-                ['ending', 1]
+                ['ending', 2]
             ]);
 
-            // R3's partial fix, as a ROW: the finding is `approved` (D-34 signed it off) and STILL OPEN,
-            // with premise resolved and ending missing. `closeFindingWhenGroupsResolved` answers
-            // `resolved_all: false` here, so the sweep reconciliation is the thing that would close it —
-            // and it declines to, on the same read.
-            expect(
-                fixture.store.findings.list().map((row) => [row.id, row.state, row.group_refs])
-            ).toEqual([['finding_0', 'approved', [premise, ending]]]);
+            // THE BOOK ONE SWEEP LATER: both groups carry the revision that answered the defect, and the row
+            // is still `approved` — the install landed while the Author's approval was still being written,
+            // so D-34's gate declined the install-time close and the sweep's `loop_reconcile_findings` step
+            // closes it (the same join the batch-cap file pins). What D-66 changed is the SHAPE of the
+            // moment: `resolved` names BOTH groups and `missing` is empty. There is no book state where one
+            // of the two named groups is rewritten and the other is not.
+            expect(fixture.store.findings.list().map((row) => [row.id, row.state, row.group_refs])).toEqual([
+                ['finding_0', 'approved', [premise, ending]]
+            ]);
+            // The fix task is the APPROVAL's child, and the approval landed after the pass was planned — so
+            // the row exists and is untouched: 0 attempts, `open`, still owed. The pass that answered the
+            // defect never saw it (the same ordering the split pair of passes had).
             expect(fixture.store.tasks.list().map((row) => [row.id, row.state, row.attempts])).toEqual([['task_0', 'open', 0]]);
 
-            // THE AUTHOR'S READ of the same moment: the debt is on ending and not on premise, which is
-            // exactly the routing the next batch is cut against.
+            // THE AUTHOR'S READ of the same moment: neither group owes the defect anything. Before D-66 this
+            // same call answered premise clean and ending `owed_by_findings: ['finding_0']`.
             const mid = await fixture.api<any>('GET', `/stories/${storyId}/phrases`);
 
             expect((mid.body.groups as any[]).map((row) => [row.key, row.revision, row.writer_busy, row.owed_by_findings])).toEqual([
@@ -403,10 +471,10 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 ['promise', 1, false, []],
                 ['theme', 1, false, []],
                 ['tone', 1, false, []],
-                ['ending', 1, false, ['finding_0']]
+                ['ending', 2, false, []]
             ]);
             expect(mid.body.findings.map((row: any) => [row.id, row.state, row.resolved_all, row.resolved, row.missing])).toEqual([
-                ['finding_0', 'approved', false, [premise], [ending]]
+                ['finding_0', 'approved', true, [premise, ending], []]
             ]);
             expect(mid.body.tasks.map((row: any) => [row.id, row.state])).toEqual([['task_0', 'open']]);
             expect({
@@ -423,31 +491,50 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 open_tasks: 1
             });
 
-            // The Story is NOT drainable yet, and says so: the open finding is the reason.
-            expect(await storyRow(fixture, storyId)).toMatchObject({
-                status: 'ready',
-                pending_kind: 'none',
-                progress: '0 chapters · 0 done · 1 finding open'
-            });
-
+            // The Story is drainable the moment the defect closes, and the sign-off is the loop's decision
+            // one sweep later — there is no second batch to wait for. `phase_signoff` is D-34's gate, not
+            // work the queue still owes.
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 40);
 
-            // THE SECOND BATCH, and only then the close: ending's number 2 carries BOTH the finding and
-            // the task — unlike premise's, this batch was planned after the approval had armed the task,
-            // so the job knew what it was consuming. The finding flips to `fixed` when the LAST missing
-            // group is filled, and the task is consumed with one attempt spent.
+            // ONE COMMIT, BOTH GROUPS. Each number-2 revision names the SAME run (`run_14`, one lower than
+            // the D-65 ledger because the scoring pass opens no row on a vector nobody stamped clean), the
+            // SAME whole-set claim, and the SAME refs: the batch listed the finding once however many of its groups it rewrote
+            // (deduped `findingRefs` in `loop/work.ts`), and it carried the finding the planner pointed at —
+            // the `confirmed` row, before the Author's approval made it work the queue could consume. So
+            // `task_refs` is empty on BOTH rows, which is what "one pass, planned once" looks like: the split
+            // pair used to leave one revision with the task and one without.
             expect(
                 fixture.store.groupRevisions
                     .list()
                     .filter((row) => row.number === 2)
-                    .map((row) => [row.id, row.group_key, row.state, row.run_ref, row.finding_refs, row.task_refs])
+                    .map((row) => [row.id, row.group_key, row.state, row.run_ref, row.work_item_ref, row.finding_refs, row.task_refs])
             ).toEqual([
-                ['group_revision_5', 'premise', 'latest', 'run_14', ['finding_0'], undefined],
-                ['group_revision_6', 'ending', 'latest', 'run_15', ['finding_0'], ['task_0']]
+                [
+                    'group_revision_5',
+                    'premise',
+                    'latest',
+                    'run_14',
+                    `${draftFamily(fixture, storyId, ['premise', 'ending'])}_1`,
+                    ['finding_0'],
+                    undefined
+                ],
+                [
+                    'group_revision_6',
+                    'ending',
+                    'latest',
+                    'run_14',
+                    `${draftFamily(fixture, storyId, ['premise', 'ending'])}_1`,
+                    ['finding_0'],
+                    undefined
+                ]
             ]);
             expect(fixture.store.findings.require('finding_0').state).toBe('fixed');
+            // The row is consumed by the SWEEP that closed the finding, not by a run that finished: 0
+            // attempts, because the pass that answered the defect was planned before the row existed. Under
+            // the split pair this was `attempts: 1, rev: 3` — a second pass spending an attempt on a defect
+            // the first one had already answered.
             expect(fixture.store.tasks.list().map((row) => [row.id, row.state, row.attempts, row.rev])).toEqual([
-                ['task_0', 'done', 1, 3]
+                ['task_0', 'done', 0, 2]
             ]);
             expect(
                 groupsOf(fixture, storyId).map((row) => [row.key, row.revision, row.updated_by])
@@ -456,20 +543,24 @@ describe('the group pipeline end to end: the defect is filed, approved, and answ
                 ['promise', 1, 'run_3'],
                 ['theme', 1, 'run_5'],
                 ['tone', 1, 'run_7'],
-                ['ending', 2, 'run_15']
+                ['ending', 2, 'run_14']
             ]);
 
-            // Both fix passes are the SECOND attempt of their own group's family — one pass per group,
-            // no doubled retry, and the first draft's row for each group archived rather than deleted.
+            // THE LEDGER: every `draft_groups` row is attempt 1 of its own family — five first drafts, one
+            // pair fix, and NOT ONE `_2` anywhere. A split fix would have had to buy a second pass, so this
+            // empty list is the "one defect, one pass" claim in the run table rather than in a comment.
             expect(
                 fixture.store.runs
                     .list()
                     .filter((row) => (row.work_item_ref ?? '').endsWith('_2') && (row.work_item_ref ?? '').startsWith('wi_draft_groups'))
-                    .map((row) => [row.id, row.work_item_ref, row.state])
-            ).toEqual([
-                ['run_14', `${draftFamily(fixture, storyId, ['premise'])}_2`, 'torn_down'],
-                ['run_15', `${draftFamily(fixture, storyId, ['ending'])}_2`, 'torn_down']
-            ]);
+            ).toEqual([]);
+            expect(
+                fixture.store.runs
+                    .list()
+                    .filter((row) => row.work_item_ref === `${draftFamily(fixture, storyId, ['premise', 'ending'])}_1`)
+                    .map((row) => [row.id, row.role, row.state, row.group_refs])
+            ).toEqual([['run_14', 'writer', 'torn_down', [premise, ending]]]);
+            // The text each group had is retained as history, not deleted.
             expect(fixture.store.groupRevisions.list().filter((row) => row.state === 'archived').map((row) => row.group_key)).toEqual([
                 'premise',
                 'ending'

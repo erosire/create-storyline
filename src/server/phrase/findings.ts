@@ -19,9 +19,20 @@
 // and that is precisely the legacy meaning of a Summary defect: it belongs to the Overview as a
 // whole. Treating absence as "no groups" would close a whole-Overview finding on the strength of one
 // unrelated group edit, which is the exact bug R3 exists to prevent.
+//
+// THE GROUP LOCK (R-LOCK) ADDS ONE CLAUSE to that rule, and it is a subtraction, not a new state: a
+// group whose text is locked cannot be rewritten, so a claim against it can never be ANSWERED with a
+// revision. `findingActionableScope` splits the R3 attribution into the part a Writer can still act on
+// and the frozen part, and every read that decides WORK (`findingResolution`'s `missing`,
+// `findingGroupsStillOwed`, and through them the batch planner and the drain probe) uses the actable
+// part. That is what keeps a cross-group finding from parking forever on a locked group, and it is why
+// an all-locked finding is discarded rather than left `approved` with nothing to do (`locks.ts` writes
+// the discard at lock time). The ATTRIBUTION itself is never rewritten: `findingGroupScope` still names
+// every group, because the record says what the defect is about even where the book has stopped being
+// able to act on it.
 import type { Finding, GroupRevision, PhraseGroup, Story } from '../../shared/types';
 import type { Attribution, Store } from '../store';
-import { phraseGroupsOf } from './catalog';
+import { isPhraseGroupLocked, lockedPhraseGroupIds, phraseGroupsOf } from './catalog';
 
 // ---------------------------------------------------------------------------
 // Attribution — which groups a finding is about
@@ -70,6 +81,47 @@ export function findingTargetGroups(store: Store, story: Story, finding: Finding
     return phraseGroupsOf(store, story.id).filter((group) => wanted.has(group.id));
 }
 
+/**
+ * A finding's scope split by what a lock has frozen (the lock's view of R3's attribution).
+ *
+ * WHY A SECOND READ RATHER THAN A FILTER INSIDE {@link findingGroupScope}: that function answers the
+ * ATTRIBUTION question — "which groups is this claim about?" — and the rail, the brief and the
+ * fingerprint all read it as written, including for a group nobody may rewrite any more. This one
+ * answers the WORK question — "which of those groups can still be rewritten to answer it?" — and only
+ * the planner, the closure gate and the clean selection want that. Collapsing the two would put a lock
+ * inside the record's meaning, and an unscoped finding (whose scope IS every group) would quietly turn
+ * into an empty scope on the first lock instead of narrowing to the groups still open.
+ */
+export interface FindingActionableScope extends FindingGroupScope {
+    /** The part of `refs` the lock has frozen: void for this finding — no further revision of it exists. */
+    locked_refs: string[];
+    /** `refs` without `locked_refs` — the groups this finding may still demand a rewrite from. */
+    unlocked_refs: string[];
+    /**
+     * True when the finding names groups and every one of them is locked. Void, not resolved: the
+     * claim is about text nobody is allowed to change, so it can neither be answered with a new
+     * revision nor hold a fix open — `locks.ts:lockPhraseGroup` discards rows in this state, and a row
+     * raised after the lock simply never becomes work.
+     */
+    voided: boolean;
+}
+
+/**
+ * R3's scope with the locked groups subtracted (R-lock). Pure over the rows, like the scope it reads.
+ *
+ * The subtraction is applied to `refs` — never to `finding.group_refs` — so an UNSCOPED finding keeps
+ * its whole-Overview meaning and narrows to exactly the groups that remain writable: with four of five
+ * groups locked, an unscoped claim is still work for the fifth, and with all five locked it is void.
+ */
+export function findingActionableScope(store: Store, story: Story, finding: Finding): FindingActionableScope {
+    const scope = findingGroupScope(store, story, finding);
+    const locked = lockedPhraseGroupIds(store, story.id);
+    const locked_refs = scope.refs.filter((id) => locked.has(id));
+    const unlocked_refs = scope.refs.filter((id) => !locked.has(id));
+
+    return { ...scope, locked_refs, unlocked_refs, voided: scope.refs.length > 0 && unlocked_refs.length === 0 };
+}
+
 // ---------------------------------------------------------------------------
 // Resolution — which targeted groups have been rewritten to answer the finding
 // ---------------------------------------------------------------------------
@@ -100,13 +152,19 @@ export function groupResolvesFinding(
 /** One finding's resolution state, group by group — the shape R3's rule is stated in. */
 export interface FindingResolution {
     finding_id: string;
-    /** Every group the finding targets, catalog order. */
+    /** Every group the finding targets, catalog order — the ATTRIBUTION, locked groups included. */
     targeted: string[];
     /** The targeted groups that have a resolving revision. */
     resolved: string[];
-    /** The targeted groups that do not — the work still owed. Empty means the finding may close. */
+    /**
+     * The targeted groups that do not — the work still owed. Empty means the finding may close.
+     *
+     * A LOCKED group is never in here (R-lock): `missing` is the debt a Writer can pay, and a locked
+     * group has no next revision to buy. It stays in `targeted`, because the claim really is about it,
+     * and it is the locked side's consistency that the unlocked groups have to be revised for.
+     */
     missing: string[];
-    /** True only when EVERY targeted group has one (R3). A partial fix is FALSE, never "close enough". */
+    /** True only when EVERY targetable group has one (R3). A partial fix is FALSE, never "close enough". */
     resolved_all: boolean;
 }
 
@@ -116,15 +174,23 @@ export interface FindingResolution {
  * A finding that targets NO groups at all (a Story with no phrase rows — the legacy shape on a
  * legacy book) resolves vacuously, and the caller that matters (the group settlement) never runs for
  * such a Story, so the vacuous TRUE cannot close anything it should not.
+ *
+ * A LOCKED group with no answering revision is skipped rather than counted as `missing` (see the field
+ * note above): the alternative is a claim that holds the pipeline open over text the Author has
+ * declared final, which is the state a lock exists to end. `closeFindingWhenGroupsResolved` still
+ * refuses to write `fixed` for a finding whose groups are ALL locked — that sentence would say a
+ * revision answered it, and none did.
  */
 export function findingResolution(store: Store, story: Story, finding: Finding): FindingResolution {
-    const scope = findingGroupScope(store, story, finding);
+    const scope = findingActionableScope(store, story, finding);
+    const locked = new Set(scope.locked_refs);
     const resolved: string[] = [];
     const missing: string[] = [];
 
     for (const groupId of scope.refs) {
-        if (groupResolvesFinding(store, finding, groupId) === undefined) missing.push(groupId);
-        else resolved.push(groupId);
+        if (groupResolvesFinding(store, finding, groupId) !== undefined) resolved.push(groupId);
+        // Void for the locked group: not an answer, and not a debt either.
+        else if (!locked.has(groupId)) missing.push(groupId);
     }
 
     return {
@@ -152,6 +218,12 @@ export function findingResolution(store: Store, story: Story, finding: Finding):
  * inventing one would put a new value in an enum the whole build reads. The open finding with its
  * `missing` groups is the honest answer, and `findingGroupsStillOwed` routes exactly those groups
  * into the next Writer batch, so the partial fix is a step, not a stall.
+ *
+ * AND WHY A VOID FINDING DOES NOT CLOSE EITHER (R-lock): when a finding names a locked group AND an
+ * unlocked one, the unlocked side's answering revision is the whole of the evidence the close can ask
+ * for — the locked half can never produce one — so it may close, with the journal saying which half was
+ * void. When EVERY group it names is locked, nothing has been answered at all and the row is discarded,
+ * never `fixed`: that write would claim a revision that no install is allowed to make.
  */
 export function closeFindingWhenGroupsResolved(
     store: Store,
@@ -171,16 +243,32 @@ export function closeFindingWhenGroupsResolved(
 
     if (finding.state !== 'approved' || !resolution.resolved_all) return { closed: false, resolution };
 
-    const titles = resolution.targeted
-        .map((id) => store.phraseGroups.get(id)?.key ?? id)
-        .join(', ');
+    // R-LOCK — a claim about text that can no longer change is VOID, not answered. The lock operation
+    // discards rows in this state, so reaching the close gate with one means the claim was raised (or
+    // approved) AFTER its whole scope froze; writing `fixed` there would journal "every group it names
+    // has a revision written to resolve it" over a group that has no revision on its way at all.
+    const scope = findingActionableScope(store, story, finding);
+
+    if (scope.voided) return { closed: false, resolution };
+
+    const keyOf = (id: string): string => store.phraseGroups.get(id)?.key ?? id;
+    // Only the groups that could still be rewritten are credited in the sentence; the locked ones are
+    // named separately, so an Author reading the journal can see which half of the claim the lock made
+    // moot rather than inferring it from a group that is conspicuously missing from the list.
+    const titles = resolution.targeted.filter((id) => !scope.locked_refs.includes(id)).map(keyOf).join(', ');
+    const lockedTitles = scope.locked_refs.map(keyOf).join(', ');
 
     store.findings.update(
         finding.id,
         { state: 'fixed' },
-        // The `why` names the GROUPS, because "run X fixed it" is not the truth of this redesign —
-        // the truth is that every group the defect named now has a revision written to answer it (R3).
-        { ...attribution, why: `${attribution.why}; closed ${finding.id} because every group it names (${titles}) has a revision written to resolve it (R3, D-34)` },
+        {
+            ...attribution,
+            // The `why` names the GROUPS, because "run X fixed it" is not the truth of this redesign —
+            // the truth is that every group the defect named now has a revision written to answer it (R3).
+            why: `${attribution.why}; closed ${finding.id} because every group it names (${titles}) has a revision written to resolve it${
+                lockedTitles === '' ? '' : `; ${lockedTitles} is locked, so the claim is void for that group`
+            } (R3, D-34)`
+        },
         [{ id: finding.id, rev: finding.rev }]
     );
 
@@ -193,12 +281,18 @@ export function closeFindingWhenGroupsResolved(
  * Returns the targeted groups with NO resolving revision, catalog order. An approved finding whose
  * groups are all rewritten but which has not closed yet (the install commit is about to close it)
  * yields `[]`, so the sweep does not buy a Writer pass for a defect the book has already answered.
+ *
+ * LOCKED GROUPS ARE NEVER IN THE ANSWER (R-lock). The resolution read already omits them from
+ * `missing`; the row-level filter here is the second half of the same sentence, and it is what stops a
+ * finding that spans a locked group and an unlocked one from stranding the batch: the locked half is
+ * void, so the finding's whole still-owed set IS the unlocked half, and `planGroupDraftBatch`'s
+ * completeness check (D-66) sees a set it can install whole.
  */
 export function findingGroupsStillOwed(store: Store, story: Story, finding: Finding): PhraseGroup[] {
     const resolution = findingResolution(store, story, finding);
     const owed = new Set(resolution.missing);
 
-    return phraseGroupsOf(store, story.id).filter((group) => owed.has(group.id));
+    return phraseGroupsOf(store, story.id).filter((group) => owed.has(group.id) && !isPhraseGroupLocked(group));
 }
 
 /**

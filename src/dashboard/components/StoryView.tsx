@@ -166,9 +166,15 @@ export function StoryView({
 
                         {grouped ? (
                             groupFocus === undefined ? (
-                                // The Overview: the compiled text, and one honest row per group. `active` carries
-                                // the selection so the lit row is the one the rail is on.
-                                <SummaryOverviewPane view={view} selection={active} onSelect={onSelect} />
+                                // The Overview: the REVIEWED Summary (D-67), the Author's Choose (D-68), and one
+                                // honest row per group. `active` carries the selection so the lit row is the one
+                                // the rail is on; `actions` carries the choose verb, which is the pane's only write.
+                                <SummaryOverviewPane
+                                    view={view}
+                                    actions={actions}
+                                    selection={active}
+                                    onSelect={onSelect}
+                                />
                             ) : (
                                 // One group: its purpose, its current text, its revision number, its open findings
                                 // with the other groups they span. The revise verb is here, not on the Overview.
@@ -191,11 +197,11 @@ export function StoryView({
                                 focusSelectable={focusSelectable}
                                 readyForReview={summaryReadyForReview(view)}
                                 sampling={story.summary_sampling}
-                                readers={story.summary_readers}
+                                critics={story.summary_critics}
                                 onSetSummaryReview={
                                     actions.setSummaryReview
-                                        ? (sampling, readers) =>
-                                              void actions.setSummaryReview?.(story.id, sampling, readers)
+                                        ? (sampling, critics) =>
+                                              void actions.setSummaryReview?.(story.id, sampling, critics)
                                         : undefined
                                 }
                                 // U-4: the pane's own Backtrack, naming the deletions (L-32).

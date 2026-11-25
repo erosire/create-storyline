@@ -2,10 +2,13 @@
 //
 // WHAT THIS MODULE OWNS: the rule that turns the CODE catalog (`shared/phrase.ts` — which groups
 // exist and what they are called) into RECORDS (`phrases`, `phrase_groups`), plus the one predicate
-// that says whether a Story is group-managed at all. Nothing here decides what a Writer may write,
+// that says whether a Story is group-managed at all, plus the one PREDICATE that says whether a
+// group's current text is locked (`isPhraseGroupLocked` — the lock's WRITES belong to `locks.ts`,
+// and every other read asks this one). Nothing here decides what a Writer may write,
 // when the loop dispatches, or what a review means: `revisions.ts`, `loop/work.ts` and
-// `loop/engine.ts` do, and they all ask THIS module the only two questions it is allowed to answer
-// — "which groups does this Story have, in what order?" and "is this Story group-managed?".
+// `loop/engine.ts` do, and they all ask THIS module the questions it is allowed to answer
+// — "which groups does this Story have, in what order?", "is this Story group-managed?", and "is this
+// group locked?".
 //
 // WHY AN ENSURE RATHER THAN A MIGRATION (R6): a Story written before the redesign has no phrase
 // rows, and this build does not migrate books on load — a legacy Story keeps its `'sampling'`
@@ -27,7 +30,7 @@ import {
     phraseGroupRank,
     type PhraseGroupDefinition
 } from '../../shared/phrase';
-import type { Phrase, PhraseGroup, Story, Summary } from '../../shared/types';
+import type { GroupRevision, Phrase, PhraseGroup, Story, Summary } from '../../shared/types';
 import { newRecordUid, type Attribution, type Store } from '../store';
 
 // ---------------------------------------------------------------------------
@@ -63,6 +66,31 @@ export const phraseIdFactoryOf = (options: PhraseOptions = {}): PhraseIdFactory 
  * disagreeing about which one they are on.
  */
 export const isGroupManagedStory = (story: Story | undefined): boolean => story?.summary_mode === 'groups';
+
+// ---------------------------------------------------------------------------
+// The group lock predicate (the flag on the row; the operations live in `locks.ts`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONE predicate for "is this group's current text locked?" (`PhraseGroup.locked`).
+ *
+ * It reads the flag and nothing else: `locked: true` is the lock, absent/`false` is unlocked, so a book
+ * written before the field exists needs no migration. It sits HERE rather than in `locks.ts` because
+ * every module that has to subtract locked groups from a read — `findings.ts`, `revisions.ts`,
+ * `reviewed.ts`, `exclusion.ts` — already imports this one for `phraseGroupsOf`, and a second home for
+ * the predicate is how the reads start disagreeing about which groups are writable. `locks.ts` owns the
+ * two writes (lock and unlock); this owns the sentence every other read asks.
+ */
+export const isPhraseGroupLocked = (group: PhraseGroup | undefined): boolean => group?.locked === true;
+
+/**
+ * The ids of a Story's locked groups, in one read — the set the work planner, the finding routing and
+ * the clean selection all subtract. Computed once per read for the same reason `openIssueGroupIds` is:
+ * every caller asks it for all the groups at once, and a per-group call would re-walk the collection.
+ */
+export function lockedPhraseGroupIds(store: Store, storyId: string): Set<string> {
+    return new Set(phraseGroupsOf(store, storyId).filter(isPhraseGroupLocked).map((group) => group.id));
+}
 
 // ---------------------------------------------------------------------------
 // Reads — every one pure over the store snapshot, ordered deterministically
@@ -412,4 +440,34 @@ export function composeGroupContent(store: Store, storyId: string, phraseId: str
 /** The same composition over rows already in hand — the form `revisions.ts` uses mid-install. */
 export function composeGroupContentFrom(groups: readonly PhraseGroup[]): string {
     return composePhraseContent(groups.map((group) => ({ key: group.key, title: group.title, content: group.content })));
+}
+
+// ---------------------------------------------------------------------------
+// The reviewed composition (D-67): the SAME Overview format, built from SELECTED rows
+// ---------------------------------------------------------------------------
+
+/** One piece of a reviewed Overview: the group it belongs to, and the Clean revision chosen for it. */
+export interface ReviewedCompositionEntry {
+    group: PhraseGroup;
+    revision: GroupRevision;
+}
+
+/**
+ * Composes a reviewed Overview from a set of SELECTED revisions (D-67).
+ *
+ * THE ONE RULE THAT MAKES THIS ITS OWN FUNCTION: it joins exactly the rows it is handed. It never
+ * reads a `latest`, never reads `PhraseGroup.content`, and never falls back to the live text, because
+ * a reviewed Overview is a composition of the revisions the review covered — which for a group whose
+ * newest text failed review is an ARCHIVED row (the user's Ending example: r5 has the issue, so the
+ * reviewed Ending is r4). A helper that quietly preferred the current text would put an unreviewed
+ * sentence inside a Summary the Reader is being asked to score.
+ *
+ * It is the same `composePhraseContent` rule the live Overview uses (§4.19, R6), so the reviewed text
+ * and the chosen text are byte-identical once the Author chooses — the choose install writes exactly
+ * these texts onto the group rows, and the projection's `overview` and `reviewed.overview` agree.
+ */
+export function composeReviewedContentFrom(entries: readonly ReviewedCompositionEntry[]): string {
+    return composePhraseContent(
+        entries.map((entry) => ({ key: entry.group.key, title: entry.group.title, content: entry.revision.content }))
+    );
 }

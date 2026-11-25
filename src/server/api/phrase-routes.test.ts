@@ -24,7 +24,10 @@ import { MockToolRuntime } from '../run/mock';
 import { Store } from '../store/store';
 import { isRecordUid } from '../store/persist';
 import { buildStorylineRuntime } from './server';
-import { groupVectorHash } from '../phrase/revisions';
+import { groupCheckSeatKey } from '../phrase/exclusion';
+import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
+import { stampCleanRevisions } from '../phrase/reviewed';
+import { AUTHOR_ATTR } from '../run/mock';
 import type { Hono } from 'hono';
 import type { Cost, Finding, Story } from '../../shared/types';
 import type { StoryRow } from '../../dashboard/api';
@@ -84,6 +87,35 @@ const groupShape = (reply: Reply) =>
         group.history,
         group.owed_by_findings
     ]);
+
+/**
+ * The Reviewed Summary block's per-group row (D-67) — the columns the rail draws beside each section:
+ * which revision the crew stands behind, which number the group is actually on, and why they differ.
+ */
+const reviewedShape = (reply: Reply) =>
+    (viewOf(reply).reviewed as { groups: Array<Record<string, unknown>> }).groups.map((group) => [
+        group.key,
+        group.selected_revision,
+        group.selected_id,
+        group.clean_run_ref,
+        group.latest_revision,
+        group.superseded,
+        group.issues_open,
+        group.gap,
+        group.scores
+    ]);
+
+/**
+ * The whole view with its two row lists normalised to the pinned columns above (`groups` through
+ * `groupShape`, the reviewed block's rows through `reviewedShape`, since a group id is a minted uuid an
+ * expectation cannot name). Every other key, the reviewed block's scalar fields included, stays exactly
+ * as the projection wrote it.
+ */
+const viewShape = (reply: Reply) => ({
+    ...viewOf(reply),
+    groups: groupShape(reply),
+    reviewed: { ...(viewOf(reply).reviewed as Record<string, unknown>), groups: reviewedShape(reply) }
+});
 
 /**
  * A Story on the NEW pipeline (the create route's default) plus the legacy prose a legacy book would
@@ -146,11 +178,24 @@ describe('POST /stories: the Summary switch is a setting on the Story (R1, R6)',
         const reply = await call(world.app, 'GET', '/stories/story_0/phrases');
         const view = viewOf(reply);
 
-        expect(Object.keys(view)).toEqual(['story_id', 'mode', 'phrase_id', 'revision', 'overview', 'groups', 'findings', 'tasks', 'review']);
+        expect(Object.keys(view)).toEqual([
+            'story_id',
+            'mode',
+            'phrase_id',
+            'revision',
+            'overview',
+            'groups',
+            'findings',
+            'tasks',
+            'review',
+            // D-67/D-68: the Reviewed Summary block is ALWAYS present, empty for a book nobody has
+            // reviewed yet — a client must not have to feature-detect it.
+            'reviewed'
+        ]);
         // The group rows carry minted uuid addresses (`persist.ts` explains why a group id is an
         // address), so the rows are normalised to the nine columns the rail reads — each one pinned —
         // and every other key of the projection is asserted as the whole object it is.
-        expect({ ...view, groups: groupShape(reply) }).toEqual({
+        expect(viewShape(reply)).toEqual({
             story_id: 'story_0',
             mode: 'groups',
             phrase_id: phraseId,
@@ -165,13 +210,34 @@ describe('POST /stories: the Summary switch is a setting on the Story (R1, R6)',
             ],
             findings: [],
             tasks: [],
+            // D-67: the Reviewed Summary exists from the first moment the book does, and it is EMPTY —
+            // `pending` with five `unwritten` gaps, no vector, and no choice. The rail's Choose button is
+            // grey because there is nothing reviewable, not because the projection failed.
+            reviewed: {
+                state: 'pending',
+                complete: false,
+                vector: {},
+                vector_hash: groupVectorHash({}),
+                overview: '',
+                groups: [
+                    ['premise', null, null, null, 0, false, false, 'unwritten', []],
+                    ['promise', null, null, null, 0, false, false, 'unwritten', []],
+                    ['theme', null, null, null, 0, false, false, 'unwritten', []],
+                    ['tone', null, null, null, 0, false, false, 'unwritten', []],
+                    ['ending', null, null, null, 0, false, false, 'unwritten', []]
+                ],
+                chosen: null,
+                stale: false,
+                blocking_issues: [],
+                writer_busy: false
+            },
             review: {
                 mode: 'groups',
                 unwritten_groups: ['premise', 'promise', 'theme', 'tone', 'ending'],
                 written_groups: 0,
                 vector: Object.fromEntries(groupIds.map((id) => [id, 0])),
                 vector_hash: groupVectorHash(Object.fromEntries(groupIds.map((id) => [id, 0]))),
-                // The Reader dial is the review seat count, unchanged by the redesign.
+                // The Critic dial is the review seat count, unchanged by the redesign.
                 review_seats: 5,
                 reviews_on_current_vector: 0,
                 deep_reviews_on_current_vector: 0,
@@ -228,6 +294,20 @@ describe('POST /stories: the Summary switch is a setting on the Story (R1, R6)',
                     locked: false,
                     fields: ['premise', 'promise', 'theme', 'tone', 'ending']
                 }
+            },
+            // D-67/D-68: the reviewed block is present here too, and says the same nothing — a sampling
+            // book has no groups, so it has no clean selection and nothing to choose.
+            reviewed: {
+                state: 'pending',
+                complete: false,
+                vector: {},
+                vector_hash: groupVectorHash({}),
+                overview: '',
+                groups: [],
+                chosen: null,
+                stale: false,
+                blocking_issues: [],
+                writer_busy: false
             }
         });
     });
@@ -465,6 +545,10 @@ describe('POST /stories/:id/phrases/groups/:groupId/revise: the Author rewrites 
                 run_ref: null,
                 finding_refs: [],
                 task_refs: [],
+                // D-67: every revision row carries its Clean stamp, so the rail can mark the text a
+                // cross-group pass passed. A hand edit has never sat through one.
+                clean: false,
+                clean_run_ref: null,
                 // The rail shows a length, not the body: 60 is the Author's new sentence and 59 the
                 // legacy prose the import seeded — the two texts this group has held.
                 chars: 60
@@ -477,6 +561,8 @@ describe('POST /stories/:id/phrases/groups/:groupId/revise: the Author rewrites 
                 run_ref: null,
                 finding_refs: [],
                 task_refs: [],
+                clean: false,
+                clean_run_ref: null,
                 chars: 59
             }
         ]);
@@ -703,7 +789,7 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
         // A PROPOSAL, filed the way §8.4 files one: `kind` on the row, the passage it would improve as
         // the evidence, and no `group_refs` — the whole-Overview reading. This pins the NON-default
         // direction: the two big pins above prove a kind-less row reads as `issue`, and this one proves
-        // a marked row survives the projection as `improvement` instead of collapsing into the default.
+        // a marked row survives the projection as `proposal` instead of collapsing into the default.
         world.store.findings.create(
             {
                 story_id: 'story_0',
@@ -713,7 +799,7 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
                 detail: 'The Premise withholds the map; naming it there gives the reader the reconciliation to watch for.',
                 evidence: 'the Premise paragraph never mentions the map',
                 cost: 'major' as Cost,
-                kind: 'improvement',
+                kind: 'proposal',
                 fingerprint: 'C-14|summary_0|improvement',
                 state: 'approved',
                 seen_count: 1
@@ -729,7 +815,7 @@ describe('the view reports the R3 debt per group and the mirror honestly (R3, R6
                 id: 'finding_0',
                 title: 'name the map in the Premise, not only in the Ending',
                 cost: 'major',
-                kind: 'improvement',
+                kind: 'proposal',
                 state: 'approved',
                 seen_count: 1,
                 // Unscoped on purpose: an improvement about the Overview as a whole names no group, and
@@ -1031,6 +1117,387 @@ describe('POST /stories/:id/summary/revise: the whole-Summary round refuses a gr
         expect(world.store.tasks.list()[0]?.title).toBe('Author requested a fresh Summary round');
         expect(world.store.tasks.list()[0]?.detail).toBe(
             'The Author asked for another three-draft Summary round. Note: not final yet · summary_0'
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// THE REVIEWED SUMMARY ON THE WIRE (D-67, D-68)
+//
+// Two states of one book, side by side: what the crew stands behind (the newest Clean revision of each
+// group) and what the book currently says (the newest revision, verdict or no verdict). The projection
+// carries BOTH because the Author's decision is exactly the distance between them, and the choose is the
+// one verb that closes it — an install of the reviewed texts, not an edit of the current ones.
+// ---------------------------------------------------------------------------
+
+describe('the Reviewed Summary on the wire, and the Author\'s choose (D-67, D-68)', () => {
+    /** One group's revision row, addressed by group key and number — the ids are counter-minted. */
+    const revisionOf = (world: TestApp, key: string, number: number) =>
+        world.store.groupRevisions.list().find((row) => row.group_key === key && row.number === number)!;
+
+    /**
+     * The book the feature exists for: five reviewed texts, then five NEWER texts nobody has read. This is
+     * the user's Ending example at wire scale — every group's current prose carries no verdict while the
+     * clean one sits exactly one revision behind it.
+     */
+    function seedReviewedBook(world: TestApp) {
+        // Each write re-reads the rows it names: an install bumps its group row's `rev`, and handing the
+        // helper a row captured before the previous install would trip the store's own CAS guard (T-4).
+        const write = (text: (key: string) => string, workItemRef: string) =>
+            installGroupRevisions(
+                world.store,
+                world.store.stories.require('story_0'),
+                world.store.phraseGroups
+                    .list()
+                    .filter((group) => group.story_id === 'story_0')
+                    .map((group) => ({ group, content: text(group.key) })),
+                AUTHOR_ATTR,
+                { runRef: null, workItemRef }
+            );
+
+        write((key) => `${key} r1, the text a cross-group pass passed.`, 'wi_draft_groups_summary_0_reviewed');
+
+        // The clean pass, by its effect on the rows — the same write `loop/engine.ts:settleJob` makes when
+        // the deep review's `check_unit` run closes (D-67).
+        stampCleanRevisions(
+            world.store,
+            world.store.stories.require('story_0'),
+            { seatKey: groupCheckSeatKey(groupVectorHash(groupRevisionVector(world.store, 'story_0')), 1), runRef: 'run_check_1' },
+            AUTHOR_ATTR
+        );
+
+        write((key) => `${key} r2, the newest text, no verdict on it.`, 'wi_draft_groups_summary_0_unreviewed');
+    }
+
+    it('shows the reviewed revision beside the newer one for every group, with no choice recorded yet', async () => {
+        const world = await seedGroupStory();
+
+        seedReviewedBook(world);
+
+        const reply = await call(world.app, 'GET', '/stories/story_0/phrases');
+        const view = viewOf(reply);
+        const reviewed = view.reviewed as Record<string, unknown>;
+
+        // `[key, selected, selected_id, clean_run_ref, latest, superseded, issues_open, gap, scores]`.
+        // Every group reads `1` under `2`, and `superseded` is what the rail paints amber.
+        expect(reviewedShape(reply)).toEqual([
+            ['premise', 1, revisionOf(world, 'premise', 1).id, 'run_check_1', 2, true, false, null, []],
+            ['promise', 1, revisionOf(world, 'promise', 1).id, 'run_check_1', 2, true, false, null, []],
+            ['theme', 1, revisionOf(world, 'theme', 1).id, 'run_check_1', 2, true, false, null, []],
+            ['tone', 1, revisionOf(world, 'tone', 1).id, 'run_check_1', 2, true, false, null, []],
+            ['ending', 1, revisionOf(world, 'ending', 1).id, 'run_check_1', 2, true, false, null, []]
+        ]);
+
+        const vector = Object.fromEntries(
+            world.store.phraseGroups.list().map((group) => [group.id, 1])
+        );
+
+        expect({
+            state: reviewed.state,
+            complete: reviewed.complete,
+            vector: reviewed.vector,
+            vector_hash: reviewed.vector_hash,
+            chosen: reviewed.chosen,
+            stale: reviewed.stale,
+            blocking_issues: reviewed.blocking_issues,
+            writer_busy: reviewed.writer_busy
+        }).toEqual({
+            // `ready`: there IS a reviewed Overview to take, and the Author has not taken it.
+            state: 'ready',
+            complete: true,
+            vector,
+            vector_hash: groupVectorHash(vector),
+            chosen: null,
+            stale: false,
+            blocking_issues: [],
+            writer_busy: false
+        });
+
+        // Both readings travel at once, and they DIFFER: the rail's Overview is the unreviewed prose, the
+        // reviewed block's is the clean prose. This is the window the choose closes.
+        expect(view.overview).toContain('premise r2, the newest text, no verdict on it.');
+        expect(reviewed.overview).toContain('premise r1, the text a cross-group pass passed.');
+        expect(reviewed.overview).not.toBe(view.overview);
+    });
+
+    it('installs the reviewed Overview as the book, discards what it passed over, and returns the new view', async () => {
+        const world = await seedGroupStory();
+
+        seedReviewedBook(world);
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {
+            note: 'the reviewed Ending is the one I meant'
+        });
+
+        expect(reply.status).toBe(200);
+
+        const body = viewOf(reply);
+        const vector = Object.fromEntries(world.store.phraseGroups.list().map((group) => [group.id, 1]));
+        const hash = groupVectorHash(vector);
+
+        expect(Object.keys(body)).toEqual([
+            'story_id',
+            'phrase_id',
+            'revision',
+            'vector',
+            'vector_hash',
+            'at',
+            'overview',
+            'installed',
+            'discarded',
+            'sources',
+            'mirror',
+            'view'
+        ]);
+        expect({ story_id: body.story_id, vector: body.vector, vector_hash: body.vector_hash }).toEqual({
+            story_id: 'story_0',
+            vector,
+            vector_hash: hash
+        });
+        expect(body.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+        // One new `latest` per group — the choose INSTALLS (R2's numbering, R6's mirror), it does not edit
+        // the current rows, so the whole history survives and the rail can still walk it.
+        expect(body.installed).toEqual(
+            ['premise', 'promise', 'theme', 'tone', 'ending'].map((key) => ({
+                group_id: world.store.phraseGroups.list().find((group) => group.key === key)!.id,
+                group_key: key,
+                revision_id: revisionOf(world, key, 3).id,
+                number: 3
+            }))
+        );
+        // Every row the choice passed over is DISCARDED and RETAINED (10 of them): a finding one of those
+        // revisions closed stays `fixed` (`phrase/findings.ts:groupResolvesFinding` walks every state).
+        expect(
+            (body.discarded as Array<Record<string, unknown>>)
+                .map((row) => `${row.group_key}:${row.number}`)
+                .sort()
+        ).toEqual([
+            'ending:1', 'ending:2',
+            'premise:1', 'premise:2',
+            'promise:1', 'promise:2',
+            'theme:1', 'theme:2',
+            'tone:1', 'tone:2'
+        ].sort());
+        expect(body.sources).toEqual(
+            ['premise', 'promise', 'theme', 'tone', 'ending'].map((key) => ({
+                group_id: world.store.phraseGroups.list().find((group) => group.key === key)!.id,
+                group_key: key,
+                source_revision: 1,
+                source_id: revisionOf(world, key, 1).id,
+                installed_revision: 3
+            }))
+        );
+        // R6: the legacy mirror moves with the choose, exactly as an install's does.
+        expect(body.mirror).toEqual({
+            summary_id: 'summary_0',
+            fields: ['premise', 'promise', 'theme', 'tone', 'ending'],
+            written: true
+        });
+
+        // THE BOOK, afterwards: each group's current text IS the reviewed text, and the two Overviews the
+        // rail reads are now the same bytes — which is the whole point of taking the choice.
+        expect(world.store.phraseGroups.list().map((group) => [group.key, group.revision, group.content])).toEqual([
+            ['premise', 3, 'premise r1, the text a cross-group pass passed.'],
+            ['promise', 3, 'promise r1, the text a cross-group pass passed.'],
+            ['theme', 3, 'theme r1, the text a cross-group pass passed.'],
+            ['tone', 3, 'tone r1, the text a cross-group pass passed.'],
+            ['ending', 3, 'ending r1, the text a cross-group pass passed.']
+        ]);
+
+        const view = viewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+        const reviewed = view.reviewed as Record<string, unknown>;
+
+        // THE BOOK, afterwards: the rail's Overview and the CHOSEN Overview are the same bytes — the
+        // choose installed the reviewed prose, so the text the Author reads and the record of the decision
+        // cannot drift apart.
+        expect(view.overview).toBe((reviewed.chosen as Record<string, unknown>).overview);
+        // The live reviewed block answers `''` and `complete: false`: the five rows this choose installed
+        // have not sat through a cross-group pass, so there is no NEWER reviewed Overview until the next
+        // deep pass earns one. The choice itself is still reported in full.
+        expect(reviewed.overview).toBe('');
+        expect({ state: reviewed.state, complete: reviewed.complete, stale: reviewed.stale }).toEqual({
+            // The choice stands (`chosen`), and there is nothing newer to take yet.
+            state: 'chosen',
+            complete: false,
+            stale: false
+        });
+        expect((reviewed.chosen as Record<string, unknown>).vector).toEqual(vector);
+        expect((reviewed.chosen as Record<string, unknown>).vector_hash).toBe(hash);
+        // P11: the journal names the route, the Story, and what the Author said about it. The order of the
+        // two clauses is the composition: `authorAttr` writes the route's sentence (closed by the
+        // dashboard-write marker) and `chooseReviewedSummary` appends the record it committed, so the
+        // domain's clause is last — the attribution stays attributable to whoever wrote each part.
+        expect(
+            world.store.journal
+                .filter((event) => event.collection === 'phrases' && event.op === 'update')
+                .slice(-1)[0]?.attribution.why
+        ).toBe(
+            `the Author used POST /stories/:id/phrases/reviewed/choose on story_0 — the reviewed Overview at vector ${hash} was chosen: the reviewed Ending is the one I meant (D-68) (§10 dashboard write); the Phrase row records the reviewed vector ${hash} as the Author's choice (D-68)`
+        );
+    });
+
+    it('keeps the diff\'s "before" side across the choose, off the newest DISCARDED row of the group (D-68)', async () => {
+        const world = await seedGroupStory();
+
+        seedReviewedBook(world);
+
+        expect((await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {})).status).toBe(200);
+
+        // WHY THIS IS NOT JUST ANOTHER ARCHIVED READ (§17.17): the install archived r2 — the row the new
+        // number replaced — and the discard step then flipped r2 AND r1 over, so a post-choose group has
+        // NO `archived` row at all. The read the pane has always used answers nothing here, and without
+        // `projections.ts:1533-1535`'s fallback the rail loses its "before" side on the one transition the
+        // Author cares about.
+        expect(
+            world.store.groupRevisions
+                .list()
+                .filter((revision) => revision.group_key === 'premise')
+                .sort((left, right) => left.number - right.number)
+                .map((revision) => [revision.number, revision.state])
+        ).toEqual([
+            [1, 'discarded'],
+            [2, 'discarded'],
+            [3, 'latest']
+        ]);
+
+        const rows = groupsOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        // Each group's `previous_content` is the text its chosen revision REPLACED: r2, the newest row of
+        // the group and therefore the newest DISCARDED one. Taking r1 instead (the clean text, now also
+        // the live one) would diff the chosen Summary against itself.
+        expect(rows.map((group) => [group.key, group.content, group.previous_content])).toEqual([
+            ['premise', 'premise r1, the text a cross-group pass passed.', 'premise r2, the newest text, no verdict on it.'],
+            ['promise', 'promise r1, the text a cross-group pass passed.', 'promise r2, the newest text, no verdict on it.'],
+            ['theme', 'theme r1, the text a cross-group pass passed.', 'theme r2, the newest text, no verdict on it.'],
+            ['tone', 'tone r1, the text a cross-group pass passed.', 'tone r2, the newest text, no verdict on it.'],
+            ['ending', 'ending r1, the text a cross-group pass passed.', 'ending r2, the newest text, no verdict on it.']
+        ]);
+
+        // §17.17's other half, from the same read: a discarded row is RETAINED (the fallback above can
+        // only name text the book already published) and still never becomes a candidate in the history
+        // list — one live row, its body reported as a count, and no discarded prose on the wire.
+        const premise = rows.find((group) => group.key === 'premise')!;
+
+        expect(premise.history).toEqual([
+            {
+                id: revisionOf(world, 'premise', 3).id,
+                number: 3,
+                state: 'latest',
+                at: revisionOf(world, 'premise', 3).created_at,
+                run_ref: null,
+                finding_refs: [],
+                task_refs: [],
+                // The rows the choose installs are deliberately NOT clean-stamped — they never sat through
+                // a review pass (D-68), so the stamp column reads false beside the chosen text.
+                clean: false,
+                clean_run_ref: null,
+                // 47 is the length of the chosen sentence — the only body this row reports, as a count.
+                chars: 47
+            }
+        ]);
+        expect(JSON.stringify(premise.history)).not.toContain('discarded');
+    });
+
+    it('refuses a book nobody has reviewed, naming every group and why it is missing (D-68)', async () => {
+        const world = await seedGroupStory();
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {});
+
+        expect(reply.status).toBe(409);
+        expect(errorOf(reply)).toBe(
+            'this Story has no Reviewed Summary to choose: premise (unwritten), promise (unwritten), theme (unwritten), tone (unwritten), ending (unwritten) — a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).'
+        );
+        // The refusal wrote nothing at all: no rows, no choice, no journal line for a verb that never ran.
+        expect(world.store.groupRevisions.list()).toEqual([]);
+        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_reviewed_choose')).toEqual([]);
+    });
+
+    it('names the issue that holds a clean verdict back rather than a bare "no clean revision"', async () => {
+        const world = await seedGroupStory();
+
+        seedReviewedBook(world);
+
+        const ending = world.store.phraseGroups.list().find((group) => group.key === 'ending')!;
+
+        world.store.findings.create(
+            {
+                story_id: 'story_0',
+                target_ref: world.store.phrases.list()[0].id,
+                criterion_ref: 'criterion_structure',
+                title: 'the ending walks away from the promise',
+                evidence: 'The last paragraph stops answering the premise.',
+                cost: 'major',
+                kind: 'issue',
+                fingerprint: 'fp_reviewed_wire',
+                state: 'approved',
+                approved_by: 'auto',
+                seen_count: 1,
+                group_refs: [ending.id]
+            },
+            AUTHOR_ATTR
+        );
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {});
+
+        expect(reply.status).toBe(409);
+        expect(errorOf(reply)).toContain('ending (an unresolved issue names it)');
+
+        // The rail sees the same thing the refusal says: Ending has its stamp and is STILL not selectable.
+        const after = await call(world.app, 'GET', '/stories/story_0/phrases');
+
+        const blocked = reviewedShape(after);
+        expect(blocked[4]).toEqual(['ending', null, null, null, 2, false, true, 'no_clean_revision', []]);
+        expect((viewOf(after).reviewed as Record<string, unknown>).blocking_issues).toEqual([
+            { id: 'finding_0', title: 'the ending walks away from the promise', cost: 'major', group_keys: ['ending'] }
+        ]);
+    });
+
+    it('refuses while a Writer pass is live on any group — the same read the disabled button uses (R4)', async () => {
+        const world = await seedGroupStory();
+
+        seedReviewedBook(world);
+
+        const ending = world.store.phraseGroups.list().find((group) => group.key === 'ending')!;
+        const live = world.store.runs.create(
+            {
+                story_id: 'story_0',
+                work_item_ref: 'wi_draft_groups_summary_0_live_1',
+                role: 'writer',
+                state: 'working',
+                started_at: '2026-11-25T10:00:01.000Z',
+                ended_at: null,
+                tokens: 4,
+                kind: 'work',
+                no_op: false,
+                delegated: [],
+                group_refs: [ending.id]
+            },
+            AUTHOR_ATTR
+        );
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {});
+
+        expect(reply.status).toBe(409);
+        expect(errorOf(reply)).toBe(
+            `the Writer is rewriting part of this Summary right now (${live.id}), so choosing the reviewed Overview would install under a pass that has not finished — the same choice lands once those runs close (R4, D-68).`
+        );
+        // The rail's Choose control is grey for the same reason, off the same read — a disabled button and
+        // a 409 can never disagree.
+        const view = viewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        expect((view.reviewed as Record<string, unknown>).writer_busy).toBe(true);
+        // `slice` rather than `.at`: this package's tsconfig `lib` predates ES2022.
+        const busy = groupsOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        expect(busy[4]!.writer_busy).toBe(true);
+    });
+
+    it('refuses a book still on the legacy pipeline, and points at the import that would make it groupable', async () => {
+        const world = await seedGroupStory('sampling');
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/reviewed/choose', {});
+
+        expect(reply.status).toBe(409);
+        expect(errorOf(reply)).toBe(
+            "this Story's Summary is still written as one text (no group catalog); POST /stories/story_0/phrases/import turns the flat Summary into groups first (R6, D-68)."
         );
     });
 });

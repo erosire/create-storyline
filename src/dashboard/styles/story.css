@@ -425,6 +425,17 @@
     color: var(--finished);
 }
 
+/* R1 — the LOCKED badge. It is deliberately not green (`.sv-badge-assigned` is the Reviewer's "this text was
+   read and passed") and not amber (the warn tone is for a refusal): a lock is a decision the Author made, a
+   fact about the text's status, so it reads as a solid, quiet chip. The revision number and the actor are in
+   its TEXT (`story-contract.groupLockBadge`), never only here — greyscale and a screen reader get both. */
+.sv-badge-locked {
+    border: 1px solid var(--line-strong);
+    background: var(--halt-bg);
+    color: var(--text-strong);
+    letter-spacing: 0.03em;
+}
+
 /* ------------------------------------------------------------------ the Summary (U-4) */
 
 .sv-summary-note {
@@ -620,6 +631,125 @@
     font-size: 0.68rem;
 }
 
+/* ------------------------------------ D-67/D-68 — the reviewed Summary the tab prints */
+
+/* The reviewed block is the Summary now, so it takes the reading voice the live Overview always had
+   (`.sv-summary-text`) and adds only what the reviewed reading needs: a state word that is a WORD, the
+   per-section selection lines, and the waiting list that replaces the text while there is none. The flat
+   skin holds — separation is a 1px border, emphasis is a solid fill — and nothing here borrows the
+   sampling vocabulary the group rail retired (U3). */
+
+/* The head's state badge: `no reviewed Summary yet` / `reviewed Summary ready` / `reviewed Summary chosen`.
+   It sits beside `n of 5 groups written` on purpose — one says what the groups hold, the other says what the
+   Reviewers have passed, and a reader who conflates them is the bug this split prevents. */
+.sv-pane-badge[data-tone='ready'] {
+    border: 1px solid var(--accent);
+    color: var(--accent);
+}
+
+.sv-pane-badge[data-tone='chosen'] {
+    border: 1px solid var(--finished);
+    color: var(--finished);
+}
+
+.sv-pane-badge[data-tone='pending'] {
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+}
+
+/* The waiting state's list: one line per group the selection lacks, in composition order. It is a list
+   because the Author has to be able to count it, and it replaces the Summary text rather than sitting under
+   it — the live text is not printed here (D-67), so a substitute sentence would be the defect wearing a
+   loading spinner. */
+.sv-reviewed-waiting {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.sv-reviewed-gaps,
+.sv-reviewed-issues,
+.sv-reviewed-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sv-reviewed-gap,
+.sv-reviewed-issue {
+    color: var(--dim);
+    font-size: 0.68rem;
+    line-height: 1.45;
+}
+
+/* An unresolved issue is the one reason in the waiting state the Author can act on, so it takes the amber
+   accent the panes already use for "this is why it is waiting" — never a new colour for a new state. */
+.sv-reviewed-issue {
+    color: var(--amber);
+}
+
+/* The per-section reviewed strip: the revision the Overview stands behind, the number that judged exactly
+   that text, and the newer revision it fell back past. Quieter than the Summary text it sits under, because
+   it is the evidence for the text, not the reading surface. */
+.sv-reviewed-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    list-style: none;
+    color: var(--muted);
+    font-size: 0.7rem;
+}
+
+.sv-reviewed-group-name {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.sv-reviewed-group-state[data-tone='ok'] {
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+}
+
+.sv-reviewed-group-state[data-tone='gap'] {
+    color: var(--dim);
+    font-style: italic;
+}
+
+.sv-reviewed-group-score {
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Supersession is information, not alarm: `Revision 5 is newer` is the pair of numbers the feature exists to
+   show, printed in the same quiet voice as the archived count on the live rows. */
+.sv-reviewed-group-quiet {
+    color: var(--muted);
+    font-size: 0.66rem;
+}
+
+.sv-reviewed-dropped {
+    font-size: 0.68rem;
+    line-height: 1.45;
+}
+
+.sv-reviewed-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    align-self: flex-start;
+}
+
+/* The confirmation step gets the amber notice the panes already use for "read this before you act": a choose
+   installs five texts and discards the ones it passes over, and nothing about it is reversible from here. */
+.sv-reviewed-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
 /* ---------------------------------------------------------------- one group (R6) */
 
 /* The group's own pane: what it is for, what the Writer has written, what the Reviewer left open. */
@@ -650,6 +780,177 @@
 .sv-group-notice--warn {
     border-color: var(--amber);
     color: var(--amber);
+}
+
+/* ---------------------------------------------------------------- T3 — the group's score */
+
+/* The Reader pass's percentage for THIS group, the pass it moved from, and the trail behind them. It sits
+   under the purpose line and above the text, because the number is the verdict on the group's JOB (the line
+   above it) and the prose below is what produced it. A group nobody has scored renders none of this, so an
+   unscored book looks exactly like it always did. */
+.sv-group-score {
+    margin: 0.4rem 0 0;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.sv-group-score-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.sv-group-score-value {
+    color: var(--text-strong);
+    font-size: 0.8rem;
+    font-weight: 700;
+    /* The rail's percentages and this one are the same number; tabular figures keep both columns aligned. */
+    font-variant-numeric: tabular-nums;
+}
+
+/* The movement says its own direction in WORDS (`up 6 from 78%`), so the colour is speed and never meaning —
+   greyscale, high contrast and a screen reader all get the same sentence. An unchanged pass is grey rather
+   than calm: it is news, but it is not progress. */
+.sv-group-score-delta {
+    font-variant-numeric: tabular-nums;
+}
+
+.sv-group-score-delta--up {
+    color: var(--calm);
+}
+
+.sv-group-score-delta--down {
+    color: var(--urgent);
+}
+
+.sv-group-score-delta--flat {
+    color: var(--dim);
+}
+
+/* The Critic's sentence about the number, from the wire. It is the only place the desk shows WHY a pass scored
+   what it did, so it stays the engine's own words and never a summary of them. */
+.sv-group-score-rationale {
+    color: var(--dim);
+    font-size: 0.7rem;
+    font-style: italic;
+}
+
+/* T5 — the TWO Reader marks, and nothing else. The pane used to print every pass with a date (a changelog);
+   the Author's question is two facts wide — what does this section score NOW, and what did it score the last
+   time the Reader read it — so the list is at most two rows, `Current clean revision` and `Previous mark`, with
+   no date in the text. Three passes or thirteen, two rows. The rows come from `story-contract.groupScoreMarks`,
+   the same selectors the rail's percentage and the delta sentence above are built from, so no two surfaces
+   order or round the pair differently. */
+.sv-group-score-marks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0.3rem 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--dim);
+    font-size: 0.7rem;
+}
+
+.sv-group-score-mark {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+}
+
+/* The label carries which mark this is, so the two rows are never read in the wrong order; the current mark is
+   the stronger line because it is the one the desk stands behind. */
+.sv-group-score-mark-label {
+    color: var(--muted);
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sv-group-score-mark-value {
+    color: var(--muted);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.sv-group-score-mark[data-current='current'] .sv-group-score-mark-value {
+    color: var(--text-strong);
+}
+
+.sv-group-score-mark-why {
+    font-style: italic;
+}
+
+/* ------------------------------------------------------------------- R1 — the group's lock */
+
+/* The Author's two verbs on a group's lock, and the line saying who else may lock. They sit with the write
+   controls rather than up in the head with the badge: the decision and its consequence read in one place.
+   `sv-group-lock-button` is the commit (accent, the same chip language every other write on this desk uses)
+   and `sv-group-unlock-button` is the way out (a bare border, because unlocking destroys nothing). */
+.sv-group-lock {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    margin-top: 0.4rem;
+}
+
+.sv-group-lock-button,
+.sv-group-unlock-button {
+    padding: 0.22rem 0.6rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--accent);
+    font-size: 0.65rem;
+    cursor: pointer;
+}
+
+.sv-group-lock-button:hover,
+.sv-group-unlock-button:hover {
+    background: var(--accent-soft);
+}
+
+.sv-group-unlock-button {
+    border-color: var(--line-strong);
+    color: var(--muted);
+}
+
+/* A shut control states its reason, and the reason is the wire's own state (`story-contract.groupLockRefusal`
+   / `groupUnlockRefusal`) carried in the button's `title` — the U-16 rule every pane on this desk follows. */
+.sv-group-lock-button:disabled,
+.sv-group-unlock-button:disabled {
+    border-color: var(--line);
+    background: transparent;
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+/* The ARMED confirmation. The first click puts the sentence above the verbs — a lock freezes the text, voids
+   the group's own findings and promises it to the other four groups, and all three belong in front of the
+   commit. It takes the full width so the sentence is a paragraph rather than a column squeezed between two
+   buttons, and it keeps the amber notice tone (`sv-group-notice--warn`) because the consequence is the one an
+   Author is least likely to expect from a lock button. */
+.sv-group-lock-confirm {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.sv-group-lock-confirm .sv-group-notice {
+    margin-top: 0;
+}
+
+.sv-group-lock-confirm .sv-summary-actions {
+    margin-top: 0;
 }
 
 .sv-group-note {
@@ -904,6 +1205,32 @@
 .sv-cost-taste {
     background: var(--surface-3);
     color: var(--muted);
+}
+
+/* T3 — WHAT a finding claims, printed next to what repairing it costs and by the same vocabulary (a chip, a
+   word, a hue that only adds speed). Every findings surface uses these two classes — the group pane, the
+   Summary's revision cards, the Findings folder, a chapter's rows and the stalled-Story line — so the two
+   claim types read identically wherever the Author meets them. */
+.sv-finding-kind {
+    padding: 0 0.35rem;
+    border-radius: var(--radius-sm);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* A Proposal asks for a change the Seed never promised, so it takes the desk's "possible work" teal: an offer
+   on the row, not a fault in the text. */
+.sv-finding-kind--proposal {
+    background: var(--accent-2-soft);
+    color: var(--accent-2);
+}
+
+/* An Issue is the unmarked case — a row raised before the field existed claims a defect — and it takes the
+   desk's defect red, the same hue as a `critical` cost, so a claimed defect reads as a fault in the text
+   against the Proposal's teal offer. */
+.sv-finding-kind--issue {
+    background: var(--urgent-bg);
+    color: var(--urgent);
 }
 
 .sv-chapter-unapprove {
@@ -1715,8 +2042,8 @@
     color: var(--finished);
 }
 
-.sv-kind-reader,
-.sv-kind-checker {
+.sv-kind-critic,
+.sv-kind-reader {
     background: var(--accent-2-soft);
     color: var(--accent-2);
 }
@@ -2126,7 +2453,7 @@
 /*
  * R10 — the identity rules are per kind, and they only set the variable: nothing here paints a
  * card, a badge or a state, which is what keeps the five hues from becoming a second status system.
- * Writer is the platform blue (the accent it already owns), Editor the completion green, Reader the
+ * Writer is the platform blue (the accent it already owns), Editor the completion green, Critic the
  * teal, and the two roles with no token of their own take the quiet purple/rose pair — distinct at
  * a glance, all five inside the same low-saturation ink palette.
  */
@@ -2138,11 +2465,11 @@
     --agent-tint: var(--finished);
 }
 
-.sv-agent-tile[data-agent='reader'] {
+.sv-agent-tile[data-agent='critic'] {
     --agent-tint: var(--accent-2);
 }
 
-.sv-agent-tile[data-agent='checker'] {
+.sv-agent-tile[data-agent='reader'] {
     --agent-tint: #b9a4e0;
 }
 
@@ -3704,7 +4031,7 @@
     font-size: 0.68rem;
 }
 
-/* ---- phase ① review dials (sampling size and reader passes) */
+/* ---- phase ① review dials (sampling size and critic passes) */
 
 .sv-summary-review-dials {
     display: flex;
@@ -3780,4 +4107,48 @@
     border-top: 1px solid var(--line);
     border-radius: 0;
     background: transparent;
+}
+
+/* R2 — a Story Setting, in the same voice as the auto-approve dial above it: the control, its name, and the
+   sentence the Author needs BEFORE turning it on. Absence is the default state (`story-contract.
+   isEditorGroupLockingEnabled` reads a Story with no key as OFF), so the row is rendered the same way whether
+   the Setting exists on the record or not — the Author sees which way the Story stands, never a blank. */
+.sv-setting {
+    margin-top: 0.8rem;
+    padding: 0.65rem 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+}
+
+.sv-setting-row {
+    display: flex;
+    gap: 0.45rem;
+    align-items: baseline;
+    color: var(--text-strong);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.sv-setting-row input {
+    accent-color: var(--accent);
+}
+
+/* With no `setEditorGroupLocking` bound in this shell the box is shut and its `title` says why (U-16); the
+   grey accent keeps that state visible without inventing a second control for it. */
+.sv-setting-row input:disabled {
+    accent-color: var(--line-strong);
+    cursor: not-allowed;
+}
+
+.sv-setting-name {
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+.sv-setting-note {
+    max-width: 74ch;
+    margin: 0.3rem 0 0;
+    color: var(--muted);
+    font-size: 0.7rem;
+    line-height: 1.5;
 }

@@ -5,7 +5,7 @@
 // `loop/work.ts` wrote the sweep note, `run/brief.ts` clipped that note at 600 characters, and
 // `criteria/engine.ts` graded C-14 against the Summary row alone. A unit test in any ONE of those
 // files can pass while the shipped combination still fails — which is exactly what shipped: twenty
-// Reader deep reviews filed at `revision_*`, no verdict at `summary_17`, and a phase-① Goal stuck at
+// Critic deep reviews filed at `revision_*`, no verdict at `summary_17`, and a phase-① Goal stuck at
 // `1/2 · failing: C-14 / summary_17: no verdict yet`, which is what holds the Author's lock (and
 // Phrase 2) shut. So the assertions below run on the Work Item the real sweep dispatched and the
 // brief the real executor assembled for it, with the store's own minted ids.
@@ -38,8 +38,8 @@ function reviewBriefOf(rig: Rig): string {
 
 describe('phase ① deep review — the verdict contract a real Reviewer is given (C-14, CS-VERDICT-1)', () => {
     it('names BOTH verdict targets with the store’s real ids — the Summary unit and the selected draft — in the job and the done-line', async () => {
-        // One sample, one Reader angle: the smallest book that still walks selection → deep review.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        // One sample, one Critic angle: the smallest book that still walks selection → deep review.
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -84,7 +84,7 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
     });
 
     it('sends the two-target instruction inside the note window that survives the 600-character clip', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -113,11 +113,11 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
     it('hands a real Reviewer the Seed-silence rule in the durable sections AND inside the note window (T3)', async () => {
         // WHY THIS IS ASSERTED ON THE RIG AND NOT A FIXTURE: the Author's complaint was about behaviour
         // the unit-level tests could not see. The rule lives in three places at once — the engine banner
-        // (`run/brief.ts:READER_REVIEW_MODE`), the job line (`run/brief.ts:jobStatement`, `check_unit` +
-        // `reader`), and the sweep note (`loop/work.ts`), which the brief CLIPS at 600 characters. A
+        // (`run/brief.ts:CRITIC_REVIEW_MODE`), the job line (`run/brief.ts:jobStatement`, `check_unit` +
+        // `critic`), and the sweep note (`loop/work.ts`), which the brief CLIPS at 600 characters. A
         // change to any one of them can leave the shipped combination without the clause, which is how
         // `THE SEED IS GENERAL` came to sit at character 950 of a note nobody was sending.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -156,5 +156,58 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
         // The rule is not ONLY in the clipped note: the job line states it before the note is reached, so
         // a note edit that pushes the clause out of the window costs emphasis, never the instruction.
         expect(text.indexOf('The Seed is general and is not an outline')).toBeLessThan(noteAt);
+    });
+
+    it('hands the same Reviewer both D-33c rules in the durable sections — the banner and the job line', async () => {
+        // WHY THIS IS PINNED HERE RATHER THAN IN `brief.test.ts`: the two rules are enforced in the tool
+        // (`tools/reader.ts:raiseFinding`), and the only copy of them the model ever sees is the brief the
+        // executor assembles for a REAL dispatch — banner (`run/brief.ts:CRITIC_REVIEW_MODE`) ahead of the
+        // Author-editable angle prompt, plus the job line (`run/brief.ts:jobStatement`, `check_unit` +
+        // `critic`). Both are engine-owned, so an Author rewriting `critic-genre` still gets them; and
+        // both are ahead of the sweep note, which `renderJob` clips at 600 characters. T3 is the precedent
+        // for what happens when the durable copies drift and only the note carries the rule.
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
+
+        await rig.run();
+
+        const text = reviewBriefOf(rig);
+
+        // -- The banner: the two rules, named as two, each with what the tool actually does -----------
+        expect(text).toContain(
+            'ISSUES COME FIRST, and the tool enforces it on the call (D-33c), in two rules: an ISSUE AND A PROPOSAL NEVER SHARE A PASS'
+        );
+        expect(text).toContain(
+            'and A PROPOSAL WAITS UNTIL EVERY ISSUE IS RESOLVED — while any issue on this Story is unresolved'
+        );
+        // The resolution bar is stated in the same breath as the rule, because `approved` is the state a
+        // crew reads as "done" and it is not: only `fixed`/`discarded` close an issue.
+        expect(text).toContain(
+            '(`fixed` or `discarded` is what closes one; `unconfirmed`, `confirmed`, `approved` and `disputed` are all still open)'
+        );
+        // …and the rule never strands the pass: an empty review is a valid answer, which is the half that
+        // stops a Critic filing an absence to avoid standing down.
+        expect(text).toContain(
+            'If you have no issue to file and no new proposal to make, file nothing and submit your verdict — say the text holds. An empty pass is a valid, good outcome; do not invent findings.'
+        );
+
+        // -- The job line: the same two rules in the sentence a tool-using pass acts on ---------------
+        expect(text).toContain(
+            'This is a REVIEW PASS: report defects and file genuine Proposals as `kind: proposal` findings — do not propose Ideas. ISSUES COME FIRST (D-33c): an issue and a proposal never share a pass'
+        );
+        expect(text).toContain(
+            'so file the defects in this pass and bring the improvement in a pass that has none left.'
+        );
+        expect(text).toContain(
+            'and if you have no issue and no new proposal, file nothing and submit your verdict: an empty pass is valid.'
+        );
+
+        // -- Both are in the unclipped parts: they cannot be pushed out of the brief by a note edit ----
+        const noteAt = text.indexOf("The sweep's note on this job: ");
+
+        expect(noteAt).toBeGreaterThan(-1);
+        expect(text.indexOf('ISSUES COME FIRST, and the tool enforces it on the call')).toBeLessThan(noteAt);
+        expect(text.indexOf('ISSUES COME FIRST (D-33c): an issue and a proposal never share a pass')).toBeLessThan(
+            noteAt
+        );
     });
 });

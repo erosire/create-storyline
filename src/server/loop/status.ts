@@ -69,7 +69,7 @@ import {
 // phrase surface (`phrase/exclusion.ts:groupPipelineOwed`) — the SAME rules `work.ts` builds its
 // candidates from — because a grouped book has no sampling rows for §6.4's clauses to describe, and
 // the rail (`api/projections.ts`) already answers "what still owes a review?" with these reads.
-import { groupPipelineOwed, isGroupManagedStory, isGroupPipelineRun } from '../phrase';
+import { groupPipelineOwed, isGroupManagedStory, isGroupPipelineRun, SECTION_SCORE_ITEM_PREFIX } from '../phrase';
 import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
 import type { CompletionProposal, LoopStory, ProbeState } from './types';
@@ -256,10 +256,21 @@ function phase1Unmet(store: Store, story: Story): string[] {
 
         const groupLive = liveRuns(store, story.id).filter((run) => isGroupPipelineRun(run));
 
-        if (groupLive.length > 0)
+        if (groupLive.length > 0) {
+            // READER SCORING (D-65): a live scoring pass is named in the same line, in the Author's
+            // words, because the row it holds up is a `%` the rail is waiting for and not a repair. The
+            // clause is additive text on an existing sentence — a scoring run counts in flight exactly as
+            // a review run does, and no SCORE affects the drain, only the run's existence.
+            const scoring = groupLive.filter((run) =>
+                (run.work_item_ref ?? '').startsWith(`${SECTION_SCORE_ITEM_PREFIX}_`)
+            ).length;
+
             unmet.push(
-                `${groupLive.length} group-pipeline run${groupLive.length === 1 ? '' : 's'} still in flight (R5, §6.4 steps 3-6)`
+                `${groupLive.length} group-pipeline run${groupLive.length === 1 ? '' : 's'} still in flight${
+                    scoring > 0 ? ` (${scoring} scoring the installed Overview)` : ''
+                } (R5, §6.4 steps 3-6)`
             );
+        }
 
         const owedGroups = groupPipelineOwed(store, story);
 
@@ -270,7 +281,7 @@ function phase1Unmet(store: Store, story: Story): string[] {
 
         if (owedGroups.structuredReviews > 0)
             unmet.push(
-                `${owedGroups.structuredReviews} Reader pass${owedGroups.structuredReviews === 1 ? '' : 'es'} still owed on the installed group Overview (R3, R5, §6.4 step 4)`
+                `${owedGroups.structuredReviews} Critic pass${owedGroups.structuredReviews === 1 ? '' : 'es'} still owed on the installed group Overview (R3, R5, §6.4 step 4)`
             );
 
         if (owedGroups.deepReviews > 0)
@@ -405,8 +416,8 @@ export function startProbe(store: Store, story: Story, phase: StoryPhase, at: st
     return {
         status: 'running',
         phase,
-        checker_item_id: null,
         reader_item_id: null,
+        critic_item_id: null,
         // The watermark is the journal's `seq` and not a timestamp: one sweep commits dozens of times
         // and two commits can share a millisecond, so a clock comparison would silently assign a
         // finding to the wrong round. D-14 anchors staleness on the same number for the same reason,
@@ -422,7 +433,7 @@ export function startProbe(store: Store, story: Story, phase: StoryPhase, at: st
  * The round's verdict, once both probe runs have closed (the sweep calls this with the closed runs).
  *
  * L-37's condition 3 is about the DIAL, not about findings in general: a `minor` finding turned up by
- * a fresh Reader while the dial covers `critical`+`major` does NOT dirty the round — §15 step 11's
+ * a fresh Critic while the dial covers `critical`+`major` does NOT dirty the round — §15 step 11's
  * whole point is that the Story drains with 12 `minor` and 4 `taste` findings sitting open. Ideas
  * never dirty it either: an Idea is a proposal for the Author (D-26), not authorised work.
  */
@@ -880,7 +891,7 @@ function phaseIsLocked(story: Story): boolean {
 function drainedReason(story: Story, left: Leftovers, completion: { met: boolean; unmet: string[] }): string {
     const parts = [
         `no ${dialPhrase(story)} left to work on (D-35b)`,
-        'a fresh round of Readers and checkers found nothing at that threshold (L-37)'
+        'a fresh round of Critics and readers found nothing at that threshold (L-37)'
     ];
 
     if (left.awaiting > 0) parts.push(`${left.awaiting} finding${left.awaiting === 1 ? '' : 's'} awaiting you`);

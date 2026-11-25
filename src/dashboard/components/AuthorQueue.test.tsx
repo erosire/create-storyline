@@ -12,7 +12,7 @@ function desk(): QueueItem[] {
         queueItem('idea_1', {
             kind: 'idea',
             title: 'the sea should have a name the cartographer refuses to say aloud',
-            detail: 'a Reader filed it from the Sargasso passage; the Editor verified the page',
+            detail: 'a Critic filed it from the Sargasso passage; the Editor verified the page',
             evidence: 'verified · p.112 "she would not name it, for fear it would hear"'
         }),
         queueItem('escalation_1', {
@@ -63,6 +63,47 @@ describe('AuthorQueue — the home screen (U-10 / U-10a / U-10b)', () => {
         expect(findingEl.querySelector('.cost-chip')?.getAttribute('data-cost')).toBe('major');
         // Exactly the two buttons U-10a names — nothing else competes with the decision.
         expect(finding.getAllByRole('button').map((button) => button.textContent)).toEqual(['Approve', 'Discard']);
+    });
+
+    // T3 — the row says WHAT it claims before it says what repairing it costs. `cost` has always been the price
+    // of a repair; `finding_kind` is the claim type, and on this screen every row is a decision the Author makes
+    // one at a time (U-10a), so an improvement must not read in the same voice as a defect. Three cases are
+    // pinned: the explicit Issue, the explicit Proposal, and the legacy row that names no kind (which reads as
+    // an Issue, never blank). The Idea row carries the field from the fixture default and shows NOTHING — the
+    // claim type belongs to findings, and a chip on an Idea would be the desk inventing a classification.
+    it('labels a finding row with its claim type, before the cost, and labels the other flavours with none (T3)', async () => {
+        await renderShell(<AuthorQueue />, [], [
+            queueItem('finding_1'),
+            queueItem('finding_2', {
+                finding_kind: 'proposal',
+                cost: 'minor',
+                title: 'link the twist in chapter 3 to the opening image'
+            }),
+            queueItem('finding_legacy', { finding_kind: undefined, cost: 'critical' }),
+            queueItem('idea_1', { kind: 'idea' })
+        ]);
+
+        expect(items().map((row) => row.querySelector('.kind-chip')?.textContent ?? null)).toEqual([
+            'Issue',
+            'Proposal',
+            'Issue',
+            null
+        ]);
+        // The stylesheet hook carries the SAME decision as the word, so a surface can never colour a label its
+        // own text says differently.
+        expect(
+            items().map((row) => row.querySelector('.kind-chip')?.getAttribute('data-kind') ?? null)
+        ).toEqual(['issue', 'proposal', 'issue', null]);
+
+        // First in the meta line, ahead of the cost — the reader learns what kind of claim it is before its
+        // price, which is the order the decision is actually made in.
+        const meta = items()[1].querySelector('.queue-item__meta')!;
+
+        expect(Array.from(meta.children).map((child) => child.className)).toEqual([
+            'kind-chip kind-chip--proposal',
+            'cost-chip',
+            'queue-item__dial-note'
+        ]);
     });
 
     it('approves one finding at a time, with the audit line, and offers no silent batch (U-10b / P11)', async () => {

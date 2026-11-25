@@ -103,7 +103,7 @@ export const RECOMMENDATION_ENUM = enumOf(
 
 /** §4.12 `roles[].kind` — the five dispatched kinds (§7.2 adds the Researcher). */
 export const ROLE_KIND_ENUM = enumOf(
-    ['writer', 'editor', 'checker', 'reader', 'researcher'],
+    ['writer', 'editor', 'reader', 'critic', 'researcher'],
     'The role kind that should do the work.'
 );
 

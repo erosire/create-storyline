@@ -28,9 +28,9 @@ import type { LoopSettings } from '../api';
  * The stances offered. Every one is a whole number of threads, and the set brackets the shipped
  * default (`DEFAULT_GLOBAL_MAX_CONCURRENT` = 12) on both sides without pretending a provider can serve
  * sixty completions at once — the ceiling protects the Author's attention (E-0a) and the relay, and
- * anything past 32 is an operator decision made in an env var, not a click.
+ * anything off this list (below 4 or above 24) is an operator decision made in an env var, not a click.
  */
-const LIMIT_CHOICES = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32] as const;
+const LIMIT_CHOICES = [4, 6, 8, 10, 12, 16, 20, 24] as const;
 
 /**
  * The dropdown's face: the stance set, plus the ceiling actually in effect when it is off the list.

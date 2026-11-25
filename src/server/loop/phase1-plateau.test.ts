@@ -71,7 +71,7 @@ const writeAudit = (rig: Rig, entries: SummaryReviewHistoryEntry[]) => {
  * deep review that audits the accepted revision.
  */
 const roundOneRig = async () => {
-    const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+    const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
     await rig.run();
 

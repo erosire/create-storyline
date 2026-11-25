@@ -66,7 +66,7 @@ const SPEC_5_2: { id: string; label: string; checker: 'code' | 'judge'; hard: bo
         id: 'C-14',
         // §5.2's C-14 row, re-cut by T3: the Seed is GENERAL, so this criterion is a contradiction
         // test, not a checklist. The old label ("nothing central to `stories.idea` is missing from
-        // it") is what let Readers file the Author's two screenshot findings — a refuge with no
+        // it") is what let Critics file the Author's two screenshot findings — a refuge with no
         // earlier planting, and a stake the Seed never stated — as C-14 defects. `checker` and `hard`
         // are unchanged; only the criterion's own wording moved, and the spec table row
         // (documents/specifications.md §5.2) carries this same text.
@@ -116,7 +116,7 @@ describe('§5.2 — the built-in criteria', () => {
     });
 
     it('T3: C-14 is a contradiction test, and its own wording says Seed silence is not a defect', () => {
-        // The failure this pins is the one the Author reported: a Reader spent a round on "the final
+        // The failure this pins is the one the Author reported: a Critic spent a round on "the final
         // refuge has no earlier setup in the Summary" and another on "the Summary never says what the
         // bird loses" — both details a general Seed leaves open. The old label/question framed C-14 as
         // "nothing central … is missing from it", which made every silence an unmet promise, and the

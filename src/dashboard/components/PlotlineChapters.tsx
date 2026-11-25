@@ -22,6 +22,8 @@ import {
     buildRevisionUnits,
     classifyChapter,
     competingRevisionsFor,
+    findingKindLabel,
+    findingKindToken,
     undoTargetFor
 } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
@@ -184,6 +186,18 @@ export function PlotlineChapters({
                                                 <ul className="sv-chapter-findings">
                                                     {chapterFindings.map((finding) => (
                                                         <li className="sv-chapter-finding" key={finding.id}>
+                                                            {/* T3 — what the row CLAIMS, before what it costs. This is
+                                                                the one list where the Author approves a whole chapter
+                                                                at a time (U-10b), so telling a defect apart from an
+                                                                improvement here is the difference between a repair
+                                                                the book needs and a batch of preferences. */}
+                                                            <span
+                                                                className={`sv-finding-kind sv-finding-kind--${findingKindToken(finding.kind)}`}
+                                                                data-testid={`finding-${finding.id}-kind`}
+                                                            >
+                                                                {findingKindLabel(finding.kind)}
+                                                            </span>
+                                                            {' '}
                                                             <span className={`sv-finding-cost sv-cost-${finding.cost}`}>
                                                                 {finding.cost}
                                                             </span>

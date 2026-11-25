@@ -5,7 +5,7 @@
  * `attempts: 3` rewrites the assigned chapter Writer's `attempts` before the first sweep (D-17d: the
  * template is where the divergence count lives, §4.12), so the loop owes three drafts of every chapter.
  *
- * The rows pinned here are the ones the spec names: three draft runs, a checker pass PER DRAFT (D-22's
+ * The rows pinned here are the ones the spec names: three draft runs, a reader pass PER DRAFT (D-22's
  * "the Editor chooses between drafts that have each been read" — a choice made about a draft nobody read
  * is not a choice), one Editor selection that deletes the losers in the same commit, the `selection_note`
  * the Editor wrote (L-17), and the winning prose landing on the chapter row (D-22).
@@ -76,10 +76,10 @@ describe("D-17d / L-16 — the template's `attempts` buys that many blind drafts
         ]);
     });
 
-    it('holds the checkers until the set is complete, then judges each draft once (D-22, L-20)', async () => {
+    it('holds the readers until the set is complete, then judges each draft once (D-22, L-20)', async () => {
         const rig = await diverging();
 
-        // While the unit still owes drafts, no checker is bought for a single sibling: the Editor judges
+        // While the unit still owes drafts, no reader is bought for a single sibling: the Editor judges
         // the SET together (§6.2a's loop B), and a pass bought now would be re-bought after every draft.
         const first = await rig.step();
 
@@ -87,7 +87,7 @@ describe("D-17d / L-16 — the template's `attempts` buys that many blind drafts
 
         await rig.run();
 
-        // One checker pass per competing draft, each naming the draft it is told to read. The Work Item
+        // One reader pass per competing draft, each naming the draft it is told to read. The Work Item
         // has no revision field, so the draft is named in the job line and read with `listRevisions`.
         expect(runRefs(rig, 'wi_check_chapter')).toEqual([
             'wi_check_chapter_0_1_revision_3',

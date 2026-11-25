@@ -9,7 +9,7 @@
 // or `server/store/**` may branch on a group name: they ask this module (R1 "data-driven").
 //
 // WHAT IS DELIBERATELY NOT HERE: no behaviour over the book (that is `server/phrase/**`), no
-// role-instruction prose (R7 — the final Writer/Reader instruction text is a later task, and the
+// role-instruction prose (R7 — the final Writer/Critic instruction text is a later task, and the
 // descriptions below are the GROUP DEFINITIONS the prompt assembler quotes, not a role's brief),
 // and no dependency beyond a type-only import, so this module is as browser-safe as
 // `shared/schemas/**`.

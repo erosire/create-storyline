@@ -102,6 +102,11 @@ describe('PlotlineChapters — the contract beside the prose (U-4, decision 0/5,
             within(row).getByText('chapter marked needs_recheck — a change somewhere else touched this one (L-11a)')
         ).toBeTruthy();
         const finding = row.querySelector('.sv-chapter-finding') as HTMLElement;
+        // T3 — the claim type leads the row. This is the one surface where the Author can approve a whole
+        // chapter's worth in a single click (U-10b), so a defect and a preference have to be separable BEFORE
+        // the click; the row's first words are the type, never the cost.
+        expect(finding.firstElementChild?.textContent).toBe('Issue');
+        expect(finding.querySelector('.sv-finding-kind')?.className).toBe('sv-finding-kind sv-finding-kind--issue');
         expect(within(finding).getByText('major')).toBeTruthy();
         expect(within(finding).getByText('Act two changes nothing')).toBeTruthy();
         expect(within(finding).getByText('approved')).toBeTruthy();
@@ -154,24 +159,37 @@ describe('PlotlineChapters — the contract beside the prose (U-4, decision 0/5,
                 state: 'confirmed'
             },
             // Raised against c3 but naming c2 — L-11a says c2 is part of its blast radius.
+            // T3 — and it is a PROPOSAL (cost `major` is a claim a Proposal may make, §4.10), so this chapter's
+            // single Approve click covers one defect and one improvement: exactly the batch the chip exists to
+            // let the Author see through before pressing it.
             {
                 ...fixtureFindings()[0],
                 id: 'f-c3-refs',
                 target_ref: 'c3',
                 related_refs: ['c2'],
                 title: 'The water line repeats the opening',
-                state: 'confirmed'
+                state: 'confirmed',
+                kind: 'proposal'
             }
         ];
         renderPane({ actions, view });
 
         const row = chapterRow('Ghost Index');
 
-        // Both rows are listed as this chapter's findings (the L-11a one included).
+        // Both rows are listed as this chapter's findings (the L-11a one included), each leading with its own
+        // claim type — the type and the title, per row, in the order the rows appear.
         const listed = Array.from(row.querySelectorAll('.sv-chapter-finding')).map(
-            (item) => (item.querySelector('.sv-finding-title') as HTMLElement).textContent
+            (item) =>
+                [
+                    (item.querySelector('.sv-finding-kind') as HTMLElement).textContent,
+                    (item.querySelector('.sv-finding-title') as HTMLElement).textContent
+                ] as [string | null, string | null]
         );
-        expect(listed).toEqual(['The index speaks first', 'The water line repeats the opening']);
+
+        expect(listed).toEqual([
+            ['Issue', 'The index speaks first'],
+            ['Proposal', 'The water line repeats the opening']
+        ]);
 
         const button = row.querySelector('.sv-chapter-approve') as HTMLButtonElement;
 

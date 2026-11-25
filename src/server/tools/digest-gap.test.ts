@@ -5,7 +5,7 @@
  * `digest_gap` finding and the loop repairs the Digest". Before this fix neither half could be
  * reached:
  *
- *   1. `raiseFinding` resolved EVERY criterion ref against the §4.11 Goal (checker.ts), and no Goal
+ *   1. `raiseFinding` resolved EVERY criterion ref against the §4.11 Goal (reader.ts), and no Goal
  *      carries `digest_gap` — it is a §4.6 open-thread ref, not a criterion a crew judges against.
  *      So the call every brief tells the crew to make (`run/brief.ts`: "file a `digest_gap` finding
  *      (D-13)") came back as a T-11 naming error, and the gap could never be filed.
@@ -13,7 +13,7 @@
  *      is the whole content of "the loop repairs the Digest" in this build.
  *
  * And the refusals that were supposed to route the agent there named a call that does not exist:
- * §8's `createTask` declares no `kind` field (checker.ts's schema — "a model-chosen kind is noise"),
+ * §8's `createTask` declares no `kind` field (reader.ts's schema — "a model-chosen kind is noise"),
  * so "createTask with kind digest_gap" produced a second refusal. Both halves and the routing text
  * are pinned below with exact values.
  */
@@ -90,9 +90,9 @@ function seedWorld(): { store: Store; story: Story; chapter: Chapter } {
     return { store, story, chapter };
 }
 
-/** A checker session — the kind §7 gives `findings: write` to (D-16's triage flow). */
+/** A reader session — the kind §7 gives `findings: write` to (D-16's triage flow). */
 function sessionFor(storyId: string): RunSession {
-    return { storyId, roleKind: 'checker', roleName: 'checker_1', runId: 'run_checker' };
+    return { storyId, roleKind: 'reader', roleName: 'reader_1', runId: 'run_reader' };
 }
 
 describe('the digest_gap filing path (U-3a, D-13, D-12a)', () => {

@@ -148,7 +148,7 @@ function seedSummaryFinding(
 
 describe('R2a — a clean, fully reviewed Summary stops and awaits the Author', () => {
     it('signs the round off to the Author and mints no further run across repeated sweeps (L-29, L-2)', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
@@ -180,15 +180,17 @@ describe('R2a — a clean, fully reviewed Summary stops and awaits the Author', 
         for (let sweep = 0; sweep < 3; sweep += 1) await rig.step();
 
         expect(runKeys(rig)).toEqual(before);
-        expect(offers(rig)).toEqual(['wi_probe_checker_summary_1', 'wi_probe_reader_summary_1']);
+        // `wi_probe_reader_*` sorts after `wi_probe_critic_*` (the Reader used to be the Checker,
+        // which sorted first), so the offers list is critic-then-reader now.
+        expect(offers(rig)).toEqual(['wi_probe_critic_summary_1', 'wi_probe_reader_summary_1']);
     });
 });
 
 describe('R2b — a sampling round whose leg closed mid-flight still reaches selection', () => {
     it('screens and selects a stranded draft instead of waiting on samples the loop stopped buying (D-52, §16.6)', async () => {
-        // Three samples per round, one screening Reader: round 1 runs to completion, and the approved
+        // Three samples per round, one screening Critic: round 1 runs to completion, and the approved
         // finding plus its fix task arm round 2 (`records.ts:samplingArmed`).
-        const rig = await createRig({ summarySampling: 3, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 3, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -220,7 +222,7 @@ describe('R2b — a sampling round whose leg closed mid-flight still reaches sel
         expect(story.sampling_round).toBe(2);
         expect(revisionRows(rig)).toEqual(['revision_0:r1:selected', 'revision_3:r2:selected']);
 
-        // The stranded draft really was screened — ONE pass, because the Story asks for one Reader, and
+        // The stranded draft really was screened — ONE pass, because the Story asks for one Critic, and
         // the family stopped there. An unscreenable draft would have been bought to the screening
         // attempt cap, one job per sweep, which is the treadmill this rule replaces with an answer.
         expect(runKeys(rig, 'wi_screen_')).toEqual([
@@ -252,7 +254,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
     it('splits the three attribution scopes on the records themselves', async () => {
         // Two samples, so round 1 leaves a loser behind in the ledger: the selection truncates the row,
         // and the persisted `sampling_history` is what still says that draft ever existed.
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1 });
 
         await rig.run();
 
@@ -294,7 +296,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
     it('neither blocks the round nor buys a verification pass for a finding about a set-aside draft', async () => {
         // `silent`: the Editor never decides anything, so any verify run below is the QUEUE offering
         // work on this finding rather than an answer arriving.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -339,7 +341,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
     });
 
     it('keeps a finding on the carried draft blocking, verified, and sign-off refused (D-33)', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -379,7 +381,7 @@ describe('R2c — a finding belongs to one draft, and a set-aside draft is nobod
         // Two samples in round 2 so the selection has a loser to truncate. The finding naming that loser
         // is seeded while the draft still exists: the retirement happens inside the selection commit,
         // and afterwards the row is gone — which is exactly why it must be attributed then, not later.
-        const rig = await createRig({ summarySampling: 2, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 2, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -444,7 +446,7 @@ describe('R2d — an Editor verification pass that never decides the finding is 
     it('spends the budget, then asks the Author instead of buying a pass every sweep (D-33, P7)', async () => {
         // `silent`: the verify run closes without calling a tool — the case that used to loop, because
         // the finding stayed `unconfirmed` and an unconfirmed finding is a D-33 hold.
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1, crew: { verifyReports: 'silent' } });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1, crew: { verifyReports: 'silent' } });
 
         await rig.run();
 
@@ -515,7 +517,7 @@ describe('R2d — an Editor verification pass that never decides the finding is 
 
 describe('the round and its sampling leg, read from the ledger', () => {
     it('counts the round in flight as one that has no sampling run of its own yet (D-48, D-52)', async () => {
-        const rig = await createRig({ summarySampling: 1, summaryReaders: 1 });
+        const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 

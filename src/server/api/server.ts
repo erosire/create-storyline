@@ -78,10 +78,10 @@ export const LEASE_IDLE_MS_ENVIRONMENT = 'STORYLINE_LEASE_IDLE_MS';
 /**
  * §8.6's assistant, as a built-in template row.
  *
- * WHY THE ROLE IS A `writer` KIND: `RoleKind` (§4.12) has exactly four values — writer, editor, reader,
- * checker — and the permission row is selected by KIND (`tools/permissions.ts`, T-1a). The assistant has
+ * WHY THE ROLE IS A `writer` KIND: `RoleKind` (§4.12) has exactly four values — writer, editor, critic,
+ * reader — and the permission row is selected by KIND (`tools/permissions.ts`, T-1a). The assistant has
  * to answer an Author's question by CHANGING an artifact, and only the writer row holds the Summary and
- * chapter writes; a checker-kind assistant could read and report and nothing else, which is the chat
+ * chapter writes; a reader-kind assistant could read and report and nothing else, which is the chat
  * reply §8.6 explicitly rules out. `web: false` is the §8.6 "no web tools" half — whether a run may call
  * `searchWeb`/`fetchPage` is decided by the run layer's hook wiring, which this layer does not own
  * (reported as a delta), so the flag records the intent on the card the Author sees (U-8).

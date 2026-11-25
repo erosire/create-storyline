@@ -23,9 +23,9 @@
  * produced (U-16's button, D-35's dial, G-1's ops) rather than "something happened".
  */
 import { criterionById } from '../../shared/criteria';
-// Phase ①'s Readers-per-sample default (shared with the loop's own `screeningSizeOf`), so a baseline that
+// Phase ①'s Critics-per-sample default (shared with the loop's own `screeningSizeOf`), so a baseline that
 // spells out "the review ran" uses the count the loop dispatches by rather than a number a test invented.
-import { DEFAULT_SUMMARY_READERS } from '../../shared/types';
+import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
 import type {
     CastMember,
     Chapter,
@@ -46,6 +46,7 @@ import type {
     GoalSurface,
     PhraseFindingRow,
     PhraseGroupRow,
+    PhraseGroupScore,
     PhraseRevisionRow,
     PhraseTaskRow,
     PhraseView
@@ -68,7 +69,7 @@ export const SEED_IDEA =
     'An archivist in a flooded megacity discovers the cathedral of data her successor sealed, and finds her own voice in the index.';
 
 /** §4.1 — the Story at phase ③, awaiting the Author (L-37a's `awaiting`, not `stalled`). */
-export function fixtureStory(): Story {
+export function fixtureStory(editorGroupLocking = false): Story {
     return {
         id: 's1',
         rev: 14,
@@ -81,7 +82,7 @@ export function fixtureStory(): Story {
         plotlines_locked: true,
         pending_kind: 'idea_selection',
         status: 'pending',
-        status_reason: 'The Reader proposed three directions; the Author has not chosen one (D-28).',
+        status_reason: 'The Critic proposed three directions; the Author has not chosen one (D-28).',
         consistency: 'Seed→Summary 2/2 · Summary→Plotlines 6/7 · Plotlines→Chapters 1/3 · Whole Story 0/3',
         trend: 'flat',
         goal_ref: 'g1',
@@ -92,8 +93,12 @@ export function fixtureStory(): Story {
         digest_rev: 7,
         template_refs: ['t-chapters'],
         // L-9: the declared dependency set — what D-37a's recheck walks when the Author edits.
-        chapter_deps: { c2: ['c4', 'c5'] }
-    };
+        chapter_deps: { c2: ['c4', 'c5'] },
+        // R2 — the Editor-locking Setting. ABSENT IS THE DEFAULT (the flag is additive on `Story`, and
+        // `story-contract.isEditorGroupLockingEnabled` reads absence as OFF), so the no-arg fixture keeps
+        // sending no key at all; `fixtureStory(true)` is how a test opts the Story INTO the Setting.
+        ...(editorGroupLocking ? ({ editor_group_locking: true } as Partial<Story>) : {})
+    } as Story;
 }
 
 /** §4.2 — the locked Summary (L-30: the only way back in is a backtrack). */
@@ -327,7 +332,16 @@ export function fixtureLedger(): LedgerEntry[] {
     ];
 }
 
-/** §4.10 — one approved finding (queued Writer work) and one fixed (not open). */
+/**
+ * §4.10 — one approved finding (queued Writer work) and one fixed (not open).
+ *
+ * T3 — the two rows also carry the two CLAIM TYPES, because every surface that reads these rows (the Findings
+ * folder, a chapter's rows, the stalled-Story line) has to show the distinction and the folder's closed list is
+ * where a resolved Proposal has to be legible as one. `f1` is an Issue: the chapter contradicting the book's own
+ * shape is a defect, and an Issue owns `critical`/`major`/`minor` (§4.10's cost ladder). `f2` is a Proposal — a
+ * structural change that would improve the opening rather than a commitment the text breaks — and a Proposal owns
+ * `major`/`minor`/`taste`, never `critical`, which is why it sits at `minor` here and not on `f1`.
+ */
 export function fixtureFindings(): Finding[] {
     return [
         {
@@ -342,6 +356,7 @@ export function fixtureFindings(): Finding[] {
             detail: 'The chapter opens and closes with the same arrangement of facts.',
             evidence: 'ch. 4, ¶2 — 900 words, no reversal, no new knowledge.',
             cost: 'major',
+            kind: 'issue',
             fingerprint: 'fp-c4-no-change',
             state: 'approved',
             confirmed_by: 'r-3',
@@ -360,6 +375,7 @@ export function fixtureFindings(): Finding[] {
             title: 'No scene break at the door',
             evidence: 'ch. 1, ¶1 — one unbroken block.',
             cost: 'minor',
+            kind: 'proposal',
             fingerprint: 'fp-c1-block',
             state: 'fixed',
             confirmed_by: 'r-1',
@@ -381,7 +397,7 @@ export function fixtureIdeas(): Idea[] {
         phase: 'chapters',
         body: 'Make the curator an early copy of the archivist.',
         kind: 'direction',
-        author: 'reader',
+        author: 'critic',
         sources: [],
         fingerprint: 'fp-copy',
         seen_count: 1,
@@ -431,7 +447,7 @@ export function fixtureIdeas(): Idea[] {
             unit_ref: 'c4',
             body: 'Make the curator an early copy of the archivist.',
             kind: 'direction',
-            author: 'reader',
+            author: 'critic',
             sources: [],
             fingerprint: 'fp-copy',
             seen_count: 3,
@@ -454,7 +470,7 @@ export function fixtureIdeas(): Idea[] {
             unit_ref: 'c3',
             body: 'Cut the relay scene: it repeats the chapter before it.',
             kind: 'warning',
-            author: 'checker',
+            author: 'reader',
             sources: [],
             fingerprint: 'fp-relay',
             seen_count: 1,
@@ -470,7 +486,7 @@ export function fixtureIdeas(): Idea[] {
             phase: 'summary',
             body: 'Open the book on the flood, not the archive.',
             kind: 'direction',
-            author: 'reader',
+            author: 'critic',
             sources: [],
             fingerprint: 'fp-open',
             seen_count: 1,
@@ -487,7 +503,7 @@ export function fixtureIdeas(): Idea[] {
             phase: 'chapters',
             body: 'Give Hale the door code nobody issued.',
             kind: 'possibility',
-            author: 'reader',
+            author: 'critic',
             sources: [],
             fingerprint: 'fp-code',
             seen_count: 2,
@@ -576,7 +592,7 @@ export function fixtureRevisions(): Revision[] {
 }
 
 /**
- * §4.9 — the verdict rows behind U-13. D-21's side-by-side panes show what the checkers said ABOUT
+ * §4.9 — the verdict rows behind U-13. D-21's side-by-side panes show what the readers said ABOUT
  * EACH DRAFT, and §6.2a files those against a `revision_N` (v-1, v-2 on rv-c2-a; v-4 on c1's selected
  * draft). v-3 is the UNIT-targeted row that c2's second draft falls back to, so the pane's two
  * branches — "this draft was judged" and "only the unit was" — both have real data. `rv-c2-b`
@@ -726,7 +742,7 @@ export function fixtureRuns(): Run[] {
             // D-38: three writer agents inside ONE run, and the panel disagreed (U-8d's marker).
             delegated: [
                 {
-                    role: 'checker',
+                    role: 'reader',
                     task: 'check C-8 against the plotline',
                     summary: '1 of 3 preferred the earlier cut — dissent recorded in the selection note.',
                     tokens: 300
@@ -762,12 +778,12 @@ export function fixtureRuns(): Run[] {
  * WHY A FIXTURE NEEDS TO SHOW THESE (T11/F1): `StoryView.runs` is a REQUIRED, uncapped slice
  * (`api.ts:StoryView`, `server/api/projections.ts` sends every run row of the Story), so a phase-①
  * baseline that carries no `wi_review_` row is not a clean Story — it is a revision nobody has read, and
- * `deepReviewProgress` owes all `summary_readers` passes for it. A test that wants "the review is done"
+ * `deepReviewProgress` owes all `summary_critics` passes for it. A test that wants "the review is done"
  * has to say so with these rows; only an explicitly legacy payload may omit the slice.
  */
 export function fixtureReviewRuns(
     revisionId: string,
-    passes = DEFAULT_SUMMARY_READERS,
+    passes = DEFAULT_SUMMARY_CRITICS,
     state: Run['state'] = 'torn_down'
 ): Run[] {
     return Array.from({ length: passes }, (_, index) => {
@@ -781,7 +797,7 @@ export function fixtureReviewRuns(
             story_id: 's1',
             work_item_ref: `wi_review_${revisionId}_a${pass}`,
             template_ref: 't-builtin',
-            role: 'reader',
+            role: 'critic',
             state,
             started_at: ago(40),
             ended_at: state === 'working' ? null : ago(35),
@@ -814,8 +830,8 @@ export function fixtureTemplates(): Template[] {
                 },
                 { name: 'editor', kind: 'editor', prompt: 'Select one draft and write the selection note.', agents: 1 },
                 {
-                    name: 'reader',
-                    kind: 'reader',
+                    name: 'critic',
+                    kind: 'critic',
                     prompt: 'Read for the Goal criteria.',
                     web: true,
                     agents: 2,
@@ -835,9 +851,9 @@ export function fixtureTemplates(): Template[] {
             rev: 1,
             created_at: ago(900),
             updated_at: ago(900),
-            name: 'core-reader',
-            title: 'Core reader (built-in)',
-            roles: [{ name: 'reader', kind: 'reader', prompt: 'Judge the artifact against the Goal.' }],
+            name: 'core-critic',
+            title: 'Core critic (built-in)',
+            roles: [{ name: 'critic', kind: 'critic', prompt: 'Judge the artifact against the Goal.' }],
             serves_phase: ['summary'],
             done_definition: 'a verdict per criterion',
             attempts: 1,
@@ -926,6 +942,15 @@ export function fixtureCompletion(): CompletionPreview {
  *                reports one of five unwritten (R1/U4).
  *   - Findings — the three open rows above PLUS one `fixed` row against Premise, which must appear NOWHERE:
  *                a fixed finding is archived out of every active list (U5).
+ *   - Scores   — T3: two passes over the four WRITTEN groups, newest first, one vector per pass (`vh-2` then
+ *                `vh-3`, the current hash matching `review.vector_hash`). Premise 78→84 and Promise 55→62 are
+ *                the improvements, Tone 64→58 is the rewrite that went backwards, Theme has a single pass (so
+ *                no delta), and Ending carries no `scores` KEY because it has no text — which is also why this
+ *                book's rail header prints no overall average (one unscored group silences it; the average is
+ *                pinned on `testing/shell-fakes.tsx:groupedPhraseView`, where all five are scored).
+ *   - Kinds    — T3: `f-cross` is an explicit Issue, `f-minor` an explicit Proposal (it asks for a word change,
+ *                not for a repair), and `f-wide`/`f-fixed` carry NO kind at all — the legacy rows every findings
+ *                surface has to read as an Issue.
  *
  * The ids are readable (`grp-premise`, `f-cross`) rather than random. That is deliberate: the dashboard addresses
  * a group by its id STRING, so a readable id asserts the same contract a uuid does — and every ref in a test
@@ -965,6 +990,22 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
         chars
     });
 
+    /**
+     * T3 — one scoring pass over ONE group, in the shape the projection sends (`api.ts:PhraseGroupScore`).
+     *
+     * `hash` is the pass's text vector, and it is the reason the fixture passes them out in pairs: a single
+     * Critic pass scores ALL FIVE groups with the same `vector_hash`, `at` and `run_ref`, so a test may not
+     * invent a per-group pass — and a group's `scores` list is newest first, exactly like `history`. `value`
+     * is the 0–100 percentage the rail prints; `phraseScorePercent` is what turns it into the number.
+     */
+    const score = (value: number, hash: string, at: string, rationale?: string): PhraseGroupScore => ({
+        value,
+        vector_hash: hash,
+        at,
+        run_ref: `run_critic_${hash}`,
+        ...(rationale === undefined ? {} : { rationale })
+    });
+
     const allIds = definitions.map((definition) => `grp-${definition.key}`);
 
     const groups: PhraseGroupRow[] = [
@@ -980,6 +1021,13 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
                 revision('premise', 3, 'latest', 74),
                 revision('premise', 2, 'archived', 75),
                 revision('premise', 1, 'archived', 40)
+            ],
+            // T3 — two passes, the newer one against the vector the review is on (`vh-3`, the same hash in
+            // `review` below), the older one before the rewrite that fixed the set-up. 78 → 84 is the rail's
+            // "this group is converging" case, and the rationale is the Critic's own sentence for the number.
+            scores: [
+                score(84, 'vh-3', ago(10), 'the lie is set up in the first sentence and paid for in the last'),
+                score(78, 'vh-2', ago(90))
             ]
         }),
         group('promise', {
@@ -988,13 +1036,20 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             updated_by: 'writer',
             // Only the latest-vs-previous body; the older archived text stays off the wire.
             previous_content: 'The reader is warned the lie will cost her the light itself.',
-            history: [revision('promise', 2, 'latest', 68), revision('promise', 1, 'archived', 60)]
+            history: [revision('promise', 2, 'latest', 68), revision('promise', 1, 'archived', 60)],
+            // T3 — up 7. No rationale on either pass: the pane prints the number and the movement, and prints
+            // NOTHING where the Critic wrote no sentence.
+            scores: [score(62, 'vh-3', ago(10)), score(55, 'vh-2', ago(90))]
         }),
         group('theme', {
             content: 'What the book is about: the price of a story told to keep the dark out.',
             revision: 1,
             updated_by: 'writer',
             history: [revision('theme', 1, 'latest', 66)],
+            // T3 — ONE pass, so there is no previous percentage and the pane prints no delta line. The Writer
+            // holds this group right now, which is exactly the state where a second number would be a lie: the
+            // text the next pass scores does not exist yet.
+            scores: [score(71, 'vh-3', ago(10))],
             // R4/F8: the same read the revise route 409s on, so a disabled control cannot disagree with the wire.
             writer_busy: true,
             // R3: the finding this group's NEXT text has to answer.
@@ -1004,12 +1059,25 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             content: 'Plain sentences, salt in every image, and no authorial wink.',
             revision: 1,
             updated_by: 'writer',
-            history: [revision('tone', 1, 'latest', 47)]
+            history: [revision('tone', 1, 'latest', 47)],
+            // T3 — the REGRESSION case, and it is a real one rather than a made-up number: the vh-2 pass scored
+            // the mirrored text (see `review.mirror` below, in sync and holding `tone`), the group's first own
+            // revision replaced it, and the vh-3 pass that scored THAT text rates it six points worse. The pane's
+            // `down 6` sentence and the rail's tooltip are the only places the desk admits a rewrite went wrong.
+            scores: [
+                score(58, 'vh-3', ago(10), 'two authorial winks survive in the middle paragraph'),
+                score(64, 'vh-2', ago(90))
+            ]
         }),
         group('ending', {
             // R1: `revision: 0` IS "never written" — the empty state's authority, not a missing field.
             content: '',
             revision: 0,
+            // T3 — NO `scores` key at all, and it stays that way on purpose: an unscored group must render
+            // nothing on the rail and no score block in its pane, and one unscored group is what keeps this
+            // book's phrase header from printing an overall average (the all-or-nothing rule in
+            // `story-contract.ts:phraseOverallScore`). The header's number is pinned on the clean five-group
+            // view in `testing/shell-fakes.tsx:groupedPhraseView`.
             history: []
         })
     ];
@@ -1019,6 +1087,9 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             id: 'f-cross',
             title: 'the promise names a cost the premise never sets up',
             cost: 'critical',
+            // T3 — an Issue, and the cost proves it: `critical` is the ladder's word for a contradiction the
+            // text cannot live with, which is a claim no Proposal is ever allowed to make (§4.10).
+            kind: 'issue',
             state: 'confirmed',
             seen_count: 3,
             group_refs: ['grp-promise', 'grp-theme'],
@@ -1035,6 +1106,8 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             // infers it from an empty array, and R3 resolves it against every group of this Story.
             title: 'the Overview never says who the keeper is lying for',
             cost: 'major',
+            // T3 — and deliberately NO `kind` key: this is the row raised before the field existed, the case
+            // every findings surface must render as an Issue rather than blank, `—` or a crash.
             state: 'unconfirmed',
             seen_count: 1,
             group_refs: [],
@@ -1049,6 +1122,12 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             // A note, not a blocker: it costs the group an `open`, never a `blocking` (U4's badges).
             title: 'the promise restates the premise in other words',
             cost: 'minor',
+            // T3 — the PROPOSAL of the set, and the fixture's comment already gives it away: the Critic is not
+            // claiming a contradiction, it is asking for the repetition to go. A word-change claim is exactly
+            // what `proposal` exists for (§4.10), it owns `minor` on the cost ladder, and the group pane's row
+            // has to say so in front of the cost — otherwise the Author reads three blockers and one preference
+            // in the same voice and approves all four.
+            kind: 'proposal',
             state: 'approved',
             seen_count: 1,
             group_refs: ['grp-promise'],
@@ -1110,6 +1189,48 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
             open_tasks: tasks.filter((task) => task.state !== 'done').length,
             mirror: { summary_id: 'sum-1', in_sync: true, locked: false, fields: ['premise', 'promise', 'theme', 'tone'] }
         },
+        // D-67 — the reviewed block for the mid-review book, and it is `pending` because the book IS: Ending
+        // has no text at all, and every group is named by an unresolved ISSUE row (the critical `f-cross` on
+        // promise/theme, and the unscoped `f-wide` major, which R3 resolves against ALL FIVE groups), so no
+        // group is selectable and the selection is partial.
+        //
+        // WHY NO SCORES HERE EITHER. The reviewed scores join on `reviewed.vector_hash`, and a PARTIAL
+        // selection has a hash no Reader row carries (the seat only ever claims a complete one) — so the strip
+        // prints selections and gaps and no numbers. The LIVE rows keep their D-65 trend rows (`vh-2`/`vh-3`),
+        // which is what the group pane and the rail read; the two lists are different reads of different text,
+        // and the Summary tab is not allowed to confuse them.
+        reviewed: {
+            state: 'pending',
+            complete: false,
+            // A partial selection still names the groups it HAS — this one has none.
+            vector: {},
+            vector_hash: 'vh-partial',
+            overview: '',
+            groups: groups.map((row) => ({
+                id: row.id,
+                key: row.key,
+                selected_revision: null,
+                selected_id: null,
+                clean_run_ref: null,
+                latest_revision: row.revision,
+                superseded: false,
+                // Every group of this book is inside an open issue's scope: `f-wide` is UNSCOPED, which R3
+                // resolves to the whole Overview, so it names all five.
+                issues_open: true,
+                gap: row.revision === 0 ? 'unwritten' : 'no_clean_revision',
+                scores: []
+            })),
+            chosen: null,
+            stale: false,
+            // The two ISSUE rows, with the catalog KEYS each one scopes to (`f-minor` is a proposal and
+            // `f-fixed` is archived, so neither holds a clean verdict back).
+            blocking_issues: [
+                { id: 'f-cross', title: 'the promise names a cost the premise never sets up', cost: 'critical', group_keys: ['promise', 'theme'] },
+                { id: 'f-wide', title: 'the Overview never says who the keeper is lying for', cost: 'major', group_keys: definitions.map((definition) => definition.key) }
+            ],
+            // Theme is mid-rewrite (`writer_busy`), which is the state the choose refuses on.
+            writer_busy: true
+        },
         ...overrides
     };
 }
@@ -1119,7 +1240,14 @@ export function fixturePhrase(overrides: Partial<PhraseView> = {}): PhraseView {
  * `story.summary_mode` are one fact on the wire (`projections.ts` echoes the mode), so passing rows without the
  * mode would render a pane the server can never produce.
  */
-export function fixtureView(options: { completion?: CompletionPreview | null; phrase?: PhraseView } = {}): StoryViewData {
+export function fixtureView(
+    options: {
+        completion?: CompletionPreview | null;
+        phrase?: PhraseView;
+        /** R2 — opts the Story into the Editor-locking Setting (see `fixtureStory`). */
+        editorGroupLocking?: boolean;
+    } = {},
+): StoryViewData {
     const base = fixtureViewBase(options);
 
     if (options.phrase === undefined) {
@@ -1129,9 +1257,11 @@ export function fixtureView(options: { completion?: CompletionPreview | null; ph
     return { ...base, story: { ...base.story, summary_mode: 'groups' }, phrase: options.phrase };
 }
 
-function fixtureViewBase(options: { completion?: CompletionPreview | null } = {}): StoryViewData {
+function fixtureViewBase(
+    options: { completion?: CompletionPreview | null; editorGroupLocking?: boolean } = {},
+): StoryViewData {
     return {
-        story: fixtureStory(),
+        story: fixtureStory(options.editorGroupLocking === true),
         summary: fixtureSummary(),
         plotlines: fixturePlotlines(),
         chapters: fixtureChapters(),
@@ -1239,7 +1369,17 @@ export function fixtureActions() {
         sendDirective: record('sendDirective'),
         // R6 / R2 — the Author's rewrite of ONE Summary group. Recorded like every other verb, so a test asserts
         // the exact `(storyId, groupId, {content, note})` the pane's Send produced — the UUID, never an index.
-        revisePhraseGroup: record('revisePhraseGroup')
+        revisePhraseGroup: record('revisePhraseGroup'),
+        // D-68 — the whole-Summary choose. It is on the stub for the same reason every verb is: a pane's
+        // click has to land in `calls` so the test asserts the ARGUMENTS (`[['s1']]`), not a boolean.
+        chooseReviewedSummary: record('chooseReviewedSummary'),
+        // R1 — the group lock verbs, recorded for the same reason: the pane's confirm click has to produce
+        // `calls.lockPhraseGroup === [['s1', 'grp-premise']]`, which is the UUID-addressed route call the
+        // server actually takes. `setEditorGroupLocking` is the Author's Setting write, and the pair
+        // `(storyId, enabled)` is what the Settings switch has to send.
+        lockPhraseGroup: record('lockPhraseGroup'),
+        unlockPhraseGroup: record('unlockPhraseGroup'),
+        setEditorGroupLocking: record('setEditorGroupLocking')
     };
 
     return { actions, calls };

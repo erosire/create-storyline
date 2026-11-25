@@ -91,7 +91,7 @@ const screenedSample = (premise: string): SummarySample => ({
 
 describe('§6.4 steps 1-2: the Seed is structured and researched before anything is sampled', () => {
     it('writes one accepted Seed Brief, then two sourced Knowledge entries, and samples nothing before both close', async () => {
-        const fixture = await bootStoryline({ readerIdeas: 0 });
+        const fixture = await bootStoryline({ criticIdeas: 0 });
         const storyId = await createSliceStory(fixture, 1);
 
         try {
@@ -167,8 +167,8 @@ describe('§6.4 steps 1-2: the Seed is structured and researched before anything
 
 describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one deterministic winner', () => {
     it('samples three times, screens each sample five times, and installs the least-issue sample', async () => {
-        const fixture = await bootStoryline({ readerIdeas: 0 });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 3, readers: 5 });
+        const fixture = await bootStoryline({ criticIdeas: 0 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 3, critics: 5 });
 
         try {
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 80);
@@ -192,7 +192,7 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
                 // `revision_${N - 1}` here. Sample 1's five screens are `revision_0_1..5`.
                 ...[1, 2, 3].flatMap((sample) =>
                     [1, 2, 3, 4, 5].map(
-                        (pass) => `wi_screen_revision_${sample - 1}_${pass}[reader-screening/reader]=torn_down`
+                        (pass) => `wi_screen_revision_${sample - 1}_${pass}[critic-screening/critic]=torn_down`
                     )
                 )
             ]);
@@ -265,13 +265,13 @@ describe('§6.4 steps 3-4: N no-tool samples, M no-tool screens per sample, one 
                 }
             ]);
 
-            // The deep review is the tool-using Reader pass on the winner, one per angle (§6.4 step 6).
+            // The deep review is the tool-using Critic pass on the winner, one per angle (§6.4 step 6).
             expect(lines.filter((line) => line.startsWith('wi_review_'))).toEqual([
-                'wi_review_revision_0_a1[reader-genre/reader]=torn_down',
-                'wi_review_revision_0_a2[reader-plausibility/reader]=torn_down',
-                'wi_review_revision_0_a3[reader-audience/reader]=torn_down',
-                'wi_review_revision_0_a4[reader-mystery/reader]=torn_down',
-                'wi_review_revision_0_a5[reader-genre/reader]=torn_down'
+                'wi_review_revision_0_a1[critic-genre/critic]=torn_down',
+                'wi_review_revision_0_a2[critic-plausibility/critic]=torn_down',
+                'wi_review_revision_0_a3[critic-audience/critic]=torn_down',
+                'wi_review_revision_0_a4[critic-mystery/critic]=torn_down',
+                'wi_review_revision_0_a5[critic-genre/critic]=torn_down'
             ]);
             expect(
                 fixture.store.verdicts
@@ -296,7 +296,7 @@ describe('§6.5/§6.6: the deterministic selection', () => {
         // Samples 2 and 3 contradict the Seed Brief on their premise; sample 1 is clean. The winner
         // is therefore not a creation-order accident — the least-critical rule decides (§6.5).
         const fixture = await bootStoryline({
-            readerIdeas: 0,
+            criticIdeas: 0,
             screenAnswer: ({ sampleIndex }): IssueList =>
                 sampleIndex === 1
                     ? { issues: [] }
@@ -312,7 +312,7 @@ describe('§6.5/§6.6: the deterministic selection', () => {
                           ]
                       }
         });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 3, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 3, critics: 1 });
 
         try {
             await fixture.settle(async () => (await storyRow(fixture, storyId)).pending_kind === 'phase_signoff', 80);
@@ -393,7 +393,7 @@ describe('§6.5/§6.6: the deterministic selection', () => {
                 'wi_sample_summary_0_1_3[writer-summary-sampler/writer]=torn_down'
             ]);
             expect(lines.filter((line) => line.startsWith('wi_review_'))).toEqual([
-                'wi_review_revision_0_a1[reader-genre/reader]=torn_down'
+                'wi_review_revision_0_a1[critic-genre/critic]=torn_down'
             ]);
         } finally {
             await fixture.close();
@@ -409,11 +409,11 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
         let filed = 0;
 
         const fixture = await bootStoryline({
-            readerIdeas: 0,
+            criticIdeas: 0,
             // The first deep-review pass files one major defect on round 1's selected draft; its four
             // sibling passes and all of round 2's passes file nothing. A crew that re-filed the
             // repaired flaw would spin a third round forever.
-            readerFinds: (ctx) => {
+            criticFinds: (ctx) => {
                 if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
@@ -428,7 +428,7 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
                     : defaultSampleAnswer(turn.sampleIndex, SLICE_SEED);
             }
         });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 1, readers: 5 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 1, critics: 5 });
 
         try {
             await openDial(fixture, storyId);
@@ -458,8 +458,8 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
                 criterion_ref: 'C-14'
             });
             // `approveFinding` queues the task in the Editor's own thread (D-34), so it keeps the
-            // Reader's finding title verbatim; the loop's dedupe then finds it and queues nothing.
-            expect(tasks[0].title).toBe('Reader: the draft drifts from the Seed (reader-genre)');
+            // Critic's finding title verbatim; the loop's dedupe then finds it and queues nothing.
+            expect(tasks[0].title).toBe('Critic: the draft drifts from the Seed (critic-genre)');
 
             // Round 1's winner stays; round 2's refined sample becomes the second selected revision.
             expect(
@@ -537,15 +537,15 @@ describe('§6.4 step 6 / §6.8: the deep review, the dial, and the refinement ro
 // dial approved it, and its fix task armed round 2. What differs is only what round 2's screening
 // passes say about the repair, because that answer — not the prose — is what the selection reads.
 describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
-    it('refuses the draft its own Readers refused, installs the one that certified the fix, then closes the task', async () => {
+    it('refuses the draft its own Critics refused, installs the one that certified the fix, then closes the task', async () => {
         /** Every refinement prompt the sampler compiled, to prove the contract travelled with the fix. */
         const refinedPrompts: string[] = [];
         /** How many deep-review passes have already filed their defect (the first one only). */
         let filed = 0;
 
         const fixture = await bootStoryline({
-            readerIdeas: 0,
-            readerFinds: (ctx) => {
+            criticIdeas: 0,
+            criticFinds: (ctx) => {
                 if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
@@ -558,7 +558,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
                 return defaultSampleAnswer(turn.sampleIndex, SLICE_SEED);
             },
             // Two refinement drafts and one question between them: sample 1 kept the ending it was
-            // given, sample 2 paid the promise. The Readers answer by TASK ID, and that answer — not
+            // given, sample 2 paid the promise. The Critics answer by TASK ID, and that answer — not
             // their issue counts, which are 0/0 for both — decides the round (H1/R2).
             screenFixes: ({ fixIds, sampleIndex }) =>
                 fixIds.map((fix_ref) => ({
@@ -567,7 +567,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
                     evidence: `ending: sample ${sampleIndex} ending`
                 }))
         });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 2, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 2, critics: 1 });
 
         try {
             await openDial(fixture, storyId);
@@ -659,8 +659,8 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
         let filed = 0;
 
         const fixture = await bootStoryline({
-            readerIdeas: 0,
-            readerFinds: (ctx) => {
+            criticIdeas: 0,
+            criticFinds: (ctx) => {
                 if (ctx.draftIds[0] !== 'revision_0') return undefined;
 
                 filed += 1;
@@ -672,7 +672,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
 
                 refinedPrompts.push(turn.prompt);
 
-                // Four attempts at the same text: the sampler keeps its word, and the Readers keep
+                // Four attempts at the same text: the sampler keeps its word, and the Critics keep
                 // theirs. This is the case the old pipeline got wrong — the prose is clean, so the
                 // counts are clean, and only the certificate says the defect is still there.
                 return screenedSample('refined: the same ending again');
@@ -684,7 +684,7 @@ describe('H1/R2-R5 — round 2 certifies the fix before it may select', () => {
                     evidence: 'ending: refined: the same ending again — the promise is still not paid'
                 }))
         });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 1, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 1, critics: 1 });
 
         try {
             await openDial(fixture, storyId);
@@ -752,7 +752,7 @@ describe('§6.4 step 3: a sampler that never validates costs attempts, then esca
         let calls = 0;
 
         const fixture = await bootStoryline({
-            readerIdeas: 0,
+            criticIdeas: 0,
             // Withholding C-14 parks the Story: the empty Summary cannot reach a sign-off, so the
             // only state worth asserting is the escalation the sampling failure raises.
             failCriteria: ['C-14'],
@@ -771,7 +771,7 @@ describe('§6.4 step 3: a sampler that never validates costs attempts, then esca
                 });
             }
         });
-        const storyId = await createSliceStory(fixture, 1, { sampling: 1, readers: 1 });
+        const storyId = await createSliceStory(fixture, 1, { sampling: 1, critics: 1 });
 
         try {
             await fixture.settle(

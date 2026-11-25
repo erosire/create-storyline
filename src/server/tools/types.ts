@@ -54,7 +54,7 @@ export interface ToolDefinition {
     enums?: Record<string, readonly string[]>;
     /**
      * Role kinds the §7 row alone would not allow, spelled out where §8 grants the tool
-     * explicitly (e.g. `proposeIdea` for a Reader, D-26). Empty means: follow the row.
+     * explicitly (e.g. `proposeIdea` for a Critic, D-26). Empty means: follow the row.
      */
     kinds?: RoleKind[];
     /**
@@ -182,7 +182,7 @@ export interface ToolExecutionContext {
     storyId: string;
     /** The live story row, read once by the pipeline for the guards (P8/D-2a/P5/L-7). */
     story: Story;
-    /** §7's row selector. `reader` and `checker` share the last column (T-1b). */
+    /** §7's row selector. `critic` and `reader` share the last column (T-1b). */
     role: RoleKind;
     /** Role NAME inside the template, for `owner_role` and audit prose. */
     roleName: string;

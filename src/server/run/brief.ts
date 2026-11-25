@@ -40,6 +40,12 @@ import {
 import { chapterContent } from '../../shared/chapter';
 import type { CommitEvent, Store } from '../store';
 import { isGroupManagedStory, phraseGroupsOf } from '../phrase';
+// D-33c/D-33d: the open-issue count the "Findings in front of you" bracket prints is the loop's OWN
+// answer (`loop/records.ts:openIssueFindings`), the same one the Critic's gate, the Editor's approval
+// gate, the dial sweep, `engine.approveFinding` and the approve-all route read — so the brief can
+// never tell the crew a different number from the one the tool refusal will quote. `loop/records.ts`
+// imports nothing from `run/`, so this adds no cycle.
+import { openIssueFindings } from '../loop/records';
 import { REPORT_TOOLS } from './catalogue';
 import { permissionLine, type ResolvedHarness } from './harness';
 // The Seed Brief and Knowledge renderers are shared with the Phase-1 compiler (./phase1-prompt):
@@ -241,7 +247,7 @@ function renderPlotline(plotline: Plotline, fieldClip: number): string {
  * The Summary block an agent reads (§4.4). On a group-managed book the five `summaries` fields are the
  * MIRROR of the phrase groups (`phrase/revisions.ts:syncSummaryMirror`, R6), so they carry the Overview's
  * text — but a field name cannot say which GROUP a quote came from, and on such a book every Summary
- * defect is routed and closed by group id (`tools/checker.ts:raiseFinding` refuses an unscoped one, and
+ * defect is routed and closed by group id (`tools/reader.ts:raiseFinding` refuses an unscoped one, and
  * `phrase/findings.ts:findingGroupScope` closes it only once every named group has an answering
  * revision). A Reviewer can only copy what it can see, so the block prints the book's groups in the
  * SAME `key=id` shape the R3 refusal prints. A legacy (`summary_mode: 'sampling'`) book keeps this block
@@ -320,7 +326,7 @@ function renderCompetingRevisions(store: Store, unitRef: string, fieldClip: numb
 }
 
 /**
- * The drafts a job may see. A Reader review names ONE sample (`revisionRef`) because D-21 keeps
+ * The drafts a job may see. A Critic review names ONE sample (`revisionRef`) because D-21 keeps
  * the competing drafts to the Editor and the Author; `select`/`merge` (and only those) see the
  * whole set, which is the set they are choosing between.
  */
@@ -475,7 +481,7 @@ const idSuffix = (id: string): number => {
  * WHY THE UNIT COMES FIRST: C-14 (and every `summary`-level criterion) is graded against the Summary
  * record — `criteria/engine.ts:scopeTargets` returns `storySummary(store, storyId).id`, and
  * `aggregateJudgeWithTargets` reads a verdict only when its `target_ref` is one of those ids (which
- * is what printed `summary_17: no verdict yet` on a book whose twenty Reader passes had all filed
+ * is what printed `summary_17: no verdict yet` on a book whose twenty Critic passes had all filed
  * against the draft). So the Summary-targeted line is the one the Goal reads, and a pass that files
  * ONLY at the draft is judged on borrowed evidence: the engine now accepts a verdict against the
  * draft the Summary row currently carries as Summary evidence (criteria/engine.ts
@@ -493,7 +499,7 @@ const idSuffix = (id: string): number => {
  * ARTIFACT UNDER REVIEW heading rather than inventing an id (S-2's stated absence over a silent
  * hole, T-6a).
  */
-const readerReviewTargetPhrase = (item: WorkItem): { unit: string; revision?: string } => ({
+const criticReviewTargetPhrase = (item: WorkItem): { unit: string; revision?: string } => ({
     unit:
         item.unit?.ref === undefined
             ? 'the Summary unit this job names under ARTIFACT UNDER REVIEW above'
@@ -507,8 +513,8 @@ const readerReviewTargetPhrase = (item: WorkItem): { unit: string; revision?: st
  * 600 characters (`renderJob`) — this sentence is the authoritative wording, and the note only
  * repeats it inside the window that survives.
  */
-const readerReviewVerdictInstruction = (item: WorkItem): string => {
-    const targets = readerReviewTargetPhrase(item);
+const criticReviewVerdictInstruction = (item: WorkItem): string => {
+    const targets = criticReviewTargetPhrase(item);
 
     if (targets.revision === undefined) {
         return (
@@ -550,7 +556,7 @@ function jobStatement(item: WorkItem): string {
             // compiled prompt instead), stated anyway so the kind is never described as an edit.
             return 'This job is the single-turn sampling mode: the compiled prompt is your whole memory, you have no tools, and your answer is one JSON object matching the SummarySample schema (§4.3, §2 decision 3). Nothing in the book is written by this run — the engine persists the sample.';
         case 'screen_samples':
-            return 'This job is the single-turn screening mode: judge the one draft the compiled prompt carries, with no tools, and answer with one JSON object matching the IssueList schema — critical and high issues only (§4.3, §6.4 step 4). Report defects, never improvements, and return an empty list when the draft holds.';
+            return 'This job is the single-turn screening mode: judge the one draft the compiled prompt carries, with no tools, and answer with one JSON object matching the IssueList schema — critical and high issues only (§4.3, §6.4 step 4). Report defects, never Proposals, and return an empty list when the draft holds.';
         // SUMMARY PHRASE (R2/R3/R5). Like the two kinds above, these are unreachable through the
         // assembled brief — a group job is a `toolMode: 'none'` run whose WHOLE memory is the compiled
         // prompt (`phase1-prompt.ts:compileGroupDraftPrompt`/`compileGroupReviewPrompt`). They are
@@ -559,7 +565,20 @@ function jobStatement(item: WorkItem): string {
         case 'draft_groups':
             return 'This job writes phrase GROUPS, not a whole Summary: the groups the compiled prompt names, each with its own revision line, and nothing else (R2). You have no tools and one turn; your answer is one JSON object matching the GroupDraft schema, with one entry per named group. The engine installs an answer for all the named groups or for none, and it archives what each replaced — there is no competing draft and nobody to choose between them (R5).';
         case 'review_groups':
-            return 'This job reviews the INSTALLED Overview — the five groups as the Summary now holds them, not a candidate among siblings. You have no tools and one turn; your answer is one JSON object matching the GroupReview schema, critical and high issues only, and every issue names the `group_refs` it is about (R3). Report defects, never improvements, and return an empty list when the Overview holds.';
+            return 'This job reviews the INSTALLED Overview — the five groups as the Summary now holds them, not a candidate among siblings. You have no tools and one turn; your answer is one JSON object matching the GroupReview schema, critical and high issues only, and every issue names the `group_refs` it is about (R3). Report defects, never Proposals, and return an empty list when the Overview holds.';
+        // READER SCORING (D-65): the one kind whose product is a number the Author reads and the loop
+        // ignores. Unreachable through the assembled brief like the three kinds above (a `toolMode:
+        // 'none'` run gets the compiled prompt), and stated for the same reason — a job the brief cannot
+        // describe is a job a reader of a transcript assumes files findings. The one-line form is on
+        // purpose: the sentence an Author reads must not promise work the pass is forbidden to do.
+        case 'score_sections':
+            return 'This job scores each section of the installed Overview 0–100 for internal logic, consistency with the other sections and plausibility, with one rationale and one quoted line per section. You have no tools and one turn; your answer is one JSON object matching the SectionScores schema, naming every group exactly once (§D-65). You file no finding, open no task and submit no verdict: the number is a progress surface for the Author, never a decision the loop takes (P6).';
+        // PHRASE GROUP LOCK (R-lock): the one kind whose product is a flag on a row that already exists.
+        // Unreachable through the assembled brief like the four kinds above (a `toolMode: 'none'` run gets
+        // the compiled prompt, `run/phase1-prompt.ts:compileGroupLockPrompt`), and stated for the same
+        // reason: the sentence has to say what a `true` COSTS, or a model answers the easy way.
+        case 'group_lock':
+            return 'This job judges ONE section of the reviewed Overview: is it FINISHED? You have no tools and exactly one turn; your answer is one JSON object matching the GroupLockDecision schema — the `group_ref` the CANDIDATE SECTION names, `lock: true` only when the evidence in the prompt supports BOTH no remaining issue and no missing major improvement, and a non-blank `rationale` naming what you weighed (§R-lock). Weigh the Reader\u2019s rationale, never its number alone: no score locks a section. A `true` makes that text fixed for the whole crew and stops every claim against it being work, and only the Author can undo it; a `false` leaves it to the loop, which is the ordinary answer.';
         case 'write_unit':
             // T3 — the Writer's licence, stated where the tool-using Writer reads its job. The sampler's
             // copy of the same rule is engine-owned text in `run/phase1-prompt.ts:SEED_CONTRACT_NOTE`; this
@@ -569,8 +588,8 @@ function jobStatement(item: WorkItem): string {
                 ? 'Write ONE Summary from the Author requirements and the structured Seed above: fill every §4.2 block — premise, promise, theme, tone, ending, world_rules — in that order, keeping the Seed untouched (P5). The Seed and its Brief commit what they STATE and are silent about everything else on purpose: where they are silent, or name a question in `open_questions`, supply the specific yourself — a place, a consequence, a stake, a custom — as long as it contradicts nothing they state. Invention is the job here, not a defect you are penalised for, and no reviewer may ask the Summary for foreshadowing or detail neither the Seed nor your own draft promised. What you must not do is contradict the brief, or drop a commitment it states explicitly. When the job names findings or tasks, correct exactly those defects while keeping all six blocks complete. Report the draft with `submitVerdict` (you are the only thing that writes story artifacts — P10, D-17b).'
                 : 'Write the unit named above (you are the only thing that writes story artifacts — P10, D-17b). Deliver the contract, then report with `submitVerdict`.';
         case 'check_unit':
-            // Phase ①'s per-draft review is a READER pass (D-30), not a consistency check: the
-            // reader compares the sample to the Seed the Author wrote and files what CONTRADICTS it or
+            // Phase ①'s per-draft review is a CRITIC pass (D-30), not a consistency check: the
+            // critic compares the sample to the Seed the Author wrote and files what CONTRADICTS it or
             // breaks a commitment it states explicitly. The role prompt carries the angle; this names
             // the obligation and its stopping rule — the pass is bounded, not an open-ended hunt for
             // polish.
@@ -579,19 +598,22 @@ function jobStatement(item: WorkItem): string {
             // missing", and the two Author screenshots came straight out of the `missing` half: a refuge
             // with no earlier planting, and a stake the Seed never stated. Both are inventions the
             // Writer is allowed. This is the durable, ENGINE-OWNED half of the rule (the Author may
-            // rewrite the four angle templates, `run/brief.ts:READER_REVIEW_MODE` and this line are not
+            // rewrite the four angle templates, `run/brief.ts:CRITIC_REVIEW_MODE` and this line are not
             // editable), so it states the admissibility test and the quote requirement in both places
             // the tool-using Reviewer is guaranteed to read.
-            return item.roleName === 'reader'
-                ? 'Read the Summary named above (its phrase groups where the book is written group by group, its draft fields where it is still sampled whole; the text is carried in this brief — call `readSummary` only if the brief does not carry it or says it was clipped) against the Seed. Use tools to check a specific doubt, not to survey the book; for a factual point one citable source is enough. Find the issues that matter and file them with `raiseFinding` — `detail` (what is wrong and where), the criterion, the quoted passage, the evidence line, and the cost you actually believe. On a book written group by group a Summary defect also names its SCOPE: copy the `phrase_groups` pairs the Summary block above prints into `group_refs` — one group when the fault sits inside one text, several when the complaint IS the gap between them, all five when the Overview itself is what is wrong. An unscoped Summary finding is refused on such a book, and a scoped one closes only once every group it names has been revised (R3). Report critical and major issues first: `critical` means the Summary contradicts itself, the Seed, or critical Knowledge (a story-logic inconsistency); `major` means a commitment the Seed or the Summary states EXPLICITLY that the draft breaks; `minor` and `taste` are notes and must not keep you searching. The Seed is general and is not an outline: where it is silent, or names a question in `open_questions`, the Writer may invent any specific that does not contradict it. So an added detail, a Seed question left open, stakes or consequences the Seed never stated, and setup a Summary did not promise are NOT defects and never a C-14 finding — a Summary is not required to foreshadow its own ending or to spell out what the Seed left open. Admissible proof is a quotation: file what you can quote the draft contradicting, and nothing that rests on an absence alone. An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: improvement` — a title that PROPOSES the change instead of accusing the text of missing something, `detail` saying what to change and why it is worth a Writer pass, and `evidence` quoting the passage it would improve. Say `kind: improvement` on purpose: an unmarked finding is a defect claim, and an Editor disputes a defect whose whole case is an absence, while a marked improvement is weighed on whether the story the Seed promises is better for it. A Summary is a set of facts and consequences, not prose — word choice, sentence shape, grammar and register are `taste` or `minor` at this phase, because phase \u2462 writes the sentences and a round restarted over a rewording has no best answer to converge on. ' +
+            return item.roleName === 'critic'
+                ? 'Read the Summary named above (its phrase groups where the book is written group by group, its draft fields where it is still sampled whole; the text is carried in this brief — call `readSummary` only if the brief does not carry it or says it was clipped) against the Seed. Use tools to check a specific doubt, not to survey the book; for a factual point one citable source is enough. Find the issues that matter and file them with `raiseFinding` — `detail` (what is wrong and where), the criterion, the quoted passage, the evidence line, and the cost you actually believe. On a book written group by group a Summary defect also names its SCOPE: copy the `phrase_groups` pairs the Summary block above prints into `group_refs` — one group when the fault sits inside one text, several when the complaint IS the gap between them, all five when the Overview itself is what is wrong. An unscoped Summary finding is refused on such a book, and a scoped one closes only once every group it names has been revised (R3). Report critical and major issues first: `critical` means the Summary contradicts itself, the Seed, or critical Knowledge (a story-logic inconsistency); `major` means a commitment the Seed or the Summary states EXPLICITLY that the draft breaks; `minor` is a note and must not keep you searching, and `taste` is not an Issue’s word at all — a preference is a Proposal. The Seed is general and is not an outline: where it is silent, or names a question in `open_questions`, the Writer may invent any specific that does not contradict it. So an added detail, a Seed question left open, stakes or consequences the Seed never stated, and setup a Summary did not promise are NOT defects and never a C-14 finding — a Summary is not required to foreshadow its own ending or to spell out what the Seed left open. Admissible proof is a quotation: file what you can quote the draft contradicting, and nothing that rests on an absence alone. An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: proposal` — a title that PROPOSES the change instead of accusing the text of missing something, `detail` saying what to change and why it is worth a Writer pass, and `evidence` quoting the passage it would improve. Say `kind: proposal` on purpose: an unmarked finding is a defect claim, and an Editor disputes a defect whose whole case is an absence, while a marked Proposal is weighed on whether the story the Seed promises is better for it. A Summary is a set of facts and consequences, not prose — word choice, sentence shape, grammar and register are a PROPOSAL at this phase — `kind: proposal` at cost `taste` or `minor`, never an Issue — because phase \u2462 writes the sentences and a round restarted over a rewording has no best answer to converge on. ' +
                       // CS-VERDICT-1: the verdict clause names the Summary ref (see the helper). It is
                       // built here rather than written inline because the note this job carries is
                       // clipped at 600 characters — this sentence is the authoritative wording.
-                      readerReviewVerdictInstruction(item) +
+                      criticReviewVerdictInstruction(item) +
                       // T5: the Ideas prohibition stays (a review pass is not the Idea tray, D-26/D-30),
                       // but the pass now has one legitimate outlet for a proposal, so the sentence names
                       // it instead of leaving "report defects" to read as "silence is the only verdict".
-                      ' This is a REVIEW PASS: report defects and file genuine improvements as `kind: improvement` findings — do not propose Ideas. You do not have to be exhaustive — once the critical/major issues you found are reported, stop; an empty pass is valid.'
+                      // D-33c adds the SEQUENCING of that outlet to the same sentence, because this line
+                      // is the part of the brief a tool-using Critic actually acts on: one kind per pass,
+                      // and the Proposals come out only once the issues are gone.
+                      ' This is a REVIEW PASS: report defects and file genuine Proposals as `kind: proposal` findings — do not propose Ideas. ISSUES COME FIRST (D-33c): an issue and a proposal never share a pass, and a proposal waits until every issue on this Story is resolved (`fixed` or `discarded` is what closes one), so file the defects in this pass and bring the improvement in a pass that has none left. You do not have to be exhaustive — once the critical/major issues you found are reported, stop; and if you have no issue and no new proposal, file nothing and submit your verdict: an empty pass is valid.'
                 : 'Judge the unit against the criteria above and report with `submitVerdict` (P4: does it deliver its contract?). Every failing criterion needs an evidence line (D-15).';
         case 'select':
             return item.unit?.kind === 'summary'
@@ -609,14 +631,14 @@ function jobStatement(item: WorkItem): string {
             // untouched, only the description of it.
             //
             // T5 adds the SECOND evaluation mode beside that admissibility test. A row marked
-            // `improvement` is a proposal the Seed never had to promise, and the absence rule above is
-            // precisely what used to reject the Reader's best suggestions without anyone weighing them:
-            // the clause below scopes that rule to issues and sends an improvement to a merit check — is
+            // `proposal` is a proposal the Seed never had to promise, and the absence rule above is
+            // precisely what used to reject the Critic's best suggestions without anyone weighing them:
+            // the clause below scopes that rule to issues and sends a Proposal to a merit check — is
             // the change worth a Writer pass, and does it contradict the installed text — which is the
             // behaviour fix the Author asked for. Plain issues keep the rule unchanged.
-            return 'A single finding is in front of you. Run ONE quick validity check: read its `detail`, `evidence` and the passage it quotes, then call `verifyFinding` with `confirmed` when the defect is real or `disputed` when it is not. Put the reason in `why`; add `evidence` only when the check itself shows something the Reader did not. ADMISSIBILITY comes before accuracy: a defect is real only when the finding quotes a commitment and shows the artifact breaking it — a contradiction of the Seed, of critical Knowledge, or of the artifact\u2019s own stated promise. The Seed is general and is not an outline, and the Writer may invent any detail the Seed does not rule out, so a claim whose whole case is an ABSENCE — a detail the Seed never stated, a field the Seed leaves silent or marks in `open_questions`, stakes or consequences the Seed left open, setup a Summary did not promise — is an INVALID finding however true the absence is: `dispute` it and name the silence as the reason, rather than confirming that something is missing. A finding marked `improvement` in its bracket is the one claim this test does NOT judge: the Reader is proposing a change the Seed never had to promise, not reporting a defect, so the absence rule does not apply to it. Weigh it on merit — `confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, and NEVER dispute it merely because the Seed never promised it. Keep the Reader’s title, detail and cost unless they are clearly wrong — the Reader already supplied the reference, so do not re-investigate the book or rewrite the finding. On a group-managed book the groups a Summary finding names are the scope its repair is routed and closed by (R3): when the evidence quotes one group and the finding names five, dispute the scope rather than confirming it. When it is valid, call `approveFinding` with decision `auto` in the same run so the Story\u2019s dial authorises the work and the Reader can confirm it; a `disputed` finding needs no approval, and a finding whose cost the dial does not cover stays confirmed for the Author\u2019s own tap. This thread carries exactly one finding, so be fast and decisive. In phase \u2460, `critical` is a story-logic contradiction — of the Summary, of the Seed, or of critical Knowledge — and `major` is a commitment the Seed or the Summary states explicitly that the draft breaks. `taste` never blocks a Summary round, because the prose it would choose between is not written until phase \u2462; `minor` blocks exactly when this Story\u2019s `auto_approve` dial covers `minor`, which it does by default (D-35). So approve the costs the dial covers, and let the rest stay confirmed for the Author.';
+            return 'A single finding is in front of you. Run ONE quick validity check: read its `detail`, `evidence` and the passage it quotes, then call `verifyFinding` with `confirmed` when the defect is real or `disputed` when it is not. Put the reason in `why`; add `evidence` only when the check itself shows something the Critic did not. ADMISSIBILITY comes before accuracy: a defect is real only when the finding quotes a commitment and shows the artifact breaking it — a contradiction of the Seed, of critical Knowledge, or of the artifact\u2019s own stated promise. The Seed is general and is not an outline, and the Writer may invent any detail the Seed does not rule out, so a claim whose whole case is an ABSENCE — a detail the Seed never stated, a field the Seed leaves silent or marks in `open_questions`, stakes or consequences the Seed left open, setup a Summary did not promise — is an INVALID finding however true the absence is: `dispute` it and name the silence as the reason, rather than confirming that something is missing. A finding marked `proposal` in its bracket is the one claim this test does NOT judge: the Critic is proposing a change the Seed never had to promise, not reporting a defect, so the absence rule does not apply to it. Weigh it on merit — `confirm` it when the change genuinely strengthens the story the Seed promises and is worth a Writer pass, `dispute` it when it is not worth the pass or would contradict the installed text, and NEVER dispute it merely because the Seed never promised it. Keep the Critic’s title, detail and cost unless they are clearly wrong — the Critic already supplied the reference, so do not re-investigate the book or rewrite the finding. On a group-managed book the groups a Summary finding names are the scope its repair is routed and closed by (R3): when the evidence quotes one group and the finding names five, dispute the scope rather than confirming it. When it is valid, call `approveFinding` with decision `auto` in the same run so the Story\u2019s dial authorises the work and the Critic can confirm it; a `disputed` finding needs no approval, and a finding whose cost the dial does not cover stays confirmed for the Author\u2019s own tap. This thread carries exactly one finding, so be fast and decisive. In phase \u2460, `critical` is a story-logic contradiction — of the Summary, of the Seed, or of critical Knowledge — and `major` is a commitment the Seed or the Summary states explicitly that the draft breaks. a `taste` row — which by rule is a Proposal, never an Issue — never blocks a Summary round, because the prose it would choose between is not written until phase \u2462; `minor` blocks exactly when this Story\u2019s `auto_approve` dial covers `minor`, which it does by default (D-35). So approve the costs the dial covers, and let the rest stay confirmed for the Author. ISSUES COME FIRST, and they gate the approval as well as the verdict (D-33d): while any issue on this Story is unresolved — `fixed` or `discarded` is what closes one, so `unconfirmed`, `confirmed`, `approved` and `disputed` all still hold it — `approveFinding` REFUSES a row marked `proposal`, whatever the dial says. So work the issues before anything else: settle this proposal with `verifyFinding` (a proposal is confirmed or disputed on merit, never on an approval), and if it cannot be approved yet leave it `confirmed` — it is not lost, and the pass that has no issue left approves it. Discarding a proposal is always allowed, because declining a change is not an approval. An ISSUE row is never held by this rule: the defects that unlock the proposals are exactly the work the loop must not stop taking.';
         case 'confirm_finding':
-            // T3 — the same test on the Reader's own second look. Without it the confirmation pass
+            // T3 — the same test on the Critic's own second look. Without it the confirmation pass
             // re-approved what the Editor had already waved through, because "the Summary really does
             // not mention X" survives any amount of independent checking.
             return 'The Editor has approved the finding listed below. Do your OWN independent check: read the cited passage and the claim, and decide whether the defect is real. An absence is not a defect: the Seed is general rather than an outline, the Writer may invent any detail the Seed does not contradict, so a claim that rests only on something the Seed never said — a detail, a stake, a consequence, an earlier planting — is not a defect however true the silence is. Call `confirmFinding` with `confirm` when it holds (this is what lets the Writer spend a round on it) or `dispute` when it does not (the fix task is withdrawn and the finding is recorded as disputed); `dispute` an omission-only claim on that ground, and `confirm` only a finding that quotes a commitment and shows the draft breaking it. Do not rewrite the finding and do not look for new defects — this thread exists to confirm or reject exactly one already-approved claim.';
@@ -660,17 +682,34 @@ function renderJob(store: Store, item: WorkItem, fieldClip: number): string {
         .filter((finding) => finding !== undefined);
 
     if (findings.length > 0) {
+        // D-33c/D-33d: the crew is told WHY a proposal is stuck, in the bracket it reads the refusal
+        // against. Added ONLY when a Proposal row is actually in front of this job AND the Story has
+        // unresolved issues, so every brief without a proposal row — which is every brief in every
+        // existing fixture — renders byte-identically, and the sentence appears exactly where the crew
+        // would otherwise waste a turn rediscovering the rule by calling the tool.
+        const openIssueCount = findings.some((finding) => finding.kind === 'proposal')
+            ? openIssueFindings(store, item.storyId).length
+            : 0;
+        const blockedNote =
+            openIssueCount > 0
+                ? `, ${openIssueCount} unresolved ${openIssueCount === 1 ? 'issue' : 'issues'} — no Proposal is filed or approved until they close (D-33c, D-33d)`
+                : '';
+
+        // The note goes INSIDE the bracket rather than after it: the count and the reason are one fact
+        // about the same tray, and a heading that reads `(2), 1 unresolved issue …` makes the second
+        // number look like a second tray. Nothing is appended at all when there is no proposal row or no
+        // open issue, which is every brief in the existing fixtures (`brief_hash` stays put, §4.13).
         blocks.push(
-            `Findings in front of you (${findings.length}):\n${findings
+            `Findings in front of you (${findings.length}${blockedNote}):\n${findings
                 .map(
                     (finding) =>
                         `- ${finding.id} [${finding.state}, cost ${finding.cost}, seen ${finding.seen_count}×, criterion ${
                             finding.criterion_ref
                         }${
-                            // T5: the marker is printed ONLY on an improvement, so a plain issue renders
+                            // T5: the marker is printed ONLY on a Proposal, so a plain issue renders
                             // byte-identically to every earlier brief (and every fixture), while the
                             // Editor's job line above can point at a word it actually sees here.
-                            finding.kind === 'improvement' ? ', improvement' : ''
+                            finding.kind === 'proposal' ? ', proposal' : ''
                         }]: ${clip(finding.title, 300)}\n  evidence: ${clip(finding.evidence, 600)}${
                             finding.detail ? `\n  detail: ${clip(finding.detail, fieldClip)}` : ''
                         }`
@@ -770,32 +809,32 @@ interface Part {
 }
 
 /**
- * D-30 — a Reader's phase-① REVIEW pass. The role prompt describes the Reader's whole
+ * D-30 — a Critic's phase-① REVIEW pass. The role prompt describes the Critic's whole
  * capability (including Ideas and research, for jobs that ask for them); a review pass narrows
  * that to "judge this sample": defects only, critical/major first, and no open-ended mining for
  * minor polish. The banner is rendered BEFORE the role prompt because it is the binding mode.
  */
-const isReaderReview = (item: WorkItem): boolean => item.kind === 'check_unit' && item.roleName === 'reader';
+const isCriticReview = (item: WorkItem): boolean => item.kind === 'check_unit' && item.roleName === 'critic';
 
-const READER_REVIEW_MODE =
+const CRITIC_REVIEW_MODE =
     // T3 — the admissibility rule lives HERE, in the banner, and not only in the four angle
     // templates: the banner is engine-owned, it is rendered BEFORE the role prompt, and it declares
-    // itself the override, so an Author who rewrote `reader-genre` still gets the rule. The same words
-    // are in the JOB line below (`jobStatement`'s `check_unit` reader branch) and in the sweep note's
+    // itself the override, so an Author who rewrote `critic-genre` still gets the rule. The same words
+    // are in the JOB line below (`jobStatement`'s `check_unit` critic branch) and in the sweep note's
     // first 600 characters (`loop/work.ts`), which is the only part of the note `renderJob` keeps —
     // pinned by `run/brief.test.ts` and `loop/phase1-verdict-contract.test.ts`. Nothing here weakens a
     // contradiction check, and phases ② and ③ keep their setup-and-payoff review.
-    'PASS MODE — REVIEW (this overrides any wider instruction in the role prompt below). The Summary sample and the Seed are in this brief; call `readSummary` only if the brief does not carry the sample or says it was clipped. Use the read tools your angle needs — the ledger only where a continuity point turns on it — and research only the specific factual claim you doubt (one citable source is enough). Do not read the whole book or unrelated artifacts, and do not propose Ideas in this pass. WHAT COUNTS AS AN ISSUE: the Seed and its Brief are commitments, not an exhaustive outline — the Writer may invent any specific they do not rule out. So an added detail, a field the Seed leaves silent or marks in `open_questions`, stakes or consequences the Seed never stated, and setup or foreshadowing a Summary did not promise are NOT defects by themselves, and never a C-14 finding; do not demand explicit stakes, consequences or planting from a Summary unless an explicit Seed or Summary commitment, or an actual contradiction, makes it necessary. A Summary is a set of facts and consequences, not prose: word choice, sentence shape, grammar and register are `taste` or `minor` at this phase, because the sentences that would carry them are written in phase \u2462. What IS reviewable: a real contradiction of what the Seed, the Brief or established critical Knowledge states, a real contradiction inside the artifact itself, a clear failure to carry a commitment the Seed states centrally (as distinct from a detail it leaves open), and the artifact contradicting or leaving unpaid a promise the artifact itself makes. A finding must quote that evidence — a finding that quotes only an absence, and cannot quote what it contradicts, is not admissible. The one exception is a PROPOSAL: a change that would genuinely improve the book while contradicting nothing is filed with `kind: improvement`, titled as a proposal and quoting the passage it would improve, and the Editor weighs it on whether the story is better for the pass rather than on whether the Seed promised it. On a book whose Summary is written group by group, the Summary in front of you is the OVERVIEW of five separately revised groups: name in `group_refs` the group or groups your quote is about, copied from the `phrase_groups` pairs the Summary block prints, and one defect crossing several groups is one finding, not several. In later phases the chapter and plotline setup-and-payoff checks (C-4, C-5, C-6) stay exactly as they are. Report the critical and major issues first — minor and taste notes are optional and must not keep you searching. Every finding must carry `detail` (what is wrong and where — section, paragraph or lines), `evidence` (the quote or line range), `criterion_ref`, and the cost you believe; add `related_refs` when the defect touches another record. You do not need to be exhaustive: once the issues that matter are reported, stop; an empty pass is valid.';
+    'PASS MODE — REVIEW (this overrides any wider instruction in the role prompt below). The Summary sample and the Seed are in this brief; call `readSummary` only if the brief does not carry the sample or says it was clipped. Use the read tools your angle needs — the ledger only where a continuity point turns on it — and research only the specific factual claim you doubt (one citable source is enough). Do not read the whole book or unrelated artifacts, and do not propose Ideas in this pass. TWO KINDS OF FINDING, and the row says which one it is: an ISSUE (`kind: issue`, the default) is something that breaks the story’s logic, contradicts a commitment, or rests on a claim the text cannot support, and it is rated `critical`, `major` or `minor` — never `taste`. A PROPOSAL (`kind: proposal`) is an improvement the Seed never had to promise — a word change, a new element, a twist linked earlier — and it is rated `major`, `minor` or `taste`, never `critical`. WHAT COUNTS AS AN ISSUE: the Seed and its Brief are commitments, not an exhaustive outline — the Writer may invent any specific they do not rule out. So an added detail, a field the Seed leaves silent or marks in `open_questions`, stakes or consequences the Seed never stated, and setup or foreshadowing a Summary did not promise are NOT defects by themselves, and never a C-14 finding; do not demand explicit stakes, consequences or planting from a Summary unless an explicit Seed or Summary commitment, or an actual contradiction, makes it necessary. A Summary is a set of facts and consequences, not prose: word choice, sentence shape, grammar and register are never an Issue at this phase — they are a PROPOSAL at cost `taste` or `minor` — because the sentences that would carry them are written in phase \u2462, and a `taste`-cost Issue is refused on the call (`tools/reader.ts:raiseFinding`). What IS reviewable: a real contradiction of what the Seed, the Brief or established critical Knowledge states, a real contradiction inside the artifact itself, a clear failure to carry a commitment the Seed states centrally (as distinct from a detail it leaves open), and the artifact contradicting or leaving unpaid a promise the artifact itself makes. A finding must quote that evidence — a finding that quotes only an absence, and cannot quote what it contradicts, is not admissible. The one exception is a PROPOSAL: a change that would genuinely improve the book while contradicting nothing is filed with `kind: proposal`, titled as a proposal and quoting the passage it would improve, and the Editor weighs it on whether the story is better for the pass rather than on whether the Seed promised it. On a book whose Summary is written group by group, the Summary in front of you is the OVERVIEW of five separately revised groups: name in `group_refs` the group or groups your quote is about, copied from the `phrase_groups` pairs the Summary block prints, and one defect crossing several groups is one finding, not several. In later phases the chapter and plotline setup-and-payoff checks (C-4, C-5, C-6) stay exactly as they are. Report the critical and major issues first — a minor Issue and any Proposal are optional and must not keep you searching. Every finding must carry `detail` (what is wrong and where — section, paragraph or lines), `evidence` (the quote or line range), `criterion_ref`, and the cost you believe; add `related_refs` when the defect touches another record. ISSUES COME FIRST, and the tool enforces it on the call (D-33c), in two rules: an ISSUE AND A PROPOSAL NEVER SHARE A PASS — one review files one kind, so a pass that filed a Proposal stops there and files its issue in the next review, and a pass that filed issues does not also file a Proposal; and A PROPOSAL WAITS UNTIL EVERY ISSUE IS RESOLVED — while any issue on this Story is unresolved (`fixed` or `discarded` is what closes one; `unconfirmed`, `confirmed`, `approved` and `disputed` are all still open) a `kind: proposal` call is refused and told how many issues are open, while an issue stays filable at any time. So answer the defects this pass and bring the improvement once the book has no defect left to answer. If you have no issue to file and no new proposal to make, file nothing and submit your verdict — say the text holds. An empty pass is a valid, good outcome; do not invent findings. You do not need to be exhaustive: once the issues that matter are reported, stop; an empty pass is valid.';
 
 /**
  * The review pass's own done-definition. CS-VERDICT-1: it names the SAME two targets as the job
- * sentence, in the same order. "the sample is rated" left the target ambiguous, and a Reader that
+ * sentence, in the same order. "the sample is rated" left the target ambiguous, and a Critic that
  * rated only the draft left the Goal reading `no verdict yet` while the crew panel showed four
  * passing reviews; the done-line is the last thing the crew reads before the tool catalogue, so a
  * target stated here and nowhere else is the failure mode this prevents.
  */
-const readerReviewDone = (item: WorkItem): string => {
-    const targets = readerReviewTargetPhrase(item);
+const criticReviewDone = (item: WorkItem): string => {
+    const targets = criticReviewTargetPhrase(item);
 
     return `Done means: every critical and major issue you found is filed with its detail, quoted passage, criterion and evidence line; the goal verdict is filed with \`submitVerdict\` at ${targets.unit}${
         targets.revision === undefined ? '' : ` AND at ${targets.revision}`
@@ -830,12 +869,12 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
     const parts: Part[] = [];
 
     // 1. The role prompt (S-2's first element): D-17a makes it the ONLY thing separating this
-    //    run from every other kind holding the same tool catalogue (T-6a). A Reader REVIEW pass
+    //    run from every other kind holding the same tool catalogue (T-6a). A Critic REVIEW pass
     //    gets its mode banner first, and its own done-definition: the template's angle prompt
-    //    describes the whole Reader capability (Ideas, research), while this pass is bounded.
+    //    describes the whole Critic capability (Ideas, research), while this pass is bounded.
     const roleLines: string[] = [];
 
-    if (isReaderReview(item)) roleLines.push(READER_REVIEW_MODE);
+    if (isCriticReview(item)) roleLines.push(CRITIC_REVIEW_MODE);
 
     roleLines.push(
         harness.role?.prompt ??
@@ -844,10 +883,10 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
 
     if (harness.warning) roleLines.push(`WARNING: ${harness.warning}`);
 
-    if (isReaderReview(item)) roleLines.push(readerReviewDone(item));
+    if (isCriticReview(item)) roleLines.push(criticReviewDone(item));
     else if (harness.template?.done_definition) roleLines.push(`Done means: ${harness.template.done_definition}`);
     // D-17c: `selection_rules` is the Editor's brief in the Author's own words — and C-13 is
-    // defined against it, so a checker grading C-13 needs it too (P12: without it the crew is
+    // defined against it, so a reader grading C-13 needs it too (P12: without it the crew is
     // guessing at the Author's taste).
     if (harness.template?.selection_rules) {
         roleLines.push(

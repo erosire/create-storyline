@@ -88,13 +88,18 @@ describe('the grouped Summary Phrase on the wire', () => {
             expect(phrase.review.vector).toEqual(Object.fromEntries(ids.map((id) => [id, 0])));
 
             // An unwritten row: no text, no revision, no history, nobody holding it, nothing owed.
-            for (const group of phrase.groups) {
-                expect(group).toEqual({
-                    id: group.id,
-                    key: group.key,
-                    title: group.title,
-                    description: group.description,
-                    order: group.order,
+            //
+            // T3 — `scores` is taken off the row for this pin rather than folded into it, and the split is
+            // deliberate: the projection sends the key ALWAYS (an empty list for a book nobody has scored),
+            // so the shape stays asserted exactly as it was AND the new field is pinned exactly — `toEqual([])`,
+            // which fails if the server ever starts inventing a phantom `0%` row for an unwritten group.
+            for (const { scores, ...row } of phrase.groups) {
+                expect(row).toEqual({
+                    id: row.id,
+                    key: row.key,
+                    title: row.title,
+                    description: row.description,
+                    order: row.order,
                     content: '',
                     revision: 0,
                     updated_by: null,
@@ -103,6 +108,7 @@ describe('the grouped Summary Phrase on the wire', () => {
                     owed_by_findings: [],
                     writer_busy: false
                 });
+                expect(scores).toEqual([]);
             }
 
             // The Premise group's description is the catalog's own sentence, verbatim — the pane prints it
@@ -229,7 +235,11 @@ describe('the grouped Summary Phrase on the wire', () => {
                 run_ref: null,
                 finding_refs: [],
                 task_refs: [],
-                chars: HAND_TEXT.length
+                chars: HAND_TEXT.length,
+                // D-67: every revision row carries its Clean stamp, so the rail can mark the text a
+                // cross-group pass passed. An Author's hand edit has never sat through one.
+                clean: false,
+                clean_run_ref: null
             });
 
             // The review moves with the write: one group written, four still named by catalog key.
@@ -311,5 +321,90 @@ describe('the grouped Summary Phrase on the wire', () => {
                     `POST /stories/${groupedId}/phrases/groups/:groupId/revise (R2, R5).`
             );
         });
+    });
+});
+
+describe('the Reviewed Summary on the wire (D-67, D-68)', () => {
+    let fixture: StorylineFixture;
+    /** A grouped book nobody has written a revision for: the shape a fresh book's Summary really is. */
+    let freshId = '';
+    /** The same book still written as one text, which has no group catalog to choose from. */
+    let legacyId = '';
+    let fresh!: PhraseView;
+
+    beforeAll(async () => {
+        fixture = await bootStoryline();
+        freshId = await createSliceStory(fixture, 3, { mode: 'groups' });
+        legacyId = await createSliceStory(fixture, 3);
+        fresh = (await fixture.api<PhraseView>('GET', `/stories/${freshId}/phrases`)).body;
+    });
+
+    it('sends the reviewed block on EVERY grouped read — pending, incomplete, and gap-named per group', () => {
+        // D-67's wire promise: `reviewed` is not an optional extra the dashboard has to tolerate, and a fresh
+        // book answers `pending` rather than a Summary made of the live text.
+        expect(fresh.reviewed).toBeDefined();
+        expect(fresh.reviewed?.state).toBe('pending');
+        expect(fresh.reviewed?.complete).toBe(false);
+        expect(fresh.reviewed?.overview).toBe('');
+        expect(fresh.reviewed?.chosen).toBeNull();
+        expect(fresh.reviewed?.stale).toBe(false);
+        expect(fresh.reviewed?.writer_busy).toBe(false);
+        // The five rows are addressed by the SAME uuids the rail carries, in catalog order.
+        expect(fresh.reviewed?.groups.map((row) => [row.key, row.id])).toEqual(
+            fresh.groups.map((group) => [group.key, group.id])
+        );
+        expect(GROUP_KEYS.every((key, index) => fresh.reviewed?.groups[index]?.key === key)).toBe(true);
+        // Nothing is selected and nothing is superseded on a book with no revisions, and each gap names
+        // itself with the token the choose route's refusal will quote.
+        expect(fresh.reviewed?.groups.map((row) => row.selected_revision)).toEqual([null, null, null, null, null]);
+        expect(fresh.reviewed?.groups.map((row) => row.superseded)).toEqual([false, false, false, false, false]);
+        expect(fresh.reviewed?.groups.map((row) => row.gap)).toEqual(Array(5).fill('unwritten'));
+        // An EMPTY selection still carries a hash — `e3b0c44298fc1c14` is the server's 16-hex digest of the
+        // empty vector, not a placeholder — and no group has a score row against it, because the Reader only
+        // ever claims a COMPLETE selection.
+        expect(fresh.reviewed?.vector_hash).toBe('e3b0c44298fc1c14');
+        expect(fresh.reviewed?.groups.map((row) => row.scores)).toEqual([[], [], [], [], []]);
+    });
+
+    it('refuses the choose on a book with no clean Summary, naming every group and how it is missing', async () => {
+        // The sentence the Summary tab prints verbatim, from the server: one clause per group, each saying
+        // whether it is unwritten, has no clean revision, or is held by an unresolved issue — and the rule
+        // that decides it. Pinned in full because the dashboard is only allowed to relay it.
+        const res = await fixture.api<{ error: string }>(
+            'POST',
+            `/stories/${freshId}/phrases/reviewed/choose`,
+            {}
+        );
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe(
+            `this Story has no Reviewed Summary to choose: ${GROUP_KEYS.map((key) => `${key} (unwritten)`).join(', ')} ` +
+                '— a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).'
+        );
+    });
+
+    it('refuses the choose on a legacy book and names the verb that makes it group-managed', async () => {
+        const res = await fixture.api<{ error: string }>(
+            'POST',
+            `/stories/${legacyId}/phrases/reviewed/choose`,
+            { note: 'take the flat Summary' }
+        );
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe(
+            `this Story's Summary is still written as one text (no group catalog); ` +
+                `POST /stories/${legacyId}/phrases/import turns the flat Summary into groups first (R6, D-68).`
+        );
+    });
+
+    it('answers 404 for a book that is not in the workspace, so a stale tab cannot choose into another Story', async () => {
+        const res = await fixture.api<{ error: string }>(
+            'POST',
+            '/stories/00000000-0000-4000-8000-000000000000/phrases/reviewed/choose',
+            {}
+        );
+
+        expect(res.status).toBe(404);
+        expect(res.body.error).toContain('00000000-0000-4000-8000-000000000000');
     });
 });

@@ -23,7 +23,7 @@ const DELETION_SENTENCE =
  * `SummaryPane.tsx`'s `DEFAULT_SUMMARY_SAMPLING` renders the 3.
  */
 const ROUND_DIALS_HINT =
-    'Phase ① writes 3 complete Summaries per round. The Readers critique each draft, and the round settles ' +
+    'Phase ① writes 3 complete Summaries per round. The Critics critique each draft, and the round settles ' +
     'by itself: the engine keeps the draft with the fewest findings — fewest critical, then fewest high, ' +
     'then fewest total, then the earliest sample (§6.5, §16.6) — and parks the rest as discarded history. ' +
     'No Editor picks a column in phase ①. Both counts are yours.';
@@ -191,7 +191,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(screen.queryByText('Author-declared · read-only for every agent (D-3b)')).toBeNull();
     });
 
-    it('carries the phase-① round and reader counts, saved as one Author write', async () => {
+    it('carries the phase-① round and critic counts, saved as one Author write', async () => {
         const calls: Array<[number, number]> = [];
 
         render(
@@ -199,8 +199,8 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
                 story={{ ...fixtureStory(), summary_locked: false }}
                 summary={{ ...fixtureSummary(), locked: false }}
                 sampling={3}
-                readers={5}
-                onSetSummaryReview={(sampling, readers) => calls.push([sampling, readers])}
+                critics={5}
+                onSetSummaryReview={(sampling, critics) => calls.push([sampling, critics])}
             />
         );
 
@@ -208,7 +208,7 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         // R3 / §16.6 (D-47): phase ① has no Editor draft choice, so the pane may not describe one.
         expect(screen.queryByText(/the Editor keeps one/)).toBeNull();
         fireEvent.change(screen.getByLabelText('Writers per Summary round'), { target: { value: '6' } });
-        fireEvent.change(screen.getByLabelText('Readers per revision'), { target: { value: '7' } });
+        fireEvent.change(screen.getByLabelText('Critics per revision'), { target: { value: '7' } });
         await click(screen.getByRole('button', { name: 'Set review counts' }));
 
         expect(calls).toEqual([[6, 7]]);
@@ -285,6 +285,83 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(tags.textContent).toBe('majorconfirmed');
         expect(tags.contains(state)).toBe(true);
         expect(state.className).toContain('find-state--confirmed');
+
+        // T3 — the claim type leads the head, and it is a SIBLING of that cost+state unit, never a third word
+        // inside it: "major confirmed" is one fact about the row and adding a third token would read as a state
+        // the engine never recorded. This fixture row carries no `kind` at all — a finding raised before the
+        // field existed — so the chip says `Issue`, which is both the legacy reading and the server's default.
+        const head = row.querySelector('.find-head')!;
+
+        expect(head.firstElementChild?.textContent).toBe('Issue');
+        expect(head.firstElementChild?.className).toBe('sv-finding-kind sv-finding-kind--issue');
+        expect(tags.contains(head.firstElementChild as HTMLElement)).toBe(false);
+    });
+
+    // T3 — the branch the row above cannot reach: a finding the Critic MARKS as a Proposal. Both kinds sit on
+    // one Revision here, because the point is the pair — a row that says the text breaks a promise and a row
+    // that only asks for a better word have to read apart on the same screen, at the same cost tier.
+    it('names a Proposal row as a Proposal, and leaves the cost+state unit untouched (T3)', () => {
+        const finding = ENTRY.findings[0]!;
+        const both: SummaryRevisionEntry = {
+            ...ENTRY,
+            findings: [
+                finding,
+                {
+                    ...finding,
+                    id: 'finding_draft_proposal',
+                    title: 'The draft restates the premise in other words',
+                    // §4.10 — `major` is a cost a Proposal may carry, so the two rows share a cost tier and
+                    // only the kind separates them.
+                    cost: 'major',
+                    kind: 'proposal'
+                }
+            ],
+            findingScopes: {
+                finding_draft: 'artifact',
+                finding_draft_proposal: 'artifact'
+            }
+        };
+
+        render(
+            <SummaryPane
+                story={{ ...fixtureStory(), phase: 'summary', summary_locked: false }}
+                summary={fixtureSummary()}
+                focus={both}
+            />
+        );
+
+        const rows = Array.from(document.querySelectorAll<HTMLElement>('.find-row'));
+
+        expect(
+            rows.map((row) => [
+                row.querySelector('.find-title')?.textContent,
+                row.querySelector('.sv-finding-kind')?.textContent,
+                row.querySelector('.sv-finding-kind')?.className,
+                // The chip leads the head — it is the first thing the row says.
+                row.querySelector('.find-head')?.firstElementChild?.textContent,
+                // …and it is NOT part of the cost+state unit, which stays the two words it always was.
+                row.querySelector('.find-tags')?.textContent,
+                // The testid is the row's own handle, so the two rows cannot be confused by a re-sort.
+                row.querySelector('[data-testid^="finding-"]')?.getAttribute('data-testid')
+            ])
+        ).toEqual([
+            [
+                'The draft loses the stray',
+                'Issue',
+                'sv-finding-kind sv-finding-kind--issue',
+                'Issue',
+                'majorconfirmed',
+                'finding-finding_draft-kind'
+            ],
+            [
+                'The draft restates the premise in other words',
+                'Proposal',
+                'sv-finding-kind sv-finding-kind--proposal',
+                'Proposal',
+                'majorconfirmed',
+                'finding-finding_draft_proposal-kind'
+            ]
+        ]);
     });
 
     // -----------------------------------------------------------------------

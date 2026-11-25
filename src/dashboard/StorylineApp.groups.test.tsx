@@ -7,21 +7,26 @@
 //     group rows and the Overview's text come from it, and a pane cannot fetch it itself);
 //   - the rail lists the five groups from the server's rows, and its click changes the centre;
 //   - the panes' own row click navigates through the SAME handler, so a group row in the Overview clears
-//     the selected employee exactly the way a rail click does.
+//     the selected employee exactly the way a rail click does;
+//   - D-68 — the action object the panes receive carries the Reviewed-Summary choose, and the route's cached
+//     409 rides into the same model, because only the shell can keep a refusal alive across the refresh the
+//     refusal itself triggers.
 import { describe, expect, it, vi } from 'vitest';
 import { act, screen } from '@testing-library/react';
 
 import { StorylineApp } from './StorylineApp';
 import { click, fakeHarness, renderWithStore, storyRow } from './testing/shell-fakes';
-import { groupedPhraseView, phraseView } from './testing/shell-fakes';
+import { groupedPhraseView, phraseView, reviewedPhraseView } from './testing/shell-fakes';
 import type { DashboardStore } from './state';
 import type { PhraseView } from './api';
+import { ApiError } from './api';
 
 vi.mock('./components/StoryView', () => {
     // The stub prints what the shell handed the pane: the phrase mode the store cached, the selection the
     // rail is holding, and a button that navigates the way the pane's own group row does.
     const Stub = (props: {
-        view: { story: { title: string }; phrase?: { mode: string } | null; phraseError?: string | null };
+        view: { story: { title: string }; phrase?: { mode: string } | null; phraseError?: string | null; reviewedError?: string | null };
+        actions?: { chooseReviewedSummary?: unknown };
         selection?: { panel: string; ref?: string };
         onSelect?: (selection: { panel: string; ref?: string }) => void;
     }) => (
@@ -32,6 +37,13 @@ vi.mock('./components/StoryView', () => {
                 the stub prints it the same way it prints the mode: a pane that cannot tell a 503 from a slow
                 read has no way to render an actionable state. */}
             {`error:${props.view.phraseError ?? 'none'}`}
+            {/* D-68 — the choose's cached 409 rides the SAME model, and the pane has to see it to print it
+                beside its own button. `none` is a real state: no refusal, which is not the claim "success". */}
+            {`reviewed:${props.view.reviewedError ?? 'none'}`}
+            {/* D-68 — the action object is the panes' only write surface, so the stub reports whether the
+                choose verb is actually bound. A shell that forgot it leaves the button disabled and this
+                line saying `choose:none`. */}
+            {`choose:${typeof props.actions?.chooseReviewedSummary === 'function' ? 'bound' : 'none'}`}
             {`ref:${props.selection?.ref ?? 'header'}`}
             <button type="button" onClick={() => props.onSelect?.({ panel: 'summary', ref: 'summary-group:grp-tone' })}>
                 pane navigates
@@ -134,6 +146,82 @@ describe('StorylineApp — the phrase read reaches the desk’s one model (R6)',
     });
 });
 
+describe('StorylineApp — the Reviewed Summary verb and its refusal reach the pane (D-68)', () => {
+    /** The shell over a book whose reviewed Summary is `ready`, with the choose route under the test's control. */
+    async function mountReviewable(choosePhraseReviewed?: () => Promise<never>) {
+        // No `summary_mode` on the row: the stub does not read it, and the phrase read this book answers is
+        // already the five-group projection, which is the fact the assertions below are about.
+        const harness = fakeHarness([storyRow('story_1', { title: 'Hollow Sea' })], [], {
+            getPhrase: vi.fn(async () => reviewedPhraseView('story_1', 'ready')),
+            ...(choosePhraseReviewed ? { choosePhraseReviewed: vi.fn(choosePhraseReviewed) } : {})
+        });
+
+        await harness.store.reload();
+        await harness.store.openStory('story_1');
+        await mount(harness.store);
+
+        return harness;
+    }
+
+    it('binds the choose verb on the model’s action object, so the tab can offer the choice', async () => {
+        const { client, store } = await mountReviewable();
+
+        expect(screen.getByTestId('story-view').textContent).toContain('choose:bound');
+
+        // And the binding is the store's, not a stub: firing it as the pane would is ONE route call, and the
+        // frame settles from the read the server answers with.
+        await act(async () => {
+            await store.chooseReviewedSummary('story_1');
+        });
+
+        expect(client.choosePhraseReviewed).toHaveBeenCalledTimes(1);
+        // The frame ends on the phrase READ, not on the write's echo: `mutate` re-reads the book after every
+        // verb, and this fake keeps answering `ready` (the server would answer `chosen`). That is the point —
+        // the tab shows what the server reports, never what the response happened to carry.
+        expect(store.getSnapshot().phrases.story_1?.reviewed.state).toBe('ready');
+        expect(store.getSnapshot().reviewedErrors.story_1).toBeUndefined();
+    });
+
+    it("keeps the choose's 409 sentence on the frame after the refresh, so the pane can print it verbatim", async () => {
+        // The full loop through the shell: the route refuses, `state.ts` caches the sentence PER STORY, the
+        // post-write refresh re-renders the pane (which would otherwise lose an in-component error), and the
+        // shell threads the cache back into the same model. Anything shorter and the Author gets a silent
+        // greyed button instead of the sentence that names the groups to fix.
+        const refusal =
+            'this Story has no Reviewed Summary to choose: ending (unwritten), promise (an unresolved issue names it) ' +
+            '— a group joins the reviewed Overview only once a cross-group Critic pass closes with no unresolved defect on it (D-67, D-68).';
+        const { store } = await mountReviewable(async () => {
+            throw new ApiError(409, refusal);
+        });
+
+        await act(async () => {
+            await store.chooseReviewedSummary('story_1');
+        });
+
+        const desk = String(screen.getByTestId('story-view').textContent);
+
+        expect(desk).toContain(`reviewed:${refusal}`);
+        // The Summary on screen is still the one the Author was refused about, and the book is intact.
+        expect(desk).toContain('phrase:groups');
+        expect(store.getSnapshot().phrases.story_1?.reviewed.state).toBe('ready');
+        expect(store.getSnapshot().reviewedErrors.story_1).toBe(refusal);
+    });
+
+    it('says `none` for the reviewed refusal on a book that has never been refused', async () => {
+        // The absence is a state of its own: the pane must not print a refusal sentence it did not receive,
+        // and a refusal from ANOTHER book must not follow the Author here.
+        const { store } = await mountReviewable();
+
+        expect(screen.getByTestId('story-view').textContent).toContain('reviewed:none');
+
+        await act(async () => {
+            await store.chooseReviewedSummary('story_2');
+        });
+
+        expect(screen.getByTestId('story-view').textContent).toContain('reviewed:none');
+    });
+});
+
 describe('StorylineApp — the rail’s group row and the pane’s group row are the same verb', () => {
     it('lists the five groups by title, and a rail click moves the centre to that group', async () => {
         await mountGrouped();
@@ -153,6 +241,22 @@ describe('StorylineApp — the rail’s group row and the pane’s group row are
             await click(row);
             expect(screen.getByTestId('story-view').textContent).toContain(`ref:${ref}`);
         }
+    });
+
+    // T3 — the same five rows also arrive WITH scores, and the rail is the one surface where the Author
+    // compares them. `groupedPhraseView` scores every group in one pass (84/76/70/88/66), so each row prints
+    // its own percentage and the phrase header prints the average those five imply — 384 / 5 = 76.8 → `77%`.
+    // Pinned at the shell level on purpose: it proves the number the rail shows is the server's row read
+    // through the store, with no re-scoring between the fetch and the column.
+    it('prints each group’s percentage on its row and the phrase average on the header (T3)', async () => {
+        await mountGrouped();
+
+        const outline = screen.getByTestId('story-outline');
+
+        expect(
+            Array.from(outline.querySelectorAll('[data-testid="outline-group-score"]')).map((row) => row.textContent)
+        ).toEqual(['84%', '76%', '70%', '88%', '66%']);
+        expect(screen.getByTestId('outline-phrase-score').textContent).toBe('77%');
     });
 
     it('returns to the Overview when the rail’s phrase header is clicked', async () => {

@@ -2,7 +2,7 @@
 //
 // The tray holds every UNDECIDED Idea of the current phase, above a collapsed list of what has
 // already been decided. The decided list is not decoration (D-32): it is the only reason the
-// next amnesiac Reader does not propose the same thing again, so a re-raise is shown as the
+// next amnesiac Critic does not propose the same thing again, so a re-raise is shown as the
 // repeat badge it is, with the earlier decision attached.
 //
 // D-27 is the interaction rule: the Author selects among VERIFIED Ideas first, and an unverified

@@ -40,7 +40,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // would put the loop's own timer back in charge of the clock (L-1: a test is the clock).
         fixture = await bootStoryline({
             raiseFindings: 'critical',
-            readerIdeas: 1,
+            criticIdeas: 1,
             runtime: { engineConfig: { autoSweep: false, globalMaxConcurrent: 4 } }
         });
         storyId = await createSliceStory(fixture, 3);
@@ -128,10 +128,10 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
 
         const view = await storyView(fixture, storyId);
 
-        // The finding is the Checker's (`raiseFinding` on the chapter unit, C-7). The Editor's quick
+        // The finding is the Reader's (`raiseFinding` on the chapter unit, C-7). The Editor's quick
         // validity check confirms it and keeps the filed cost — re-weighting is an explicit
         // correction, not part of marking the finding valid (D-33, D-34).
-        // `target_ref: 'chapter_2'` is the FIRST unit the checker crew finished judging, which the ceiling
+        // `target_ref: 'chapter_2'` is the FIRST unit the reader crew finished judging, which the ceiling
         // pinned in `beforeAll` is what makes deterministic; it is not a rule of the ladder. The subject
         // here is the ladder's walk (open → verified → approved → task → repaired).
         expect(view.findings[0]).toMatchObject({
@@ -140,7 +140,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
             state: 'fixed',
             target_ref: 'chapter_2',
             criterion_ref: 'C-7',
-            // The scripted Checker titles the finding from the unit it judged (`harness.ts:813` prints
+            // The scripted Reader titles the finding from the unit it judged (`harness.ts:813` prints
             // `Chapter ${unit.split('_')[1]}`), so with story-local counters the unit `chapter_2` — the
             // order-3 chapter — is titled from its id, not its order.
             title: 'Chapter 2 does not deliver its contract'
@@ -209,7 +209,7 @@ describe('§15 step 3: chapters, the repair ladder, and the loop running itself 
         // without knowing a row they never picked was going away; the tray line and `completion_preview`
         // below both read the discardable set now, so they agree with the accept.
         expect(row.status_reason).toBe(
-            'no critical, major, minor or taste left to work on (D-35b) · a fresh round of Readers and checkers found nothing at that threshold (L-37) · 1 undecided Idea in the tray, which accepting discards (L-25b, U-14) · every hard criterion passes at every reached level — the loop proposes completion (L-25)'
+            'no critical, major, minor or taste left to work on (D-35b) · a fresh round of Critics and readers found nothing at that threshold (L-37) · 1 undecided Idea in the tray, which accepting discards (L-25b, U-14) · every hard criterion passes at every reached level — the loop proposes completion (L-25)'
         );
 
         // The proposal is a fact the Author can read: the tray it is waiting on, and the Idea in it.
