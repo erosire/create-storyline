@@ -175,8 +175,12 @@ describe('§15 step 4: the Author takes the desk back and hands it over again', 
         expect({ kind: run.kind, delegated: run.delegated, end_reason: run.end_reason }).toEqual({
             kind: 'assistant',
             delegated: [],
-            end_reason: 'completed — the model returned no tool call and the run reported'
+            // C2-AD3's third honest ending (run/executor.ts:END_UNREPORTED): this run called only reads
+            // (§8.5), so S-4's `no_op` is true, and the row may no longer say "the run reported" beside
+            // that flag. The FLAG is unchanged — this is the sentence catching up with the bookkeeping.
+            end_reason: 'completed — the model returned no tool call and the run filed no report (S-4)'
         });
+        expect(run.no_op).toBe(true);
         expect(run.ended_at).not.toBeNull();
     });
 

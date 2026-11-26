@@ -21,9 +21,18 @@
 // other's output. Nothing here feeds one agent's text to another; only the aggregator (the
 // `merge` / `lead` modes) is shown all N proposals, and the aggregator is a different context
 // again — so no agent's answer is contaminated by another's, and the run's answer is one.
+//
+// THE PANEL PROPAGATES WHAT ITS MEMBERS' POLICIES DECIDED (C2-AD3). A panel REPLACES the run's loop,
+// so a member that was capped, or that answered and was cut off, would otherwise reach the run row as
+// nothing at all: `run/executor.ts` reads no `endCause` from a panel branch, and every panel used to
+// read as "the model returned no tool call and the run reported". So each member's `endCause` rides on
+// its `PanelAgent`, and `runPanel` folds the members' endings into counted fields on `PanelOutcome`,
+// which the executor turns into one clause on the row. Every built-in critic template ships `agents:
+// 1`, so this is correctness for an Author-authored panel rather than a hot path (D-38 allows one).
 import type { ToolSchema } from '../llm';
-import type { LoopDeps, RunTally } from './loop';
+import type { LoopDeps, RunEndCause, RunTally } from './loop';
 import { createTally, runAgentLoop } from './loop';
+import { isTerminalCriticReport } from './plugins/critic-termination';
 import type { RunDelegation, RoleAggregation, RoleKind, StoryPhase } from '../../shared/types';
 import { panelPreamble } from './harness';
 import {
@@ -51,6 +60,13 @@ export interface PanelAgent {
     text: string;
     proposals: PanelProposal[];
     tokens: number;
+    /**
+     * C2-AD3 — how THIS member's loop ended, when a policy ended it early. Present for a critic panel
+     * (the members run under the review policy, on either execution path) and absent for every other
+     * kind, whose members end the way runs always have. Kept on the agent, not merged into the
+     * run-level outcome, because the aggregation is what turns N endings into one honest sentence.
+     */
+    endCause?: RunEndCause;
 }
 
 export interface PanelSpec {
@@ -100,6 +116,22 @@ export interface PanelOutcome {
     dissent: string;
     /** How many agents answered (the crew panel's "3 agents, 1 report", D-38). */
     answered: number;
+    /**
+     * C2-AD3 — how many MEMBERS ended by filing their terminal report, how many the review-turn cap
+     * ended without a verdict, and how many had a terminal report REFUSED and never filed one. Each is
+     * present only when non-zero, so a Writer or Editor panel (whose members have no review policy,
+     * hence no end cause at all) returns exactly the shape it always did.
+     *
+     * WHY THE PANEL CARRIES THEM AT ALL: the run's own loop is replaced by the panel (D-38), so no
+     * member's `endCause` ever reaches the run row by itself, and `run/executor.ts` would otherwise
+     * describe a capped or already-answered critic panel with the plain natural-end sentence — the row
+     * claiming "the model returned no tool call" for members that were each ended by their own policy.
+     * The counts are aggregated rather than per-member because the row is one line for the run, and
+     * D-38's contract is that the panel answers once.
+     */
+    reported?: number;
+    capped?: number;
+    refused?: number;
 }
 
 /** One group of proposals that mean the same decision (D-38's "group by tool + key args"). */
@@ -319,6 +351,36 @@ export function interceptingRuntime(base: ToolRuntime, index: number, proposals:
 }
 
 /**
+ * Folds the members' C2-AD3 endings into the counts the run row carries (MAJOR 4). Every field is
+ * omitted when it is zero, so a Writer or Editor panel — whose members have no review policy and
+ * therefore no end cause — keeps the exact `PanelOutcome` shape it always had, and only a critic panel
+ * where members were actually ended early changes what the row says.
+ *
+ * A member counts as REFUSED only when it called a terminal report, the tool layer refused it, and no
+ * later call for the same tool succeeded: a member that fixed its verdict is `reported`, and a member
+ * that gave up and answered tool-less is counted by neither (the loop cannot tell "gave up" from
+ * "finished", and inventing a third claim would be less honest than naming none).
+ */
+function memberEndCounts(agents: readonly PanelAgent[]): Pick<PanelOutcome, 'reported' | 'capped' | 'refused'> {
+    const counted = (matches: (cause: RunEndCause) => boolean): number =>
+        agents.reduce((total, agent) => (agent.endCause !== undefined && matches(agent.endCause) ? total + 1 : total), 0);
+
+    const reported = counted((cause) => cause.kind === 'reported');
+    const capped = counted((cause) => cause.kind === 'capped');
+    const refused = counted(
+        (cause) =>
+            cause.refusals !== undefined &&
+            cause.refusals.some((name) => isTerminalCriticReport(name) && !cause.reports.includes(name))
+    );
+
+    return {
+        ...(reported === 0 ? {} : { reported }),
+        ...(capped === 0 ? {} : { capped }),
+        ...(refused === 0 ? {} : { refused })
+    };
+}
+
+/**
  * Runs the panel and returns the single answer the run reports. Tokens from every agent and from
  * the aggregator land in the run's tally (S-6): the run's total is the whole run's, including
  * whatever its internals cost, and S-6 says that number is informational only (E-0).
@@ -392,7 +454,14 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
             agentTally
         );
 
-        agents[position] = { index, label, text: outcome.text, proposals, tokens: agentTally.tokens };
+        agents[position] = {
+            index,
+            label,
+            text: outcome.text,
+            proposals,
+            tokens: agentTally.tokens,
+            ...(outcome.endCause === undefined ? {} : { endCause: outcome.endCause })
+        };
 
         // S-7: the panel's agents nest on the run row; they are not Work Items and have no rows.
         spec.addDelegated({ role: label, task: spec.jobSummary, summary: outcome.text, tokens: agentTally.tokens });
@@ -420,14 +489,17 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
 
     if (wrote.length === 0) {
         // Nobody wrote anything: there is nothing to aggregate, so the run reports what its agents
-        // read. The loop counts it as a no-op (S-4) — correctly, since nothing was reported.
+        // read. The loop counts it as a no-op (S-4) — correctly, since nothing was reported. The
+        // members' endings still ride along, because "capped at its review cap" is the reason the
+        // panel has nothing to aggregate.
         return {
             text: answered
                 .map((agent) => agent.text)
                 .filter(Boolean)
                 .join('\n\n'),
             dissent: '',
-            answered: answered.length
+            answered: answered.length,
+            ...memberEndCounts(answered)
         };
     }
 
@@ -449,7 +521,7 @@ export async function runPanel(deps: LoopDeps, spec: PanelSpec, tally: RunTally)
         spec.onExecuted(proposal.tool);
     }
 
-    return { text: pick.synthesis ?? winner.text, dissent, answered: answered.length };
+    return { text: pick.synthesis ?? winner.text, dissent, answered: answered.length, ...memberEndCounts(answered) };
 }
 
 /**

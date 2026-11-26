@@ -547,14 +547,14 @@ export class LoopEngine implements EngineApi {
 
             for (const finding of storyFindings(store, story.id)) {
                 if (finding.state !== 'confirmed') continue;
-                // D-33d: a PROPOSAL waits for the issues, and a skip is the right shape here rather than
-                // a throw — this loop is one commit over every confirmed row of the Story, and a refusal
-                // on one proposal would abort the sweep and strand the ISSUES that are the very work the
-                // rule wants done first. The row stays `confirmed` (nothing is lost), the Author still
-                // sees it in the queue, and the next sweep approves it the moment the last issue leaves
-                // the holding set `ISSUE_HOLDING_STATES` — which excludes `disputed`, so a sweep cannot
-                // park a proposal behind a claim the Editor already called a non-defect.
-                // `auto_approved` reports what the sweep DID, so a skipped row is simply absent from it.
+                // D-33d, THE APPROVAL SWEEP ONLY: while issues hold (`ISSUE_HOLDING_STATES`), this sweep
+                // SKIPS approving a `confirmed` PROPOSAL — the `continue` below, not a wait and not a
+                // throw: this loop is one commit over every confirmed row of the Story, and a refusal on
+                // one proposal would abort the sweep and strand the ISSUES that are the very work the
+                // rule wants done first. Nothing is parked or lost — the row stays `confirmed`, the next
+                // sweep approves it the moment the last issue leaves the holding set (it excludes
+                // `disputed`), and `auto_approved` reports what the sweep DID, so a skipped row is not in
+                // it. Filing is the other rule: `tools/reader.ts:dismissedProposal` answers that call.
                 if (finding.kind === 'proposal' && openIssues.length > 0) continue;
                 // Phase ①'s bar is the deep review: the Editor's verification of a tool-using
                 // Critic's finding IS the acceptance that arms the next sampling round, and only the

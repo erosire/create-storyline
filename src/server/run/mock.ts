@@ -49,8 +49,10 @@ import { BUILT_IN_CRITERIA, defaultGoal } from '../../shared/criteria';
 import { isGroupManagedStory } from '../phrase';
 // D-33c/D-33d: the scripted crew files and approves under the loop's OWN issues-first predicate, so
 // an integration test cannot exercise a finding flow the product refuses. `loop/records.ts` imports
-// nothing from `run/`, so this adds no cycle.
-import { findingsRaisedByRun, openIssueFindings } from '../loop/records';
+// nothing from `run/`, so this adds no cycle. (The other half of the old pair — the per-run attribution
+// read the mirror rule keyed on, deleted with the rule on 2026-11-26 — is not read here any more,
+// because the mirror rule is gone; see `raiseFinding`'s D-33c block.)
+import { openIssueFindings } from '../loop/records';
 // The Seed's change-detector hash, shared with `structureSeed` (tools/knowledge.ts) so the mock's
 // P5 refusal fires on exactly the value the real tool would compare (documents/…§3.3).
 import { seedHashOf } from '../../shared/seed-hash';
@@ -231,6 +233,209 @@ function competingOf(runtime: MockToolRuntime, storyId: string, unitRef: string)
 // ---------------------------------------------------------------------------
 
 /**
+ * W3b (2026-11-26) — ONE verdict ROW from one target's args, shared by the double's `submitVerdict`
+ * primary call and every entry of its `verdicts[]` array, so a scripted terminal report and a real
+ * session file the same rows. The double stays LENIENT on purpose (it enforces neither D-15's evidence
+ * bar nor D-33b's kind/cost pairing — §8.4's fake exists so run tests never depend on a refusal they
+ * did not script); what it must share is the SHAPE: one row per target, `criteria_passed` per target,
+ * `hard_pass` computed from the hard criteria in that row only.
+ *
+ * `criteria_passed` is accepted beside `criteria` because the tool's nested `verdicts[]` entries carry
+ * `criteria_passed`, so a scripted call can read exactly like a real one.
+ */
+async function mockVerdictRow(
+    ctx: MockRunContext,
+    args: Record<string, unknown>,
+    runtime: MockToolRuntime
+): Promise<Verdict> {
+    const criteria = Array.isArray(args.criteria)
+        ? (args.criteria as VerdictCriterion[])
+        : Array.isArray(args.criteria_passed)
+          ? (args.criteria_passed as VerdictCriterion[])
+          : [];
+    const hardIds = new Set(BUILT_IN_CRITERIA.filter((criterion) => criterion.hard).map((criterion) => criterion.id));
+
+    return inCommit(runtime.store, 'submit_verdict', () =>
+        runtime.store.verdicts.create(
+            {
+                story_id: ctx.storyId,
+                target_ref: str(args.target_ref),
+                target_kind: str(args.target_kind) || 'chapter',
+                run_ref: ctx.runRef,
+                template_ref: ctx.templateRef,
+                round: num(args.round) || 1,
+                // P4/D-15: a verdict is per-criterion with an evidence line, never a score.
+                criteria_passed: criteria,
+                hard_pass: criteria.filter((entry) => hardIds.has(entry.criterion)).every((entry) => entry.result),
+                soft_count: criteria.filter((entry) => entry.result).length,
+                recommendation: (str(args.recommendation) || 'advance') as Verdict['recommendation']
+            },
+            attrFor(ctx, args)
+        )
+    );
+}
+
+/**
+ * F3 (2026-11-26) — D-33c's admissibility for one scripted REPORT, the double's copy of
+ * `tools/reader.ts:findingGateOf`: the rows open BEFORE the report wrote anything, plus how many
+ * `kind: issue` entries that report carries itself.
+ *
+ * WHY THE DOUBLE NEEDS IT. `submitVerdict`'s `findings[]` used to ask the store per entry, so a scripted
+ * `[proposal, issue]` report FILED the proposal on a clear board while `[issue, proposal]` dismissed it.
+ * The product no longer behaves that way (admissibility is resolved once, before the first write), and this
+ * class exists so a scripted crew cannot script a sequence the server refuses — the same argument the
+ * comment on {@link mockFileFinding} makes for the gate itself.
+ */
+type MockFindingGate = { openIssues: Finding[]; sameReportIssues: number };
+
+function mockFindingGate(
+    ctx: MockRunContext,
+    runtime: MockToolRuntime,
+    entries: Record<string, unknown>[]
+): MockFindingGate {
+    return {
+        openIssues: openIssueFindings(runtime.store, ctx.storyId),
+        // KIND-TOLERANT, exactly like `mockFileFinding` below: anything that is not `proposal` is an issue.
+        sameReportIssues: entries.filter((entry) => str(entry.kind) !== 'proposal').length
+    };
+}
+
+/**
+ * The dismissal answer, mirroring `tools/reader.ts:dismissedProposal` — same rule id, same reason-not-a-
+ * queue framing (F3), same additive `same_report_issues` key — in this double's FLAT shape, because the run
+ * layer's transcript reads that shape rather than the tool's `data` envelope.
+ */
+function mockDismissedProposal(gate: MockFindingGate) {
+    const openIds = gate.openIssues.map((issue) => issue.id);
+    const total = openIds.length + gate.sameReportIssues;
+    const causes: string[] = [];
+
+    if (openIds.length > 0) causes.push(`open before this call — ${openIds.join(', ')}`);
+    if (gate.sameReportIssues > 0)
+        causes.push(
+            openIds.length > 0
+                ? `plus ${gate.sameReportIssues} ${gate.sameReportIssues === 1 ? 'issue' : 'issues'} filed by this same report`
+                : 'filed by this same report'
+        );
+
+    return {
+        ok: true,
+        dismissed: 'D-33c',
+        filed: false,
+        kind: 'proposal' as Finding['kind'],
+        message: `this proposal is dismissed, not filed — the reason is ${total} ${total === 1 ? 'issue' : 'issues'}: ${causes.join('; ')}. A suggestion about a book that still has defects is not what this round is for, and the dismissal settles the claim here: no row, no count, nothing to answer. Conclude this pass — submit your verdict (D-33c).`,
+        // PRE-CALL rows only, so a scripted pass is never told its own submission was already on the board.
+        open_issues: openIds.length,
+        open_issue_refs: openIds,
+        ...(gate.sameReportIssues > 0 ? { same_report_issues: gate.sameReportIssues } : {})
+    };
+}
+
+/**
+ * W3b (2026-11-26) — ONE finding from an args record: the whole `raiseFinding` handler, lifted here so
+ * `submitVerdict`'s `findings[]` files each entry through the SAME D-33c gate and the SAME D-16 dedupe
+ * as a standalone call (the tool layer does the same lift in `tools/reader.ts:fileFinding`). The
+ * scripted crew cannot script a sequence the product refuses, and a terminal report in a run test
+ * behaves like the real terminal call.
+ *
+ * F3 adds the optional {@link MockFindingGate}: a batch caller hands in the D-33c answer it resolved before
+ * the batch wrote anything, so an entry's fate cannot depend on its position in `findings[]`.
+ */
+async function mockFileFinding(
+    ctx: MockRunContext,
+    args: Record<string, unknown>,
+    runtime: MockToolRuntime,
+    gate?: MockFindingGate
+) {
+    const criterionRef = str(args.criterion_ref);
+    const targetRef = str(args.target_ref);
+    // T5: the mock is KIND-TOLERANT. An omitted or unknown `kind` is an `issue`, the same reading
+    // the real tool normalises to, and the dedupe key follows `utilities.ts:findingFingerprint`'s
+    // rule: `issue` keeps the pre-field two-part key (so a scripted repeat still matches), and an
+    // `proposal` marks itself so a proposal does not collapse into the defect beside it.
+    const kind: Finding['kind'] = str(args.kind) === 'proposal' ? 'proposal' : 'issue';
+    const fingerprint = kind === 'proposal' ? `${criterionRef}|${targetRef}|proposal` : `${criterionRef}|${targetRef}`;
+
+    // D-33c — the mock crew files under the SAME issues-first rule the real tool enforces,
+    // because an integration test that ran the loop through this double would otherwise exercise
+    // a flow the product no longer allows (a proposal approved over an open defect) and report
+    // green for a sequence the server refuses. Same predicate, same rule id, same answer as
+    // `tools/reader.ts:raiseFinding` + `dismissedProposal`:
+    //   a `proposal` over an unresolved issue is DISMISSED (2026-11-26) — `ok: true`, no row,
+    //   no `seen_count`, and the answer names the open issues that dismissed it: that roster is the
+    //   REASON, not a queue the claim waits behind, and the claim is spent for this pass (nothing is
+    //   parked and there is no retry to re-arm). It is NOT a refusal:
+    //   the old `{ok:false, refused:'D-33c'}` shape told the scripted crew its call was wrong
+    //   and listed exits to try, which is the retry loop the rule now closes at the first call.
+    //   "Unresolved" is the ONE holding set `loop/types.ts:ISSUE_HOLDING_STATES` (`unconfirmed`,
+    //   `confirmed`, `approved`): a `disputed` row is not a defect and does not hold, exactly as
+    //   in the real tool, so a loop test cannot report green for an answer the product removed.
+    // The mirror rule (an `issue` refused after this run filed a proposal) is GONE, in the
+    // double as in the tool: it could only ever refuse a DEFECT, and the ordering it protected
+    // is carried by this gate plus D-33d's approval gate.
+    // The result shape is this double's own (flat, like every other handler here), not the tool
+    // layer's `data` envelope, because that is what the run layer's transcript reads.
+    if (kind === 'proposal') {
+        // F3 (2026-11-26): the answer comes from the GATE when the caller is filing a report, and from the
+        // store when it is filing one claim — the same split `tools/reader.ts:fileFinding` makes, so the
+        // double and the product agree about which entry in `findings[]` survives.
+        const resolved = gate ?? { openIssues: openIssueFindings(runtime.store, ctx.storyId), sameReportIssues: 0 };
+
+        if (resolved.openIssues.length > 0 || resolved.sameReportIssues > 0) return mockDismissedProposal(resolved);
+    }
+
+    // D-16/D-32: the dedupe lives in the tool layer, and the ANSWER names the existing
+    // record — a fresh context that is told `repeat` can stop, which is the mechanism that
+    // makes "no progress" visible in an amnesiac loop.
+    const existing = runtime.store.findings
+        .list()
+        .find(
+            (row) =>
+                row.story_id === ctx.storyId &&
+                row.fingerprint === fingerprint &&
+                row.state !== 'fixed' &&
+                row.state !== 'discarded'
+        );
+
+    if (existing !== undefined) {
+        const bumped = await inCommit(runtime.store, 'raise_finding', () =>
+            runtime.store.findings.update(existing.id, { seen_count: existing.seen_count + 1 }, attrFor(ctx, args))
+        );
+
+        return {
+            ok: true,
+            repeat: true,
+            finding_id: bumped.id,
+            // T5: the kind the open row actually carries, echoed like the real tool does.
+            kind: bumped.kind ?? 'issue',
+            rev: bumped.rev
+        };
+    }
+
+    const created = await inCommit(runtime.store, 'raise_finding', () =>
+        runtime.store.findings.create(
+            {
+                story_id: ctx.storyId,
+                target_ref: targetRef,
+                criterion_ref: criterionRef,
+                title: str(args.title),
+                detail: str(args.detail) || undefined,
+                evidence: str(args.evidence),
+                cost: (str(args.cost) || 'minor') as Finding['cost'],
+                // T5: stored explicitly, default included — the same discipline the real tool
+                // follows, so a scripted row and a tool-written row read alike.
+                kind,
+                fingerprint,
+                state: 'unconfirmed',
+                seen_count: 1
+            },
+            attrFor(ctx, args)
+        )
+    );
+
+    return { ok: true, finding_id: created.id, kind: created.kind ?? 'issue', rev: created.rev };
+}
+/**
  * The §8 surface the run layer exercises: the §8.1 read names (so `isReadOnlyTool`'s prefix rule is
  * exercised against real names) and the §8.2/§8.3/§8.4 write and report names.
  */
@@ -309,142 +514,57 @@ function defaultTools(): Record<string, MockToolHandler> {
         },
 
         // -- §8.4 plumbing: what the readers live on -------------------------------------------
+        // W3b (2026-11-26) — `submitVerdict` is the TERMINAL report of a review pass, in the double as in
+        // the tool: the classic verdict plus the OPTIONAL `verdicts[]` (further targets, §6.2a/D-21) and
+        // `findings[]` (every claim the critic is certain of), each filed through the SAME helper a
+        // standalone call uses, so a scripted terminal report behaves like a real one. The result keeps
+        // this double's flat shape (`id`/`rev`, not the tool's `data` envelope) because that is what the
+        // run layer's transcript reads; the extra arrays are receipts of the rows this call wrote.
         submitVerdict: async (ctx, args, runtime) => {
-            const criteria = Array.isArray(args.criteria) ? (args.criteria as VerdictCriterion[]) : [];
-            const hardIds = new Set(
-                BUILT_IN_CRITERIA.filter((criterion) => criterion.hard).map((criterion) => criterion.id)
-            );
-            const created = await inCommit(runtime.store, 'submit_verdict', () =>
-                runtime.store.verdicts.create(
+            // F3 (2026-11-26): D-33c is resolved for the WHOLE report before any of it files, exactly as
+            // `tools/reader.ts:submitVerdict` does, so a scripted `[proposal, issue]` pass reaches the same
+            // answer as `[issue, proposal]` and this double cannot green-light a sequence the product
+            // refuses. Verdict rows do not hold a proposal, which is why the gate may be read first.
+            const extraFindings = Array.isArray(args.findings) ? (args.findings as Record<string, unknown>[]) : [];
+            const gate = mockFindingGate(ctx, runtime, extraFindings);
+            const created = await mockVerdictRow(ctx, args, runtime);
+            const extraVerdicts = Array.isArray(args.verdicts) ? (args.verdicts as Record<string, unknown>[]) : [];
+            const verdicts: Record<string, unknown>[] = [];
+            const findings: Record<string, unknown>[] = [];
+
+            for (const entry of extraVerdicts) {
+                const row = await mockVerdictRow(
+                    ctx,
                     {
-                        story_id: ctx.storyId,
-                        target_ref: str(args.target_ref),
-                        target_kind: str(args.target_kind) || 'chapter',
-                        run_ref: ctx.runRef,
-                        template_ref: ctx.templateRef,
-                        round: num(args.round) || 1,
-                        // P4/D-15: a verdict is per-criterion with an evidence line, never a score.
-                        criteria_passed: criteria,
-                        hard_pass: criteria
-                            .filter((entry) => hardIds.has(entry.criterion))
-                            .every((entry) => entry.result),
-                        soft_count: criteria.filter((entry) => entry.result).length,
-                        recommendation: (str(args.recommendation) || 'advance') as Verdict['recommendation']
+                        ...entry,
+                        // The primary's recommendation is the default, exactly as in the tool: two reports
+                        // about one text are meant to reach the same answer (D-21).
+                        recommendation: entry.recommendation ?? args.recommendation,
+                        // T-5 in the double: the attribution's `why` falls back to the call's reason.
+                        why: entry.why ?? args.why
                     },
-                    attrFor(ctx, args)
-                )
-            );
+                    runtime
+                );
 
-            return { ok: true, id: created.id, rev: created.rev };
+                verdicts.push({ ok: true, id: row.id, rev: row.rev, target_ref: row.target_ref });
+            }
+
+            // Every entry is judged against the ONE gate above — never against the rows its siblings wrote.
+            for (const entry of extraFindings)
+                findings.push(await mockFileFinding(ctx, { ...entry, why: entry.why ?? args.why }, runtime, gate));
+
+            return {
+                ok: true,
+                id: created.id,
+                rev: created.rev,
+                ...(verdicts.length > 0 ? { verdicts } : {}),
+                ...(findings.length > 0 ? { findings } : {}),
+                ...(verdicts.length + findings.length > 0
+                    ? { reported: { verdicts: verdicts.length + 1, findings: findings.length } }
+                    : {})
+            };
         },
-        raiseFinding: async (ctx, args, runtime) => {
-            const criterionRef = str(args.criterion_ref);
-            const targetRef = str(args.target_ref);
-            // T5: the mock is KIND-TOLERANT. An omitted or unknown `kind` is an `issue`, the same reading
-            // the real tool normalises to, and the dedupe key follows `utilities.ts:findingFingerprint`'s
-            // rule: `issue` keeps the pre-field two-part key (so a scripted repeat still matches), and an
-            // `proposal` marks itself so a proposal does not collapse into the defect beside it.
-            const kind: Finding['kind'] = str(args.kind) === 'proposal' ? 'proposal' : 'issue';
-            const fingerprint = kind === 'proposal' ? `${criterionRef}|${targetRef}|proposal` : `${criterionRef}|${targetRef}`;
-
-            // D-33c — the mock crew files under the SAME issues-first rules the real tool enforces,
-            // because an integration test that ran the loop through this double would otherwise exercise
-            // a flow the product no longer allows (issue + proposal in one pass, a proposal approved over
-            // an open defect) and report green for a sequence the server refuses. Same predicate, same
-            // rule ids, same two directions as `tools/reader.ts:raiseFinding`:
-            //   (a) a `proposal` waits while the Story has an unresolved issue — which also covers the
-            //       same-pass case, since an issue filed moments ago is open. "Unresolved" is the ONE
-            //       holding set `loop/types.ts:ISSUE_HOLDING_STATES` (`unconfirmed`, `confirmed`,
-            //       `approved`): a `disputed` row is not a defect and does not hold, exactly as in the
-            //       real tool, so a loop test cannot report green for a refusal the product removed;
-            //   (b) an `issue` is refused when THIS run already filed a proposal, read from the journal
-            //       by `run_ref` the way the real tool reads it.
-            // The refusal shape is this double's own (`{ok:false, refused, message}`), not a thrown
-            // `ToolRefusal`, because that is what the run layer's transcript reads.
-            if (kind === 'proposal') {
-                const openIssues = openIssueFindings(runtime.store, ctx.storyId);
-
-                if (openIssues.length > 0) {
-                    return {
-                        ok: false,
-                        refused: 'D-33c',
-                        message: `a proposal cannot be filed while ${openIssues.length} ${openIssues.length === 1 ? 'issue is' : 'issues are'} unresolved — ${openIssues.map((issue) => issue.id).join(', ')} — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is \`unconfirmed\`, \`confirmed\` or \`approved\`; one the Editor marked \`disputed\` is not a defect and releases it, exactly as \`fixed\` or \`discarded\` does (D-33c).`,
-                        open_issues: openIssues.length,
-                        open_issue_refs: openIssues.map((issue) => issue.id)
-                    };
-                }
-            }
-
-            if (kind === 'issue') {
-                const siblingProposals = findingsRaisedByRun(runtime.store, ctx.storyId, ctx.runRef).filter(
-                    (row) => row.kind === 'proposal'
-                );
-
-                if (siblingProposals.length > 0) {
-                    return {
-                        ok: false,
-                        refused: 'D-33c',
-                        message: `this pass already filed ${siblingProposals.map((row) => row.id).join(', ')} as \`kind: proposal\`, and an issue cannot share a review pass with a proposal (D-33c).`,
-                        proposal_refs: siblingProposals.map((row) => row.id)
-                    };
-                }
-            }
-
-            // D-16/D-32: the dedupe lives in the tool layer, and the ANSWER names the existing
-            // record — a fresh context that is told `repeat` can stop, which is the mechanism that
-            // makes "no progress" visible in an amnesiac loop.
-            const existing = runtime.store.findings
-                .list()
-                .find(
-                    (row) =>
-                        row.story_id === ctx.storyId &&
-                        row.fingerprint === fingerprint &&
-                        row.state !== 'fixed' &&
-                        row.state !== 'discarded'
-                );
-
-            if (existing !== undefined) {
-                const bumped = await inCommit(runtime.store, 'raise_finding', () =>
-                    runtime.store.findings.update(
-                        existing.id,
-                        { seen_count: existing.seen_count + 1 },
-                        attrFor(ctx, args)
-                    )
-                );
-
-                return {
-                    ok: true,
-                    repeat: true,
-                    finding_id: bumped.id,
-                    // T5: the kind the open row actually carries, echoed like the real tool does.
-                    kind: bumped.kind ?? 'issue',
-                    rev: bumped.rev
-                };
-            }
-
-            const created = await inCommit(runtime.store, 'raise_finding', () =>
-                runtime.store.findings.create(
-                    {
-                        story_id: ctx.storyId,
-                        target_ref: targetRef,
-                        criterion_ref: criterionRef,
-                        title: str(args.title),
-                        detail: str(args.detail) || undefined,
-                        evidence: str(args.evidence),
-                        cost: (str(args.cost) || 'minor') as Finding['cost'],
-                        // T5: stored explicitly, default included — the same discipline the real tool
-                        // follows, so a scripted row and a tool-written row read alike.
-                        kind,
-                        fingerprint,
-                        state: 'unconfirmed',
-                        seen_count: 1
-                    },
-                    attrFor(ctx, args)
-                )
-            );
-
-            return { ok: true, finding_id: created.id, kind: created.kind ?? 'issue', rev: created.rev };
-        },
+        raiseFinding: async (ctx, args, runtime) => mockFileFinding(ctx, args, runtime),
         createTask: async (ctx, args, runtime) => {
             const created = await inCommit(runtime.store, 'create_task', () =>
                 runtime.store.tasks.create(
@@ -1052,9 +1172,7 @@ function defaultTools(): Record<string, MockToolHandler> {
                 .filter((row) => row.story_id === ctx.storyId && row.status === 'accepted');
             const brief = accepted[accepted.length - 1];
 
-            const knowledge_rows = runtime.store.knowledge
-                .list()
-                .filter((row) => row.story_id === ctx.storyId).length;
+            const knowledge_rows = runtime.store.knowledge.list().filter((row) => row.story_id === ctx.storyId).length;
 
             return {
                 ok: true,

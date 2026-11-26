@@ -15,7 +15,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRig } from './mock';
-import { selectedSummaryRevision } from './records';
+// D-33c: the LIVE STATE line in a Critic brief is this exact predicate, so the rig assertion below
+// compares the brief against the loop's answer rather than against a number typed into the test.
+import { openIssueFindings, selectedSummaryRevision } from './records';
 import type { Rig } from './mock';
 
 /** `run/brief.ts:renderJob` clips the sweep's note at this many characters (S-2's budget). */
@@ -34,6 +36,54 @@ function reviewBriefOf(rig: Rig): string {
     if (request === undefined) throw new Error('the rig never dispatched a tool-using phase-① deep review');
 
     return request.messages.map((message) => message.content).join('\n\n');
+}
+
+/**
+ * The engine-owned BANNER paragraph — `run/brief.ts:CRITIC_REVIEW_MODE` is one paragraph and the LIVE
+ * STATE line is the NEXT one, so the slice ends at the first blank line. Absence assertions run against
+ * this slice rather than the whole brief on purpose: the role prompt underneath it is the Author's copy
+ * (`templates.ts`, edited by whoever owns the templates) and may still carry a retired sentence without
+ * the ENGINE contradicting the tool.
+ */
+function bannerOf(text: string): string {
+    const at = text.indexOf('PASS MODE — REVIEW');
+
+    if (at === -1) throw new Error('the review brief carries no PASS MODE banner');
+
+    const end = text.indexOf('\n\n', at);
+
+    return text.slice(at, end === -1 ? text.length : end);
+}
+
+/** The LIVE STATE paragraph — `run/brief.ts:criticOpenIssueState`, the count read out of the store. */
+function liveStateOf(text: string): string {
+    const at = text.indexOf('LIVE STATE — ');
+
+    if (at === -1) throw new Error('the review brief carries no LIVE STATE line');
+
+    const end = text.indexOf('\n\n', at);
+
+    return text.slice(at, end === -1 ? text.length : end);
+}
+
+/**
+ * The job statement — `run/brief.ts:renderJob`'s FIRST block, ahead of the sweep's note (which the
+ * brief clips at 600 characters) and ahead of the next section heading. Like the banner, this is the
+ * slice whose retired wording the engine is answerable for.
+ */
+function jobStatementOf(text: string): string {
+    const heading = '# THE JOB\n';
+    const at = text.indexOf(heading);
+
+    if (at === -1) throw new Error('the review brief carries no THE JOB section');
+
+    const body = text.slice(at + heading.length);
+    const boundaries = [
+        body.indexOf("\nThe sweep's note on this job:"),
+        body.indexOf('\n# ')
+    ].filter((index) => index > -1);
+
+    return boundaries.length === 0 ? body : body.slice(0, Math.min(...boundaries));
 }
 
 describe('phase ① deep review — the verdict contract a real Reviewer is given (C-14, CS-VERDICT-1)', () => {
@@ -60,27 +110,59 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
 
         const text = reviewBriefOf(rig);
 
-        // -- The job line requires both filing forms, by id, and says which one the Goal reads ------
-        expect(text).toContain('Report the verdict TWICE with `submitVerdict`');
+        // -- The job line requires both verdict LINES, by id, in ONE call, and says which one the Goal
+        //    reads. (2026-11-26: the pin moved from "Report the verdict TWICE with `submitVerdict`" to
+        //    the single-terminal-report wording. The rule is the same two-line contract in the same
+        //    order with the same ids — what changed is that it is now the CONTENT of one call, because
+        //    the old phrasing read as two tool calls and a Critic pass spent round-trips on it.) ------
+        expect(text).toContain('Put BOTH verdict lines in the pass\u2019s ONE terminal report');
         expect(text).toContain(
             'first at `target_ref` `summary_0` — the Summary unit the Goal\u2019s criteria are graded against, and the line the Goal actually reads'
         );
         expect(text).toContain('then at `target_ref` `revision_0`, the draft this brief carries');
+        expect(text).toContain('Those two lines are one call, the last one this pass makes');
 
         // -- The pass's own done-definition names the SAME two targets, so the two cannot be read
         //    apart (D-30: the banner and the done-line are the binding mode of the review pass).
         expect(text).toContain(
-            'the goal verdict is filed with `submitVerdict` at `target_ref` `summary_0` AND at `target_ref` `revision_0`'
+            'BOTH verdict lines sit in the ONE terminal `submitVerdict` report you end with, at `target_ref` `summary_0` AND at `target_ref` `revision_0`'
         );
 
         // -- The shipped draft-only instruction cannot come back from either section.
         expect(text).not.toContain('against the revision named above');
         expect(text).not.toContain('Rate the sample with `submitVerdict`');
+        expect(text).not.toContain('Report the verdict TWICE');
+        // THE SWEEP NOTE CARRIES THE SAME RETIREMENT (2026-11-26): its leading clause used to order "File
+        // TWO verdicts with submitVerdict", which is the same two-call shape the job line above bans. The
+        // note is part of the brief, so the ban covers it too.
+        expect(text).not.toContain('File TWO verdicts with submitVerdict');
 
         // -- The findings contract is unchanged: the unit is the target, the draft is a `related_ref`
         //    (D-21's attribution, `records.ts:findingRevisionScope`).
         expect(text).toContain('raiseFinding');
         expect(text).toContain('related_refs');
+
+        // -- LIVE STATE (D-33c, 2026-11-26): the count the Critic used to have to discover by calling a
+        //    tool is in the brief before any call. DERIVED, NOT COPIED: the expected sentence is built
+        //    from `openIssueFindings` on the store this rig actually ended with, so the assertion pins
+        //    parity with the gate in `tools/reader.ts:dismissedProposal`, not a fixture number. This rig
+        //    reaches the deep review with nothing open, which is also the branch that must NOT claim a
+        //    proposal is blocked.
+        const openIssues = openIssueFindings(rig.store, rig.storyId);
+        const liveState = liveStateOf(text);
+
+        expect(openIssues).toEqual([]);
+        expect(liveState).toContain(
+            'LIVE STATE — no issue is open on this Story right now, so a Proposal you are certain of is admissible in this pass'
+        );
+        expect(liveState).not.toContain('dismissed');
+
+        // Rendered by the REAL executor, ahead of the Author-editable angle prompt and of the tool
+        // catalogue: the plumbing needs no new field on the Work Item, because `run/brief.ts` already
+        // holds the store.
+        expect(text.indexOf('PASS MODE — REVIEW')).toBeLessThan(text.indexOf('LIVE STATE — '));
+        expect(text.indexOf('LIVE STATE — ')).toBeLessThan(text.indexOf('# THE JOB'));
+        expect(text.indexOf('LIVE STATE — ')).toBeLessThan(text.indexOf('# TOOLS AND HOW TO END'));
     });
 
     it('sends the two-target instruction inside the note window that survives the 600-character clip', async () => {
@@ -101,7 +183,7 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
 
         const carriedNote = text.slice(noteAt + noteHeading.length, noteAt + noteHeading.length + NOTE_CHAR_CLIP);
 
-        expect(carriedNote).toContain('File TWO verdicts with submitVerdict');
+        expect(carriedNote).toContain('File ONE submitVerdict with both verdict lines');
         expect(carriedNote).toContain('the goal verdict at target_ref summary_0');
         expect(carriedNote).toContain('and the draft\u2019s own line at target_ref revision_0');
         // The note never contradicts the job it accompanies.
@@ -158,56 +240,84 @@ describe('phase ① deep review — the verdict contract a real Reviewer is give
         expect(text.indexOf('The Seed is general and is not an outline')).toBeLessThan(noteAt);
     });
 
-    it('hands the same Reviewer both D-33c rules in the durable sections — the banner and the job line', async () => {
-        // WHY THIS IS PINNED HERE RATHER THAN IN `brief.test.ts`: the two rules are enforced in the tool
-        // (`tools/reader.ts:raiseFinding`), and the only copy of them the model ever sees is the brief the
-        // executor assembles for a REAL dispatch — banner (`run/brief.ts:CRITIC_REVIEW_MODE`) ahead of the
-        // Author-editable angle prompt, plus the job line (`run/brief.ts:jobStatement`, `check_unit` +
+    it('hands the same Reviewer the one D-33c rule and its live count, in the banner and the job line', async () => {
+        // WHY THIS IS PINNED HERE RATHER THAN IN `brief.test.ts`: the rule is enforced in the tool
+        // (`tools/reader.ts:dismissedProposal`), and the only copy of it the model ever sees is the brief
+        // the executor assembles for a REAL dispatch — banner (`run/brief.ts:CRITIC_REVIEW_MODE`) ahead of
+        // the Author-editable angle prompt, plus the job line (`run/brief.ts:jobStatement`, `check_unit` +
         // `critic`). Both are engine-owned, so an Author rewriting `critic-genre` still gets them; and
         // both are ahead of the sweep note, which `renderJob` clips at 600 characters. T3 is the precedent
         // for what happens when the durable copies drift and only the note carries the rule.
+        //
+        // THE TEST USED TO SAY "BOTH RULES". There is one now: the mirror rule ("an issue and a proposal
+        // never share a pass") was removed with the dismissal on 2026-11-26
+        // (`documents/specifications.md:333`), and the assertion set below is what that removal looks
+        // like from the brief's side — the surviving rule, the dismissal's SHAPE (an answer that does not
+        // invite another call), and the absence of the two retry sentences the retired rule came with.
         const rig = await createRig({ summarySampling: 1, summaryCritics: 1 });
 
         await rig.run();
 
         const text = reviewBriefOf(rig);
+        const banner = bannerOf(text);
+        const job = jobStatementOf(text);
 
-        // -- The banner: the two rules, named as two, each with what the tool actually does -----------
-        expect(text).toContain(
-            'ISSUES COME FIRST, and the tool enforces it on the call (D-33c), in two rules: an ISSUE AND A PROPOSAL NEVER SHARE A PASS'
+        // -- The banner: ONE rule, stated with what the tool actually does ----------------------------
+        expect(banner).toContain(
+            'ISSUES COME FIRST, and the tool enforces it on the call (D-33c): while any issue on this Story is unresolved'
         );
-        expect(text).toContain(
-            'and A PROPOSAL WAITS UNTIL EVERY ISSUE IS RESOLVED — while any issue on this Story is unresolved'
+        // The answer is a DISMISSAL, and the sentence says what that costs — no row, no work, no retry —
+        // because the old wording ("refused and told how many issues are open") was an invitation to send
+        // the same claim again, which is the round-trip the owner's complaint is about.
+        expect(banner).toContain(
+            'a `kind: proposal` claim is DISMISSED rather than refused — nothing is written, no work is armed, and the answer offers no retry'
         );
         // The resolution bar is stated in the same breath as the rule, because `approved` is the state a
         // crew reads as "done" and it is not, while `disputed` is the state a crew reads as "blocked" and
-        // is not either: the holding set is exactly `unconfirmed`/`confirmed`/`approved`.
-        expect(text).toContain(
+        // is not either: the holding set is exactly `unconfirmed`/`confirmed`/`approved`
+        // (`loop/types.ts:ISSUE_HOLDING_STATES`).
+        expect(banner).toContain(
             '(only `unconfirmed`, `confirmed` and `approved` hold one open; an issue marked `disputed`, `fixed` or `discarded` releases it)'
         );
         // …and the rule never strands the pass: an empty review is a valid answer, which is the half that
         // stops a Critic filing an absence to avoid standing down.
-        expect(text).toContain(
-            'If you have no issue to file and no new proposal to make, file nothing and submit your verdict — say the text holds. An empty pass is a valid, good outcome; do not invent findings.'
+        expect(banner).toContain(
+            'A pass that files nothing and reports that the text holds is a completed pass: S-4 counts a run that never REPORTS, never a run that filed no finding, so an empty pass is a valid, good outcome'
         );
 
-        // -- The job line: the same two rules in the sentence a tool-using pass acts on ---------------
-        expect(text).toContain(
-            'This is a REVIEW PASS: report defects and file genuine Proposals as `kind: proposal` findings — do not propose Ideas. ISSUES COME FIRST (D-33c): an issue and a proposal never share a pass'
+        // -- The job line: the same rule in the sentence a tool-using pass acts on -------------------
+        expect(job).toContain(
+            'This is a REVIEW PASS: report defects and file genuine Proposals as `kind: proposal` findings — do not propose Ideas. ISSUES COME FIRST (D-33c): while any issue on this Story is unresolved'
         );
-        expect(text).toContain(
-            'so file the defects in this pass and bring the improvement in a pass that has none left.'
+        expect(job).toContain(
+            'a `kind: proposal` claim is DISMISSED on the call — no row, no work armed, and no retry to spend'
         );
-        expect(text).toContain(
-            'and if you have no issue and no new proposal, file nothing and submit your verdict: an empty pass is valid.'
+        expect(job).toContain(
+            'a pass that files nothing and reports that the text holds is a valid outcome, not a wasted run'
         );
 
-        // -- Both are in the unclipped parts: they cannot be pushed out of the brief by a note edit ----
+        // -- The retired sentences are ABSENT from the two engine-owned sections, in any casing. The
+        //    whole brief is NOT the assertion surface here: the angle prompt under the banner is the
+        //    Author's copy in `templates.ts`, owned by another pass, and an Author may keep a sentence
+        //    the engine no longer says.
+        for (const retired of [
+            'never share a pass',
+            'refuses a `kind: proposal`',
+            'call is refused and told how many issues are open',
+            'bring it in a pass that has none left',
+            'bring the improvement once the book has no defect left',
+            'in the next review'
+        ]) {
+            expect(banner.toLowerCase()).not.toContain(retired);
+            expect(job.toLowerCase()).not.toContain(retired);
+        }
+
+        // -- Everything above is in the unclipped parts: no note edit can push it out of the brief ----
         const noteAt = text.indexOf("The sweep's note on this job: ");
 
         expect(noteAt).toBeGreaterThan(-1);
         expect(text.indexOf('ISSUES COME FIRST, and the tool enforces it on the call')).toBeLessThan(noteAt);
-        expect(text.indexOf('ISSUES COME FIRST (D-33c): an issue and a proposal never share a pass')).toBeLessThan(
+        expect(text.indexOf('ISSUES COME FIRST (D-33c): while any issue on this Story is unresolved')).toBeLessThan(
             noteAt
         );
     });

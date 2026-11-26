@@ -23,7 +23,13 @@
 // WHY THERE IS NO TIMEOUT AND NO CAP HERE (E-0, S-4a): the only guard is the lease, and the
 // lease is `runs.updated_at`, refreshed after every tool call by {@link heartbeat}. A four-hour
 // run is fine while it keeps calling tools; a hung run stops refreshing and lapses (L-2), and
-// the sweep re-adopts or abandons it (L-3).
+// the sweep re-adopts or abandons it (L-3). The one exception (C2-AD3) is the Critic's review
+// pass, and it is not a clock: the pass ends when its report has FILED — the tool answered, not
+// merely the model asked — or when the review-turn bound catches a critic that will not conclude.
+// Both are decisions about the pass, both close the row `torn_down` with a sentence of its own
+// ({@link END_REPORTED}, {@link END_CAPPED}), and neither puts a time limit on any run. A report the
+// tool layer REFUSED ends nothing at all: the row's third honest ending is {@link END_UNREPORTED},
+// paired with `no_op: true`, which is what lets the loop owe that seat again.
 //
 // THE TWO CLOCKS (the bug this file carried, and the contract that closes it): a
 // `toolMode: 'none'` run answers in ONE structured turn and never calls a tool, so between the
@@ -49,8 +55,9 @@ import { runModelFor } from './agent-models';
 import { buildBrief, type AssembledBrief } from './brief';
 import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
-import { createTally, runAgentLoop, wasAborted, type RunTally } from './loop';
+import { createTally, runAgentLoop, wasAborted, type LoopOutcome, type RunEndCause, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
+import { isTerminalCriticReport } from './plugins/critic-termination';
 import {
     compileGroupDraftPrompt,
     compileGroupLockPrompt,
@@ -122,11 +129,110 @@ interface RunScope {
 const END_COMPLETED = 'completed — the model returned no tool call and the run reported';
 
 /**
+ * §4.13's `end_reason` for a run that ended on its own tool-less turn HAVING FILED NOTHING. It is a
+ * different sentence from {@link END_COMPLETED} because the plain one asserts the run reported, and
+ * `no_op: true` on the same row says it did not — the pair the crew rail shows would contradict
+ * itself. This is the row of a pass whose every report tool was refused, and of the brief bug S-4
+ * measures: the honest state is "ended without a successful report", not "reported".
+ *
+ * It names neither {@link END_REPORTED}'s tool nor a cap, because neither happened, and it keeps clear
+ * of the pause words `runsStoppedByPause` (dashboard/components/story-contract.ts:2817) matches, so a
+ * run that concluded is never counted as one the Author stopped.
+ */
+const END_UNREPORTED = 'completed — the model returned no tool call and the run filed no report (S-4)';
+
+/**
  * §4.13's `end_reason` for a `toolMode: 'none'` run. It is a different sentence on purpose: a
  * structured run never "returned no tool call and reported" — it was given no tool to call, and
  * its single schema-validated answer is what the engine persists (§2 decision 2).
  */
 const END_STRUCTURED = 'completed — one structured turn, validated against the response schema (§4.2)';
+
+/**
+ * §4.13's `end_reason` for a Critic review pass that ENDED BY FILING ITS REPORT (C2-AD3). It is a
+ * different sentence from {@link END_COMPLETED} on purpose: the model did NOT return a turn with no
+ * tool call — it filed `submitVerdict`, and the run ended on that turn because the pass had answered.
+ * Claiming the natural-end sentence here would misdescribe the run the Author is reading (U-7), and
+ * the number of turns it cost is the fact the whole change exists to make visible.
+ *
+ * WHY THE WORDING AVOIDS "stop"/"kill"/"author": `runsStoppedByPause` (dashboard/components/
+ * story-contract.ts:2817) counts paused runs by matching `/author|stop|paused|kill` against
+ * `end_reason`. A Critic pass that concluded must never land in that count, so this sentence names
+ * what happened without any of those words.
+ */
+const END_REPORTED = (cause: RunEndCause): string =>
+    `completed — the Critic filed its report (${cause.terminal_tool ?? cause.reports.join(', ')}) at model turn ${String(
+        cause.turns
+    )} and the pass ended there (C2-AD3)`;
+
+/**
+ * §4.13's `end_reason` for a Critic pass the review-turn CAP ended (C2-AD3). Honest, and deliberately
+ * not the same sentence as {@link END_REPORTED}: the pass ran out its bound without filing its
+ * verdict, so the row says the verdict is missing and names the bound, while the findings it did file
+ * stay filed. The row still closes `torn_down` rather than `failed`, because teardown really happened
+ * and the work it produced is in the book — a cap is a bounded outcome, not a fault.
+ */
+const END_CAPPED = (cause: RunEndCause): string => {
+    const refused = terminalRefusalOf(cause);
+
+    // TWO capped sentences, because the two facts differ and the Author tunes against them. A pass that
+    // never called its verdict is a critic that would not conclude; a pass that called it and was
+    // REFUSED (T-1a) is a critic whose answer the tool layer turned away — the correction turn the fix
+    // gives it is the difference, and the row has to show which one it is reading.
+    return refused === undefined
+        ? `completed — the Critic reached its ${String(cause.cap)}-model-turn review cap without filing its verdict; the ${String(
+              cause.turns
+          )} turns it ran and the findings it filed stand (C2-AD3)`
+        : `completed — the Critic reached its ${String(cause.cap)}-model-turn review cap with its ${refused} report refused and nothing filed; the ${String(
+              cause.turns
+          )} turns it ran are all this pass produced (C2-AD3)`;
+};
+
+/**
+ * The terminal report this pass called and never got filed — refused, with no later success for the
+ * same tool. `run/plugins/critic-termination` and `run/loop.ts` both report refusals; this is the one
+ * place that turns one into a sentence, so the plugin's ledger, the thread record and the run row
+ * cannot name three different versions of the same ending.
+ */
+const terminalRefusalOf = (cause: RunEndCause): string | undefined =>
+    (cause.refusals ?? []).find((name) => isTerminalCriticReport(name) && !cause.reports.includes(name));
+
+/**
+ * The panel clause on a run row (MAJOR 4). A panel REPLACES the run's loop (D-38), so the run never
+ * has an `endCause` of its own and would otherwise claim "the model returned no tool call" for members
+ * each ended by their own review policy. The counts come from `run/panel.ts`, which folds the members'
+ * `endCause`s into numbers — one clause, because the run answers once.
+ *
+ * Empty for every panel with no policy-watched members (a Writer or Editor panel, and a critic panel
+ * whose members all ended naturally), which is what keeps the sentences of every existing run row
+ * byte-identical.
+ */
+const panelMemberClause = (panel: PanelOutcome): string => {
+    // ONE or MANY, because the row is prose the Author reads: a 2-agent panel whose members all filed
+    // has to read as a sentence, not as a count glued to a singular verb.
+    const count = (value: number | undefined, one: string, many: string): string | undefined =>
+        value === undefined ? undefined : `${String(value)} ${value === 1 ? one : many}`;
+    const parts = [
+        count(panel.reported, 'filed its report', 'filed their reports'),
+        count(panel.capped, 'reached its review-turn cap without a verdict', 'reached their review-turn cap without a verdict'),
+        count(panel.refused, 'had its report refused and never filed one', 'had their reports refused and never filed one')
+    ].filter((part): part is string => part !== undefined);
+
+    return parts.length === 0 ? '' : `; its members — ${parts.join(', ')} (C2-AD3)`;
+};
+
+/**
+ * §4.13's `end_reason` for a D-38 PANEL whose members WERE ended by their own review policy. It
+ * replaces {@link END_COMPLETED}'s claim that "the model returned no tool call" for that row, because
+ * for a panel that sentence was never true — the members each ended under C2-AD3 and the panel then
+ * aggregated them — and it carries what each ending was, so a capped critic panel cannot be read as a
+ * panel that concluded. Panels with no policy-watched members keep the historical sentence (the clause
+ * is empty and this builder is never reached), which is why no existing row changes.
+ */
+const END_PANEL = (panel: PanelOutcome, agents: number, noOp: boolean): string =>
+    `completed — the panel answered once (${String(panel.answered)} of ${String(agents)} agents answered) and the run ${
+        noOp ? 'filed no report (S-4)' : 'reported'
+    }${panelMemberClause(panel)}`;
 
 /**
  * How many provider calls a no-tool run may make. TWO is the whole budget the design allows:
@@ -179,6 +285,15 @@ const BEAT_REQUEST = 'lease heartbeat — provider request in flight (S-4a)';
  * need: `lease` says "nobody was home", `deadline` says "somebody was home and stopped answering".
  * A run abandoned for either reason returns its Work Item to the queue; only the sentence the
  * Author reads differs.
+ *
+ * WHY C2-AD3 ADDED NO MEMBER HERE. The ways a Critic pass now ends early — a terminal report that
+ * FILLED, and the review-turn cap — are not cancellations: the run reaches `execute`'s success path
+ * with its result intact and closes `torn_down`/`completed`. This union is the vocabulary of the
+ * ABORT path (`ABORT_TEXT`'s `end` strings all say "abandoned"), so putting a concluded review pass
+ * in it would claim the pass was killed and hand its Work Item back to the queue. The sentences that
+ * describe an early end — {@link END_REPORTED}, {@link END_CAPPED} and {@link END_UNREPORTED} — are
+ * therefore `end_reason` builders on the completed path, not new kill causes. A REFUSED report is not
+ * a kill cause either and not an ending: it is a turn the model gets back.
  */
 type RunKillReason = 'author' | 'lease' | 'deadline' | 'stop' | 'directive' | 'delete';
 
@@ -438,6 +553,10 @@ export class RunExecutor {
         let structuredPromptHash: string | undefined;
         /** The two turns the structured run was given — the retained thread's `request` (U-8). */
         let structuredRequest = '';
+        // What the agent loop returned, when this run took the single-agent path. Needed out here
+        // because C2-AD3 reads `endCause` from it to decide the row's `end_reason`: a Critic pass that
+        // ended by filing its verdict must not borrow the natural-end sentence.
+        let loopOutcome: LoopOutcome | undefined;
 
         try {
             // §2 decision 3: a no-tool run is the single-turn structured mode. It has no brief and
@@ -548,7 +667,7 @@ export class RunExecutor {
                     tally
                 );
             } else {
-                await runAgentLoop(
+                loopOutcome = await runAgentLoop(
                     {
                         chat: this.chat,
                         runtime: this.runtime,
@@ -583,6 +702,13 @@ export class RunExecutor {
             // A `toolMode: 'none'` run is the ONE exception, and it is not a loosening of S-4: the
             // validated structured answer IS its report (§2 decision 2 — the engine persists it),
             // so a successful structured run did produce the thing its job exists to produce.
+            //
+            // WHY THIS LINE NEEDS NO `ok` CHECK (it used to be where the refusal bug lived): both
+            // executors now push into `tally.reports` only when the tool ANSWERED — the hand-written
+            // loop at ./loop.ts and the engine's tool bridge at ./story-engine.ts each require
+            // `result.ok !== false`. So "the terminal report was refused" arrives here already as an
+            // empty `reports`, which is exactly what S-4's flag and the seat-owed decision want: a
+            // pass that filed nothing OWES its seat again, whatever the model believed it filed.
             const noOp = item.toolMode === 'none' ? false : tally.reports.length === 0;
 
             result = {
@@ -599,12 +725,39 @@ export class RunExecutor {
             };
             // A panel that disagreed says so on the row too (D-38, U-8d): the dissent's home is the
             // `selection_note` the panel appended it to, and the row is where the crew panel looks.
-            // A structured run states what it actually did: one validated turn, no tool calls.
+            // A structured run states what it actually did: one validated turn, no tool calls. A
+            // Critic pass that C2-AD3 ended early states THAT instead — checked ahead of the
+            // natural-end pair, because `endCause` is only ever present on a single-agent run's
+            // outcome (a D-38 panel answers with its own dissent sentence and its own member counts,
+            // and a `toolMode: 'none'` run never enters the loop at all).
+            //
+            // THE THREE ENDINGS, IN THE ORDER THE ROW READS THEM: `reported` (a successful terminal
+            // report), `capped` (the bound caught it, with a sentence of its own when the verdict was
+            // REFUSED), and ended-without-a-successful-report ({@link END_UNREPORTED}) for a run that
+            // closed on its own turn having filed nothing. The panel clause is appended to whichever
+            // base sentence applies, because a panel's members each ended under their own policy while
+            // the run as a whole ended naturally.
+            const endCause = loopOutcome?.endCause;
+            const panelClause = panelOutcome === undefined ? '' : panelMemberClause(panelOutcome);
             const endReason = structuredRun
                 ? END_STRUCTURED
-                : panelOutcome === undefined || panelOutcome.dissent === ''
-                  ? END_COMPLETED
-                  : `${END_COMPLETED}; panel disagreed — ${panelOutcome.dissent} (${panelOutcome.answered} of ${scope.agents} agents answered)`;
+                : endCause?.kind === 'reported'
+                  ? END_REPORTED(endCause)
+                  : endCause?.kind === 'capped'
+                    ? END_CAPPED(endCause)
+                    : panelOutcome === undefined
+                      ? noOp
+                          ? END_UNREPORTED
+                          : END_COMPLETED
+                      : panelOutcome.dissent !== ''
+                        ? `${END_COMPLETED}; panel disagreed — ${panelOutcome.dissent} (${String(
+                              panelOutcome.answered
+                          )} of ${String(scope.agents)} agents answered)${panelClause}`
+                        : panelClause === ''
+                          ? noOp
+                              ? END_UNREPORTED
+                              : END_COMPLETED
+                          : END_PANEL(panelOutcome, scope.agents, noOp);
 
             finalRow = {
                 state: 'torn_down',

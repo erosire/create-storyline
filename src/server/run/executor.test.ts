@@ -42,6 +42,7 @@ import {
     seedTemplate
 } from './mock';
 import { compileSamplePrompt, compileScreenPrompt } from './phase1-prompt';
+import { CRITIC_CONCLUDE_NUDGE, CRITIC_REVIEW_TURN_CAP } from './plugins/critic-termination';
 import { StoryThreadLog } from './thread-log';
 import type { WorkItem } from './types';
 
@@ -330,7 +331,10 @@ describe('RunExecutor — a dispatched run (S-1, S-3, S-4, S-6)', () => {
             state: 'torn_down',
             no_op: true,
             tokens: 60,
-            end_reason: END_COMPLETED
+            // THE SENTENCE MATCHES THE FLAG. `END_COMPLETED` claims the run reported, and this row says
+            // it did not, so the pair would contradict itself on the crew rail; the honest ending for a
+            // run that closed on its own tool-less turn having filed nothing is its own sentence.
+            end_reason: 'completed — the model returned no tool call and the run filed no report (S-4)'
         });
         // No report tool executed, so §9's `reporting` step never appears on the row; the one
         // empty patch is the lease beat while the single model request was in flight (S-4a).
@@ -1124,6 +1128,530 @@ const SAMPLE_ANSWER: SummarySample = {
     world_rules: 'No magic; the reservoir is engineering.',
     knowledge_used: ['K-aaa']
 };
+
+// ---------------------------------------------------------------------------
+// C2-AD3 — the Critic review pass ENDS at the report it files
+//
+// ./story-engine.test.ts proves the plugin's decisions at the engine; this block proves the thing the
+// Author actually reads — the RUN ROW (D-18, U-7). It runs the shipped path (`RunExecutor` → the
+// Story's `@underload/harness` engine, with `critic-termination` installed by `StoryHarness`) over the
+// package's mock provider and the W5 tool double, with the double UNMODIFIED: `submitVerdict` and
+// `raiseFinding` write REAL rows through the store, because C3's claim is that a filed report SURVIVES
+// the early end and only a committed write can show that.
+// ---------------------------------------------------------------------------
+
+/**
+ * A Critic review pass dispatched the way the sweep dispatches one: a `check_unit` Work Item whose role
+ * is `critic` — `run/brief.ts:837`'s `isCriticReview` shape — on its own template.
+ */
+function criticRig() {
+    const store = Store.empty();
+    const story = seedStory(store);
+
+    seedGoal(store, story.id);
+    seedDigest(store, story.id, 'Maren reaches the ridge; the map is wrong; the town is under water.');
+
+    const plotline = seedPlotline(store, story.id);
+    const chapter = seedChapter(store, story.id, { plotline_ref: plotline.id });
+
+    const template = seedTemplate(store, {
+        name: 'critic-review',
+        roles: [
+            {
+                name: 'critic',
+                kind: 'critic',
+                prompt: 'You judge the unit against the Seed and file what contradicts it (D-30).'
+            }
+        ],
+        selection_rules: 'Judge the unit against the Seed, then file the verdict.'
+    });
+
+    const runtime = new MockToolRuntime(store, story.id);
+    const item: WorkItem = {
+        id: 'work_review_1',
+        storyId: story.id,
+        kind: 'check_unit',
+        templateRef: template.name,
+        roleName: 'critic',
+        unit: { kind: 'chapter', ref: chapter.id }
+    };
+
+    return { store, story, chapter, template, runtime, item };
+}
+
+/** The terminal report the scripted Critic files — real §4.16 args, so the row it writes is real. */
+const VERDICT_ARGS = {
+    target_ref: 'chapter_0',
+    target_kind: 'chapter',
+    round: 1,
+    recommendation: 'fix',
+    criteria: [{ criterion: 'C-14', result: true, evidence: 'the steeple answer pays off the 1911 map' }],
+    why: 'the review is complete and this is its verdict (C2-AD3)'
+};
+
+/** One provider answer: prose plus the tool calls it asks for, at a usage the token maths can pin. */
+const turn = (content: string, name: string, args: Record<string, unknown>) => ({
+    message: msg({ content, toolCalls: calls([{ name, args }]) }),
+    usage: { input: 120, output: 30, cached_input: 0 }
+});
+
+describe('RunExecutor — the Critic review pass ends at its report (C2-AD3)', () => {
+    it('ends the run on the turn the verdict is filed, and names that turn on the row (C1, C3, D-11)', async () => {
+        const { store, runtime, item } = criticRig();
+        const brief = briefOf(store, item);
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            if (toolResults === 0) return turn('reading the chapter', 'readChapter', { chapter_id: 'chapter_0' });
+
+            if (toolResults === 1)
+                return {
+                    message: msg({
+                        content: 'the steeple answer pays off; the map line does not',
+                        toolCalls: calls([{ name: 'submitVerdict', args: VERDICT_ARGS }])
+                    }),
+                    // S-6: the tally is the sum of what the provider reported, so the row's total is
+                    // arithmetic over these two numbers rather than a figure the test agreed to.
+                    usage: { input: 90, output: 40, cached_input: 0 }
+                };
+
+            // Scripted so it WOULD answer if it were asked. C1 is that it is never asked.
+            return {
+                message: msg({ content: 'never asked — the pass ended at its report' }),
+                usage: { input: 60, output: 80, cached_input: 0 }
+            };
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // C1, measured where the waste was: TWO provider requests, and the third scripted answer is
+        // still unconsumed. The report tool ran (the store says so below); the turn after it did not.
+        expect(requests).toHaveLength(2);
+
+        // The terminated run is a GENUINE result: `completed`, not `failed`, not `abandoned`, and not
+        // S-4's no-op — it filed the report its job exists to file.
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            no_op: false,
+            tokens: 280, // 150 (turn 1) + 130 (turn 2) — the two scripted usages
+            toolsCalled: ['readChapter', 'submitVerdict']
+        });
+
+        // D-11: the row, exactly. `torn_down` with a sentence of its own naming the tool and the model
+        // turn that ended the pass — NOT the natural-end sentence (the model never returned a tool-less
+        // turn) and NOT an abandon (no cord was pulled).
+        expect(rowOf(store, 'run_0')).toEqual({
+            id: 'run_0',
+            story_id: 'story_0',
+            work_item_ref: 'work_review_1',
+            template_ref: 'critic-review',
+            role: 'critic',
+            kind: 'work',
+            session_ref: 'sess_run_0',
+            state: 'torn_down',
+            tokens: 280,
+            no_op: false,
+            end_reason: 'completed — the Critic filed its report (submitVerdict) at model turn 2 and the pass ended there (C2-AD3)',
+            delegated: [],
+            brief_hash: brief.hash
+        });
+
+        // The journal tells the same story: `spawning` → `working` → `reporting` (the verdict commit was
+        // the next step, §9) → `torn_down`, with one lease beat per request and one after each tool
+        // call — and no beat for a third request, because there was no third request (S-4a, E-0).
+        expect(stateSteps(store)).toEqual([
+            'create:spawning',
+            'update:working',
+            'update:', // request beat, turn 1
+            'update:', // heartbeat after readChapter
+            'update:', // request beat, turn 2
+            'update:', // heartbeat after submitVerdict
+            'update:reporting',
+            'update:torn_down' // S-3's unconditional close
+        ]);
+        // P11: the close names WHY, in the row's own words, and it is the conclusion, not a kill.
+        expect(lastRunEvent(store).attribution).toEqual({
+            run_ref: 'run_0',
+            why: 'teardown — completed — the Critic filed its report (submitVerdict) at model turn 2 and the pass ended there (C2-AD3) (S-3)'
+        });
+
+        // C3 — the report survives the stop. The verdict row is in the book, under the run that filed
+        // it, which is the whole product of the pass.
+        expect(
+            store.verdicts.list().map((verdict) => ({
+                story_id: verdict.story_id,
+                target_ref: verdict.target_ref,
+                run_ref: verdict.run_ref,
+                recommendation: verdict.recommendation,
+                hard_pass: verdict.hard_pass
+            }))
+        ).toEqual([
+            {
+                story_id: 'story_0',
+                target_ref: 'chapter_0',
+                run_ref: 'run_0',
+                recommendation: 'fix',
+                // C-14 is a hard criterion (shared/criteria.ts:190-195) and it passed, so the pass is a
+                // hard pass — the value the sign-off gate reads.
+                hard_pass: true
+            }
+        ]);
+    });
+
+    it('caps a Critic that keeps reading after its finding — one nudge, the documented bound, and the capped sentence (C4, C5)', async () => {
+        const { store, runtime, item } = criticRig();
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            // A PARTIAL report: S-4 counts it (so the row is not a no-op), and C2-AD3 does NOT end the
+            // pass on it — a Critic that filed one defect has not answered the job it was sent for.
+            if (toolResults === 0)
+                return turn(
+                    'one defect, filed',
+                    'raiseFinding',
+                    {
+                        criterion_ref: 'C-14',
+                        target_ref: 'chapter_0',
+                        detail: 'the ridge scene contradicts the map line',
+                        evidence: '"the map was right" — the ridge scene, line 4',
+                        cost: 'major',
+                        why: 'a defect the Writer has to answer (C2-AD3)'
+                    }
+                );
+
+            // The cap is the contract under test, so a pass that asks BEYOND it is a failure the test
+            // says out loud rather than a turn the mock silently invents.
+            if (toolResults >= CRITIC_REVIEW_TURN_CAP)
+                throw new Error(
+                    `the pass asked for model turn ${String(toolResults + 1)} — C4 says the cap (${String(
+                        CRITIC_REVIEW_TURN_CAP
+                    )}) must have ended it at ${String(CRITIC_REVIEW_TURN_CAP)}`
+                );
+
+            return turn(`reading again (turn ${String(toolResults + 1)})`, 'readChapter', { chapter_id: 'chapter_0' });
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // Bounded, at exactly the documented number of model turns, and still a COMPLETED result.
+        expect(requests).toHaveLength(CRITIC_REVIEW_TURN_CAP);
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            // It filed a finding, so S-4's no-op flag is off; what is missing is the verdict, and the
+            // row says THAT rather than pretending the pass concluded.
+            no_op: false,
+            tokens: CRITIC_REVIEW_TURN_CAP * 150,
+            toolsCalled: [
+                'raiseFinding',
+                ...Array.from({ length: CRITIC_REVIEW_TURN_CAP - 1 }, () => 'readChapter')
+            ]
+        });
+
+        const row = store.runs.get('run_0')!;
+
+        expect(row.state).toBe('torn_down');
+        expect(row.end_reason).toBe(
+            `completed — the Critic reached its ${String(CRITIC_REVIEW_TURN_CAP)}-model-turn review cap without filing its verdict; the ${String(
+                CRITIC_REVIEW_TURN_CAP
+            )} turns it ran and the findings it filed stand (C2-AD3)`
+        );
+
+        // C5's nudge, at the level of what the model was SHOWN: exactly one, in the request that
+        // follows the report, and as the last line of that request (mid-transcript it would read as one
+        // of its own tool results). The engine applies a `turn.before` transcript override to the
+        // REQUEST only, so a 24-turn pass carries the instruction once, never on every turn.
+        const nudged = requests.filter((request) => request.messages.some((message) => message.content === CRITIC_CONCLUDE_NUDGE));
+
+        expect(nudged).toHaveLength(1);
+        expect(requests.indexOf(nudged[0])).toBe(1);
+        expect(nudged[0]!.messages[nudged[0]!.messages.length - 1]).toEqual({ role: 'user', content: CRITIC_CONCLUDE_NUDGE });
+
+        // What the pass DID file stands, even though the cap ended it — and the verdict it never filed
+        // is honestly absent, rather than defaulted to something agreeable.
+        expect(
+            store.findings.list().map((finding) => ({ criterion_ref: finding.criterion_ref, target_ref: finding.target_ref }))
+        ).toEqual([{ criterion_ref: 'C-14', target_ref: 'chapter_0' }]);
+        expect(store.verdicts.list()).toEqual([]);
+    });
+
+    it('leaves every other role alone: a Writer that files `submitVerdict` still runs to its natural end (C2)', async () => {
+        const { store, runtime, item } = rig();
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            // The catalogue is role-blind (T-6a), so a Writer CAN file a verdict. C2-AD3 must not read
+            // that as a conclusion: the pass keeps its own loop and its own end sentence.
+            if (toolResults === 0) return turn('verdict filed', 'submitVerdict', VERDICT_ARGS);
+            if (toolResults === 1) return turn('still working', 'readChapter', { chapter_id: 'chapter_0' });
+
+            return {
+                message: msg({ content: 'the chapter carries the promise through to the cost' }),
+                usage: { input: 60, output: 80, cached_input: 0 }
+            };
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // Three requests — the report did not end the run — and the original `end_reason`, untouched.
+        expect(requests).toHaveLength(3);
+        expect(result.ended).toBe('completed');
+        expect(rowOf(store, 'run_0').end_reason).toBe(END_COMPLETED);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// C2-AD3, the REFUSAL rule on the ENGINE path (T-1a)
+//
+// A `submitVerdict` call is a REQUEST to file; when the tool layer answers `{ ok: false }` the verdict
+// is not in the book, and the shipped policy read the CALL as the filing. The pass ended there, the row
+// claimed "the Critic filed its report", `no_op` was false, and the seat was paid for a review that
+// produced no verdict at all. These three tests drive the pair the fallback loop pins in
+// ./loop.test.ts through the real harness, so the two paths cannot drift: a refusal must cost the model
+// nothing but its next turn, and only a DELIVERED report may end the pass.
+// ---------------------------------------------------------------------------
+
+/** T-1a's refusal shape, as the tool layer answers it: `ok: false`, the rule id, and the fix. */
+const VERDICT_REFUSAL = {
+    ok: false,
+    refused: 'P6',
+    error: 'a failing criterion line with no evidence is not a verdict (P6) — quote the draft',
+    message: 'the verdict was not filed'
+};
+
+/** The tool messages of one recorded request, parsed — a refusal has to be READ, not sniffed for a word. */
+const verdictToolResults = (request: ChatRequest): Record<string, unknown>[] =>
+    request.messages
+        .filter((message) => message.role === 'tool')
+        .map((message) => JSON.parse(String(message.content)) as Record<string, unknown>);
+
+describe('RunExecutor — a REFUSED terminal report does not end the Critic pass (C2-AD3, T-1a)', () => {
+    it('gives the pass its correction turn, files the verdict it fixes, and reports honestly (N1, N3)', async () => {
+        const { store, story, item } = criticRig();
+        // The refusal is a TOOL answer, not a stub of the run layer: the first call is turned away and
+        // every later call goes to a second, un-overridden double, so the verdict row the fix files is
+        // as real as the one the C1 test above pins.
+        const filing = new MockToolRuntime(store, story.id);
+        let verdictCalls = 0;
+        const runtime = new MockToolRuntime(store, story.id, {
+            submitVerdict: (context, args) =>
+                verdictCalls++ === 0 ? VERDICT_REFUSAL : filing.execute(context, 'submitVerdict', args)
+        });
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            // Two attempts, both asking to file. The pass may only stop once the SECOND one lands.
+            if (toolResults < 2) return turn('the steeple answer pays off; the map line does not', 'submitVerdict', VERDICT_ARGS);
+
+            // Scripted so it WOULD answer if it were asked. C1 still holds: no turn after the filing.
+            return {
+                message: msg({ content: 'never asked — the pass ended at its report' }),
+                usage: { input: 60, output: 80, cached_input: 0 }
+            };
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // THE REFUSAL WAS THE WHOLE REASON FOR THE SECOND REQUEST: two asks, both filed by the model,
+        // and the third scripted answer still unconsumed.
+        expect(requests).toHaveLength(2);
+        // THE REFUSAL REACHED THE MODEL, whole, as its own tool message on the request it had to answer
+        // (T-4 serialises the result object, and the rule id in it is the instruction).
+        expect(verdictToolResults(requests[1]!)).toEqual([VERDICT_REFUSAL]);
+
+        // THE SEAT IS PAID, because this time the verdict really is in the book.
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            no_op: false,
+            tokens: 300, // 150 + 150 — the two scripted `turn()` usages
+            toolsCalled: ['submitVerdict', 'submitVerdict']
+        });
+        // The row says the same thing the book says: the report was FILED, at the turn it was filed.
+        expect(rowOf(store, 'run_0').end_reason).toBe(
+            'completed — the Critic filed its report (submitVerdict) at model turn 2 and the pass ended there (C2-AD3)'
+        );
+        // C3's product survives: ONE verdict row, under the run that filed it. Before the fix this list
+        // was empty while the row claimed the report was filed.
+        expect(
+            store.verdicts.list().map((verdict) => ({
+                story_id: verdict.story_id,
+                target_ref: verdict.target_ref,
+                run_ref: verdict.run_ref,
+                recommendation: verdict.recommendation
+            }))
+        ).toEqual([{ story_id: 'story_0', target_ref: 'chapter_0', run_ref: 'run_0', recommendation: 'fix' }]);
+    });
+
+    it('runs the bound out on a critic that is refused every turn, and calls it capped-with-a-refusal (N3, N5)', async () => {
+        const { store, story, item } = criticRig();
+        const runtime = new MockToolRuntime(store, story.id, { submitVerdict: () => VERDICT_REFUSAL });
+        const { client, requests } = record((): ChatResponse => turn('still trying to file', 'submitVerdict', VERDICT_ARGS));
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // THE PASS KEPT EVERY TURN THE BOUND ALLOWS: the shipped code ended it after ONE refused call,
+        // so the model never got the correction turn the rule exists to buy.
+        expect(requests).toHaveLength(CRITIC_REVIEW_TURN_CAP);
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            // THE BOOKKEEPING CLAIM: nothing was filed, so S-4's flag is ON and the seat is owed again.
+            no_op: true,
+            tokens: CRITIC_REVIEW_TURN_CAP * 150,
+            toolsCalled: Array.from({ length: CRITIC_REVIEW_TURN_CAP }, () => 'submitVerdict')
+        });
+
+        const row = store.runs.get('run_0')!;
+
+        expect(row.state).toBe('torn_down');
+        // A THIRD honest ending, and not the C4 sentence: this critic DID try to conclude, and the tool
+        // layer turned it away. The Author tunes those two failures differently, so the row tells them
+        // apart instead of reading as "it would not answer".
+        expect(row.end_reason).toBe(
+            `completed — the Critic reached its ${String(CRITIC_REVIEW_TURN_CAP)}-model-turn review cap with its submitVerdict report refused and nothing filed; the ${String(
+                CRITIC_REVIEW_TURN_CAP
+            )} turns it ran are all this pass produced (C2-AD3)`
+        );
+        // Nothing was filed, and nothing is invented: the verdict the pass never got in is absent.
+        expect(store.verdicts.list()).toEqual([]);
+
+        // THE REFUSAL WAS ON EVERY REQUEST the model answered, whole, and it is the only instruction it
+        // got: the conclude nudge is for a pass that REPORTED, and a refused report is not one. Pushing
+        // the nudge on top of a refusal would put two instructions in the same turn.
+        expect(verdictToolResults(requests[CRITIC_REVIEW_TURN_CAP - 1]!)).toEqual(
+            Array.from({ length: CRITIC_REVIEW_TURN_CAP - 1 }, () => VERDICT_REFUSAL)
+        );
+        expect(requests.filter((request) => request.messages.some((message) => message.content === CRITIC_CONCLUDE_NUDGE))).toEqual([]);
+    });
+
+    it('carries a critic panel members report status onto the run row (MAJOR 4)', async () => {
+        const { store, story, chapter } = criticRig();
+        // D-38 with CRITIC members: the panel replaces the run loop, so the run never has an `endCause`
+        // of its own. Before the fix the row read "the model returned no tool call and the run
+        // reported" for a panel whose members had each ended under C2-AD3.
+        const template = seedTemplate(store, {
+            name: 'critic-panel',
+            roles: [
+                {
+                    name: 'critic',
+                    kind: 'critic',
+                    prompt: 'You judge the unit against the Seed and file what contradicts it (D-30).',
+                    agents: 2,
+                    aggregate: 'majority'
+                }
+            ],
+            selection_rules: 'Judge the unit against the Seed, then file the verdict.'
+        });
+        const item: WorkItem = {
+            id: 'work_review_2',
+            storyId: story.id,
+            kind: 'check_unit',
+            templateRef: template.name,
+            roleName: 'critic',
+            unit: { kind: 'chapter', ref: chapter.id }
+        };
+        // Both members propose the SAME terminal report; D-38 intercepts it, so each member ends on the
+        // proposal it was told was recorded (a delivery), and the panel executes one winning set.
+        const { client } = record((): ChatResponse => turn('the verdict I would file', 'submitVerdict', VERDICT_ARGS));
+
+        const result = await new RunExecutor({ store, runtime: new MockToolRuntime(store, story.id), chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // One request per member, and no aggregator call: `majority` is arithmetic (G-3).
+        expect(client.callCount).toBe(2);
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            // The winning set executed, so the run reported — and ONE verdict row is its product.
+            no_op: false,
+            tokens: 300,
+            toolsCalled: ['submitVerdict']
+        });
+        expect(
+            store.verdicts.list().map((verdict) => ({ target_ref: verdict.target_ref, run_ref: verdict.run_ref }))
+        ).toEqual([{ target_ref: 'chapter_0', run_ref: 'run_0' }]);
+
+        // MAJOR 4's claim, on the row the crew panel reads: the members endings are the runs, whatever
+        // each member ended as. `majority` with no split keeps D-38 dissent clause away.
+        expect(rowOf(store, 'run_0').end_reason).toBe(
+            'completed — the panel answered once (2 of 2 agents answered) and the run reported; its members — 2 filed their reports (C2-AD3)'
+        );
+    });
+});
+
+    it('names a capped critic-panel member on the row beside one that filed (MAJOR 4)', async () => {
+        const { store, story, chapter } = criticRig();
+        const template = seedTemplate(store, {
+            name: 'critic-panel-split',
+            roles: [
+                {
+                    name: 'critic',
+                    kind: 'critic',
+                    prompt: 'You judge the unit against the Seed and file what contradicts it (D-30).',
+                    agents: 2,
+                    aggregate: 'majority'
+                }
+            ],
+            selection_rules: 'Judge the unit against the Seed, then file the verdict.'
+        });
+        const item: WorkItem = {
+            id: 'work_review_3',
+            storyId: story.id,
+            kind: 'check_unit',
+            templateRef: template.name,
+            roleName: 'critic',
+            unit: { kind: 'chapter', ref: chapter.id }
+        };
+        // A SPLIT panel: agent 1 answers with its terminal report, agent 2 keeps reading and is ended by
+        // its own review cap. Both endings are facts about the run, and D-38's aggregation says nothing
+        // about either one — so the row has to carry them, not the natural-end sentence it used to.
+        const { client } = record((request: ChatRequest): ChatResponse => {
+            const system = request.messages[0].content;
+
+            if (/You are agent 1 of 2/.test(system)) return turn('agent 1 files its verdict', 'submitVerdict', VERDICT_ARGS);
+            if (/You are agent 2 of 2/.test(system)) return turn('agent 2 reads again', 'readChapter', { chapter_id: 'chapter_0' });
+
+            throw new Error('a critic panel answering `majority` must not call an aggregator (G-3)');
+        });
+
+        const result = await new RunExecutor({
+            store,
+            runtime: new MockToolRuntime(store, story.id),
+            chat: client,
+            defaultModel: 'gpt-5'
+        }).execute(item);
+
+        // 1 turn for the member that answered, the whole bound for the one that did not (S-7: the panel's
+        // members are this run's agents, and their turns and tokens are the run's).
+        expect(client.callCount).toBe(1 + CRITIC_REVIEW_TURN_CAP);
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            // The one member that proposed is the winning set, so the run DID report (D-38).
+            no_op: false,
+            tokens: (1 + CRITIC_REVIEW_TURN_CAP) * 150,
+            toolsCalled: ['submitVerdict']
+        });
+        expect(
+            store.verdicts.list().map((verdict) => ({ target_ref: verdict.target_ref, run_ref: verdict.run_ref }))
+        ).toEqual([{ target_ref: 'chapter_0', run_ref: 'run_0' }]);
+
+        const row = rowOf(store, 'run_0');
+
+        // THE COUNTS, IN THE ROW: one member filed, one was capped. This is the claim MAJOR 4 asks for —
+        // a critic panel's members endings reach the run row instead of being flattened into "the model
+        // returned no tool call", and the cap is visible where the crew panel looks. It is the PANEL
+        // sentence rather than D-38's dissent sentence because a member that proposed nothing has no
+        // position to disagree WITH; its ending is a fact about the run, which is exactly what the
+        // members clause carries.
+        expect(row.end_reason).toBe(
+            'completed — the panel answered once (2 of 2 agents answered) and the run reported; its members — 1 filed its report, 1 reached its review-turn cap without a verdict (C2-AD3)'
+        );
+        // And the row still claims neither a fault nor a kill (D-18's reader must be able to trust it).
+        expect(row.state).toBe('torn_down');
+        expect(row.no_op).toBe(false);
+    });
 
 describe('RunExecutor — the structured no-tool run (§4.2, §2 decision 3)', () => {
     it('sends ONE tool-less request with the schema contract and the sample seed, and returns the parsed answer', async () => {

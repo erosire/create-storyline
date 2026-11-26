@@ -299,7 +299,49 @@ export function parseGroupReviewAnswer(
             };
         }
 
-        checked.push({ ...issue, group_refs: [...new Set(refs)] });
+        // R3/D-15 — a `group_quotes` entry is evidence FOR a group the issue already names. A
+        // quote for an unnamed group, or for an id the book does not have, is refused whole:
+        // keeping it would put evidence in the review that no named scope can be closed on.
+        const groupQuotes = Array.isArray(issue.group_quotes) ? issue.group_quotes : [];
+        const named = new Set(refs);
+        const badQuote =
+            groupQuotes.find((entry) => {
+                if (typeof entry?.group_ref !== 'string' || !owned.has(entry.group_ref) || !named.has(entry.group_ref)) {
+                    return true;
+                }
+
+                return typeof entry?.quote !== 'string' || entry.quote.trim().length === 0;
+            }) ?? undefined;
+
+        if (badQuote !== undefined) {
+            return {
+                ok: false,
+                refusal:
+                    'a `group_quotes` entry must quote a group named in the same issue\'s `group_refs`, using an id this Story has and a non-empty quote (R3, D-15)'
+            };
+        }
+
+        // R3/D-15 — EVERY named group has to be evidenced. The primary `quote` is the group the
+        // prompt tells the Critic to put FIRST in `group_refs`; every other ref needs a
+        // `group_quotes` entry. Without this check the old impossibility ("name three, quote one")
+        // would still pass the schema and the prompt's "a group named without a quote is refused"
+        // would be a promise the engine does not keep.
+        const primaryGroup = refs[0];
+        const quotedGroups = new Set([primaryGroup, ...groupQuotes.map((entry) => entry.group_ref)]);
+        const unquoted = refs.filter((ref) => !quotedGroups.has(ref));
+
+        if (unquoted.length > 0) {
+            return {
+                ok: false,
+                refusal: `an issue naming ${refs.length} groups has to quote every one of them; ${unquoted.join(', ')} has no quote — put the primary quote's group first in \`group_refs\` and add a \`group_quotes\` entry for every other group (R3, D-15)`
+            };
+        }
+
+        checked.push({
+            ...issue,
+            group_refs: [...new Set(refs)],
+            ...(groupQuotes.length === 0 ? {} : { group_quotes: groupQuotes.map((entry) => ({ ...entry })) })
+        });
     }
 
     return {

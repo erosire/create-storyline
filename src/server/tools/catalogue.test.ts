@@ -245,7 +245,10 @@ const SPEC_TOOL_CONTRACT: Record<
     },
     delegate: { args: ['role', 'task'], required: ['role', 'task'], writes: 'runs', level: 'recommend', allow: 'yyyy' },
     submitVerdict: {
-        args: ['target_ref', 'criteria_passed', 'recommendation', 'why'],
+        // W3b (2026-11-26): the terminal report adds two OPTIONAL args — `verdicts` (further targets, so
+        // §6.2a/D-21's per-target reports stop being two calls) and `findings` (every claim the reviewer
+        // is certain of). The three §8.3 names and the required set are unchanged.
+        args: ['target_ref', 'criteria_passed', 'recommendation', 'verdicts', 'findings', 'why'],
         required: ['target_ref', 'criteria_passed', 'recommendation'],
         writes: 'verdicts',
         level: 'write',
@@ -779,7 +782,7 @@ describe('the §8 catalogue', () => {
         expect(result.data).toEqual({
             name: 'raiseFinding',
             description:
-                'File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story\'s logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST, in both directions (D-33c): while any issue on this Story is unresolved — only `unconfirmed`, `confirmed` and `approved` hold one open, and an issue the Editor marks `disputed` releases it exactly as `fixed` or `discarded` does — a `kind: proposal` call is refused with the count of open issues, and an `issue` is refused if THIS pass already filed a proposal, because an issue and a proposal never share a review pass: end the pass and file the issue in your next review. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).',
+                "File a claim: the artifact, the criterion, a title, the evidence, and a cost. Say WHICH of the two it is with `kind` (default `issue`). An `issue` claims a DEFECT — it breaks the story's logic, contradicts a commitment, or rests on a claim the text cannot support — and its proof is a quotation: name the commitment the Seed or the artifact states and show the artifact breaking it. A claim whose whole case is something the Seed never said is not an issue, because the Writer may invent any detail the Seed does not rule out. A `proposal` is an IMPROVEMENT the Seed never had to promise — a word change, a new element, a twist linked earlier: title it as a proposal, quote the passage it would improve, and say what to change and why it is worth the pass, because the Editor weighs it on merit, never on whether the Seed promised it. The two cost ladders do not overlap at the ends, and a mis-marked row is refused rather than re-triaged: `critical` is refused for a proposal (a suggestion is not a contradiction the text cannot live with), and `taste` is refused for an issue (a preference is a proposal, not a defect). ISSUES ARE WORKED FIRST (D-33c): while any issue on this Story is unresolved — only `unconfirmed`, `confirmed` and `approved` hold one open, and an issue the Editor marks `disputed` releases it exactly as `fixed` or `discarded` does — a `kind: proposal` call is DISMISSED FOR THIS PASS because issues are still open: nothing is filed, the answer names the open issues as the reason, and the dismissal settles the claim there — there is no retry to spend and nothing carried to a later pass, so do not send it again. An `issue` is never held back, whatever else is open. File an issue whenever you have one, and if you have no issue and no new proposal, file nothing — an empty pass is a valid, good outcome. Name related_refs — the other records the same claim touches — and it propagates across chapters instead of being re-raised unit by unit (L-11a). A reader or critic finding starts unconfirmed until an Editor confirms it (D-33); the same claim again bumps seen_count instead of opening a row (D-16). On a book written group by group a Summary finding also names its scope in `group_refs`, copied from the `phrase_groups` pairs the brief prints, and it closes once every group it names has been revised (R3).",
             required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
             fields: [
                 {
@@ -887,6 +890,89 @@ describe('the §8 catalogue', () => {
             ],
             may_call_as_this_role: true,
             rule_ids: ['D-16', 'D-33', 'D-34', 'D-35']
+        });
+    });
+
+    it('describes submitVerdict as the TERMINAL report: one call, both targets, every certain finding (W3b, B4)', async () => {
+        const result = await callAs(store, 'critic', 'describeTool', { name: 'submitVerdict' });
+
+        expect(result.ok).toBe(true);
+        const info = result.data as Record<string, any>;
+
+        // §8's three names and the required set did not move — the terminal call is ADDITIVE, so a caller
+        // written against §8.3 keeps working. What changed is the PROMISE the description makes, and it is
+        // pinned byte for byte because prompt writers are describing this same call in parallel.
+        expect({ required: info.required, fields: info.fields.map((field: { name: string }) => field.name) }).toEqual({
+            required: ['target_ref', 'criteria_passed', 'recommendation'],
+            fields: ['target_ref', 'criteria_passed', 'recommendation', 'verdicts', 'findings', 'why']
+        });
+        expect(info.description).toBe(
+            'THE ONE CALL THAT ENDS A REVIEW PASS. File it once, with everything you are certain of: your verdict ' +
+                'for each target you judged (one line per criterion, pass/fail, citable evidence) and every finding that ' +
+                'goes with it. Do NOT file findings in a separate raiseFinding call and report afterwards — a critic ' +
+                'reads, decides, and answers once. A job that asks for the verdict about both a unit and the draft it ' +
+                'came from names BOTH targets here (`target_ref` plus `verdicts`); it never files the same report twice. ' +
+                'Claims you are certain of go in `findings`. This writes verdicts and findings and NOTHING else: it ' +
+                'changes no story state, and the loop advances a chapter on it (P6, L-10). A failing line with no ' +
+                'evidence is refused (D-15), and a `kind: proposal` finding filed while the Story still has an unresolved ' +
+                'issue is dismissed on its own (D-33c) — the other findings still file and the verdict still records.'
+        );
+        // The two additive fields, byte-exact including their descriptions: `describeTool` is where a fresh
+        // run learns what to put in them, so the wording IS the contract (T-13).
+        expect(
+            info.fields.filter((field: { name: string }) => field.name === 'verdicts' || field.name === 'findings')
+        ).toEqual([
+            {
+                name: 'verdicts',
+                type: 'array',
+                required: false,
+                description:
+                    'FURTHER targets judged in this same call — one entry per target, and each files its own verdict row beside the primary one. Use it when the job asks for the verdict about both a unit and a draft (§6.2a/D-21), or about several artifacts. `criteria_passed` is required per entry, because each target is judged on its own lines; an entry that omits `recommendation` carries the primary one, since the two reports about one text are meant to reach the same answer.'
+            },
+            {
+                name: 'findings',
+                type: 'array',
+                required: false,
+                description:
+                    'Every claim you are CERTAIN of, filed with this verdict instead of in a separate raiseFinding call. Each entry is answered on its own and reported back in the result: `filed` opened a row, `repeat` counts a claim an open row already holds (D-16), and `dismissed` ends a `kind: proposal` this report could not carry — because an issue was already open on this Story, or because this same report files an issue beside it, whichever end of the array each sits at (D-33c): the proposal writes no row, counts no sighting, and arms no work, so name the improvement in one line and let the defects have the round. A refusal anywhere in this call files NOTHING, so fix the entry and send the whole report again.'
+            }
+        ]);
+        // `describeTool` renders top-level fields only (T-6c), so the ITEM shape a model actually fills is
+        // pinned off the schema itself: the nested target needs its OWN criterion lines, and a finding entry
+        // is exactly a `raiseFinding` call — same names, same required set, so the two call shapes cannot
+        // drift into two dialects of the same claim.
+        const properties = TOOL_BY_NAME.get('submitVerdict')!.inputSchema.properties as Record<string, any>;
+
+        expect({
+            verdicts_required: properties.verdicts.items.required,
+            verdicts_fields: Object.keys(properties.verdicts.items.properties)
+        }).toEqual({
+            verdicts_required: ['target_ref', 'criteria_passed'],
+            verdicts_fields: ['target_ref', 'criteria_passed', 'recommendation', 'why']
+        });
+        expect(Object.keys(properties.verdicts.items.properties.criteria_passed.items.properties)).toEqual([
+            'criterion',
+            'result',
+            'evidence',
+            'finding_ref'
+        ]);
+        expect({
+            findings_required: properties.findings.items.required,
+            findings_fields: Object.keys(properties.findings.items.properties)
+        }).toEqual({
+            findings_required: ['target_ref', 'criterion_ref', 'title', 'evidence', 'cost'],
+            findings_fields: [
+                'target_ref',
+                'criterion_ref',
+                'title',
+                'detail',
+                'evidence',
+                'cost',
+                'kind',
+                'related_refs',
+                'group_refs',
+                'why'
+            ]
         });
     });
 

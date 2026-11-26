@@ -370,8 +370,9 @@ describe('the whole story: a disputed claim, a repaired one, and a fix that land
         await rig.step();
 
         // THE CRITIC FILES THE PROPOSAL IN-RUN. Under the four-state holding set this row does not exist:
-        // `tools/reader.ts:raiseFinding` refuses a `kind: proposal` call over an unresolved issue, and a
-        // `disputed` issue counted as unresolved, so the pass filed nothing (measured: `Temp/coding/
+        // `tools/reader.ts:raiseFinding` refused a `kind: proposal` call over an unresolved issue (it
+        // DISMISSES one now), and a `disputed` issue counted as unresolved, so the pass filed nothing
+        // (measured: `Temp/coding/
         // probe-f5c.ts` under the old set has no proposal row at any step).
         expect(findingRows(rig)).toEqual([
             [repaired.id, 'issue', 'fixed', ['ending']],

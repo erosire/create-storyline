@@ -174,7 +174,7 @@ import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 // dial in one ordered rule (D-66). The vector hash is what makes a review pass re-arm on an install
 // rather than on a clock.
 import {
-    allReviewSeatsRun,
+    allReviewSeatsReported,
     findingGroupsStillOwed,
     GROUP_DRAFT_ITEM_PREFIX,
     // HARDENING: the write allowance, the target set and the seat read now live in
@@ -195,12 +195,21 @@ import {
     // so a refusal re-arms the seat without letting a broken provider buy a Reader forever.
     cleanSelectionOf,
     groupCheckSeatKey,
+    // MAJOR 3 (2026-11-26) — the DEEP seat's DONE predicate (it produced a report, or the family spent its
+    // retry cap). Both deep legs arm on it, `exclusion.ts:groupPipelineOwed` counts owed deep passes with
+    // it, and `api/projections.ts` counts the rail's deep numerator with its first clause, so the queue,
+    // the drain, the sign-off and the Author's rail all answer "is this deep seat reviewed?" from one read.
+    groupCheckSeatSettled,
     // PHRASE ② (T-W2): the batch's CLAIM REF is the phrase row id (`exclusion.ts:groupDraftClaimRef`,
     // seam S8), so the Summary's batch and the chapter batch on one book never spend each other's
     // attempts; and the review seat key is the SAME builder phase ① uses, because the vector hash — not
     // the family — is what keeps the two phrases' seats apart.
     groupDraftClaimRef,
     groupReviewSeatKey,
+    // W5 — the seat's DONE predicate (answered, or the family spent its retry cap). Both review legs arm
+    // on it and `exclusion.ts:groupPipelineOwed` counts owed passes with it, so the queue and the drain
+    // cannot disagree about a seat a dead provider left behind.
+    groupReviewSeatSettled,
     // The PHRASE-level dial (`story.plotlines_mode`). `isGroupManagedStory` above stays the Summary's
     // predicate for the classic pins; this is the form the phase-② lane asks.
     isPhraseGroupManaged,
@@ -1180,12 +1189,30 @@ function phase1GroupCandidates(
 
     if (hasText) {
         for (let pass = 1; pass <= critics; pass += 1) {
-            const key = `wi_review_groups_${vectorHash}_${pass}`;
+            // Built by `phrase/exclusion.ts:groupReviewSeatKey` — the SAME builder phase ② uses
+            // (`work.ts` leg 3) and the projections count closed runs under, so one `(vector, pass)` pair
+            // can never be spelled two ways. W5 kept this key exactly as it was while letting a dead seat
+            // run again: the seat IS the pair, and a retry is another RUN ROW under it, not a new seat.
+            const key = groupReviewSeatKey(vectorHash, pass);
 
-            // One run per seat per vector: `runsForItem` counts CLOSED runs, so a seat that has
-            // already reported on this state is not bought again, and the live seat is caught by
-            // `candidate()`'s own claim check.
-            if (runsForItem(store, key).length > 0) continue;
+            // W5 — THE GATE IS THE ANSWER, NOT THE RUN ROW. The old test was `runsForItem(store, key)
+            // .length > 0`: ANY row paid the seat, including the ones a killed pass leaves behind.
+            // Measured on the Bird Brain store, 3 of its 16 `wi_review_groups_*` runs ended `abandoned`
+            // with `tokens: 0` at `run/executor.ts:STRUCTURED_REQUEST_MAX_MS` (600_000ms), and the book
+            // holds 13 `sample_reviews` rows for those 16 seats — so every one of those three passes
+            // spent half an hour of wall clock, wrote NOTHING (`engine.ts:1756` writes the row only
+            // behind `groupReview.ok`), paid its seat anyway, and the vector kept 2 of its 5 Critic reads
+            // until a Writer happened to move the group vector. `groupReviewSeatSettled` is now the gate:
+            // an `abandoned`/`failed` seat re-arms (`records.ts:isReportedRun` refuses to call a closed
+            //-but-silent run an answer), and `groupReviewAttemptCap` = critics + SAMPLING_RETRY_ALLOWANCE
+            // is the ceiling that stops a provider that never answers from buying a Critic every sweep —
+            // the same budget `records.ts:screeningCapOf` gives a draft's screening family.
+            //
+            // No duplicate is minted for one seat on one sweep: the loop below visits each `pass` once, so
+            // the sweep builds at most ONE candidate per key, and `candidate()`'s own `isClaimed` guard
+            // (this file, `candidate`) drops the key while a run of it is still live. A retry therefore
+            // costs at most the same fan-out the first pass cost — never more.
+            if (groupReviewSeatSettled(store, vectorHash, critics, pass)) continue;
 
             const built = candidate(
                 store,
@@ -1274,11 +1301,11 @@ function phase1GroupCandidates(
                     // (`phrase/section-scores.ts` refuses an incomplete run), and consistency with the
                     // OTHER sections is one of the three things each section is judged on.
                     groupRefs: allRefs,
-                    // The reader's own consistency angle: it is the built-in whose role prompt is about
-                    // the contract chain holding across artifacts, which is what a cross-section score is.
-                    // The scoring rules themselves are engine-owned text (`SECTION_SCORE_INSTRUCTION`), so
-                    // an Author rewriting this template cannot lose the contract.
-                    templateRef: 'reader-consistency',
+                    // A DEDICATED score-only voice: `reader-consistency` is the tool-carrying review
+                    // prompt (verdict, findings, tasks), while this seat has no tools and may file
+                    // nothing (P6/D-65). The compiler always resolves `SCORE_TEMPLATE_SLUG`, so this
+                    // ref is the visible crew label; the scoring rules stay engine-owned.
+                    templateRef: 'reader-score',
                     roleName: 'reader'
                 }
             );
@@ -1387,14 +1414,20 @@ function phase1GroupCandidates(
     }
 
     // -- 3. The deep cross-group review (§6.4 step 6, R5) -----------------------------------------
-    // The tool-carrying pass, offered once the structured seats for this vector have all run: it is
+    // The tool-carrying pass, offered once the structured seats for this vector have all REPORTED: it is
     // the pass that turns "the Critic noticed something" into a FINDING with `group_refs` on it
-    // (`tools/reader.ts:raiseFinding`), and R3's whole closure rule runs on that attribution.
+    // (`tools/reader.ts:raiseFinding`), and R3's whole closure rule runs on that attribution. W5 changed
+    // what "have all run" means — `allReviewSeatsReported` now wants an ANSWER per seat (or an exhausted
+    // family), where the old gate accepted a run row that brought back `tokens: 0`. In the healthy case
+    // nothing moves: every seat closes `torn_down`, which satisfies both readings. The gate only bites
+    // when a pass died, and then it buys the retry before the deep pass reads the same Overview — the
+    // measured Bird Brain vector armed five `wi_group_check_*` passes on a review set that had produced
+    // two answers out of five, which is the sequencing this line is meant to guarantee (R5).
     // `revisionRef` is deliberately absent — there is no draft row in this model; the brief carries
     // the composed Overview and the run reads the book with tools (R6's mirror keeps `readSummary`
     // honest).
     if (hasText && phrase !== undefined) {
-        const reviewsFiled = groups.length > 0 && allReviewSeatsRun(store, vectorHash, critics);
+        const reviewsFiled = groups.length > 0 && allReviewSeatsReported(store, vectorHash, critics);
 
         if (reviewsFiled) {
             for (let pass = 1; pass <= critics; pass += 1) {
@@ -1404,7 +1437,23 @@ function phase1GroupCandidates(
                 // claims a vector and the stamp that records it spell the key the same way.
                 const key = groupCheckSeatKey(vectorHash, pass);
 
-                if (runsForItem(store, key).length > 0) continue;
+                // MAJOR 3 (2026-11-26) — THE GATE IS THE REPORT, NOT THE RUN ROW. The test here used to be
+                // `runsForItem(store, key).length > 0`: ANY closed row paid the seat. A deep pass is the
+                // TOOL-CARRYING one, so its success branch is reached whenever the session merely ENDED —
+                // a capped or abandoned pass closes a row, files NOTHING (`torn_down` says nothing about
+                // whether `submitVerdict` ran; `run/plugins/critic-termination.ts` exists because this pass
+                // runs 6-17 min and used to end with no report at all), and the seat stayed paid while the
+                // Author's rail still showed it as never reviewed.
+                //
+                // `groupCheckSeatSettled` is the deep family's copy of the two clauses leg 2 arms the
+                // structured seats with: it PRODUCED A REPORT (a `verdicts` row its own run filed —
+                // `submitVerdict` is the call that ends a Critic pass and carries its verdicts and findings)
+                // or its family SPENT `groupCheckAttemptCap` = `critics + SAMPLING_RETRY_ALLOWANCE` — on
+                // the default dial 5 owed passes + 3 retries, so a permanently silent provider costs at most
+                // 8 deep passes per vector (≈48-136 min) and never one per sweep. One candidate per seat per
+                // sweep is unchanged: the loop visits each `pass` once and `candidate()`'s `isClaimed` guard
+                // drops a seat whose run is still live, so a retry cannot fan out into a second one.
+                if (groupCheckSeatSettled(store, story.id, vectorHash, critics, pass)) continue;
 
                 const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
 
@@ -1426,12 +1475,45 @@ function phase1GroupCandidates(
                         // legacy one never had to is say WHICH GROUPS each complaint is about. Without
                         // `group_refs` a finding means "the whole Overview" (the legacy reading) and the
                         // next Writer batch rewrites all five — the exact cost R2 exists to remove.
+                        //
+                        // ONE CALL, NOT TWO (2026-11-26, G1 close-out). This note used to send the pass to
+                        // TWO endpoints — "File the critical and major issues with raiseFinding on …" and
+                        // "File the goal verdict with submitVerdict at …" — which is the two-call ending the
+                        // legacy screen note (`:2225` below) and the engine's own done-line both retired:
+                        // `submitVerdict` IS the call that ends the pass (`run/plugins/critic-termination
+                        // .ts`) and its `findings[]` carries every claim — the entry shape is the
+                        // `raiseFinding` body lifted UNCHANGED (`tools/reader.ts:submitVerdict`), so
+                        // `group_refs` works there exactly as it did on the standalone call. A model that
+                        // obeyed the old wording spent a second round-trip after the terminal one, and that
+                        // call files nothing: the termination plugin closed the thread with the first.
+                        // `run/brief.ts:criticReviewDone` says "BOTH verdict lines sit in the ONE terminal
+                        // `submitVerdict` report"; this lane now says the same about its one target, and the
+                        // angle crews already say it in their own prompts (`CRITIC_TERMINAL_REPORT`,
+                        // `templates/templates.ts:125`).
+                        //
+                        // THE MINOR CLAUSE WAS QUALIFIED IN THE SAME EDIT. "Minor notes are optional and
+                        // must not keep you searching" is an OPEN permission the seat's own angle prompt has
+                        // since narrowed: the four deep-review angles all say a minor/taste note rides along
+                        // only when it is already obvious — `templates/templates.ts:671` ("only when it is
+                        // already in front of the reader, never because the shelf was searched"), `:739`,
+                        // `:807`, `:877` — so the note invited the search the prompt forbids. The new clause
+                        // uses the prompt's own words.
+                        //
+                        // WHY THIS REWORD CANNOT BREAK THE CLIP (the constraint the legacy note's comment
+                        // spells out from `:2196`): `run/brief.ts:renderJob` keeps only the note's first 600
+                        // characters, and this note's window CLOSES INSIDE "…because phase ③ writes the
+                        // sentences." — before a single character edited here. The floor case proves it for
+                        // every id the store can mint: rendered with `pass`, `critics`, `vectorHash`,
+                        // `summaryRef` and the group keys all EMPTY, the first edited character still sits at
+                        // 662 (717 with the ids a real book mints), so a longer id only pushes the tail
+                        // further out. Window byte-identical before and after — proven by
+                        // `Temp/coding-g1/notes.ts` + `compare.ts` (sha256 of the 600-char window matches).
                         note:
                             `Critic pass ${pass}/${critics} on the installed group Overview at vector ${vectorHash}. THIS IS THE OVERVIEW, NOT PROSE, and it is composed from the book's Summary groups: ${groups
                                 .map((group) => group.key)
-                                .join(', ')}. THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the Overview's own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. Word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. File the critical and major issues with raiseFinding on ${summaryRef}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
+                                .join(', ')}. THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the Overview's own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. Word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. File the critical and major issues you are certain of as findings[] entries of the ONE submitVerdict this pass ends with, each at target_ref ${summaryRef}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
                             "`group_refs` naming every group the defect is about, as the group ids in the brief. " +
-                            `A premise contradiction belongs to the premise group; a promise the ending does not keep names both. Cross-group incoherence is the review this pass exists for: judge the groups AGAINST EACH OTHER, not five times in isolation. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict with submitVerdict at target_ref ${summaryRef}; there is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`,
+                            `A premise contradiction belongs to the premise group; a promise the ending does not keep names both. Cross-group incoherence is the review this pass exists for: judge the groups AGAINST EACH OTHER, not five times in isolation. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict in that SAME submitVerdict, at target_ref ${summaryRef} — ONE report, the last call this pass makes, its thread over the moment it fires, so the findings and the verdict go together and nothing is filed after it. There is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. A minor note belongs in that report only when it is already obvious, never because the shelf was searched; once the issues you are certain of are in the report, stop — an empty pass is valid.`,
                     },
                     pass - 1
                 );
@@ -1616,13 +1698,17 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
             // and the vector is what keeps the two phrases' seats apart.
             const key = groupReviewSeatKey(vectorHash, pass);
 
-            if (runsForItem(store, key).length > 0) continue;
+            // W5: the SAME settled predicate phase ① arms with (see leg 2 above), so a chapter seat
+            // whose pass died at the request-liveness ceiling re-arms instead of spending the vector's
+            // `summary_critics` reads one dead pass at a time. The cap is the family's, keyed by this
+            // phrase's own vector hash, so the two lanes can never spend each other's allowance.
+            if (groupReviewSeatSettled(store, vectorHash, critics, pass)) continue;
 
-            // Phase ② has no `critic-screening` in its pool (that row serves phase ①), so the seats
-            // rotate the assigned phase-② Critic angles — the same four the deep review uses, and the
-            // rotation is what makes N passes N different readers rather than N copies of one.
-            const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
-
+            // The structured chapter review is TOOL-LESS, so it uses the phase-② screening template,
+            // never the four deep-review angles: those are the tool-carrying `check_unit` voices and
+            // their `raiseFinding`/`submitVerdict`/`cost`/`kind` instructions are not this answer's
+            // contract. `compileGroupReviewPrompt` enforces the same choice at the prompt layer, so
+            // `templateRef` here is the seat's visible crew label rather than the prompt's source.
             const built = candidate(
                 store,
                 story,
@@ -1639,7 +1725,7 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
                     // chapter 2 and paid in chapter 7 is one issue naming both.
                     groupRefs: allRefs,
                     fixRefs: openFixTaskIds(store, story.id),
-                    templateRef: template,
+                    templateRef: 'critic-screening-plotlines',
                     roleName: 'critic'
                 },
                 pass - 1
@@ -1674,10 +1760,10 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
                     toolMode: 'none',
                     responseSchema: { name: SECTION_SCORES_SCHEMA_NAME, schema: SectionScoresSchema },
                     groupRefs: allRefs,
-                    // `reader-consistency` serves every phase, so the chapter seat uses the same crew as
-                    // the Summary's: a cross-section score is exactly the contract-chain judgement this
-                    // reader's role prompt is about.
-                    templateRef: 'reader-consistency',
+                    // The same dedicated score voice as the Summary seat: the chapter score is still
+                    // a no-tools number with no findings, tasks or verdict (P6/D-65), and
+                    // `reader-consistency` is the tool-carrying review prompt this seat must not get.
+                    templateRef: 'reader-score',
                     roleName: 'reader'
                 }
             );
@@ -1739,13 +1825,19 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
     // R3's closure rule runs on that attribution. Without `group_refs` a complaint means "the whole
     // book" and the next batch rewrites every chapter.
     if (hasText) {
-        const reviewsFiled = allReviewSeatsRun(store, vectorHash, critics);
+        const reviewsFiled = allReviewSeatsReported(store, vectorHash, critics);
 
         if (reviewsFiled) {
             for (let pass = 1; pass <= critics; pass += 1) {
                 const key = groupCheckSeatKey(vectorHash, pass);
 
-                if (runsForItem(store, key).length > 0) continue;
+                // MAJOR 3: the SAME settled predicate the Summary lane's deep leg arms with (see
+                // `phase1GroupCandidates` leg 3 — answered, or the family spent `groupCheckAttemptCap`), so
+                // a chapter seat whose 6-17 minute pass died without filing a verdict re-arms instead of
+                // spending the vector's reads one dead pass at a time. The attempt counter is keyed by THIS
+                // phrase's own vector hash, so the two lanes can never spend each other's allowance, and the
+                // rail counts these seats with the same predicate (`api/projections.ts:reportedDeepSeatsFor`).
+                if (groupCheckSeatSettled(store, story.id, vectorHash, critics, pass)) continue;
 
                 const template = DEEP_REVIEW_TEMPLATES[(pass - 1) % DEEP_REVIEW_TEMPLATES.length];
 
@@ -1762,13 +1854,31 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
                         groupRefs: allRefs,
                         templateRef: template,
                         roleName: 'critic',
+                        // ONE CALL, NOT TWO (2026-11-26, G1 close-out) — the Phrase ② twin of the Summary
+                        // lane's clause above, for the same reason: `submitVerdict` ENDS this pass
+                        // (`run/plugins/critic-termination.ts`) and its `findings[]` is the `raiseFinding`
+                        // body lifted UNCHANGED (`tools/reader.ts:submitVerdict`), so the old two-endpoint
+                        // wording ("… with raiseFinding on …" then "File the goal verdict with submitVerdict
+                        // at …") spent the round-trip AFTER the thread was already closed. The same seats,
+                        // the same crew (`DEEP_REVIEW_TEMPLATES`, `:673`), and their prompts already end the
+                        // pass in one report (`CRITIC_TERMINAL_REPORT`, `templates/templates.ts:125`).
+                        // The minor clause here was an OPEN permission those prompts narrowed — a minor note
+                        // rides along only when it is already obvious (`templates/templates.ts:671`, `:739`,
+                        // `:807`, `:877`) — so it now says that, in their words.
+                        //
+                        // BOTH EDITS SIT PAST THE CLIP: `run/brief.ts:renderJob` keeps the note's first 600
+                        // characters, and this note's window closes inside "…never cost a note because you
+                        // would have staged the chapter differently" — the first edited character sits at 940
+                        // even with `pass`, `critics`, `vectorHash`, `story.id` and the chapter keys all
+                        // rendered EMPTY (989 with a real book's ids), so no id width can pull a change into
+                        // the window. Proven byte-identical by `Temp/coding-g1/notes.ts` + `compare.ts`.
                         note:
                             `Critic pass ${pass}/${critics} on the installed chapter contracts at vector ${vectorHash}. THESE ARE CONTRACTS, NOT PROSE, and the book composes them in chapter order: ${groups
                                 .map((group) => group.key)
                                 .join(', ')}. THE PHRASE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the phrase seed, critical Knowledge, or a contract's own setups and payoffs — or a commitment the seed states that the chapter set lacks. Added detail, an open question the seed left silent and unplanted setup are NOT defects. A contract may be SPARSE and still correct: judge it as a contract, not as a scene nobody wrote, and never cost a note because you would have staged the chapter differently — phase \u2462 writes the sentences. ` +
-                            `THE CHAIN IS THE THING TO CHECK: every payoff has a setup in an earlier chapter, every setup is collected in a later one, and a chapter that changes nothing leaves the book flat. Say which end is wrong and name the other end. File the critical and major issues with raiseFinding on ${story.id}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
-                            "`group_refs` naming EVERY chapter the defect crosses, as the chapter group ids in the brief. A defect that crosses chapters is ONE issue naming both, because the repair is one decision about two contracts. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict with submitVerdict at target_ref " +
-                            `${story.id}; there is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. Minor notes are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`,
+                            `THE CHAIN IS THE THING TO CHECK: every payoff has a setup in an earlier chapter, every setup is collected in a later one, and a chapter that changes nothing leaves the book flat. Say which end is wrong and name the other end. File the critical and major issues you are certain of as findings[] entries of the ONE submitVerdict this pass ends with, each at target_ref ${story.id}: detail (what is wrong and where), criterion, the quoted passage, the evidence line, the cost you believe — AND ` +
+                            "`group_refs` naming EVERY chapter the defect crosses, as the chapter group ids in the brief. A defect that crosses chapters is ONE issue naming both, because the repair is one decision about two contracts. Do not name a group you did not read a quote from, and never guess an id — an id the Story does not have is refused. File the goal verdict in that SAME submitVerdict, at target_ref " +
+                            `${story.id} — ONE report, the last call this pass makes, its thread over the moment it fires, so the findings and the verdict go together and nothing is filed after it. There is no draft row in this model, so do not invent one. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. A minor note belongs in that report only when it is already obvious, never because the shelf was searched; once the issues you are certain of are in the report, stop — an empty pass is valid.`,
                     },
                     pass - 1
                 );
@@ -2092,7 +2202,27 @@ function phase1PipelineCandidates(store: Store, story: Story): WorkCandidate[] {
                     revisionRef: selected.id,
                     templateRef: template,
                     roleName: 'critic',
-                    note: `Critic pass ${pass}/${critics} on the selected Summary draft ${selected.id}. File TWO verdicts with submitVerdict: the goal verdict at target_ref ${selected.unit_ref} (the Goal’s own row) and the draft\u2019s own line at target_ref ${selected.id} (the crew panel\u2019s row). THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the draft\u2019s own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. A Summary is a set of facts, not prose: word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues with raiseFinding on ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview; the draft line never replaces the Summary line. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. A minor Issue and any Proposal are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
+                    // ONE CALL, TWO LINES (2026-11-26): this clause used to read "File TWO verdicts with
+                    // submitVerdict", which a model acts on as two tool calls. `submitVerdict` is the one
+                    // call that ENDS the pass (run/plugins/critic-termination.ts), and both verdict lines
+                    // are the CONTENT of that single report — the same shape the engine-owned job line
+                    // states (`run/brief.ts:criticReviewVerdictInstruction`). THE WORDING IS LENGTH-BOUND:
+                    // everything ahead of "Added detail … are NOT defects" has to stay inside `renderJob`'s
+                    // 600-character note clip (T3). The longer-ids fixture in `run/brief.test.ts` had 16
+                    // characters of margin there before this change; the reword costs +10 and leaves 6, so
+                    // a longer form pushes the clause out of the window and THAT test fails.
+                    //
+                    // THE TAIL WAS REWORDED FOR THE SAME REASON, ON THE OTHER SIDE OF THE CLIP (2026-11-26,
+                    // MAJOR 3 follow-up): it used to open "File the critical and major issues with
+                    // raiseFinding on …", which a model reads as a SECOND endpoint call beside the ONE
+                    // verdict sentence above — the two-call contract the head was just fixed to stop saying.
+                    // The shipped contract is one report that carries both: `tools/reader.ts:submitVerdict`'s
+                    // `findings[]` files "every claim you are CERTAIN of … instead of in a separate
+                    // raiseFinding call", and `run/brief.ts`'s review banner says the pass ends with "ONE
+                    // terminal report … AND every finding you are filing". This clause starts past character
+                    // 600, so it is CLIPPED either way: rewording it leaves the visible window byte-identical
+                    // and cannot move the margin above, which is why it may be spelled out at length.
+                    note: `Critic pass ${pass}/${critics} on the selected Summary draft ${selected.id}. File ONE submitVerdict with both verdict lines: the goal verdict at target_ref ${selected.unit_ref} (the Goal’s own row) and the draft\u2019s own line at target_ref ${selected.id} (the crew panel\u2019s row). THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE: cost critical or major only on a contradiction you can QUOTE — the Seed, critical Knowledge, or the draft\u2019s own promise and rules — or a central commitment the Seed states that it lacks. Added detail, an open Seed question, an unstated stake and unplanted setup are NOT defects. A Summary is a set of facts, not prose: word choice, sentence shape and register are a PROPOSAL (kind 'proposal', cost 'taste' or 'minor'), never a taste-cost Issue, because phase ③ writes the sentences. The draft and the Seed are in the brief; call readSummary only if the brief does not carry the draft. Use tools to check a specific doubt — not to survey the book — and for a factual point one citable source is enough. File the critical and major issues you are certain of as findings[] entries of that SAME submitVerdict, each at target_ref ${selected.unit_ref}: detail (what is wrong and where), criterion, quoted passage, evidence line, and the cost you believe; name ${selected.id} in related_refs so the dashboard files each finding under this Overview; the draft line never replaces the Summary line. Never edit the book (D-26, D-30, T-9). Do not propose Ideas. A minor Issue and any Proposal are optional and must not keep you searching; once the issues that matter are reported, stop — an empty pass is valid.`
                 },
                 pass - 1
             );

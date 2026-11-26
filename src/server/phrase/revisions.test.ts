@@ -11,6 +11,17 @@
 // locked group is the fixed point the other groups get revised against, so nothing installs over it,
 // whether it was locked before the install or by another writer in the middle of one.
 //
+// THE GROUP-QUOTE LEG (R3/D-15): a review issue carries ONE primary `quote`, which can only prove that ONE
+// group was read, so every OTHER group its `group_refs` names has to carry a `group_quotes` entry. The parser
+// refuses an issue that names a group it never quoted, and refuses an entry that is not evidence for a group
+// the same issue names — both sentences are pinned verbatim, as is the shape of an accepted multi-group answer
+// (refs deduped, entries carried in the answered order, fix certificates passed through). The prompt states the
+// same rules in BOTH engine-owned blocks: `run/phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION` (phrase ①, pinned in
+// `run/phase1-prompt.test.ts`) and `run/phase1-prompt.ts:CONTRACT_SCREEN_INSTRUCTION` (phrase ②'s chapter twin,
+// pinned in `integration/plotlines-groups.test.ts`); `parseGroupReviewAnswer` is one validator for both lanes, so
+// the two prompt files and this one are a single contract, and drift between them costs the book a refused pass
+// per attempt.
+//
 // THE FIXTURE: `run/mock.ts:seedStory` + `ensurePhraseCatalog` with `recordUidAt`, so every group id
 // in the expectations below is a literal the reader can point at.
 import { describe, expect, it } from 'vitest';
@@ -162,14 +173,45 @@ describe('a group Writer answer is validated against the JOB, not just the schem
 });
 
 describe('a group review answer is refused unless every issue names real groups (R3)', () => {
-    const issue = (group_refs: string[]) => ({
+    /**
+     * One review issue, in the shape a provider answers with.
+     *
+     * `group_quotes` is added ONLY when the case supplies it, because the row shape differs by exactly that
+     * key: `parseGroupReviewAnswer` spreads the answered issue and attaches the array only when the answer
+     * carried entries (`revisions.ts:340-344`), so a single-group row carries none. A fixture that always
+     * printed the key would pin a row the engine never writes.
+     */
+    const issue = (
+        group_refs: string[],
+        group_quotes?: Array<{ group_ref: string; quote: string; location?: string }>
+    ) => ({
         severity: 'critical' as const,
         criterion: 'C-14',
         location: 'the Ending',
         quote: 'She floods the valley on purpose.',
         detail: 'The Ending answers a promise the Promise never makes.',
-        group_refs
+        group_refs,
+        ...(group_quotes === undefined ? {} : { group_quotes })
     });
+
+    /** One extra group's evidence, as the prompt tells the Critic to answer (`group_ref`, `quote`, `location`). */
+    const quoteFor = (group: PhraseGroup, line: string) => ({
+        group_ref: group.id,
+        quote: line,
+        location: `the ${group.key} section`
+    });
+
+    /**
+     * The refusal a bad `group_quotes` ENTRY gets — one sentence for all three shapes of bad entry (an id
+     * the issue does not name, an id the Story does not have, a blank quote), because the Author sees the
+     * same repair whichever one the model made.
+     */
+    const BAD_ENTRY =
+        'a `group_quotes` entry must quote a group named in the same issue\'s `group_refs`, using an id this Story has and a non-empty quote (R3, D-15)';
+
+    /** The refusal a named-but-unquoted group gets, with the group count and ids the source prints. */
+    const unquotedRefusal = (count: number, unquoted: string[]) =>
+        `an issue naming ${count} groups has to quote every one of them; ${unquoted.join(', ')} has no quote — put the primary quote's group first in \`group_refs\` and add a \`group_quotes\` entry for every other group (R3, D-15)`;
 
     it('refuses an answer with no issues array', () => {
         const { store, story } = seedBook();
@@ -197,13 +239,116 @@ describe('a group review answer is refused unless every issue names real groups 
         });
     });
 
+    it('refuses a multi-group issue whose only quote is the primary group\'s (R3, D-15)', () => {
+        const { store, story, groups } = seedBook();
+        const ending = groupOf(groups, 'ending');
+        const premise = groupOf(groups, 'premise');
+        const promise = groupOf(groups, 'promise');
+
+        // THE IMPOSSIBILITY THIS CLOSES: one `quote` can only prove ONE group was read, so "name three, quote
+        // one" used to be the only legal answer while being unverifiable. Both engine-owned prompt blocks now
+        // say a group named without a quote is refused (`run/phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION` for a
+        // Summary review, `run/phase1-prompt.ts:CONTRACT_SCREEN_INSTRUCTION` for a chapter-contract review),
+        // and this is the engine keeping that promise. The count in the sentence is the RAW `group_refs.length` and the ids
+        // are the unquoted ones only — the repair has to be readable from the refusal alone.
+        expect(parseGroupReviewAnswer(store, story.id, { issues: [issue([ending.id, premise.id])] })).toEqual({
+            ok: false,
+            refusal: unquotedRefusal(2, [premise.id])
+        });
+
+        // Two groups named and neither quoted: both ids are listed, in the order the issue named them.
+        expect(
+            parseGroupReviewAnswer(store, story.id, { issues: [issue([ending.id, premise.id, promise.id])] })
+        ).toEqual({ ok: false, refusal: unquotedRefusal(3, [premise.id, promise.id]) });
+    });
+
+    it('refuses a `group_quotes` entry that is not evidence for a named group of this Story (R3, D-15)', () => {
+        const { store, story, groups } = seedBook();
+        const ending = groupOf(groups, 'ending');
+        const premise = groupOf(groups, 'premise');
+
+        // (a) A group this STORY has but this ISSUE did not name: evidence no closure join can route, because
+        //     a finding closes on the ids in `group_refs` and this one is not among them.
+        expect(
+            parseGroupReviewAnswer(store, story.id, {
+                issues: [issue([ending.id], [quoteFor(premise, 'The cartographer walks back into the water.')])]
+            })
+        ).toEqual({ ok: false, refusal: BAD_ENTRY });
+
+        // (b) An id the Story does not have. It sits in `group_quotes` ONLY: an unknown id in `group_refs` is
+        //     caught by the earlier ref check (`phrase/revisions.ts:293-300`, pinned above), and that ordering
+        //     is deliberate — the invented GROUP is the more specific defect than an unusable piece of evidence.
+        expect(
+            parseGroupReviewAnswer(store, story.id, {
+                issues: [issue([ending.id, premise.id], [{ group_ref: 'group_9', quote: 'A row no rail can label.' }])]
+            })
+        ).toEqual({ ok: false, refusal: BAD_ENTRY });
+
+        // (c) An entry that quotes nothing: an empty quote proves no group was read, and `minLength` is not
+        //     enforced by the in-process validator (`llm/structured.ts`), so this is the only place the rule runs.
+        expect(
+            parseGroupReviewAnswer(store, story.id, {
+                issues: [issue([ending.id, premise.id], [{ group_ref: premise.id, quote: '   ' }])]
+            })
+        ).toEqual({ ok: false, refusal: BAD_ENTRY });
+
+        // (d) THE ORDER the two refusals fire in: a broken entry outranks an unquoted group, so a model that
+        //     made both mistakes is sent home with the specific one (the same ordering rule
+        //     `parseSectionScoreAnswer` follows, and the difference between a repairable retry and a new
+        //     invention). Here `promise.id` is unquoted AND `premise.id`'s entry is blank.
+        const promise = groupOf(groups, 'promise');
+
+        expect(
+            parseGroupReviewAnswer(store, story.id, {
+                issues: [
+                    issue([ending.id, premise.id, promise.id], [{ group_ref: premise.id, quote: '' }])
+                ]
+            })
+        ).toEqual({ ok: false, refusal: BAD_ENTRY });
+    });
+
+    it('accepts a single-group issue with no `group_quotes` — the primary quote covers the only group named', () => {
+        const { store, story, groups } = seedBook();
+        const ending = groupOf(groups, 'ending');
+
+        expect(
+            parseGroupReviewAnswer(store, story.id, { issues: [issue([ending.id])] })
+        ).toEqual({
+            ok: true,
+            review: {
+                // No `group_quotes` key at all: the answer carried none, so the row carries none. A repair
+                // that wrote `group_quotes: []` here would put an empty array on every legacy row.
+                issues: [
+                    {
+                        severity: 'critical',
+                        criterion: 'C-14',
+                        location: 'the Ending',
+                        quote: 'She floods the valley on purpose.',
+                        detail: 'The Ending answers a promise the Promise never makes.',
+                        group_refs: [ending.id]
+                    }
+                ]
+            }
+        });
+    });
+
     it('keeps a valid answer verbatim, dedupes its group list, and carries the fix certificates through', () => {
         const { store, story, groups } = seedBook();
         const premise = groupOf(groups, 'premise');
+        const promise = groupOf(groups, 'promise');
         const ending = groupOf(groups, 'ending');
 
+        // Every group this issue names is quoted: the primary `quote` answers `ending` (the FIRST ref, which
+        // is the position the prompt sends the quoted group to), and the two others each carry an entry. The
+        // double `ending.id` is kept in the answer on purpose — the dedupe runs on the refs, not on the quotes.
+        const events = store.journal.length;
         const decision = parseGroupReviewAnswer(store, story.id, {
-            issues: [issue([ending.id, ending.id, premise.id])],
+            issues: [
+                issue([ending.id, ending.id, promise.id, premise.id], [
+                    quoteFor(promise, 'The map reconciles at the price of the map.'),
+                    quoteFor(premise, 'A cartographer returns to a valley the water redrew.')
+                ])
+            ],
             fix_verifications: [{ fix_ref: 'task_0', status: 'resolved', evidence: 'the Ending now pays the promise' }]
         });
 
@@ -219,11 +364,47 @@ describe('a group review answer is refused unless every issue names real groups 
                 quote: 'She floods the valley on purpose.',
                 detail: 'The Ending answers a promise the Promise never makes.',
                 // The double `ending.id` is collapsed; the critic's own text is untouched (D-15).
-                group_refs: [ending.id, premise.id]
+                group_refs: [ending.id, promise.id, premise.id],
+                // The entries are carried in the ANSWERED order, not re-sorted to the refs' order: the engine
+                // validates evidence, it does not re-organise the Critic's case against the book.
+                group_quotes: [
+                    { group_ref: promise.id, quote: 'The map reconciles at the price of the map.', location: 'the promise section' },
+                    { group_ref: premise.id, quote: 'A cartographer returns to a valley the water redrew.', location: 'the premise section' }
+                ]
             }
         ]);
         expect(decision.review.fix_verifications).toEqual([
             { fix_ref: 'task_0', status: 'resolved', evidence: 'the Ending now pays the promise' }
+        ]);
+        // A validation is a read: the review rows are the settle's to file, not the parser's, so nothing on
+        // the book moved while the answer was judged (the same guard the draft refusals run).
+        expect(store.journal).toHaveLength(events);
+    });
+
+    it('keeps a redundant quote for the primary group rather than tidying the Critic\'s evidence (D-15)', () => {
+        const { store, story, groups } = seedBook();
+        const ending = groupOf(groups, 'ending');
+        const premise = groupOf(groups, 'premise');
+
+        // A Critic that quotes the primary group TWICE — once in `quote`, once in `group_quotes` — is not
+        // malformed: every named group is evidenced, and dropping the extra entry would be the loop editing
+        // the Critic's evidence, which D-15 forbids. This is the case an "optimisation" would silently break.
+        const decision = parseGroupReviewAnswer(store, story.id, {
+            issues: [
+                issue([ending.id, premise.id], [
+                    quoteFor(ending, 'She floods the valley on purpose, and says so.'),
+                    quoteFor(premise, 'A cartographer returns to a valley the water redrew.')
+                ])
+            ]
+        });
+
+        expect(decision.ok).toBe(true);
+
+        if (!decision.ok) throw new Error(decision.refusal);
+
+        expect(decision.review.issues[0].group_quotes).toEqual([
+            { group_ref: ending.id, quote: 'She floods the valley on purpose, and says so.', location: 'the ending section' },
+            { group_ref: premise.id, quote: 'A cartographer returns to a valley the water redrew.', location: 'the premise section' }
         ]);
     });
 });

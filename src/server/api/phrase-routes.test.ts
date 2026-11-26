@@ -24,7 +24,17 @@ import { MockToolRuntime } from '../run/mock';
 import { Store } from '../store/store';
 import { isRecordUid } from '../store/persist';
 import { buildStorylineRuntime } from './server';
-import { groupCheckSeatKey } from '../phrase/exclusion';
+// W5's seat predicates, imported so the RAIL and the RETRY GATE are checked against each other rather
+// than against a hand-derived number: `groupReviewSeatAnswered` is `runsForItem(key).some(isReportedRun)`,
+// the very test `api/projections.ts:reportedSeatsFor` now uses, and `groupReviewSeatSettled` is the
+// "does this vector still owe seat N?" read the generator arms on. `groupReviewAttempts` is the closed-row
+// attempt counter, which is how an in-flight seat proves it is not (yet) an attempt.
+import {
+    groupCheckSeatKey,
+    groupReviewAttempts,
+    groupReviewSeatAnswered,
+    groupReviewSeatSettled
+} from '../phrase/exclusion';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
 import { stampCleanRevisions } from '../phrase/reviewed';
 import { AUTHOR_ATTR } from '../run/mock';
@@ -1586,5 +1596,221 @@ describe('the view counts the queue on the engine’s open set, so a `wontfix` r
         // Overview one task above its own sentence.
         expect(taskShape(reply)).toEqual([]);
         expect(reviewOf(reply).open_tasks).toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// W5 SEAT ARITHMETIC — the rail's "N of M" counts SEATS THAT ANSWERED (2026-11-26)
+//
+// TWO RULES, ONE UNIT (see `api/projections.ts:reportedSeatsFor`, which states both):
+//   1. The UNIT is a seat (`work_item_ref`), never a run row, because W5 re-arms a dead seat and the
+//      retry lands as a SECOND row under the same key — row counting printed "6 of 5".
+//   2. The FILTER is `loop/records.ts:isReportedRun`, not "closed". A seat whose only closed row is
+//      `abandoned`/`failed` filed nothing (`tokens: 0`, `no_op: true`) and the family still owes it, so
+//      calling it reviewed prints "5 of 5" beside a vector that got four verdicts.
+//
+// THE DENOMINATOR IS NOT PART OF THIS CHANGE: `review_seats` stays `records.ts:screeningSizeOf` — the
+// Author's dial — which is why every case below asserts the PAIR and not just the numerator.
+// ---------------------------------------------------------------------------
+
+/** The sentence a real killed review pass wrote on its row (`run/executor.ts:ABORT_TEXT.deadline`). */
+const SEAT_KILL_TEXT = 'abandoned — its provider request outlived the request-liveness ceiling (S-4a)';
+
+/**
+ * One CLOSED review-seat run under the seat key the generator uses
+ * (`phrase/exclusion.ts:groupReviewSeatKey` → `wi_review_groups_<vectorHash>_<pass>`).
+ *
+ * `abandoned` is the state that made this a defect: `loop/records.ts:isReportedRun` refuses to call it an
+ * answer, so `phrase/exclusion.ts:groupReviewSeatSettled` re-arms the SAME seat key and the retry lands
+ * as a SECOND row beside it. `tokens: 0` / `no_op: true` / `end_reason` carry the values measured on the
+ * real killed rows, so the fixture is the shape the product writes.
+ */
+function seedSeatRun(store: Store, seatKey: string, state: 'abandoned' | 'torn_down', startedAt: string) {
+    return store.runs.create(
+        {
+            story_id: 'story_0',
+            work_item_ref: seatKey,
+            role: 'critic',
+            state,
+            started_at: startedAt,
+            ended_at: startedAt,
+            tokens: state === 'torn_down' ? 12 : 0,
+            kind: 'work',
+            no_op: state !== 'torn_down',
+            ...(state === 'abandoned' ? { end_reason: SEAT_KILL_TEXT } : {}),
+            delegated: []
+        },
+        { run_ref: null, author: false, why: `seed: a ${state} review seat row (W5)` }
+    );
+}
+
+/** The seat rows the rail is counting, as `<seat key>:<state>` pairs, sorted so the store's order cannot leak in. */
+const seatRows = (store: Store, hash: string) =>
+    store.runs
+        .list()
+        .filter((run) => (run.work_item_ref ?? '').startsWith(`wi_review_groups_${hash}_`))
+        .map((run) => `${run.work_item_ref}:${run.state}`)
+        .sort();
+
+describe('the rail counts review SEATS THAT ANSWERED, so a retried seat cannot out-number the Critic dial (W5)', () => {
+    it('answers 5 of 5 for a vector whose one seat was retried — SIX rows, FIVE seats', async () => {
+        const world = await seedGroupStory();
+
+        writeLegacyProse(world.store);
+        await call(world.app, 'POST', '/stories/story_0/phrases/import');
+
+        // THE VECTOR, READ NOT GUESSED: the projection counts under `wi_review_groups_<hash>_` with the
+        // hash of the vector this import installed, so the seeds key off the same read the rail uses.
+        const before = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+        const hash = before.vector_hash as string;
+
+        expect(before.review_seats).toBe(5);
+        expect(before.reviews_on_current_vector).toBe(0);
+
+        // Four seats answer on the first pass; seat 5 dies at the request-liveness ceiling and is retried,
+        // so its key carries an `abandoned` row AND the `torn_down` retry.
+        seedSeatRun(world.store, `wi_review_groups_${hash}_1`, 'torn_down', '2026-11-26T09:00:00.000Z');
+        seedSeatRun(world.store, `wi_review_groups_${hash}_2`, 'torn_down', '2026-11-26T09:01:00.000Z');
+        seedSeatRun(world.store, `wi_review_groups_${hash}_3`, 'torn_down', '2026-11-26T09:02:00.000Z');
+        seedSeatRun(world.store, `wi_review_groups_${hash}_4`, 'torn_down', '2026-11-26T09:03:00.000Z');
+        seedSeatRun(world.store, `wi_review_groups_${hash}_5`, 'abandoned', '2026-11-26T09:04:00.000Z');
+        seedSeatRun(world.store, `wi_review_groups_${hash}_5`, 'torn_down', '2026-11-26T09:35:00.000Z');
+
+        // The rows are six and the seats are five — the pair this projection used to confuse. Pinned here
+        // so the assertion below cannot be read as "six seats exist".
+        expect(seatRows(world.store, hash)).toEqual([
+            `wi_review_groups_${hash}_1:torn_down`,
+            `wi_review_groups_${hash}_2:torn_down`,
+            `wi_review_groups_${hash}_3:torn_down`,
+            `wi_review_groups_${hash}_4:torn_down`,
+            `wi_review_groups_${hash}_5:abandoned`,
+            `wi_review_groups_${hash}_5:torn_down`
+        ]);
+
+        const after = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        // THE DEFECT, PINNED SHUT: counting CLOSED ROWS answered `reviews_on_current_vector: 6` against
+        // `review_seats: 5`, so the desk printed "6 of 5" — more reviews than the Author's dial has seats.
+        // A seat answers ONCE, however many attempts it spent (`api/projections.ts:reportedSeatsFor`).
+        expect([
+            after.review_seats,
+            after.reviews_on_current_vector,
+            after.deep_reviews_on_current_vector
+        ]).toEqual([5, 5, 0]);
+
+        // THE RAIL AND THE GATE AGREE, which is the whole point of sharing `isReportedRun`: seat 5 holds a
+        // dead row AND its retry, so the loop no longer owes it and the rail says it arrived. Derived from
+        // the predicate — `runsForItem(key).some(isReportedRun)` is true through the `torn_down` row, and
+        // `groupReviewSeatSettled` short-circuits on the same clause (attempts 6 < cap 8, so this is the
+        // ANSWERED clause doing the work, not the exhausted-family clause; `groupReviewAttemptCap` =
+        // `critics + SAMPLING_RETRY_ALLOWANCE` = 5 + 3).
+        expect(groupReviewSeatAnswered(world.store, hash, 5)).toBe(true);
+        expect(groupReviewSeatSettled(world.store, hash, after.review_seats as number, 5)).toBe(true);
+    });
+
+    it('answers 4 of 5 when a seat has only an `abandoned` row, because that seat brought back nothing', async () => {
+        const world = await seedGroupStory();
+
+        writeLegacyProse(world.store);
+        await call(world.app, 'POST', '/stories/story_0/phrases/import');
+
+        const hash = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases')).vector_hash as string;
+
+        // THE DIAL FIRST: five seats is `records.ts:screeningSizeOf` on this Story's own Critic setting, and
+        // this case changes nothing on that side — the numerator is the only figure the ruling moves.
+        const dial = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        expect([dial.review_seats, dial.reviews_on_current_vector]).toEqual([5, 0]);
+
+        // FOUR SEATS ANSWER, THE FIFTH DIES AND HAS NOT BEEN RETRIED YET. Four closed `torn_down` rows and
+        // one closed `abandoned` row — five rows, five keys, and the pair a row-counting rail used to read
+        // identically. The `abandoned` row is the one at issue: `loop/records.ts:isReportedRun` refuses it,
+        // because a run that never reached `engine.ts:1756`'s `groupReview.ok` guard wrote no
+        // `sample_reviews` row, so this vector has FOUR reviews no matter how many rows it holds.
+        for (const pass of [1, 2, 3, 4]) {
+            seedSeatRun(world.store, `wi_review_groups_${hash}_${pass}`, 'torn_down', `2026-11-26T09:0${pass}:00.000Z`);
+        }
+
+        seedSeatRun(world.store, `wi_review_groups_${hash}_5`, 'abandoned', '2026-11-26T09:05:00.000Z');
+
+        // The rows, pinned so the assertion below cannot be read as "five seats answered because five rows
+        // closed": seat 5's ONLY closed row is the dead one.
+        expect(seatRows(world.store, hash)).toEqual([
+            `wi_review_groups_${hash}_1:torn_down`,
+            `wi_review_groups_${hash}_2:torn_down`,
+            `wi_review_groups_${hash}_3:torn_down`,
+            `wi_review_groups_${hash}_4:torn_down`,
+            `wi_review_groups_${hash}_5:abandoned`
+        ]);
+
+        const after = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        // THE RULING, DERIVED NOT OBSERVED: `isReportedRun` is `state === 'torn_down'`, so the seats holding
+        // such a row are 1-4 → FOUR, and the dial is untouched at five (`records.ts:screeningSizeOf`, the
+        // Author's Critic setting) → "4 of 5". The old read called the dead seat reviewed and printed 5.
+        expect([after.review_seats, after.reviews_on_current_vector, after.deep_reviews_on_current_vector]).toEqual([
+            5, 4, 0
+        ]);
+
+        // ...AND THE LOOP STILL OWES THAT SEAT, which is the property this ruling exists to keep the rail
+        // honest about. `groupReviewSeatAnswered` reads the same predicate, so seat 5 is unanswered;
+        // `groupReviewSeatSettled` also refuses it, because the family has spent 5 attempts (four answers +
+        // one dead pass) against the cap of 8, so the exhaustion clause has not bought it off either. A rail
+        // that printed "5 of 5" here would be reporting a review the vector has not got and never will get
+        // unless the retry runs.
+        expect(groupReviewSeatAnswered(world.store, hash, 5)).toBe(false);
+        expect(groupReviewSeatSettled(world.store, hash, after.review_seats as number, 5)).toBe(false);
+        expect(groupReviewAttempts(world.store, hash)).toBe(5);
+    });
+
+    it('still leaves an in-flight seat out of the count, so seat counting did not become row counting', async () => {
+        const world = await seedGroupStory();
+
+        writeLegacyProse(world.store);
+        await call(world.app, 'POST', '/stories/story_0/phrases/import');
+
+        const hash = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases')).vector_hash as string;
+
+        // THREE ANSWER, ONE DIED AND WAITS FOR ITS RETRY, ONE IS STILL DECIDING — the mix that separates all
+        // three readings of the numerator. The live seat has never been the point (a `working` row is a run
+        // in flight, not a review and not even a spent attempt: `phrase/exclusion.ts:groupReviewAttempts`
+        // counts CLOSED rows only), and the dead seat is no longer counted either, for the reason the case
+        // above pins. `isReportedRun` carries both halves — `torn_down` is closed, and a live row is not.
+        for (const pass of [1, 2, 3]) {
+            seedSeatRun(world.store, `wi_review_groups_${hash}_${pass}`, 'torn_down', `2026-11-26T09:0${pass}:00.000Z`);
+        }
+
+        seedSeatRun(world.store, `wi_review_groups_${hash}_4`, 'abandoned', '2026-11-26T09:04:00.000Z');
+
+        world.store.runs.create(
+            {
+                story_id: 'story_0',
+                work_item_ref: `wi_review_groups_${hash}_5`,
+                role: 'critic',
+                state: 'working',
+                started_at: '2026-11-26T09:05:00.000Z',
+                ended_at: null,
+                tokens: 0,
+                kind: 'work',
+                delegated: []
+            },
+            { run_ref: null, author: false, why: 'seed: a review seat still deciding (W5)' }
+        );
+
+        const after = reviewOf(await call(world.app, 'GET', '/stories/story_0/phrases'));
+
+        // FOUR CLOSED ROWS, THREE REVIEWS. The two seats outside the count are outside for DIFFERENT reasons
+        // and the rail is right about both: seat 4 filed nothing and still owes its retry, seat 5 is mid-flight
+        // and may yet answer. The dial stays five — the seat the Author asked for does not move because of what
+        // the provider did.
+        expect([after.review_seats, after.reviews_on_current_vector]).toEqual([5, 3]);
+
+        // THE IN-FLIGHT SEAT, SAID AS THE GATE SAYS IT: not an attempt (`groupReviewAttempts` counts the four
+        // CLOSED rows and stops there), and not an answer (`groupReviewSeatAnswered` reads the `working` row
+        // through `isReportedRun`). Seat 4 fails the same two tests, and that is what the retry is for.
+        expect(groupReviewAttempts(world.store, hash)).toBe(4);
+        expect(groupReviewSeatAnswered(world.store, hash, 5)).toBe(false);
+        expect(groupReviewSeatAnswered(world.store, hash, 4)).toBe(false);
+        expect(groupReviewSeatSettled(world.store, hash, after.review_seats as number, 5)).toBe(false);
     });
 });

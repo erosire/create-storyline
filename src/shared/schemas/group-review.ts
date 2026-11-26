@@ -26,13 +26,28 @@ import type { SampledFixVerification, SampledIssue } from '../types';
 export const GROUP_REVIEW_SCHEMA_NAME = 'GroupReview';
 
 /**
+ * One extra group's evidence for a multi-group complaint. `quote`/`location` are per group because
+ * the answer's primary `quote` can only prove ONE group was read; naming three groups while quoting
+ * one was the impossibility this field removes. `group_ref` must be one of the issue's `group_refs`.
+ */
+export type GroupReviewQuote = { group_ref: string; quote: string; location?: string };
+
+/**
  * One group review's complaint: a {@link SampledIssue} PLUS the groups it is about.
  *
  * `group_refs` holds `phrase_groups.id` values (the same UUIDs the job was dispatched with), not
  * catalog keys — the engine validates them against the story's groups before persisting, so a
  * Critic that invents an id is a refusal rather than a dangling attribution.
+ *
+ * `group_quotes` is the per-group evidence for a cross-group defect: the primary `quote` is the
+ * group named in `location`, and every OTHER group named in `group_refs` needs one entry here. It
+ * is optional on the wire for back-compat (a legacy row or a single-group issue has none), but the
+ * prompts require it for every additional group a new answer names.
  */
-export type GroupReviewIssue = SampledIssue & { group_refs: string[] };
+export type GroupReviewIssue = SampledIssue & {
+    group_refs: string[];
+    group_quotes?: GroupReviewQuote[];
+};
 
 /**
  * The TypeScript mirror of {@link GroupReviewSchema}.
@@ -54,7 +69,10 @@ export type GroupReview = {
  * The top level and every issue are strict (`additionalProperties: false`), `quote`/`detail` carry
  * `minLength: 1` (D-15: an unevidenced complaint is not a judgement the loop may act on), and
  * `group_refs` is REQUIRED with `minItems: 1` — a defect that crosses the whole Overview names
- * every group it crosses.
+ * every group it crosses. `group_quotes` is the per-group evidence for the OTHER named groups: a
+ * single `quote` can only prove the group in `location`, so the old "quote every group you name"
+ * rule was unsatisfiable without this array. It is optional for legacy rows and single-group
+ * issues; the prompts require it for every additional group a new answer names.
  *
  * `minItems` is the provider-side half of the rule only: the in-process validator
  * (`server/llm/structured.ts`) ignores keywords it does not implement, so an empty `group_refs`
@@ -88,6 +106,22 @@ export const GroupReviewSchema = {
                         type: 'array',
                         minItems: 1,
                         items: { type: 'string', minLength: 1 }
+                    },
+                    // R3/D-15 — the per-group evidence for a cross-group defect. The primary
+                    // `quote` proves `location`; this array proves every OTHER group the issue
+                    // names, so "name three groups, quote one" is no longer the only legal answer.
+                    group_quotes: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                group_ref: { type: 'string', minLength: 1 },
+                                quote: { type: 'string', minLength: 1 },
+                                location: { type: 'string' }
+                            },
+                            required: ['group_ref', 'quote'],
+                            additionalProperties: false
+                        }
                     }
                 },
                 required: ['severity', 'criterion', 'location', 'quote', 'detail', 'group_refs'],

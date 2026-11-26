@@ -41,6 +41,7 @@ import type { Store } from '../store';
 // generator, the prompt compiler and the settle all read the SAME definition of "lockable right now".
 import { editorLockEvidenceOf, groupLockSeatKey, groupLockSeatSpent } from './editor-lock';
 import {
+    GROUP_CHECK_ITEM_PREFIX,
     GROUP_DRAFT_ITEM_PREFIX,
     groupCheckSeatKey,
     groupReviewSeatKey,
@@ -49,6 +50,11 @@ import {
 import { storyPhrase } from '../phrase/catalog';
 import { lockPhraseGroup, unlockPhraseGroup } from '../phrase/locks';
 import { cleanSelectionOf, stampCleanRevisions } from '../phrase/reviewed';
+// MAJOR 3 (2026-11-26) — a DEEP seat is paid by the report its run FILED, not by the row it closed, so the
+// fixture that "already paid" a deep seat has to write the row `tools/reader.ts:submitVerdict` writes
+// (`store.verdicts`, keyed to the run by `run_ref`) — the same join `records.ts:wholeStoryVerdicts` uses.
+// `storySummary` is the target the real deep pass judges.
+import { storySummary } from './records';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
 import { AUTHOR_ATTR } from '../run/mock';
 import { GroupLockDecisionSchema, GROUP_LOCK_SCHEMA_NAME } from '../../shared/schemas';
@@ -112,13 +118,62 @@ function stampClean(rig: Rig, runRef = 'run_check_1') {
 }
 
 /**
+ * The terminal report a CONCLUDED deep-review pass leaves on the record (MAJOR 3, 2026-11-26).
+ *
+ * `phrase/exclusion.ts:groupCheckSeatAnswered` — the ONE predicate the deep seat's gate and the Author's
+ * rail share — asks whether one of the seat's RUNS filed a `verdicts` row, because a tool-carrying pass
+ * reaches `torn_down` whenever its session merely ENDED (`run/plugins/critic-termination.ts`): a capped or
+ * abandoned deep pass closes a run row, files NOTHING, and used to settle its seat anyway while the rail
+ * refused to count it. `submitVerdict` is the call that ENDS a Critic pass and carries its verdict lines
+ * AND its findings, so a verdict row is the evidence it concluded. This write mirrors
+ * `tools/reader.ts:submitVerdict`'s row (`run_ref` = the run that filed it), which is also the join
+ * `records.ts:wholeStoryVerdicts` already makes.
+ *
+ * THE REPORT FAILS, and that is not decoration — it is what keeps this file testing locks. A PASSING
+ * report on the phase's last open criterion makes `criteria/engine.ts`'s `goalStatus.passed` true, and
+ * `status.ts:decideStory` then offers `phase_signoff` with `dispatch: false` (`loop/mock.ts`'s engine
+ * dispatches only on the decision's say-so, which is L-36's "the crew is stopped until you sign"): the
+ * optional seat would never be claimed and every assertion below about WHICH run the sweep opened would
+ * read an empty ledger. A `fix` verdict holds the sign-off back exactly like the pre-MAJOR 3 fixture did
+ * with no verdict rows at all, and it files no FINDING, so it also creates no FIX task and no queue
+ * competition — measured in `Temp/coding-f2/probe-lock3.ts`: `file` → `phase_signoff`, 0 lock runs;
+ * `fix` → `ready`, 1 lock run. The rig's own Critic crew answers `fix` whenever a line fails
+ * (`mock.ts:verdictLines`), so this is also the state the live loop would actually be in.
+ */
+function fileSeatReport(rig: Rig, run: Run): void {
+    rig.store.verdicts.create(
+        {
+            story_id: rig.storyId,
+            target_ref: storySummary(rig.store, rig.storyId)?.id ?? rig.storyId,
+            target_kind: 'summary',
+            run_ref: run.id,
+            template_ref: 'critic-genre',
+            round: 1,
+            // ONE FAILING line: the seat has answered the phase's criterion, and its answer is "not yet" —
+            // which is what holds the sign-off (see the header) without filing a finding or a task.
+            criteria_passed: [{ criterion: 'C-14', result: false, evidence: 'a contradiction the pass quoted against the clean text' }],
+            hard_pass: false,
+            soft_count: 0,
+            recommendation: 'fix'
+        },
+        { run_ref: run.id, why: `seed: the deep seat's terminal report on ${run.work_item_ref} (MAJOR 3)` }
+    );
+}
+
+/**
  * A CLOSED run for one seat key — "the book already paid this seat". This retires the work phase ① genuinely
  * owes (the structured Critic pass and the deep cross-group review) so the rig's capacity-1 slot can only
- * take the optional seat. `torn_down` is the state a finished pass leaves: `records.ts` counts a CLOSED run
- * whatever its outcome, which is the very spentness rule these seats share.
+ * take the optional seat.
+ *
+ * THE TWO SEATS ARE NOT PAID THE SAME WAY (MAJOR 3, 2026-11-26). The structured seat is paid by its
+ * `torn_down` row, because that is the one closed state whose answer reached the settle
+ * (`records.ts:isReportedRun` → `groupReviewSeatAnswered`). The DEEP seat is paid by what it FILED:
+ * `groupCheckSeatAnswered` wants a verdict row from the seat's own run, so `paySeat` writes one for a
+ * `wi_group_check_` key and a closed-but-silent deep pass re-arms — the fixture now says "this pass
+ * concluded", which is exactly what these tests assume.
  */
 function paySeat(rig: Rig, key: string, role: Run['role'], groupRefs: string[]) {
-    return rig.store.runs.create(
+    const run = rig.store.runs.create(
         {
             story_id: rig.storyId,
             work_item_ref: key,
@@ -134,6 +189,10 @@ function paySeat(rig: Rig, key: string, role: Run['role'], groupRefs: string[]) 
         },
         { run_ref: null, author: true, why: `seed: the paid seat ${key}` }
     );
+
+    if (key.startsWith(`${GROUP_CHECK_ITEM_PREFIX}_`)) fileSeatReport(rig, run);
+
+    return run;
 }
 
 /**

@@ -14,6 +14,16 @@
 // run is fine while it keeps calling tools and a hung one lapses (S-4a, L-2). Adding a cap here
 // would be the exact thing E-0 forbids.
 //
+// THE ONE EXCEPTION IS THE CRITIC'S REVIEW PASS (C2-AD3), and it is a POLICY end, not a clock: a
+// Critic run ends the moment its terminal report (`submitVerdict`) has FILED — meaning the tool
+// ANSWERED, not merely that the model asked. A verdict the tool layer refused (T-1a) leaves the run
+// its next turn, exactly as it does on the engine path, and the refusal is already in the transcript
+// as that call's own message. A critic that filed a PARTIAL report (`raiseFinding`) and keeps reading
+// gets one nudge, then the bounded review-turn cap. The rule lives in ./plugins/critic-termination
+// for the shipped engine-backed path and is mirrored below for this hand-written loop, so a caller
+// with no engine cannot get a different contract. Every other kind keeps E-0's unbounded loop
+// untouched.
+//
 // THE RUN ENDS NATURALLY when the model returns a turn with no `tool_calls` (§9 "report →
 // commit → teardown"): the model decides it is done, which is why the brief's etiquette section
 // states S-4's obligation — a model that stops without reporting produces a no-op turn, and that
@@ -21,6 +31,12 @@
 import type { ChatClient, ChatMessage, ChatUsage, ToolCall, ToolSchema } from '../llm';
 import { isAbortError } from '../llm';
 import { isReportTool } from './catalogue';
+import {
+    CRITIC_ROLE_KIND,
+    CRITIC_CONCLUDE_NUDGE,
+    criticTurnCapFromEnvironment,
+    isTerminalCriticReport
+} from './plugins/critic-termination';
 import { isProposedResult, type RunToolContext, type ToolResult, type ToolRuntime } from './types';
 import type { RoleKind, StoryPhase } from '../../shared/types';
 
@@ -93,7 +109,43 @@ export interface LoopSpec {
      * `searchWeb`/`fetchPage` even when the model would happily advertise them (§7's column, U-1e).
      */
     tools?: ToolSchema[];
+    /**
+     * C2-AD3: the review-turn bound for a `critic` run on THIS loop. Omitted means
+     * {@link criticTurnCapFromEnvironment} — the same default the shipped plugin reads, so both
+     * paths agree unless a host narrowed one. The engine-backed path cannot take it per run (its
+     * plugin is built with the Story harness), so `runEngineAgent` ignores this field and the
+     * harness-level cap in force there decides.
+     */
+    criticTurnCap?: number;
     signal?: AbortSignal;
+}
+
+/**
+ * How a run that ended EARLY ended, in the run's own words (C2-AD3). It exists because the ordinary
+ * `LoopOutcome` says nothing about WHY the loop stopped, and the run row must not claim "the model
+ * returned no tool call" for a Critic pass that was ended by its own filed report.
+ *
+ *   - `reported` — it filed its terminal report, and the pass ended on that turn. A completed
+ *     result, not a kill and not a failure: the verdict is in the book.
+ *   - `capped` — the review-turn cap caught it before it filed its verdict. Honest wording only:
+ *     the findings it did file stand, and the row says the verdict is missing.
+ */
+export interface RunEndCause {
+    kind: 'reported' | 'capped';
+    /** Model turns this pass really issued. */
+    turns: number;
+    /** The bound that was in force when the pass ended. */
+    cap: number;
+    /** Every report tool it FILED, in call order (S-4's classification). A refusal is not here. */
+    reports: string[];
+    /**
+     * Every report tool it called and the tool layer REFUSED (`{ ok: false }`, T-1a). Omitted when the
+     * pass was never refused. This is the third state the run row has to keep: `reports: []` alone
+     * reads "never answered", and a pass whose verdict was refused and never fixed answered and lost.
+     */
+    refusals?: string[];
+    /** The terminal tool name, present for a `reported` end. */
+    terminal_tool?: string;
 }
 
 export interface LoopOutcome {
@@ -101,6 +153,11 @@ export interface LoopOutcome {
     text: string;
     /** Turns asked of the provider, for the tests that pin "the run asked twice". */
     turns: number;
+    /**
+     * Absent for every run that ended the way it always has — the natural no-tool-call turn, a
+     * panel, a structured turn. Present only when the Critic policy ended the pass early.
+     */
+    endCause?: RunEndCause;
 }
 
 /** Adds one turn's usage to the tally. `usage` is absent when the provider sent none (S-6). */
@@ -172,14 +229,40 @@ export async function runAgentLoop(deps: LoopDeps, spec: LoopSpec, tally: RunTal
 
     let turns = 0;
 
+    // C2-AD3 — the Critic review policy for THIS fallback loop, mirroring
+    // ./plugins/critic-termination: terminal report → stop now; partial report → one nudge; no
+    // verdict by the cap → stop and say so. Gated on the kind, so every other role never reads a
+    // line of it.
+    const isCriticPass = spec.roleKind === CRITIC_ROLE_KIND;
+    const reviewCap = spec.criticTurnCap ?? criticTurnCapFromEnvironment();
+    // What the pass has FILED, what it called and had REFUSED, and how many times it has been nudged.
+    const filedReports: string[] = [];
+    const refusedReports: string[] = [];
+    // THE NUDGE IS A REQUEST, NOT A MESSAGE. The engine path injects it through a `turn.before`
+    // transcript override that reaches one request and is never committed; this loop owns its own
+    // transcript, so pushing the line into `messages` would re-lecture the model on every later turn
+    // (measured: the same instruction in 3 consecutive requests of one pass). Arming the flag puts it
+    // in exactly the NEXT request, and `criticNudges` bounds the arming to once per run — so both
+    // paths show the model the instruction at most once (objective 5).
+    let criticNudges = 0;
+    let criticNudgePending = false;
+
     for (;;) {
         // Checked before the dial, not only inside the transport: a kill that lands between two
         // turns must not spend another request (P8 — "the Author can always pull the cord").
         throwIfAborted(spec.signal);
 
+        // The history the model is asked to answer THIS turn: the committed transcript, plus the one
+        // nudge if it was armed after the last turn. `messages` itself never gains the line.
+        const requestMessages: ChatMessage[] = criticNudgePending
+            ? [...messages, { role: 'user', content: CRITIC_CONCLUDE_NUDGE }]
+            : messages;
+
+        criticNudgePending = false;
+
         const response = await chat.complete({
             model: spec.model,
-            messages,
+            messages: requestMessages,
             // T-6a/T-6: the whole catalogue is declared on every session, so a fresh context
             // sees its tools on turn one and never pays a discovery round trip.
             tools: spec.tools ?? runtime.schemas(),
@@ -204,6 +287,10 @@ export async function runAgentLoop(deps: LoopDeps, spec: LoopSpec, tally: RunTal
 
         turn.tool_calls = toolCalls;
         messages.push(turn);
+
+        // C2-AD3: the terminal report this turn filed, if any. Reset per turn so a call the model
+        // only THOUGHT it filed (a malformed payload, below) never ends the pass.
+        let filedTerminalTool: string | undefined;
 
         for (const call of toolCalls) {
             const decoded = decodeArguments(call);
@@ -230,10 +317,32 @@ export async function runAgentLoop(deps: LoopDeps, spec: LoopSpec, tally: RunTal
             // producing them. A malformed payload counts too: the model is still talking.
             deps.heartbeat?.();
 
-            if (reachedTool && isReportTool(call.name) && !isProposedResult(result)) {
+            if (reachedTool && isReportTool(call.name) && !isProposedResult(result) && result.ok !== false) {
+                // S-4's "did this run report anything" is about what LANDED. A refusal filed nothing,
+                // so it must not clear the run's `no_op` flag, and the row must not move to
+                // `reporting` on a call the tool layer turned away (`run/executor.ts:631` reads this
+                // list, and the loop engine's seat-owed decision reads the row).
                 if (!tally.reports.includes(call.name)) deps.onReport?.(call.name);
 
                 tally.reports.push(call.name);
+            }
+
+            // C2-AD3 — the Critic policy counts a report the call DELIVERED, and a refusal is not a
+            // delivery. The engine's plugin now decides the same way, from the `ToolResult` the host's
+            // tool bridge hands it, because neither `turn.after`'s committed `tool_calls` nor the
+            // harness's `tool.after` outcome can see a `{ ok: false }` refusal: the request to file is
+            // not the filing. A D-38 PROPOSAL is a delivery — the agent was told its write is recorded
+            // and the run aggregates it later — so a critic panel member still ends on its proposal
+            // here exactly as it does on the engine path. Only a call that never reached the tool
+            // layer (T-11's malformed payload) and a refusal leave the pass its next turn.
+            if (isCriticPass && reachedTool && isReportTool(call.name)) {
+                if (result.ok === false) {
+                    if (!refusedReports.includes(call.name)) refusedReports.push(call.name);
+                } else {
+                    if (!filedReports.includes(call.name)) filedReports.push(call.name);
+
+                    if (isTerminalCriticReport(call.name)) filedTerminalTool = call.name;
+                }
             }
 
             if (reachedTool && !isProposedResult(result)) {
@@ -251,6 +360,54 @@ export async function runAgentLoop(deps: LoopDeps, spec: LoopSpec, tally: RunTal
                 content: JSON.stringify(result),
                 tool_call_id: call.id
             });
+        }
+
+        // C2-AD3 — the three Critic rules, in precedence order, taken AFTER the turn's tools ran so
+        // the filed report is already in the book when the pass ends. A non-critic never reaches any
+        // of this and keeps looping to its natural end.
+        if (isCriticPass) {
+            // 1. Its verdict FILED: the review pass is over, and this is a completed result — no
+            //    further model turn (objective 1). `turn.content` is the prose it said while filing.
+            if (filedTerminalTool !== undefined) {
+                return {
+                    text: turn.content,
+                    turns,
+                    endCause: {
+                        kind: 'reported',
+                        turns,
+                        cap: reviewCap,
+                        reports: [...filedReports],
+                        ...(refusedReports.length === 0 ? {} : { refusals: [...refusedReports] }),
+                        terminal_tool: filedTerminalTool
+                    }
+                };
+            }
+
+            // 2. The review-turn cap. Honest wording on the row, `capped` and not `reported`: the
+            //    verdict never arrived, and the findings it did file are all this pass produced. A
+            //    verdict it filed and had REFUSED is named in `refusals`, because "never answered" and
+            //    "answered and refused" are different facts for the Author and for the seat.
+            if (turns >= reviewCap) {
+                return {
+                    text: turn.content,
+                    turns,
+                    endCause: {
+                        kind: 'capped',
+                        turns,
+                        cap: reviewCap,
+                        reports: [...filedReports],
+                        ...(refusedReports.length === 0 ? {} : { refusals: [...refusedReports] })
+                    }
+                };
+            }
+
+            // 3. One nudge, once, and only because a report SUCCEEDED (objective 2). A refusal is not
+            //    here on purpose: the refusal is already in the transcript as this turn's tool message
+            //    and is the instruction the model actually has to answer.
+            if (filedReports.length > 0 && criticNudges === 0) {
+                criticNudges += 1;
+                criticNudgePending = true;
+            }
         }
     }
 }

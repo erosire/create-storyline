@@ -40,7 +40,12 @@ import type {
     ToolContext
 } from '@underload/harness';
 import type { ChatClient, ChatMessage, ToolCall, ToolSchema } from '../llm';
-import type { LoopOutcome, LoopSpec, RunTally } from './loop';
+import type { LoopOutcome, LoopSpec, RunEndCause, RunTally } from './loop';
+import {
+    createCriticTerminationPlugin,
+    criticTurnCapFromEnvironment,
+    type CriticTerminationHandle
+} from './plugins/critic-termination';
 import { agentModelFor, templateRoleModels, type AgentModelSource, type AgentTemplateModel } from './agent-models';
 import { isReportTool } from './catalogue';
 import { isProposedResult, type RunToolContext, type ToolRuntime } from './types';
@@ -394,6 +399,14 @@ export interface StoryHarnessOptions {
     defaultModel: string;
     /** Test seam; defaults to the engine's `harness`. */
     createHarness?: typeof harness;
+    /**
+     * C2-AD3: the model-turn bound for one Critic review pass in this Story's harness. Omitted means
+     * {@link criticTurnCapFromEnvironment} — the operator's `STORYLINE_CRITIC_TURN_CAP`, else
+     * {@link CRITIC_REVIEW_TURN_CAP}. It is a harness option rather than a per-run one because the
+     * mechanism that enforces it is a plugin the harness owns; a per-run bound would need
+     * `HarnessRunOptions`, and that is only `{ signal, attachments }`.
+     */
+    criticTurnCap?: number;
     /** Durable thread history (request + answer); defaults to an in-memory log. */
     threadLog?: StoryThreadLog;
 }
@@ -416,6 +429,12 @@ export class StoryHarness {
     private readonly threadLog: StoryThreadLog;
     /** Brief system line -> run, so the transport can attribute a request to its thread. */
     private readonly byBrief = new Map<string, EngineRun>();
+    /**
+     * C2-AD3 — the Critic termination policy for this Story: the plugin the engine runs, and the
+     * ledger that tells `run()` which rejections were the plugin ending a pass that had already
+     * reported. Built before the harness because the harness config is what installs it.
+     */
+    private readonly termination: CriticTerminationHandle;
 
     constructor(
         private readonly storyId: string,
@@ -444,6 +463,13 @@ export class StoryHarness {
         // Item owner.
         this.catalogue = this.toolCatalogue();
         this.declaredSchemas = new Map(this.runtime.schemas().map((schema) => [schema.function.name, schema]));
+
+        // C2-AD3: the Critic pass ends when it files its verdict. Built first, because the harness
+        // config below is what installs its plugin and the ledger has to exist before any thread runs.
+        this.termination = createCriticTerminationPlugin({
+            cap: options.criticTurnCap ?? criticTurnCapFromEnvironment()
+        });
+
         this.engine = create({
             agents,
             entry: STORY_AGENT_ENTRY,
@@ -451,6 +477,10 @@ export class StoryHarness {
             presets: false,
             // The two CONTEXT built-ins (compaction + trimmer), never the parked-session ping.
             builtinPlugins: STORYLINE_BUILTIN_PLUGINS,
+            // C2-AD3's critic-scoped policy, applied AFTER the built-ins (the engine's documented
+            // order for `configuration.plugins`), so a `turn.before` round runs compaction first and
+            // this policy last: a `stop` composes with a transcript override instead of undoing it.
+            plugins: [this.termination.plugin],
             toolCreation: false,
             tools: this.catalogue,
             knowledgeOwner: `storyline:${storyId}`
@@ -460,12 +490,18 @@ export class StoryHarness {
     }
 
     /**
-     * R2/R3 — the engine plugins this Story's harness actually runs, in application order.
-     * Diagnostics and the plugin test read this; the roster UI has no plugin pane (the host
-     * fixes the set in {@link STORYLINE_BUILTIN_PLUGINS}).
+     * R2/R3 — the engine plugins this Story's harness actually runs, in application order: the two
+     * CONTEXT built-ins the host fixes in {@link STORYLINE_BUILTIN_PLUGINS}, then this host's own
+     * `critic-termination` policy (`configuration.plugins` is applied after the built-ins).
+     * Diagnostics and the plugin test read this; the roster UI has no plugin pane.
      */
     get pluginNames(): readonly string[] {
         return this.engine.plugins;
+    }
+
+    /** C2-AD3 — the Critic review-turn bound in force for this Story's harness. */
+    get criticTurnCap(): number {
+        return this.termination.cap;
     }
 
     /**
@@ -593,7 +629,23 @@ export class StoryHarness {
         // S-4a: the lease is refreshed on every tool call, exactly as the hand-written loop did.
         run.heartbeat?.();
 
-        if (isReportTool(name) && !isProposedResult(result)) {
+        // C2-AD3 — THE POLICY SEES THE RESULT, NOT THE REQUEST. `run/plugins/critic-termination`
+        // arms its stop only from what a report tool ANSWERED: `turn.after`'s committed `toolCalls`
+        // are the model's request, and `submitVerdict` can still refuse it (T-1a). A refusal here
+        // means the verdict was never written, so the policy must not end the pass — the model keeps
+        // its turn, and the refusal it filed is already in the transcript as this call's message.
+        //
+        // WHY HERE AND NOT IN A HARNESS HOOK: the engine classifies a `{ ok: false }` value as a
+        // COMPLETED delivery (`harness/src/engine/core/tool-outcome.ts` — only a throw or an
+        // over-cap document is `failed`), so `tool.after`'s `outcome`/`isError` cannot see a Storyline
+        // refusal. This method is the one place on this path holding the real `ToolResult`.
+        this.termination.toolResult(run.threadId, name, result.ok !== false);
+
+        // S-4's report accounting is result-aware for the SAME reason: a call that filed nothing did
+        // not report, and `no_op` is the flag the loop's seat-owed decision reads (`run/executor.ts`).
+        // A D-38 proposal still counts as the AGENT's answer (it was recorded, and the agent was told
+        // so), and the run's own report lands later through the panel's winning set.
+        if (isReportTool(name) && !isProposedResult(result) && result.ok !== false) {
             if (!run.tally.reports.includes(name)) run.onReport?.(name);
 
             run.tally.reports.push(name);
@@ -914,12 +966,55 @@ export class StoryHarness {
             const aborted =
                 spec.signal?.aborted === true || (error as { name?: string } | undefined)?.name === 'AbortError';
 
+            // C2-AD3 — the honest end state of a Critic pass the plugin ended. A plugin `stop` takes
+            // the engine's abort path, so `sendThreadInput` REJECTS even though the pass concluded:
+            // reading that rejection as a failure is precisely how the filed verdict used to be lost
+            // (the row went `failed`, S-4 scored the pass a no-op). The plugin's ledger is the record
+            // of that stop — the rejection itself carries no machine-readable code — and it is checked
+            // only when the run was NOT aborted, so an Author cord still wins with its own sentence.
+            const terminal = aborted ? undefined : this.termination.ledger.take(thread.id);
+
+            if (terminal !== undefined) {
+                // The stop is a COMPLETED result: teardown happened, the report tool executed before
+                // it, and the verdict/findings it filed are already in the book. `turn.after` kept the
+                // last committed prose, so the thread still answers.
+                run.answer = terminal.final_text;
+                run.state = 'torn_down';
+
+                // A capped pass has no verdict, and the thread record says so instead of reading as a
+                // clean conclusion (objective 3). The `reported` case carries no `error`: nothing about
+                // it went wrong, and the sentence naming the conclusion rides on the run row's
+                // `end_reason` (`run/executor.ts`), which is the surface the crew rail renders.
+                if (terminal.kind === 'capped') run.error = terminal.reason;
+
+                const endCause: RunEndCause = {
+                    kind: terminal.kind,
+                    // `run.turns` is the transport's own count of model requests, so the row's number
+                    // comes from the same place the token tally does, not from the plugin's counter.
+                    turns: run.turns,
+                    cap: terminal.cap,
+                    reports: terminal.reports,
+                    // Carried through so the ROW can name a refused verdict: `reports: []` alone would
+                    // read as "never answered", which is a different fact than "answered, refused".
+                    ...(terminal.refusals === undefined ? {} : { refusals: terminal.refusals }),
+                    ...(terminal.terminal_tool === undefined ? {} : { terminal_tool: terminal.terminal_tool })
+                };
+
+                return { text: terminal.final_text, turns: run.turns, endCause };
+            }
+
             run.state = aborted ? 'abandoned' : 'failed';
             run.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 
             throw run.lastError ?? error;
         } finally {
             run.endedAt = Date.now();
+
+            // C2-AD3: the plugin's per-thread state and its pending terminal record are this run's, so
+            // they end here. Engine thread ids are never reused inside a Story harness, but the ledger
+            // is scoped to a run rather than to a thread on purpose — a thread that outlives its run
+            // (a compaction continuation) must not inherit a stale conclusion.
+            this.termination.ledger.release(thread.id);
 
             // THE BRIEF STAYS THE THREAD'S KEY AFTER THIS RUN RESOLVES (2026-11-23). A thread can
             // outlive the `sendThreadInput` call that started it: the engine's `context-compaction`

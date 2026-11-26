@@ -4,11 +4,11 @@
  * WHY THIS FILE EXISTS: `MockToolRuntime` is not a stub, it is the double every loop, API and executor
  * test runs its crew through (`run/mock.ts:defaultTools`), and a double that lets a scripted crew do what
  * the product forbids is worse than no double at all — the suite would go green on a sequence the server
- * refuses. So the two mirrors (`raiseFinding`'s D-33c gates and `approveFinding`'s D-33d gate) are pinned
- * HERE, against the same exact refusal objects the real tools throw, and both read the same shared
- * predicates (`loop/records.ts:openIssueFindings`, `findingsRaisedByRun`) rather than a private re-read of
- * the rule. The real-tool side of the same contract lives in `src/server/tools/runtime.test.ts`; the
- * engine/API side lives in `src/server/loop/findings.test.ts` and `src/server/api/approve-all.test.ts`.
+ * refuses. So the two mirrors (`raiseFinding`'s D-33c dismissal and `approveFinding`'s D-33d gate) are
+ * pinned HERE, against the same exact result objects the real tools return, and both read the same shared
+ * predicate (`loop/records.ts:openIssueFindings`) rather than a private re-read of the rule. The real-tool
+ * side of the same contract lives in `src/server/tools/runtime.test.ts`; the engine/API side lives in
+ * `src/server/loop/findings.test.ts` and `src/server/api/approve-all.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -18,9 +18,9 @@ import type { RunToolSession } from './types';
 
 /**
  * A CRITIC session on this Story, bound the way `run/executor.ts` binds one (T-3: the Story is fixed by
- * the session, never by the args). One `runId` is one review PASS, which is the unit D-33c's no-mixing
- * rule counts — so a test that wants two passes asks for two sessions, exactly as two dispatched runs get
- * two.
+ * the session, never by the args). One `runId` is one review PASS — a dispatched run — so a test that
+ * wants two passes asks for two sessions, exactly as two dispatched runs get two. (D-33c's filing gate is
+ * Story-scoped and never counts the pass at all, since 2026-11-26.)
  */
 const sessionFor = (runId: string): RunToolSession => ({
     storyId: 'story_0',
@@ -67,8 +67,8 @@ const improvement = (title: string) => ({
     why: 'the pass is worth taking'
 });
 
-describe('the mock crew files under D-33c — issues before proposals, and never in one pass', () => {
-    it('refuses a Proposal over an open issue, names the open rows, and files nothing (D-33c)', async () => {
+describe('the mock crew files under D-33c — issues before proposals, and a proposal dismissed while they wait', () => {
+    it('dismisses a Proposal over an open issue, names the open rows, and files nothing (D-33c)', async () => {
         const { store, call } = crew();
 
         // The issue files first, and the double answers like the real tool does: the created row, its kind,
@@ -80,33 +80,109 @@ describe('the mock crew files under D-33c — issues before proposals, and never
             rev: 1
         });
 
-        const refused = await call('run_0', 'raiseFinding', improvement('open the book on the lie'));
+        const dismissed = await call('run_0', 'raiseFinding', improvement('open the book on the lie'));
 
-        // The refusal object is what the model reads back, so its exact wording and its structured fields
-        // are both product surface — this one mirrors `tools/reader.ts:raiseFinding`'s D-33c throw.
-        expect(refused).toEqual({
-            ok: false,
-            refused: 'D-33c',
+        // The answer object is what the scripted crew reads back, so its exact wording and its structured
+        // fields are both product surface. This one mirrors `tools/reader.ts:dismissedProposal`
+        // (2026-11-26): the proposal is DISMISSED, not refused — `ok: true`, `filed: false`, the open rows
+        // stated as the REASON (never a queue the claim waits behind, F3), and no exits to try. A
+        // `{ok:false}` refusal would tell the scripted crew its call was wrong and invite another one,
+        // which is the retry loop the rule now closes at the first call.
+        expect(dismissed).toEqual({
+            ok: true,
+            dismissed: 'D-33c',
+            filed: false,
+            kind: 'proposal',
             message:
-                'a proposal cannot be filed while 1 issue is unresolved — finding_0 — because a suggestion about a book that still has defects is not what the round is for. An issue holds a proposal down only while it is `unconfirmed`, `confirmed` or `approved`; one the Editor marked `disputed` is not a defect and releases it, exactly as `fixed` or `discarded` does (D-33c).',
+                'this proposal is dismissed, not filed — the reason is 1 issue: open before this call — finding_0. A suggestion about a book that still has defects is not what this round is for, and the dismissal settles the claim here: no row, no count, nothing to answer. Conclude this pass — submit your verdict (D-33c).',
             open_issues: 1,
             open_issue_refs: ['finding_0']
         });
-        // And the refusal is a refusal: the proposal never reached the board, so the queue, the dial and the
-        // closure rules all see the one row the pass actually filed.
+        // And the dismissal is a dismissal: the proposal never reached the board, so the queue, the dial
+        // and the closure rules all see the one row the pass actually filed.
         expect(store.findings.list().map((row) => [row.id, row.kind ?? 'issue', row.state])).toEqual([
             ['finding_0', 'issue', 'unconfirmed']
         ]);
     });
 
-    it('refuses an issue in the pass that already filed a Proposal, and keeps an issue filable in the next (D-33c)', async () => {
-        // THE ASYMMETRY IS THE POINT, SO IT IS PINNED FROM BOTH SIDES. A pass that filed a Proposal first
-        // may not also file a defect — the pass answered "what would be better?", and it stops there. A
-        // DIFFERENT pass may file the defect at any time (a defect is always filable), which is also why
-        // the proposal-after-issue direction needs no second rule: the issue is open, so the gate above
-        // refuses the proposal. The attribution runs through the journal
-        // (`loop/records.ts:findingsRaisedByRun`), because a finding carries no `run_ref` — which is why
-        // the two directions of this test differ only in their `runId`.
+    it('files a WHOLE pass in one submitVerdict call — the verdict, a second target, and both claims (W3b)', async () => {
+        // W3b (2026-11-26): the double carries the same terminal shape as `tools/reader.ts:submitVerdict`,
+        // because every loop and API test runs its crew through this class. One call files the primary
+        // verdict, an extra target from `verdicts[]`, and the claims from `findings[]` — and the D-33c gate
+        // is resolved for the WHOLE call before it files, from the board as it stood plus the report's own
+        // claims (F3), so a scripted crew cannot script around it whichever order it files in.
+        const { store, call } = crew();
+
+        await call('run_0', 'raiseFinding', defect('the map contradicts the 1911 survey'));
+
+        expect(
+            await call('run_1', 'submitVerdict', {
+                target_ref: 'chapter_1',
+                target_kind: 'chapter',
+                round: 1,
+                criteria: [{ criterion: 'C-4', result: true, evidence: 'chapter_1 sec_1 delivers the climb' }],
+                recommendation: 'fix',
+                why: 'the pass ends here',
+                verdicts: [
+                    {
+                        target_ref: 'revision_0',
+                        target_kind: 'revision',
+                        round: 1,
+                        // The nested entry sends `criteria_passed`, the field the real tool's schema names.
+                        criteria_passed: [
+                            { criterion: 'C-4', result: true, evidence: 'revision_0 sec_1 delivers the climb' }
+                        ]
+                    }
+                ],
+                findings: [
+                    improvement('open the book on the lie'),
+                    { ...defect('the bell is rung twice'), criterion_ref: 'C-7' }
+                ]
+            })
+        ).toEqual({
+            ok: true,
+            id: 'verdict_0',
+            rev: 1,
+            verdicts: [{ ok: true, id: 'verdict_1', rev: 1, target_ref: 'revision_0' }],
+            findings: [
+                {
+                    ok: true,
+                    dismissed: 'D-33c',
+                    filed: false,
+                    kind: 'proposal',
+                    // F3: the cause is BOTH the row that was open before the call and the issue this same
+                    // report files beside it, and the answer says which is which — `open_issue_refs` stays
+                    // the pre-existing rows, and `same_report_issues` counts the report's own.
+                    message:
+                        'this proposal is dismissed, not filed — the reason is 2 issues: open before this call — finding_0; plus 1 issue filed by this same report. A suggestion about a book that still has defects is not what this round is for, and the dismissal settles the claim here: no row, no count, nothing to answer. Conclude this pass — submit your verdict (D-33c).',
+                    open_issues: 1,
+                    open_issue_refs: ['finding_0'],
+                    same_report_issues: 1
+                },
+                { ok: true, finding_id: 'finding_1', kind: 'issue', rev: 1 }
+            ],
+            reported: { verdicts: 2, findings: 2 }
+        });
+        // Two verdict rows and one new finding — the dismissed proposal wrote no row and counted no sighting
+        // on the issue that holds the gate open (the same "the dismissal armed nothing" claim the real tool
+        // makes in `tools/runtime.test.ts`).
+        expect(store.verdicts.list().map((row) => `${row.id}:${row.target_ref}:${row.recommendation}`)).toEqual([
+            'verdict_0:chapter_1:fix',
+            'verdict_1:revision_0:fix'
+        ]);
+        expect(store.findings.list().map((row) => `${row.id}:${row.kind}:${row.state}:${row.seen_count}`)).toEqual([
+            'finding_0:issue:unconfirmed:1',
+            'finding_1:issue:unconfirmed:1'
+        ]);
+    });
+
+    it('files both halves of a pass — the mirror rule is gone — and dismisses the Proposal (D-33c)', async () => {
+        // THE MIRROR RULE THAT GOED (2026-11-26): an `issue` used to be refused in a pass that had already
+        // filed a proposal. After the dismissal a proposal row only exists when NO issue was open, so that
+        // rule could henceforth refuse only a DEFECT — the work the round exists for — and it would strand
+        // it behind another pass while the proposal rode the dial. So both calls are accepted now, and the
+        // half that loses is the proposal, by the first gate. Attribution by run decides nothing here
+        // any more — the helper that read it went with the rule.
         const { store, call } = crew();
 
         expect(await call('run_0', 'raiseFinding', improvement('open the book on the lie'))).toEqual({
@@ -116,35 +192,98 @@ describe('the mock crew files under D-33c — issues before proposals, and never
             rev: 1
         });
 
+        // The defect the same pass files afterwards is accepted: an issue is always filable.
         expect(await call('run_0', 'raiseFinding', defect('the map contradicts the 1911 survey'))).toEqual({
-            ok: false,
-            refused: 'D-33c',
-            message:
-                'this pass already filed finding_0 as `kind: proposal`, and an issue cannot share a review pass with a proposal (D-33c).',
-            proposal_refs: ['finding_0']
-        });
-
-        // The next pass files the defect, rule notwithstanding: an open PROPOSAL does not hold an ISSUE
-        // down, and a loop that refused the defect would refuse the very work that releases proposals.
-        expect(await call('run_1', 'raiseFinding', defect('the map contradicts the 1911 survey'))).toEqual({
             ok: true,
             finding_id: 'finding_1',
             kind: 'issue',
             rev: 1
         });
+
+        // And a proposal attempted afterwards is dismissed by the open issue, in the same pass or any other.
+        expect(await call('run_0', 'raiseFinding', improvement('let the keeper lie first'))).toEqual({
+            ok: true,
+            dismissed: 'D-33c',
+            filed: false,
+            kind: 'proposal',
+            message:
+                'this proposal is dismissed, not filed — the reason is 1 issue: open before this call — finding_1. A suggestion about a book that still has defects is not what this round is for, and the dismissal settles the claim here: no row, no count, nothing to answer. Conclude this pass — submit your verdict (D-33c).',
+            open_issues: 1,
+            open_issue_refs: ['finding_1']
+        });
+        // The board holds the first proposal and the defect, and nothing else: the dismissed improvement
+        // left no row, so the loop cannot act on it and no Writer round comes from it.
         expect(store.findings.list().map((row) => [row.id, row.kind ?? 'issue'])).toEqual([
             ['finding_0', 'proposal'],
             ['finding_1', 'issue']
         ]);
     });
 
-    it('releases the Proposal the moment the issue reaches a closed state (D-33c)', async () => {
+    it('dismisses the Proposal beside an issue in ONE report, whichever end of the array it sits at (D-33c, F3)', async () => {
+        // THE DOUBLE MIRRORS THE TOOL (2026-11-26, F3). `submitVerdict`'s gate is read BEFORE the report
+        // files, together with the report's own `kind: issue` entries, so a scripted crew cannot script an
+        // answer the product no longer gives: on a clear board, `[proposal, issue]` used to FILE the
+        // proposal while `[issue, proposal]` dismissed it. Both orders now dismiss it, and the issue files
+        // either way — which is the sequence every loop and API test running through this class will script.
+        const report = (order: 'proposal-first' | 'issue-first') => ({
+            target_ref: 'chapter_1',
+            target_kind: 'chapter',
+            round: 1,
+            criteria: [{ criterion: 'C-4', result: true, evidence: 'chapter_1 sec_1 delivers the climb' }],
+            recommendation: 'fix',
+            why: 'one defect and one wish, in the one closing call',
+            findings:
+                order === 'proposal-first'
+                    ? [improvement('open the book on the lie'), defect('the map contradicts the 1911 survey')]
+                    : [defect('the map contradicts the 1911 survey'), improvement('open the book on the lie')]
+        });
+
+        // The dismissal, identical in both orders: no pre-existing row (`open_issues: 0` — the roster does
+        // not list a row this same call filed), and `same_report_issues: 1` naming the actual cause.
+        const dismissed = {
+            ok: true,
+            dismissed: 'D-33c',
+            filed: false,
+            kind: 'proposal',
+            message:
+                'this proposal is dismissed, not filed — the reason is 1 issue: filed by this same report. A suggestion about a book that still has defects is not what this round is for, and the dismissal settles the claim here: no row, no count, nothing to answer. Conclude this pass — submit your verdict (D-33c).',
+            open_issues: 0,
+            open_issue_refs: [],
+            same_report_issues: 1
+        };
+        const filed = { ok: true, finding_id: 'finding_0', kind: 'issue', rev: 1 };
+
+        // The receipts, read off the double's FLAT result shape (`submitVerdict` returns `findings` beside
+        // `id`/`rev`, and `ToolResult` types only the tool layer's envelope).
+        const findingsOf = (result: unknown) => (result as { findings?: unknown[] }).findings;
+
+        const proposalFirst = crew();
+        const proposalFirstResult = await proposalFirst.call('run_0', 'submitVerdict', report('proposal-first'));
+
+        expect(findingsOf(proposalFirstResult)).toEqual([dismissed, filed]);
+
+        const issueFirst = crew();
+        const issueFirstResult = await issueFirst.call('run_0', 'submitVerdict', report('issue-first'));
+
+        expect(findingsOf(issueFirstResult)).toEqual([filed, dismissed]);
+        // THE BOARD IS THE SAME in both orders — one issue row, no proposal row, and so no verification seat
+        // and no Writer round armed by a claim the pass was never allowed to file.
+        expect(proposalFirst.store.findings.list().map((row) => [row.id, row.kind, row.state])).toEqual([
+            ['finding_0', 'issue', 'unconfirmed']
+        ]);
+        expect(issueFirst.store.findings.list().map((row) => [row.id, row.kind, row.state])).toEqual([
+            ['finding_0', 'issue', 'unconfirmed']
+        ]);
+    });
+
+    it('files the Proposal the moment the issue reaches a closed state (D-33c)', async () => {
         const { store, call } = crew();
 
         await call('run_0', 'raiseFinding', defect('the map contradicts the 1911 survey'));
         expect(await call('run_1', 'raiseFinding', improvement('open the book on the lie'))).toMatchObject({
-            ok: false,
-            refused: 'D-33c'
+            ok: true,
+            dismissed: 'D-33c',
+            filed: false
         });
 
         // The repair landing — `fixed` is one of the two states `records.ts:CLOSED_FINDING_STATES` counts

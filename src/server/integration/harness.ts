@@ -680,6 +680,18 @@ function readBrief(brief: string, store: Store, options: CrewOptions) {
  * takes one `target_ref` (§8.3) and `criteria/engine.ts:passingFor` counts a line only when its
  * target equals the scope the criterion needs — so a double that filed everything at the artifact
  * could never complete a level, which is the bug §15 exists to catch (see also tools/reader.ts).
+ *
+ * THE DOUBLE IS DELIBERATELY THE CLASSIC TWO-CALL SHAPE (checked 2026-11-26, V5). `submitVerdict` grew
+ * a terminal form — one call carrying `verdicts[]` beside `target_ref` — and this double still files the
+ * D-21 pair as TWO calls. That is coverage, not staleness: the arrays are OPTIONAL and absent from the
+ * result unless sent, so the two-call path is the pre-W3b contract, and it is the only place the whole
+ * pipeline exercises it end to end. It stayed green under the Critic-termination plugin precisely
+ * because both calls run in the same turn (the plugin stops at the NEXT `turn.before`,
+ * `run/plugins/critic-termination.ts:283`, and `run/loop.ts` returns only after the turn's calls ran),
+ * so the second filing is never swallowed. The single-call terminal form is pinned by
+ * `tools/runtime.test.ts` (the `verdicts[]`/`findings[]` cases) and `run/mock.test.ts` (the
+ * `reported: { verdicts, findings }` receipt); converting this double to it would drop the classic path
+ * from the integration ledger rather than test anything new.
  */
 function verdictCalls(ctx: CrewContext, evidence: string): CrewCall[] {
     const { criteria, unitTarget, story, options } = ctx;

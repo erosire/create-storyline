@@ -291,6 +291,107 @@ describe('the draft batch: the lane installs the chapter contracts', () => {
     });
 });
 
+// ── THE STRUCTURED CHAPTER REVIEW SEAT IS A SCREENING, NOT A DEEP-REVIEW ANGLE (2026-11-26 wiring) ─
+//
+// `loop/work.ts` leg 3 used to rotate `DEEP_REVIEW_TEMPLATES` onto this seat, so the tool-less
+// `review_groups` pass was briefed with a `check_unit` angle's `raiseFinding`/`submitVerdict`/`cost`
+// copy — the phase mismatch the rewiring removed. TWO layers now say the same thing, and this file can
+// only prove the first of them:
+//
+//   * the PLANNER (here, and end to end in `integration/plotlines-groups.test.ts`): the seat's
+//     `templateRef` is the crew the run row reports, now `critic-screening-plotlines`;
+//   * the PROMPT (`run/phase1-prompt.ts:compileGroupReviewPrompt`): the voice resolves from
+//     `PLOTLINES_SCREEN_TEMPLATE_SLUG` whatever the ref says, so the seat can never be handed a
+//     tool-carrying prompt again. Its bytes are pinned in `run/phase1-prompt*.test.ts`, not here.
+describe('the structured chapter review seat is planned as a contract screening', () => {
+    it('binds `critic-screening-plotlines` on a tool-less `GroupReview` seat over every chapter', async () => {
+        const rig = await laneRig();
+        const { chapters } = structureLane(rig);
+
+        // A HAND install: contract text at revision 1 with NO crew run behind it, which is the one state
+        // where the seat is still OWED. `rig.run()` answers it in the same sweep as the install (the seat-row
+        // pins in the block above are the proof), and a settled seat is skipped by
+        // `phrase/exclusion.ts:groupReviewSeatSettled` rather than offered — an assertion against the swept
+        // state would say nothing about what the planner binds.
+        installGroupRevisions(
+            rig.store,
+            rig.story(),
+            chapters.map((group) => ({
+                group,
+                content: `${group.key}: the installed contract.`,
+                plotpoints: {
+                    must_happen: `chapter ${group.order} reaches the dam gate`,
+                    must_change: `the valley is flooded on purpose by chapter ${group.order}`
+                }
+            })),
+            AUTHOR_ATTR,
+            { runRef: null }
+        );
+
+        // The vector the seat claims is the chapter entries AT THE REVISION THE INSTALL PRODUCED (1), not the
+        // revision-0 hash the draft family hashes, and the rig's `summary_critics: 1` dial means ONE pass.
+        const writtenHash = groupVectorHash(Object.fromEntries(chapters.map((group) => [group.id, 1])));
+
+        // The lane offers EXACTLY this one seat: the draft batch has no owed target (`groupWorkTargets` wants
+        // revision 0 or an open finding, and every entry is installed and clean of findings), the deep
+        // `group_check` pass is gated behind `allReviewSeatsReported`, and the score and lock seats are gated
+        // behind the phrase's CLEAN selection, which a hand install never stamps.
+        expect(laneJobs(rig, rig.story())).toEqual([
+            {
+                kind: 'review_groups',
+                key: groupReviewSeatKey(writtenHash, 1),
+                // The artifact is the SET of contracts, so the seat carries no unit (architecture point 7).
+                unit: undefined,
+                role: 'critic',
+                // THE PIN. This seat reported `critic-genre` — `DEEP_REVIEW_TEMPLATES[0]`, a tool-carrying
+                // `check_unit` angle — until the 2026-11-26 rewiring gave the no-tools pass its own screening
+                // crew. The four deep angles still belong to the `group_check` seat: its row is pinned BY KEY
+                // in the block above, and BY CREW (`critic-genre`) in the integration ledger.
+                template: 'critic-screening-plotlines',
+                refs: 3,
+                why: `Critic 1/1 reviews the installed chapter set at vector ${writtenHash} (R3, R5)`
+            }
+        ]);
+
+        // THE ANSWER CONTRACT IS UNCHANGED by the rewiring (brief item 4): the seat is still a tool-less
+        // `GroupReview` naming every chapter, so the new crew copy cannot smuggle a tool contract — a verdict,
+        // a `raiseFinding`, a `cost` — back into the job the engine validates. `group_quotes` is an OPTIONAL
+        // addition to that answer (`shared/schemas/group-review.ts`) and needs no seat change; its prompt
+        // sentence is pinned where the prompt is compiled.
+        const seat = phase2GroupCandidates(rig.store, rig.story())[0]!.item;
+
+        expect([seat.toolMode, seat.responseSchema?.name, seat.roleName, seat.groupRefs]).toEqual([
+            'none',
+            'GroupReview',
+            'critic',
+            chapters.map((group) => group.id)
+        ]);
+
+        // THE CREW THE SLUG RESOLVES TO. `loop/engine.ts:createStory` seeds `BUILT_IN_TEMPLATES`, so the
+        // rig's catalogue holds this row — and the row is not a repackaged deep-review angle: it serves
+        // phase ② ONLY (so it can never be the crew of a phase-① seat), runs with no web, and carries the one
+        // `critic` role the seat asks for. A hand-built catalogue that skipped the new built-in fails HERE,
+        // rather than running the seat on whatever fallback crew the executor reaches for.
+        const crew = rig.store.templates.list().find((template) => template.name === 'critic-screening-plotlines')!;
+
+        expect({
+            name: crew.name,
+            builtin: crew.builtin,
+            editable: crew.editable,
+            serves_phase: crew.serves_phase,
+            attempts: crew.attempts,
+            roles: crew.roles.map((role) => ({ name: role.name, kind: role.kind, web: role.web, agents: role.agents }))
+        }).toEqual({
+            name: 'critic-screening-plotlines',
+            builtin: true,
+            editable: false,
+            serves_phase: ['plotlines'],
+            attempts: 1,
+            roles: [{ name: 'critic', kind: 'critic', web: false, agents: 1 }]
+        });
+    });
+});
+
 describe('the Reader score seat is armed by the PHRASE clean selection', () => {
     it('claims the chapter vector, and never the Summary clean selection beside it', async () => {
         const rig = await laneRig();
@@ -323,7 +424,12 @@ describe('the Reader score seat is armed by the PHRASE clean selection', () => {
         expect(scoreSeats).toEqual([
             {
                 key: sectionScoreClaimKey(chapterReviewed.vector_hash),
-                template: 'reader-consistency',
+                // D-65's SCORE-ONLY voice, the same crew the Summary's score seat binds (`loop/work.ts`
+                // chapter lane, 2026-11-26 wiring): the seat is `toolMode: 'none'` and may file nothing (P6),
+                // so it does NOT get `reader-consistency`, the TOOL-CARRYING review reader. `compileSectionScorePrompt`
+                // resolves `SCORE_TEMPLATE_SLUG` = 'reader-score' whatever this ref says, so ref and prompt
+                // agree only while BOTH name the score-only built-in — which is what this pin holds.
+                template: 'reader-score',
                 refs: 3,
                 rank: -1
             }

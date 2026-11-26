@@ -23,7 +23,10 @@
  *      verdict, no counter, and no group attempt spent. `vector_hash` is read back off the CLAIM KEY, not
  *      re-derived from the rows that exist when the run lands: the score judges the text the Reader was
  *      SHOWN (the selection the prompt was compiled from), and a Writer install during the pass must not
- *      re-stamp an old judgement onto a new book.
+ *      re-stamp an old judgement onto a new book. "ONE COMMIT" is counted on the JOURNAL LABEL
+ *      (`scoreWriteCommits`), not on a shared `created_at`: `store.ts:Collection.create` stamps each record
+ *      with its own `new Date()`, so five inserts in one transaction may legitimately straddle a
+ *      millisecond — the timestamp version of this pin failed about one run in three.
  *   4. A REFUSED ANSWER RE-ARMS, TWICE (D-67). D-65 spent the vector on any CLOSED run, which stranded a
  *      Clean book on one bad provider answer — plumbing holding a verdict. A refusal now leaves the seat
  *      armed, and `phrase/section-scores.ts:SECTION_SCORE_ATTEMPT_CAP` (2 closed passes) is what stops a
@@ -34,8 +37,9 @@
  *
  * Every value below was read off the rig (`yarn vite-node` probes in `Temp/tc1/`), not guessed. Group ids
  * are UUIDs the store generates, so they are referenced through the rows, never hardcoded; the ref
- * (`summary_0`), the template, the numbers (60/68/76/84/92) and the sentences are pinned as literals
- * because they are the product copy.
+ * (`summary_0`), the score crew slug (`reader-score`, D-65's score-only reader — NOT the tool-carrying
+ * `reader-consistency`), the numbers (60/68/76/84/92) and the sentences are pinned as literals because they
+ * are the product copy.
  */
 import { describe, expect, it } from 'vitest';
 import { createRig, type CrewBehaviour, type Rig } from './mock';
@@ -56,6 +60,10 @@ import { storyPhrase } from '../phrase/catalog';
 import { cleanSelectionOf, stampCleanRevisions } from '../phrase/reviewed';
 import { SECTION_SCORE_ATTEMPT_CAP } from '../phrase/section-scores';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
+// MAJOR 3 (2026-11-26) — the DEEP seat below is "paid" by the report its run filed, not by the row it
+// closed, so this fixture also writes that seat's `verdicts` row (the one `tools/reader.ts:submitVerdict`
+// files), and `storySummary` is the artifact the real deep pass judges.
+import { storySummary } from './records';
 import { AUTHOR_ATTR, seedFinding } from '../run/mock';
 import { SectionScoresSchema, SECTION_SCORES_SCHEMA_NAME } from '../../shared/schemas';
 import type { PhraseGroup, RunState, SummaryScore } from '../../shared/types';
@@ -98,12 +106,100 @@ const scoreSeats = (rig: Rig) =>
         (candidate) => candidate.item.kind === 'score_sections'
     );
 
+/**
+ * The terminal report a CONCLUDED deep-review pass leaves on the record (MAJOR 3, 2026-11-26) — the row
+ * that pays a DEEP seat, and the only thing that does.
+ *
+ * `phrase/exclusion.ts:groupCheckSeatAnswered` asks whether one of the seat's RUNS filed a `verdicts` row,
+ * and `api/projections.ts` counts the rail's deep numerator with the SAME read. A CLOSED deep row proves
+ * nothing on its own: this is the tool-carrying family, and its success branch is reached whenever the
+ * session merely ENDED (`run/plugins/critic-termination.ts`), so a capped or abandoned pass closes a row
+ * and files nothing. The row written here is the one `tools/reader.ts:submitVerdict` files from the pass's
+ * ONE terminal report — `run_ref` is the run that filed it, the join `records.ts:wholeStoryVerdicts` makes.
+ */
+function fileSeatReport(rig: Rig, run: { id: string; work_item_ref?: string | null }): void {
+    rig.store.verdicts.create(
+        {
+            story_id: rig.storyId,
+            target_ref: storySummary(rig.store, rig.storyId)?.id ?? rig.storyId,
+            target_kind: 'summary',
+            run_ref: run.id,
+            template_ref: 'critic-genre',
+            round: 1,
+            criteria_passed: [{ criterion: 'C-14', result: true, evidence: 'no contradiction the pass could quote' }],
+            hard_pass: true,
+            soft_count: 1,
+            recommendation: 'advance'
+        },
+        { run_ref: run.id, why: `seed: the deep seat's terminal report on ${run.work_item_ref} (MAJOR 3)` }
+    );
+}
+
 const scoreRows = (rig: Rig): SummaryScore[] =>
     rig.store.summaryScores.list().filter((row) => row.story_id === rig.storyId);
+
+/**
+ * The score rows this Story holds, counted per COMMIT LABEL — P1's atomicity read off the journal, which
+ * is the only deterministic way to prove "the five rows landed in one commit" (2026-11-27, task C).
+ *
+ * WHY NOT `created_at`: `store/store.ts:Collection.create` stamps every record with its OWN
+ * `new Date().toISOString()`, so five inserts inside ONE transaction legitimately carry two timestamps
+ * when they straddle a millisecond. The assertion this replaces — one `Set` of `created_at` of size 1 —
+ * failed about one run in three while the settle stayed a single commit: a clock race presented as an
+ * invariant, which is what the deterministic-test standard forbids.
+ *
+ * The journal IS the atomicity record: `Store.commit(label, fn)` buffers every write of the transaction
+ * into one group and stamps each event with that label (`store.ts:commit`, `store.ts:_event`), and the
+ * run settle opens that transaction as `loop_job_result` (`loop/engine.ts:1492`), inside which the score
+ * rows are written (`loop/engine.ts`, READER SCORING block). So "one commit for the five" is exactly "all
+ * five `create` events carry the settle's label, and no score row was written under any other label" —
+ * the partial rail the parse refuses (`phrase/section-scores.ts:parseSectionScoreAnswer`) would show up
+ * here as a short count.
+ */
+const scoreWriteCommits = (rig: Rig): Record<string, number> =>
+    rig.store.journal.reduce<Record<string, number>>((counts, event) => {
+        // `store.summaryScores` is the `summary_scores` collection — the journal keys events by the store's
+        // collection name (`store.ts:784`), not by the accessor's camelCase property.
+        if (event.collection !== 'summary_scores' || event.op !== 'create') return counts;
+
+        const record = event.patch as { story_id?: string } | undefined;
+
+        if (record?.story_id !== rig.storyId) return counts;
+
+        counts[event.commit_label] = (counts[event.commit_label] ?? 0) + 1;
+
+        return counts;
+    }, {});
 
 /** The score run of one vector, however it ended. */
 const scoreRun = (rig: Rig, claimKey: string) =>
     rig.store.runs.list().find((run) => run.work_item_ref === claimKey)!;
+
+/**
+ * The crew ROW a seat's `templateRef` resolves to, narrowed to what the executor and the rail read (D-17a:
+ * a Work Item's slug is only a crew if the store holds the row).
+ *
+ * WHY THIS IS PINNED AT ALL (brief item 3): `loop/engine.ts:createStory` seeds `BUILT_IN_TEMPLATES` by slug,
+ * so the rig's catalogue carries the two built-ins the 2026-11-26 rewiring bound — `reader-score` here and
+ * `critic-screening-plotlines` in the chapter lane. A hand-built Store fixture that seeds its own short
+ * catalogue instead would arm the seat against a slug nothing can resolve, and the run would fall back to a
+ * default crew while still "passing"; this read makes the row's presence, its phase scope and the role the
+ * seat asks for (`name`/`kind`/`web`/`agents`) one exact value instead.
+ */
+const crewRowOf = (rig: Rig, name: string) => {
+    const row = rig.store.templates.list().find((template) => template.name === name);
+
+    if (row === undefined) return undefined;
+
+    return {
+        name: row.name,
+        builtin: row.builtin,
+        editable: row.editable,
+        serves_phase: row.serves_phase,
+        attempts: row.attempts,
+        roles: row.roles.map((role) => ({ name: role.name, kind: role.kind, web: role.web, agents: role.agents }))
+    };
+};
 
 /** Installs text for `count` of the five groups, in catalog order — the completeness dial. */
 function install(rig: Rig, content: string, count = 5, workItemRef = `${GROUP_DRAFT_ITEM_PREFIX}_summary_0_test_1`) {
@@ -177,9 +273,13 @@ describe('the scoring seat is gated on the clean selection, not on installed tex
                 id: key,
                 storyId: rig.storyId,
                 kind: 'score_sections',
-                // The Reader's own consistency angle: the built-in whose role prompt is about the
-                // contract chain holding across artifacts, which is what a cross-section score is.
-                templateRef: 'reader-consistency',
+                // D-65's SCORE-ONLY voice (2026-11-26 wiring): the seat is `toolMode: 'none'` and may file
+                // nothing (P6), so its crew is the built-in whose prompt carries no `raiseFinding`,
+                // `createTask` or verdict copy. `reader-consistency` is the TOOL-CARRYING review reader —
+                // the one `check_unit` uses — and it is no longer this seat's label. `compileSectionScorePrompt`
+                // always resolves `SCORE_TEMPLATE_SLUG` = 'reader-score' regardless of this ref, so the ref is
+                // the seat's visible crew binding, and it has to agree with the prompt the run is briefed with.
+                templateRef: 'reader-score',
                 roleName: 'reader',
                 unit: { kind: 'summary', ref: 'summary_0' },
                 toolMode: 'none',
@@ -353,11 +453,34 @@ describe('the settle commits five rows for the selection it read (D-65, D-67)', 
         const run = scoreRun(rig, key);
 
         expect(rig.store.runs.list().filter((row) => (row.work_item_ref ?? '').startsWith('wi_summary_score_'))).toHaveLength(1);
-        expect({ role: run.role, kind: run.kind, state: run.state, work_item_ref: run.work_item_ref }).toEqual({
+        expect({
+            role: run.role,
+            kind: run.kind,
+            state: run.state,
+            template_ref: run.template_ref,
+            work_item_ref: run.work_item_ref
+        }).toEqual({
             role: 'reader',
             kind: 'work',
             state: 'torn_down',
+            // The crew the run RESOLVED UNDER, not only the slug the candidate carried. This row said
+            // `reader-consistency` before the 2026-11-26 rewiring; it is the score-only built-in now, and it
+            // resolves because the rig's engine seeds `BUILT_IN_TEMPLATES` (`loop/engine.ts:createStory`).
+            template_ref: 'reader-score',
             work_item_ref: key
+        });
+
+        // THE CATALOGUE THE SEAT RESOLVES FROM: the score-only reader is a seeded built-in ROW in this store,
+        // with the one no-web `reader` role the seat asks for and its single-attempt budget. A fixture that
+        // hand-builds a catalogue without the new built-ins leaves the seat bound to a slug the executor
+        // cannot resolve, and this is where that shows.
+        expect(crewRowOf(rig, 'reader-score')).toEqual({
+            name: 'reader-score',
+            builtin: true,
+            editable: false,
+            serves_phase: ['summary', 'plotlines', 'chapters'],
+            attempts: 1,
+            roles: [{ name: 'reader', kind: 'reader', web: false, agents: 1 }]
         });
 
         // Five rows, one per section, in catalog order, at the mock's scripted numbers — the same numbers
@@ -383,9 +506,12 @@ describe('the settle commits five rows for the selection it read (D-65, D-67)', 
         expect(rows.map((row) => row.score)).toEqual([60, 68, 76, 84, 92]);
         expect(sectionScoreVectorHashOf(key)).toBe(hash);
 
-        // ONE COMMIT for the five: the rail reads the set, so a partial write would show four numbers and
-        // a missing section — the state the parse refuses. Same instant on all five rows is how that shows.
-        expect(new Set(rows.map((row) => row.created_at)).size).toBe(1);
+        // ONE COMMIT for the five, counted on the JOURNAL LABEL rather than on a shared timestamp (see
+        // `scoreWriteCommits` below): the rail reads the SET, so a partial write would show four numbers and
+        // a missing section — the state the parse refuses. The five rows also all name the same run and the
+        // same claim, which is what lets the rail label the set at all.
+        expect(scoreWriteCommits(rig)).toEqual({ loop_job_result: 5 });
+        expect(new Set(rows.map((row) => `${row.run_ref}|${row.work_item_ref}`))).toEqual(new Set([`${run.id}|${key}`]));
 
         // DISPLAY-ONLY, in the probe's own words: the pass paid no seat, so the drain still names the
         // Critic pass it never touched, and it says nothing about scores.
@@ -500,7 +626,7 @@ describe('the scoring pass never holds sign-off (P6 exception, D-65)', () => {
             [groupReviewSeatKey(hash, 1), 'critic'],
             [groupCheckSeatKey(hash, 1), 'critic']
         ] as const) {
-            rig.store.runs.create(
+            const run = rig.store.runs.create(
                 {
                     story_id: rig.storyId,
                     work_item_ref: key,
@@ -516,6 +642,14 @@ describe('the scoring pass never holds sign-off (P6 exception, D-65)', () => {
                 },
                 { run_ref: null, author: true, why: `seed: the paid seat ${key}` }
             );
+
+            // MAJOR 3 (2026-11-26): the two seats are NOT paid the same way. The structured seat is paid by
+            // its `torn_down` row (`records.ts:isReportedRun` — that state's answer reached the settle); the
+            // DEEP seat is paid by what it FILED, because a tool-carrying pass closes `torn_down` whenever
+            // the session merely ENDED. So the deep seat also gets the `verdicts` row
+            // `tools/reader.ts:submitVerdict` files, which is what
+            // `phrase/exclusion.ts:groupCheckSeatAnswered` — and the rail through it — reads as reviewed.
+            if (key.startsWith('wi_group_check_')) fileSeatReport(rig, run);
         }
 
         // The queue still wants the score, and the probe still says the phase may sign off. That is the

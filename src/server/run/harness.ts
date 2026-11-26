@@ -87,7 +87,13 @@ export function permissionLine(kind: RoleKind): string {
         case 'editor':
             return 'You are the Editor: you may select, merge and verify, and you may never write prose (L-19, T-3b). Your writes land through `selectRevision`, `requestMerge`, `rejectAll`, `verifyIdea` and `verifyFinding` only (D-33, D-22).';
         case 'critic':
-            return 'You are a Critic: your output is `raiseFinding` and `submitVerdict`, plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
+            // 2026-11-26: the report is the END of the pass, not one more call. The line used to list
+            // `raiseFinding` and `submitVerdict` as two equal outputs, which is the shape that let a
+            // Critic file, report, file again, and report again — every extra call a round-trip. The
+            // terminal framing matches `run/brief.ts:CRITIC_REVIEW_MODE` and the review done-line:
+            // findings are `findings[]` entries of the ONE `submitVerdict`, not a separate
+            // `raiseFinding` filing.
+            return 'You are a Critic: you close with ONE terminal report — `submitVerdict` carries every verdict line the pass owes and every finding in `findings[]`, and it is the last call you make — plus `proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story artifact is refused naming P10 — report or propose, never edit.';
         case 'researcher':
             // §7.2: the one kind whose WRITE is not a story artifact. The line names its tools and the
             // P10 route, so a researcher that cannot establish a fact files a task instead of reaching

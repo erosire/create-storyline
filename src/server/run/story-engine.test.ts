@@ -5,8 +5,18 @@ import { harness } from '@underload/harness';
 import { MockChatClient, calls, makeRecorder, msg } from '../llm/mock';
 import type { ChatMessage, ChatResponse } from '../llm/client';
 import { Store } from '../store';
-import { MockToolRuntime, seedChapter, seedDigest, seedGoal, seedPlotline, seedStory, seedTemplate } from './mock';
+import {
+    MockToolRuntime,
+    seedChapter,
+    seedDigest,
+    seedGoal,
+    seedPlotline,
+    seedStory,
+    seedTemplate,
+    type MockToolHandler
+} from './mock';
 import { createTally } from './loop';
+import { CRITIC_CONCLUDE_NUDGE, CRITIC_REVIEW_TURN_CAP } from './plugins/critic-termination';
 import { StoryHarnessManager } from './story-engine';
 
 const storyOf = (store: Store, title: string) => {
@@ -143,7 +153,12 @@ describe('StoryHarnessManager — one harness per Story', () => {
 
         // Compaction is the bound on a thread's context growth; the trimmer is its per-turn half.
         // `async-ping` is a parked-session keepalive and must not add provider traffic here.
-        expect([...manager.forStory(story.id).pluginNames].sort()).toEqual(['context-compaction', 'context-trimmer']);
+        // `critic-termination` is Storyline's own policy plugin (C2-AD3), applied after the built-ins.
+        expect([...manager.forStory(story.id).pluginNames].sort()).toEqual([
+            'context-compaction',
+            'context-trimmer',
+            'critic-termination'
+        ]);
 
         manager.dispose();
     });
@@ -717,6 +732,317 @@ describe('StoryHarnessManager — one harness per Story', () => {
                 .sessionsForStatus()
                 .map((session) => session.phase)
         ).toEqual(['summary', 'plotlines']);
+
+        manager.dispose();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// C2-AD3 — a Critic review pass ENDS at the report it files, and ends truthfully
+//
+// These run the SHIPPED path end to end: `StoryHarnessManager` → the Story's `@underload/harness`
+// engine → the `critic-termination` plugin, with the package's mock provider behind the engine's
+// stream adapter. Every assertion is on something observable from outside the plugin — how many times
+// the provider was asked, what the provider was SHOWN, what the retained thread record says, and what
+// is still in the store when the pass ends — because the acceptance criteria are about the run the
+// Author reads, not about the plugin's internals.
+// ---------------------------------------------------------------------------
+
+/**
+ * The two report tools, pinned here so this file tests WHEN the pass ends rather than the row shape a
+ * report returns (W3b owns ./mock's versions of both and is rewriting them in parallel).
+ *
+ * `submitVerdict` still writes a REAL verdict row through the store, because C3's claim is that the
+ * filed verdict SURVIVES the stop, and only a committed write can show that.
+ */
+const reportTools = (): Record<string, MockToolHandler> => ({
+    submitVerdict: async (ctx, args, runtime) => {
+        const created = await runtime.store.verdicts.create(
+            {
+                story_id: ctx.storyId,
+                target_ref: String(args.target_ref ?? 'chapter_0'),
+                target_kind: 'chapter',
+                run_ref: ctx.runRef,
+                template_ref: ctx.templateRef,
+                round: 1,
+                criteria_passed: [{ criterion: 'promise', result: true, evidence: 'the steeple answer lands' }],
+                hard_pass: true,
+                soft_count: 1,
+                recommendation: 'fix'
+            },
+            { run_ref: ctx.runRef, why: 'the review pass filed its verdict (C2-AD3)' }
+        );
+
+        return { ok: true, id: created.id, rev: created.rev };
+    },
+    // A finding is S-4's report and NOT the terminal call: the pass must keep going after it (C5).
+    raiseFinding: async () => ({ ok: true, id: 'finding_0', rev: 1 })
+});
+
+/** One employee thread, with everything this file repeats; only the kind and the script vary. */
+function rig(kind: 'critic' | 'writer', options: { criticTurnCap?: number } = {}) {
+    const store = Store.empty();
+    const story = storyOf(store, 'Hollow Sea');
+    const runtime = new MockToolRuntime(store, story.id, reportTools());
+    const replies: ChatResponse[] = [];
+    const chat = new MockChatClient((request, state) => {
+        const reply = replies[state.callIndex];
+
+        if (reply === undefined)
+            throw new Error(
+                `no scripted turn for call ${state.callIndex} — the ${kind} pass asked the provider more times than the test scripted`
+            );
+
+        return reply;
+    });
+    const manager = new StoryHarnessManager({
+        store,
+        runtime,
+        chat,
+        defaultModel: 'mock',
+        ...(options.criticTurnCap === undefined ? {} : { criticTurnCap: options.criticTurnCap })
+    });
+
+    const rig_ = {
+        store,
+        story,
+        runtime,
+        chat,
+        manager,
+        replies,
+        /** Script the pass's turns, one `ChatResponse` per provider call. */
+        script: (...turns: ChatResponse[]) => replies.push(...turns),
+        /** The usage every turn reports, so token totals stay exact (S-6). */
+        run: (runId = 'run_0') =>
+            manager.run({
+                storyId: story.id,
+                phase: 'chapters',
+                label: runId,
+                runId,
+                roleName: kind,
+                roleKind: kind,
+                model: 'mock',
+                system: `BRIEF ${kind}`,
+                kickoff: 'review the chapter',
+                context: runtime.createContext({
+                    storyId: story.id,
+                    runId,
+                    // T-3: `runRef` is the attribution the store writes under, and the tool context
+                    // takes it as its own field — the verdict row's `run_ref` is how C3 proves the
+                    // filed report belongs to this run.
+                    runRef: runId,
+                    sessionRef: `sess_${runId}`,
+                    roleName: kind,
+                    roleKind: kind
+                }),
+                runtime,
+                tally: createTally()
+            })
+    };
+
+    return rig_;
+}
+
+/** One scripted turn: prose, and the tools it asks for. */
+const turnOf = (content: string, tools: Array<{ name: string; args?: Record<string, unknown> }> = []) => ({
+    message: msg({ content, toolCalls: tools.length === 0 ? undefined : calls(tools) }),
+    usage: { input: 100, output: 20, cached_input: 0 }
+});
+
+describe('StoryHarnessManager — the Critic pass ends at its report (C2-AD3)', () => {
+    it('stops on the reporting turn, records the thread torn_down, and keeps the filed verdict (C1, C3)', async () => {
+        const h = rig('critic');
+
+        h.script(
+            turnOf('reading the chapter', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            turnOf('the steeple answer pays off; the map line does not', [
+                { name: 'submitVerdict', args: { target_ref: 'chapter_0', recommendation: 'fix' } }
+            ]),
+            // Scripted so it WOULD answer if asked: C1's claim is that this reply is never consumed.
+            turnOf('never asked')
+        );
+
+        const outcome = await h.run();
+
+        // The pass CONCLUDED. `endCause` says so, and its prose answer is kept rather than dropped.
+        expect(outcome).toEqual({
+            text: 'the steeple answer pays off; the map line does not',
+            turns: 2,
+            endCause: {
+                kind: 'reported',
+                turns: 2,
+                cap: CRITIC_REVIEW_TURN_CAP,
+                reports: ['submitVerdict'],
+                terminal_tool: 'submitVerdict'
+            }
+        });
+        // C1, measured at the provider: TWO calls, and the third scripted reply is still unconsumed —
+        // the stop is taken at `turn.before`, after the report tool ran, so no further model turn is
+        // issued. (The documented cap is asserted against its constant, not a magic number.)
+        expect(h.chat.callCount).toBe(2);
+        expect(h.chat.calls).toHaveLength(2);
+
+        // C3 — the filed result survived the stop: the verdict row is in the book, attributed to the
+        // run that filed it.
+        expect(
+            h.store.verdicts.list().map((verdict) => ({
+                story_id: verdict.story_id,
+                target_ref: verdict.target_ref,
+                run_ref: verdict.run_ref,
+                recommendation: verdict.recommendation,
+                hard_pass: verdict.hard_pass
+            }))
+        ).toEqual([
+            {
+                story_id: h.story.id,
+                target_ref: 'chapter_0',
+                run_ref: 'run_0',
+                recommendation: 'fix',
+                hard_pass: true
+            }
+        ]);
+
+        // And the thread the Author reads says COMPLETED: `torn_down`, its answer kept, no `error`.
+        // Not `failed` (the old misreport that lost the pass) and not `abandoned`.
+        const threads = h.manager.threads('critic');
+
+        expect(threads).toHaveLength(1);
+        expect(threads[0]).toMatchObject({
+            run_id: 'run_0',
+            role: 'critic',
+            state: 'torn_down',
+            answer: 'the steeple answer pays off; the map line does not',
+            tokens: 240,
+            retained: true
+        });
+        expect(threads[0]?.error).toBeUndefined();
+        expect(h.manager.statuses().find((row) => row.kind === 'critic')?.status).toBe('idle');
+
+        h.manager.dispose();
+    });
+
+    it('leaves a Writer that files a report tool on its normal path to the natural end (C2)', async () => {
+        const h = rig('writer');
+
+        h.script(
+            // A Writer CAN call `submitVerdict` (T-6a's catalogue is role-blind). C2-AD3 is critic-only,
+            // so this must not end the run.
+            turnOf('writing', [{ name: 'submitVerdict', args: { target_ref: 'chapter_0' } }]),
+            turnOf('still working', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            turnOf('the chapter carries the promise')
+        );
+
+        const outcome = await h.run();
+
+        expect(outcome).toEqual({ text: 'the chapter carries the promise', turns: 3 });
+        expect(h.chat.callCount).toBe(3);
+        // The retained row is the ordinary completed thread: no `error`, no cap sentence.
+        expect(h.manager.threads('writer')[0]).toMatchObject({ state: 'torn_down', answer: 'the chapter carries the promise' });
+        expect(h.manager.threads('writer')[0]?.error).toBeUndefined();
+
+        h.manager.dispose();
+    });
+
+    it('nudges once, only after a report is filed, and stops at the verdict that nudge produced (C5)', async () => {
+        const h = rig('critic');
+
+        h.script(
+            turnOf('reading', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            // A PARTIAL report: S-4 counts it, C2-AD3 does not end the pass on it.
+            turnOf('one defect', [{ name: 'raiseFinding', args: { criterion_ref: 'promise', target_ref: 'chapter_0' } }]),
+            turnOf('still reading', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            turnOf('verdict filed', [{ name: 'submitVerdict', args: { recommendation: 'fix' } }]),
+            turnOf('never asked')
+        );
+
+        const outcome = await h.run();
+
+        /** The nudge count in the request the provider actually received for turn `index`. */
+        const nudgesIn = (index: number): number =>
+            h.chat.calls[index].messages.filter((message) => message.content === CRITIC_CONCLUDE_NUDGE).length;
+
+        // Only AFTER a report exists: neither the first request nor the one that was in flight while
+        // the finding was filed carries the nudge.
+        expect(nudgesIn(0)).toBe(0);
+        expect(nudgesIn(1)).toBe(0);
+        // The request right after the report: exactly one, and it is the LAST thing the model is shown
+        // (mid-transcript it would read as one of its own tool results).
+        expect(nudgesIn(2)).toBe(1);
+        const shown = h.chat.calls[2].messages;
+
+        expect(shown[shown.length - 1]).toEqual({ role: 'user', content: CRITIC_CONCLUDE_NUDGE });
+        // AT MOST ONCE: a `turn.before` transcript override reaches the REQUEST and is never committed
+        // to the canonical transcript, so the following turn carries no nudge at all.
+        expect(nudgesIn(3)).toBe(0);
+        expect(h.chat.callCount).toBe(4);
+
+        expect(outcome).toEqual({
+            text: 'verdict filed',
+            turns: 4,
+            endCause: {
+                kind: 'reported',
+                turns: 4,
+                cap: CRITIC_REVIEW_TURN_CAP,
+                reports: ['raiseFinding', 'submitVerdict'],
+                terminal_tool: 'submitVerdict'
+            }
+        });
+
+        h.manager.dispose();
+    });
+
+    it('caps a critic that never concludes, at the bound it was given, and records the cap (C4)', async () => {
+        const h = rig('critic', { criticTurnCap: 2 });
+
+        expect(h.manager.forStory(h.story.id).criticTurnCap).toBe(2);
+
+        h.script(
+            turnOf('reading', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            turnOf('reading further', [{ name: 'readChapter', args: { chapter_id: 'chapter_0' } }]),
+            turnOf('never asked'),
+            turnOf('never asked either')
+        );
+
+        const outcome = await h.run();
+
+        // `capped`, at exactly the bound, and NOT the `reported` shape a clean conclusion has.
+        expect(outcome).toEqual({
+            text: 'reading further',
+            turns: 2,
+            endCause: { kind: 'capped', turns: 2, cap: 2, reports: [] }
+        });
+        expect(h.chat.callCount).toBe(2);
+
+        // The thread is torn down (teardown really happened) but is NOT silent about the missing
+        // verdict: the cap sentence rides on `error`, which is what keeps a capped pass from reading
+        // as a successful one. Exact string, because the rail renders it.
+        const threads = h.manager.threads('critic');
+
+        expect(threads[0]).toMatchObject({
+            state: 'torn_down',
+            answer: 'reading further',
+            error: 'the Critic review pass reached its 2-model-turn cap without filing its verdict (C2-AD3)'
+        });
+        // Nothing was ever filed, so the pass is exactly what it claims to be: a bounded attempt.
+        expect(h.store.verdicts.list()).toEqual([]);
+
+        h.manager.dispose();
+    });
+
+    it('runs the policy at the documented default cap when the host sets none (C4’s bound)', () => {
+        const store = Store.empty();
+        const story = storyOf(store, 'Hollow Sea');
+        const runtime = new MockToolRuntime(store, story.id);
+        const chat = new MockChatClient(async (): Promise<ChatResponse> => ({ message: { content: 'done' } }));
+        const manager = new StoryHarnessManager({ store, runtime, chat, defaultModel: 'mock' });
+
+        // The default bound, pinned at its DEFINITION so a silent retune of the constant fails a test
+        // (the installed plugin reads the same value the harness reports).
+        expect(CRITIC_REVIEW_TURN_CAP).toBe(24);
+        expect(manager.forStory(story.id).criticTurnCap).toBe(24);
+        // The policy is installed on the harness that runs every employee — the plugin set the engine
+        // reports is the proof, and the R2/R3 test above pins the exact list.
+        expect([...manager.forStory(story.id).pluginNames]).toContain('critic-termination');
 
         manager.dispose();
     });

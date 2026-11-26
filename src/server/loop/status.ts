@@ -774,10 +774,28 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // HARDENING (sign-off/projection parity): a group-managed book has NO selected Summary revision
     // — the legacy read above answers "nothing owed" unconditionally there — so on that book the
     // phase's evidence is the CURRENT vector's review seats, structured passes and deep cross-group
-    // passes alike, counted by the same closed-run rule the Author's rail shows
-    // (`api/projections.ts:phraseView`'s `reviews_on_current_vector` / `deep_reviews_on_current_vector`
-    // and `loop/work.ts`'s seat gates). The gate gets tighter to match the rail; it is never loosened
-    // to let a lock through over an unread Overview.
+    // passes alike, counted by the same SEAT rule the Author's rail shows. "The same rule" now means
+    // ONE PREDICATE PER FAMILY, each read by BOTH sides of the wire (MAJOR 3, 2026-11-26 — before it, the
+    // sentence below claimed one shared read for both families and the deep half of that was false):
+    //   * STRUCTURED seats (`wi_review_groups_<hash>_<pass>`): answered = the seat holds a
+    //     `loop/records.ts:isReportedRun` row (`torn_down`, the one closed state whose structured answer
+    //     reached `loop/engine.ts`'s `groupReview.ok` guard and wrote a review row). The gate arms on it via
+    //     `phrase/exclusion.ts:groupReviewSeatSettled` → `groupReviewSeatAnswered`; the rail counts it via
+    //     `api/projections.ts:reportedSeatsFor`. Same predicate, so a seat whose only closed row is
+    //     `abandoned`/`failed` is owed AND uncounted, and a W5 re-arm counts once.
+    //   * DEEP seats (`wi_group_check_<hash>_<pass>`): answered = one of the seat's runs FILED A VERDICT
+    //     (`phrase/exclusion.ts:groupCheckSeatAnswered` — a `verdicts` row whose `run_ref` is one of the
+    //     seat's run ids, `submitVerdict` being the call that ends a Critic pass). `isReportedRun` is NOT
+    //     usable here: a tool-carrying pass reaches `torn_down` whenever the session merely ENDED, so a
+    //     capped or abandoned deep pass closed a row, filed nothing, and used to settle its seat for the
+    //     gate while the rail still refused to count it — the "2 of 5 seats reviewed" beside a
+    //     `phase_signoff` with nothing owed that MAJOR 3 closes. The gate arms on
+    //     `groupCheckSeatSettled` (same answered clause, or the family spent `groupCheckAttemptCap`); the
+    //     rail counts the same seats through `api/projections.ts:reportedDeepSeatsFor`.
+    // Both families degrade at the SAME ceiling, `critics + SAMPLING_RETRY_ALLOWANCE`, so an exhausted
+    // family settles the seat on BOTH sides at once rather than stranding the drain on one.
+    // The gate gets tighter to match the rail; it is never loosened to let a lock through over an unread
+    // Overview.
     // PHRASE ② (T-W2): the chapter lane gets the SAME treatment with its OWN phrase. A group-managed
     // phase ② has no selected Summary revision either, and its evidence is the CURRENT CHAPTER VECTOR's
     // review seats — structured passes and deep cross-chapter passes alike. Without this the Goal's two

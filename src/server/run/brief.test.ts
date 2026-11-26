@@ -8,6 +8,9 @@
 import { readFileSync } from 'node:fs';
 
 import { Store, type Attribution } from '../store';
+// D-33c: the live open-issue count in a Critic brief is the loop's OWN predicate, so the assertions
+// that pin that count are built from it rather than from a number typed into the test.
+import { openIssueFindings } from '../loop/records';
 import { hashBrief, buildBrief, assembleBrief, BRIEF_CHAR_BUDGET, REVISIONS_HEADING } from './brief';
 import { resolveHarness } from './harness';
 import { ensurePhraseCatalog } from '../phrase/catalog';
@@ -26,6 +29,7 @@ import {
     seedTemplate
 } from './mock';
 import type { WorkItem } from './types';
+import type { StoryPhase } from '../../shared/types';
 
 /** The §4.13 attribution a run's own bookkeeping carries (P11). */
 const RUN: Attribution = { run_ref: 'run_0', why: 'lease heartbeat (S-4a)' };
@@ -37,9 +41,17 @@ const RUN: Attribution = { run_ref: 'run_0', why: 'lease heartbeat (S-4a)' };
  * Ids are the store's own minted values (`story_0`, `summary_0`, `chapter_0`, …), which is what
  * makes every assertion below an exact one.
  */
-function seedStore(options: { digests?: number; drafts?: number; draftLength?: number; chapters?: number } = {}) {
+function seedStore(options: {
+    digests?: number;
+    drafts?: number;
+    draftLength?: number;
+    chapters?: number;
+    // The Story phase decides which review banner and which `check_unit` job sentence a Critic pass
+    // gets (`brief.ts:criticReviewModeOf`), so the phase is a fixture knob, not a constant.
+    phase?: StoryPhase;
+} = {}) {
     const store = Store.empty();
-    const story = seedStory(store);
+    const story = seedStory(store, options.phase === undefined ? {} : { phase: options.phase });
     const goal = seedGoal(store, story.id);
 
     seedDigest(store, story.id, 'Maren reaches the ridge; the map is wrong; the town is under water.');
@@ -121,7 +133,7 @@ const NOTE_CHAR_CLIP = 600;
  * "the decisive instruction survives the 600-character clip", and a hand-copied mirror can drift into
  * proving a sentence `work.ts` no longer sends. The extraction fails loudly if the note moves or goes.
  *
- * A long note is the whole point of the fixture — at ~1,530 characters the note is always clipped,
+ * A long note is the whole point of the fixture — at ~1,597 characters the note is always clipped,
  * which is exactly what let the verdict instruction be clipped away silently (the shipped note named
  * the right ref at character 1,249 of a 1,514-character string).
  */
@@ -250,7 +262,9 @@ describe('brief — S-2 assembly', () => {
 
         // The template's proposal-style done-definition is replaced, not stacked, for this pass.
         expect(text).not.toContain('Done means: every proposal is filed as an Idea with its sources');
-        expect(text).toContain('Done means: every critical and major issue you found is filed');
+        // R-rule: the done-line is the pass's STOPPING rule, and it is stated as certainty, not as
+        // completeness — the old "every critical and major issue you found" invited another dig.
+        expect(text).toContain('Done means: every issue you are certain of — critical and major first — is filed');
         expect(text).toContain('do not propose Ideas in this pass');
         // D-33b: the Ideas ban is unchanged, and the sentence now names the pass's one legitimate outlet
         // for a proposal, which is the half whose absence had the Critic filing wishes as defects. The
@@ -280,14 +294,24 @@ describe('brief — S-2 assembly', () => {
         // The note `work.ts` sends for THIS job (pass 1 of 2, this unit, this draft).
         const note = deepReviewNote(1, 2, 'summary_0', revision.id);
 
-        // Pinned: the note is ~2.5× the clip, so the brief below carries a TRUNCATED note — the shape
+        // Pinned: the note is ~2.6× the clip, so the brief below carries a TRUNCATED note — the shape
         // that hid the verdict instruction in the shipped build (it named the right ref past char 600).
         // The number moved when T3 front-loaded the admissibility clause into the window (it had lived
         // at characters 950-1,320 of the shipped note, i.e. never sent at all). It moved again (+78) when
-        // D-33b spelled the Issue/Proposal split into the sweep note — a deliberate lengthening, and the
-        // window assertions below, not this number, are what the doctrine depends on: the two kinds and
-        // the absence rule now sit at characters 0-240, so the rewording pushed nothing past the clip.
-        expect(note.length).toBe(1_520);
+        // D-33b spelled the Issue/Proposal split into the sweep note, once more (+10) on 2026-11-26 when
+        // the leading clause became "File ONE submitVerdict with both verdict lines" — "File TWO verdicts
+        // with submitVerdict" reads as two tool calls, and the pass now ends on one
+        // (`run/plugins/critic-termination.ts`) — and +67 with the MAJOR 3 follow-up the SAME day, when
+        // the clause past the clip stopped sending the pass to a SECOND endpoint ("File the critical and
+        // major issues with raiseFinding on …" became "… as findings[] entries of that SAME submitVerdict",
+        // `tools/reader.ts:submitVerdict`'s `findings[]`). Every one of those edits lands in the CLIPPED
+        // tail except the leading clause, so this number is bookkeeping about the tail, not the contract.
+        // THE NUMBER IS A CLIP BUDGET, NOT A FORMALITY: in the longer-ids variant below the clause "Added
+        // detail … are NOT defects" ends at character 594 (re-measured, unchanged by the +67), so a note
+        // edit that costs more than 6 characters BEFORE that clause pushes it past the 600 clip and THIS
+        // test's own "inside the window" assertions fail. The window assertions, not this number, are what
+        // the doctrine depends on.
+        expect(note.length).toBe(1_597);
 
         const item = itemFor({
             id: 'wi_review_revision_0_a1',
@@ -300,21 +324,29 @@ describe('brief — S-2 assembly', () => {
 
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
-        // -- R1: the JOB names both records and says which one the Goal reads ----------------------
+        // -- R1: the JOB names both records and says which one the Goal reads, in ONE call ---------
         // `criteria/engine.ts:scopeTargets` yields the Summary id for every `summary`-level criterion
         // (C-14); `summaryDraftEvidenceRefs` admits ONLY the currently selected draft's line as that
         // row's evidence. The brief asks for both filings: the Summary line the Goal reads, and the
-        // draft line U-13's per-draft panel needs (D-21, §6.2a).
+        // draft line U-13's side-by-side view needs (D-21, §6.2a).
+        //
+        // WHAT THE PIN CHANGED FOR (2026-11-26): the rule it pins is unchanged — TWO LINES, in that
+        // order, each named by its store-minted id, with the Summary line identified as the one the
+        // Goal reads. What moved is the CALL SHAPE: "Report the verdict TWICE with `submitVerdict`"
+        // reads as two tool calls, and each extra call is a round-trip a Critic pass spent itself on.
+        // The assertion below pins the two lines as the CONTENT of one terminal report, so a rewrite
+        // back into two calls fails here exactly as a rewrite that drops one of the targets does.
         expect(text).toContain(
-            'Report the verdict TWICE with `submitVerdict`, about the same text and reaching the same answer: ' +
+            'Put BOTH verdict lines in the pass\u2019s ONE terminal report, about the same text and reaching the same answer: ' +
                 'first at `target_ref` `summary_0` — the Summary unit the Goal\u2019s criteria are graded against, and the line the Goal actually reads — ' +
-                'then at `target_ref` `revision_0`, the draft this brief carries, which is the per-draft record the crew panel and the revision rail read (D-21, U-13).'
+                'then at `target_ref` `revision_0`, the draft this brief carries, which is the per-draft record the crew panel and the revision rail read (D-21, U-13). ' +
+                'Those two lines are one call, the last one this pass makes'
         );
 
-        // -- R2: the pass's own done-definition names the SAME two targets -------------------------
+        // -- R2: the pass's own done-definition names the SAME two targets, in ONE report ----------
         // (the template's proposal-style done-line is still replaced, not stacked, D-30).
         expect(text).toContain(
-            'the goal verdict is filed with `submitVerdict` at `target_ref` `summary_0` AND at `target_ref` `revision_0`'
+            'BOTH verdict lines sit in the ONE terminal `submitVerdict` report you end with, at `target_ref` `summary_0` AND at `target_ref` `revision_0`'
         );
         expect(text).not.toContain('Done means: every proposal is filed as an Idea with its sources');
 
@@ -339,7 +371,7 @@ describe('brief — S-2 assembly', () => {
         const carriedNote = text.slice(noteAt + noteHeading.length, noteAt + noteHeading.length + NOTE_CHAR_CLIP);
 
         // Both clauses of the note's verdict instruction are inside the surviving window…
-        expect(carriedNote).toContain('File TWO verdicts with submitVerdict');
+        expect(carriedNote).toContain('File ONE submitVerdict with both verdict lines');
         expect(carriedNote).toContain('the goal verdict at target_ref summary_0');
         expect(carriedNote).toContain('and the draft\u2019s own line at target_ref revision_0');
         // …and so is T3's admissibility clause, which is the half that decides whether this pass files
@@ -371,12 +403,12 @@ describe('brief — S-2 assembly', () => {
         const note = deepReviewNote(1, 2, 'summary_17', 'revision_102');
 
         // The same note, +8 characters from the longer ids.
-        expect(note.length).toBe(1_528);
+        expect(note.length).toBe(1_605);
 
         const carried = note.slice(0, NOTE_CHAR_CLIP);
 
         expect(carried.length).toBe(NOTE_CHAR_CLIP);
-        expect(carried).toContain('File TWO verdicts with submitVerdict');
+        expect(carried).toContain('File ONE submitVerdict with both verdict lines');
         expect(carried).toContain('the goal verdict at target_ref summary_17');
         expect(carried).toContain('and the draft\u2019s own line at target_ref revision_102');
         expect(carried).toContain('THIS IS THE OVERVIEW, NOT PROSE; THE SEED IS GENERAL, NOT AN OUTLINE');
@@ -420,8 +452,11 @@ describe('brief — S-2 assembly', () => {
         // defect AND may not file an Idea, so without this sentence the Critic's only move was to dress a
         // proposal in defect wording and watch the Editor dispute it. Pinned with the job line's own words:
         // the marker, the proposing title, and the fact that the Editor's rule for it is different.
+        // THE ROUTE IS PART OF THE SENTENCE NOW (2026-11-27): the Proposal is an entry of the same one report
+        // that ends the pass, not a call before it — "file it with `kind: proposal`" read as a
+        // `raiseFinding` round-trip, which is the second call the terminal plugin then refused to run.
         expect(text).toContain(
-            'An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, file it with `kind: proposal`'
+            'An absence is never an issue, but it may be a PROPOSAL: where the draft contradicts nothing and you can still name a change that would genuinely make the book better, put it in that same `findings[]` as `kind: proposal`'
         );
         expect(text).toContain(
             'a marked Proposal is weighed on whether the story the Seed promises is better for it'
@@ -741,6 +776,313 @@ describe('brief — S-2 assembly', () => {
         expect(disputed).not.toContain('unresolved issue');
     });
 
+    // -----------------------------------------------------------------------
+    // D-33c LIVE STATE — the open-issue count a Critic review brief never carried (2026-11-26)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The brief for a Critic REVIEW job shaped exactly like the ones the real sweep dispatches:
+     * `check_unit` + `roleName: 'critic'`, the Summary unit and the selected draft, and NO
+     * `findingRefs`. That absence is the mechanism this section pins — the deep-review sites
+     * (`loop/work.ts:2080-2098` legacy, `:1411-1435` group) never set `findingRefs`, so `renderJob`'s
+     * findings bracket (the only place the count used to render) never appears for a Critic, and the
+     * pass had to SPEND A TOOL CALL learning whether a Proposal was admissible. No `note` either: the
+     * assertions below are about the engine-owned sections, and the sweep note's own copies of these
+     * rules are pinned in `loop/phase1-verdict-contract.test.ts`.
+     */
+    function criticReviewStore(draft = true) {
+        const base = seedStore();
+
+        if (draft)
+            seedRevision(base.store, base.story.id, 'summary_0', 'DRAFT ONE — the valley under water.', 'run_1', {
+                unit_kind: 'summary',
+                state: 'selected'
+            });
+
+        seedCriticTemplate(base.store);
+
+        return base;
+    }
+
+    const criticReviewText = (store: Store): string => {
+        const item = itemFor({
+            id: 'wi_review_revision_0_a1',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
+            unit: { kind: 'summary', ref: 'summary_0' },
+            revisionRef: 'revision_0'
+        });
+
+        return buildBrief(store, item, resolveHarness(store, item)).text;
+    };
+
+    it('tells a Critic review pass how many issues are open, and that a Proposal is dismissed (D-33c — live state, not a rule)', () => {
+        const { store, story } = criticReviewStore();
+
+        // FIVE ROWS, TWO OF THEM OPEN ISSUES. The other three are the shapes that must not be counted:
+        // an open PROPOSAL (a claim, not a defect — `loop/records.ts:isOpenIssueFinding` filters on
+        // kind), a `disputed` issue (the Editor's own "not a defect", out of
+        // `loop/types.ts:ISSUE_HOLDING_STATES`) and a `fixed` one. If any of those starts counting, the
+        // number in the brief disagrees with the number `tools/reader.ts:dismissedProposal` quotes.
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-14',
+            fingerprint: 'C-14|chapter_1',
+            title: 'the ending contradicts what the Seed states',
+            cost: 'major'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-4',
+            fingerprint: 'C-4|chapter_2',
+            title: 'the 1911 map is paid off in the wrong chapter',
+            cost: 'critical',
+            state: 'confirmed'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-11',
+            fingerprint: 'C-11|chapter_1',
+            title: 'open the book on the lie instead of the truth',
+            cost: 'minor',
+            kind: 'proposal',
+            state: 'confirmed'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-6',
+            fingerprint: 'C-6|chapter_1',
+            title: 'the survey date is wrong in chapter 3',
+            cost: 'minor',
+            state: 'disputed'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-6',
+            fingerprint: 'C-6|chapter_2',
+            title: 'a chapter gap an earlier round already closed',
+            cost: 'major',
+            state: 'fixed'
+        });
+
+        // THE COUNT IS THE LOOP'S OWN ANSWER, not a hand-written number: the expected sentence is built
+        // from `openIssueFindings` itself, so a change to the holding set or to the kind filter moves
+        // the assertion with it instead of leaving the brief quoting a number the gate no longer uses.
+        const openIssues = openIssueFindings(store, story.id);
+
+        expect(openIssues.map((finding) => finding.id)).toEqual(['finding_0', 'finding_1']);
+
+        const text = criticReviewText(store);
+
+        expect(text).toContain(
+            `LIVE STATE — ${openIssues.length} issues are open on this Story right now, so a Proposal filed this pass is dismissed: no row, no work armed, and nothing to retry. Spend this pass on issues only.`
+        );
+
+        // RENDERED BEFORE THE ROLE PROMPT AND BEFORE THE CATALOGUE: the pass is told the fact before it
+        // can spend a call discovering it, which is the entire fix (measured: 10 proposal-dismissal
+        // records in one 33-minute run, each one a full round-trip).
+        const liveAt = text.indexOf('LIVE STATE — ');
+
+        expect(liveAt).toBeGreaterThan(-1);
+        expect(liveAt).toBeLessThan(text.indexOf('You are a Critic (D-30)'));
+        expect(liveAt).toBeLessThan(text.indexOf('# TOOLS AND HOW TO END'));
+
+        // The banner and the job line both point at THIS line rather than restating a count of their
+        // own, so the three cannot drift into three different numbers.
+        expect(text).toContain('The LIVE STATE line printed with this banner is that same count');
+        expect(text).toContain('The LIVE STATE line at the top of this brief is that count');
+
+        // The findings bracket is still absent, which proves the mechanism is the live store read and not
+        // rows wired into the job: a Critic review item carries no `findingRefs`, and this test builds
+        // one the way `loop/work.ts` does.
+        expect(text).not.toContain('Findings in front of you');
+
+        // THE EDITOR SIDE IS UNTOUCHED: the same store, an Editor job, and the findings heading renders
+        // exactly as it always did — the live-state line is critic-only, so the Editor's `brief_hash`
+        // does not move (see the byte-identical test above).
+        const editorItem = itemFor({
+            id: 'work_verify_live',
+            kind: 'verify_findings',
+            templateRef: 'editor-general',
+            roleName: 'editor',
+            unit: { kind: 'summary', ref: 'summary_0' },
+            findingRefs: ['finding_0']
+        });
+        const editorText = buildBrief(store, editorItem, resolveHarness(store, editorItem)).text;
+
+        expect(editorText).not.toContain('LIVE STATE');
+        expect(editorText).toContain('Findings in front of you (1):');
+    });
+
+    it('says "1 issue is open" in the singular, because a person reads this sentence (D-33c)', () => {
+        const { store, story } = criticReviewStore();
+
+        // The one open row is the `confirmed` one; the proposal beside it is not an issue.
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-4',
+            fingerprint: 'C-4|chapter_2',
+            title: 'the 1911 map is paid off in the wrong chapter',
+            cost: 'critical',
+            state: 'confirmed'
+        });
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-11',
+            fingerprint: 'C-11|chapter_1',
+            title: 'open the book on the lie instead of the truth',
+            cost: 'minor',
+            kind: 'proposal',
+            state: 'confirmed'
+        });
+
+        expect(openIssueFindings(store, story.id).map((finding) => finding.id)).toEqual(['finding_0']);
+        expect(criticReviewText(store)).toContain(
+            'LIVE STATE — 1 issue is open on this Story right now, so a Proposal filed this pass is dismissed:'
+        );
+    });
+
+    it('tells the same pass, truthfully, that a Proposal is admissible when nothing is open (D-33c — the zero branch)', () => {
+        const { store, story } = criticReviewStore();
+
+        // EVERY RELEASED SHAPE: `disputed` (the Editor's non-defect), `fixed`, `discarded`, and an OPEN
+        // PROPOSAL — which is a claim, never an issue. None of these holds a Proposal shut
+        // (`loop/types.ts:ISSUE_HOLDING_STATES` is `unconfirmed`/`confirmed`/`approved` only), so the
+        // brief must not claim the book is blocked.
+        for (const [fingerprint, state] of [
+            ['C-6|chapter_1', 'disputed'],
+            ['C-6|chapter_2', 'fixed'],
+            ['C-7|chapter_1', 'discarded']
+        ] as const) {
+            seedFinding(store, story.id, {
+                criterion_ref: 'C-6',
+                fingerprint,
+                title: 'a claim this round has finished with',
+                cost: 'minor',
+                state
+            });
+        }
+
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-11',
+            fingerprint: 'C-11|chapter_1',
+            title: 'open the book on the lie instead of the truth',
+            cost: 'minor',
+            kind: 'proposal',
+            state: 'confirmed'
+        });
+
+        expect(openIssueFindings(store, story.id)).toEqual([]);
+
+        const text = criticReviewText(store);
+
+        expect(text).toContain(
+            'LIVE STATE — no issue is open on this Story right now, so a Proposal you are certain of is admissible in this pass: file it with the verdicts in the one report you end with.'
+        );
+        // The dismissal sentence must not be present to misread, and neither may the count sentence.
+        expect(text).not.toContain('so a Proposal filed this pass is dismissed');
+        expect(text).not.toContain('issues are open on this Story right now');
+    });
+
+    it('retires the pass-pairing rule and every retry invitation from the Critic brief (D-33c, 2026-11-26)', () => {
+        const { store, story } = criticReviewStore();
+
+        seedFinding(store, story.id, {
+            criterion_ref: 'C-14',
+            fingerprint: 'C-14|chapter_1',
+            title: 'the ending contradicts what the Seed states',
+            cost: 'major'
+        });
+
+        // CASE-INSENSITIVE: the banner spelled the mirror rule in capitals ("an ISSUE AND A PROPOSAL
+        // NEVER SHARE A PASS"), and the point of this test is the SHAPE of the promise, not its casing.
+        const text = criticReviewText(store).toLowerCase();
+
+        // Every sentence below promised a CALL THE RULE NO LONGER OFFERS. The mirror rule is removed with
+        // `tools/reader.ts:dismissedProposal` (2026-11-26, `documents/specifications.md:333`), and a
+        // dismissal has no "later" to bring the improvement in — it ends the thread. Each of these is a
+        // round-trip the owner's complaint is about, so their absence is the assertion, not a side
+        // effect of new text.
+        expect(text).not.toContain('never share a pass');
+        expect(text).not.toContain('refuses a `kind: proposal`');
+        expect(text).not.toContain('refused and told how many issues are open');
+        expect(text).not.toContain('bring it in a pass that has none left');
+        expect(text).not.toContain('bring the improvement once the book has no defect left');
+        expect(text).not.toContain('next review');
+        // And the retry-shaped description of the answer itself is gone: it is a DISMISSAL.
+        expect(text).toContain('a `kind: proposal` claim is dismissed rather than refused');
+        expect(text).toContain('a `kind: proposal` claim is dismissed on the call');
+    });
+
+    it('ends the pass with ONE terminal report carrying both verdict lines and the findings (D-21, U-13, S-4)', () => {
+        const { store } = criticReviewStore();
+
+        const text = criticReviewText(store);
+
+        // JOB LINE — the report is the pass's LAST act and it carries everything. The shape is described
+        // in WORDS, never by naming parameters: the report's schema is being finalised in
+        // `tools/reader.ts` alongside this prose, and a field name here would freeze a shape another
+        // pass still owns.
+        expect(text).toContain(
+            'The pass ends with ONE terminal `submitVerdict` report carrying both verdict lines and every finding you are sure of, and the thread is over the moment that call fires'
+        );
+        expect(text).toContain('Put BOTH verdict lines in the pass\u2019s ONE terminal report');
+        expect(text).toContain('Those two lines are one call, the last one this pass makes');
+        // The D-21/U-13 double-target rule still binds, inside that one call — the assertion above names
+        // both lines; the ids they aim at are pinned in the CS-VERDICT-1 test above.
+        // BANNER — the same requirement ahead of the Author-editable angle prompt.
+        expect(text).toContain(
+            'it ends with ONE terminal report — `submitVerdict` carrying both verdict lines the Goal and the crew panel need AND every finding you are filing'
+        );
+        // DONE LINE — the last thing the crew reads before the catalogue.
+        expect(text).toContain(
+            'BOTH verdict lines sit in the ONE terminal `submitVerdict` report you end with, at `target_ref` `summary_0` AND at `target_ref` `revision_0`'
+        );
+        // PERMISSION LINE (`run/harness.ts:permissionLine`, kind `critic`) — the third copy, rendered in
+        // TOOLS AND HOW TO END. IT MOVED AGAIN (2026-11-27): the line no longer advertises `raiseFinding` as
+        // a filing path beside the report — every finding is a `findings[]` entry of the ONE terminal
+        // `submitVerdict`, which is what `run/plugins/critic-termination.ts` enforces at the call — and it
+        // names the `proposeIdea` allowance instead. Pinned WHOLE, because the brief, the banner and the
+        // plugin have to say the same thing: a partial pin lets one of the three drift.
+        expect(text).toContain(
+            'You are a Critic: you close with ONE terminal report — `submitVerdict` carries every verdict line ' +
+                'the pass owes and every finding in `findings[]`, and it is the last call you make — plus ' +
+                '`proposeIdea` when the job explicitly asks for Ideas (D-26, T-9). Any write to a story ' +
+                'artifact is refused naming P10 — report or propose, never edit.'
+        );
+        // The two-call framing cannot come back from this section. The old line named `raiseFinding` as the
+        // claim-filing path and `submitVerdict` as a separate last call — the round-trip the terminal report
+        // replaced — so its exact wording is pinned as an absence. (The bare verb still appears in the
+        // S-4 report-tool list, which is a different sentence and still lists it.)
+        expect(text).not.toContain('`raiseFinding` for a claim you can quote');
+        expect(text).not.toContain('`submitVerdict` as the pass\u2019s last call');
+        // The framing that read as two calls cannot come back from any section of this brief.
+        expect(text).not.toContain('Report the verdict TWICE');
+    });
+
+    it('stops the pass on certainty and effort-then-value, and reads an empty pass as a completed one (D-30, S-4)', () => {
+        const { store } = criticReviewStore();
+
+        const text = criticReviewText(store);
+
+        // EFFORT THEN VALUE, in both engine-owned places. The banner's version is the general rule; the
+        // job line's is the sentence a tool-using pass acts on. Nit-picking is named, not implied.
+        expect(text).toContain('CONCLUDE, DO NOT MINE: report what you are certain of and stop');
+        expect(text).toContain(
+            'A defect you had to dig for is not worth filing, nit-picking is forbidden, and a minor note or an improvement you cannot name against a quotation is not worth the call'
+        );
+        expect(text).toContain('CONCLUDE, DO NOT MINE: file the issues you are certain of and stop');
+        expect(text).toContain('a defect you had to dig for is not worth filing, and nit-picking is forbidden');
+        // The stop is CERTAINTY, in the done-line too, and the open-ended "you need not be exhaustive"
+        // hedging (which reads as permission to keep looking) is gone with it.
+        expect(text).toContain('Once the issues you are certain of are filed this pass is finished');
+        expect(text).toContain('Done means: every issue you are certain of — critical and major first — is filed');
+        expect(text).toContain('and you stopped there instead of digging for a defect worth less than the round it would buy');
+        expect(text).not.toContain('You do not have to be exhaustive');
+        expect(text).not.toContain('You do not need to be exhaustive');
+        // S-4 vs D-30, reconciled in the shared etiquette section: the ledger counts the MISSING REPORT,
+        // never a pass that filed nothing. Both halves are pinned because the contradiction was between
+        // these two sentences specifically.
+        expect(text).toContain(
+            'What costs the Story a turn is the missing REPORT, never an empty set of findings'
+        );
+        expect(text).toContain('a pass that files nothing and reports that the text holds has done its job');
+        expect(text).toContain('S-4 counts a run that never REPORTS, never a run that filed no finding');
+    });
+
     it('gives a Summary Writer the licence to invent what the Seed leaves silent, and withholds it from the other units (T3)', () => {
         const { store } = seedStore();
 
@@ -797,15 +1139,152 @@ describe('brief — S-2 assembly', () => {
 
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
-        // No `revisionRef` in the job means no invented draft target: the single required filing is
-        // stated, and the "TWICE" contract is not offered with one of its two refs missing.
+        // No `revisionRef` in the job means no invented draft target: the single required line is
+        // stated, and the two-line contract is not offered with one of its two refs missing.
         expect(text).toContain(
-            'Report the goal verdict with `submitVerdict` at `target_ref` `summary_0` — the record the Goal\u2019s criteria are graded against. ' +
+            'Put the goal verdict in the pass\u2019s ONE terminal report, at `target_ref` `summary_0` — the record the Goal\u2019s criteria are graded against. ' +
                 'A verdict filed at the draft alone is display evidence for the crew panel, not the line the Goal is measured on.'
         );
-        expect(text).toContain('the goal verdict is filed with `submitVerdict` at `target_ref` `summary_0`;');
+        expect(text).toContain(
+            'the ONE terminal `submitVerdict` report you end with, at `target_ref` `summary_0`;'
+        );
+        // The two-line form cannot appear with only one ref to aim it at, and the retired
+        // "call the tool twice" framing is gone from this section with the rest of the build.
+        expect(text).not.toContain('then at `target_ref`');
+        expect(text).not.toContain('the draft this brief carries');
         expect(text).not.toContain('Report the verdict TWICE');
         expect(text).not.toContain('against the revision named above');
+    });
+
+    it('labels a phase-② Critic pass as a chapter-contract review, not a Summary review (the phase mismatch this fixes)', () => {
+        // The chapter lane dispatches `check_unit` with NO unit, so the phase is the only artifact
+        // signal. Before this fix the item got the Summary banner while its job line named chapter
+        // contracts, and the role prompt's C-14/C-15 calibration rode along into a prose-free phase.
+        const { store } = seedStore({ phase: 'plotlines' });
+
+        seedCriticTemplate(store);
+
+        const item = itemFor({
+            id: 'wi_check_chapter_0',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
+            unit: undefined
+        });
+
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        // The banner is prepended to the ROLE section, so the model meets the phase before it meets
+        // the Author-editable role prompt it is overriding.
+        expect(text.indexOf('PASS MODE — CHAPTER-CONTRACT REVIEW')).toBeLessThan(
+            text.indexOf('You are a Critic (D-30): you judge the Overview against the Seed from one angle.')
+        );
+        expect(text).toContain('Phase: plotlines.');
+        expect(text).toContain(
+            'PASS MODE — CHAPTER-CONTRACT REVIEW (this overrides any wider instruction in the role prompt below). The chapter contracts and the phrase seed are in this brief'
+        );
+        expect(text).toContain(
+            'use C-7, C-8 or C-9 for a chapter contract and C-0 through C-6 for the plotline contract the chapter fails'
+        );
+        expect(text).toContain('Judge CONTRACTS, not prose');
+        expect(text).toContain(
+            'The pass ends with ONE terminal report — `submitVerdict` carrying the goal verdict at the Story row AND every finding in `findings[]`'
+        );
+        // The job line is the chapter contract, filed at the Story row, and it never cites the
+        // Summary-phase criteria.
+        expect(text).toContain('Read the chapter contracts named above against the phrase seed.');
+        expect(text).toContain(
+            'put them in the `findings[]` array of the ONE terminal `submitVerdict`, each at `target_ref` `story_0`'
+        );
+        expect(text).toContain('never cite `C-14` or `C-15` here');
+        // One goal verdict at the Story row: the Summary's two-line contract cannot ride in here.
+        expect(text).toContain(
+            'Put the goal verdict in the pass\u2019s ONE terminal report, at `target_ref` `story_0` — the whole Story the chapter contracts are graded against. The findings ride in that same report as `findings[]`; there is no draft line to file.'
+        );
+        expect(text).toContain(
+            'is filed as a `findings[]` entry of the ONE terminal `submitVerdict` you end with, at `target_ref` `story_0`'
+        );
+        // The Summary banner and the Summary job sentence are gone, with the sentence the Author
+        // screenshot showed in the wrong phase.
+        expect(text).not.toContain('PASS MODE — REVIEW (this overrides');
+        expect(text).not.toContain('Read the Summary named above');
+        expect(text).not.toContain('BOTH verdict lines');
+        expect(text).not.toContain('never a C-14 finding');
+    });
+
+    it('labels a phase-③ Critic pass as a prose review, where C-10 through C-13 are reportable', () => {
+        // Phase ③ writes the sentences, so the Summary-phase rule "prose is never an Issue" is
+        // backwards here. The prose banner states the override rather than leaving the role prompt
+        // (editable by the Author) to carry it.
+        const { store } = seedStore({ phase: 'chapters' });
+
+        seedCriticTemplate(store);
+
+        const item = itemFor({
+            id: 'wi_check_chapter_0',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
+            unit: undefined
+        });
+
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        expect(text).toContain('Phase: chapters.');
+        expect(text).toContain(
+            'PASS MODE — PROSE REVIEW (this overrides any wider instruction in the role prompt below). The chapter prose and its contract are in this brief'
+        );
+        expect(text).toContain(
+            'Judge the PROSE this phase wrote: C-10, C-11, C-12 and C-13 apply, and word choice, sentence shape, grammar and register ARE reviewable here — the Summary-phase rule that prose is never an Issue does not apply to this pass.'
+        );
+        expect(text).toContain(
+            'Read the chapter prose named above against its contract and the criteria. C-10, C-11, C-12 and C-13 apply;'
+        );
+        expect(text).toContain(
+            'Put the critical and major issues in the `findings[]` array of the ONE terminal `submitVerdict`, each at `target_ref` `story_0`'
+        );
+        expect(text).toContain('— the whole Story the prose is graded against.');
+        // Neither the Summary banner nor the chapter-contract banner belongs to this phase.
+        expect(text).not.toContain('PASS MODE — REVIEW (this overrides');
+        expect(text).not.toContain('PASS MODE — CHAPTER-CONTRACT REVIEW');
+        expect(text).not.toContain('Read the Summary named above');
+        expect(text).not.toContain('BOTH verdict lines');
+    });
+
+    it('keeps the Summary review banner when a Summary sample is reviewed in a later phase (S-2)', () => {
+        // The unit kind wins over the phase: a phase-① deep review can be dispatched after the Story
+        // has advanced, and a stale phase must not put the prose banner on a Summary review.
+        const { store } = seedStore({ phase: 'chapters' });
+
+        seedCriticTemplate(store);
+
+        const item = itemFor({
+            id: 'wi_review_summary_0',
+            templateRef: 'critic-genre',
+            roleName: 'critic',
+            // `seedStory` mints the Story's own Summary row (`summary_0`); the draft ref is the one a
+            // deep-review candidate carries (`loop/work.ts`) — named, not rowed, which is all the
+            // verdict clause needs.
+            unit: { kind: 'summary', ref: 'summary_0' },
+            revisionRef: 'revision_0'
+        });
+
+        const { text } = buildBrief(store, item, resolveHarness(store, item));
+
+        expect(text.indexOf('PASS MODE — REVIEW')).toBeLessThan(
+            text.indexOf('You are a Critic (D-30): you judge the Overview against the Seed from one angle.')
+        );
+        expect(text).toContain(
+            'PASS MODE — REVIEW (this overrides any wider instruction in the role prompt below). The Summary sample and the Seed are in this brief'
+        );
+        expect(text).toContain('Find the issues that matter and put them in the `findings[]` array of the one terminal `submitVerdict`');
+        expect(text).toContain(
+            'Put BOTH verdict lines in the pass\u2019s ONE terminal report'
+        );
+        expect(text).toContain('BOTH verdict lines sit in the ONE terminal `submitVerdict` report you end with');
+        // The phase banners belong to the other two lanes; the Summary sample keeps its own rules.
+        expect(text).not.toContain('PASS MODE — CHAPTER-CONTRACT REVIEW');
+        expect(text).not.toContain('PASS MODE — PROSE REVIEW');
+        expect(text).not.toContain('Read the chapter contracts named above');
+        expect(text).not.toContain('Read the chapter prose named above');
     });
 
     it('names no invented artifact id when a Critic review carries no unit ref (defensive, S-2)', () => {
@@ -826,10 +1305,10 @@ describe('brief — S-2 assembly', () => {
         // With no ref in the item the brief points at the heading rather than asserting an id it does
         // not hold (a fabricated ref is the failure mode the fallback exists to avoid).
         expect(text).toContain(
-            'Report the goal verdict with `submitVerdict` at the Summary unit this job names under ARTIFACT UNDER REVIEW above — this job carries no artifact ref of its own, so read the id from that heading'
+            'Put the goal verdict in the pass\u2019s ONE terminal report, at the Summary unit this job names under ARTIFACT UNDER REVIEW above — this job carries no artifact ref of its own, so read the id from that heading'
         );
         expect(text).toContain(
-            'the goal verdict is filed with `submitVerdict` at the Summary unit this job names under ARTIFACT UNDER REVIEW above;'
+            'the ONE terminal `submitVerdict` report you end with, at the Summary unit this job names under ARTIFACT UNDER REVIEW above;'
         );
         // No concrete-ref form is invented, and the old revision-only wording cannot come back.
         expect(text.includes('target_ref')).toBe(false);

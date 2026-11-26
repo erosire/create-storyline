@@ -2428,11 +2428,15 @@ components:
                 commitment, rated `critical` / `major` / `minor`; `proposal` is an improvement the Seed
                 never promised (a word change, a new element, a twist linked earlier), rated `major` /
                 `minor` / `taste`. The two off-ladder pairings are refused by `raiseFinding`, never
-                re-triaged silently. D-33c/D-33d sequence the two kinds on one Story: an `issue` and a
-                `proposal` never share a review pass, a `proposal` may not be FILED while any issue is
-                unresolved (`tools/reader.ts:raiseFinding`, `D-33c`) nor APPROVED over one
+                re-triaged silently. D-33c/D-33d sequence the two kinds on one Story: a `proposal` is
+                DISMISSED while any issue is unresolved — the call answers `ok: true` with nothing filed
+                and no row, and it is not re-sent (`tools/reader.ts:raiseFinding`, `D-33c`) — and it may
+                not be APPROVED over one
                 (`tools/editor.ts:approveFinding`, the engine's approval, the auto-approve sweep and the
-                chapter approve-all, `D-33d`). An issue holds that order only while it is `unconfirmed`,
+                chapter approve-all, `D-33d`). An `issue` is never held back, whatever else is open: the
+                old rule refusing an issue in a pass that had already filed a proposal was removed on
+                2026-11-26, because after the dismissal it could only ever refuse a defect. An issue holds
+                that order only while it is `unconfirmed`,
                 `confirmed` or `approved` (`loop/types.ts:ISSUE_HOLDING_STATES`); a row the Editor marks
                 `disputed` is not a defect and releases the proposal, like `fixed` or `discarded`, and
                 the Author can still overturn that verdict later on the unguarded approve/discard routes.

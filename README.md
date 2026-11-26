@@ -130,6 +130,12 @@ that drives it, from one origin.
   id it serves (`L-` loop, `D-` design decision, `U-` UI, `S-` service, `T-` tool, `G-` goal,
   `E-` engine, `P-` principle, `V-` vocabulary), so a reader can go from a line of code to the
   paragraph that demanded it, and back.
+- **The Summary Phrase's life cycle** is `documents/summary-phrase-lifecycle.md` — the diagrammed walk
+  from a catalog row to a `group_revisions` row (`latest` · `archived` · `discarded`), what a new
+  revision re-arms, and why an install whose text is identical to the group's current text still mints
+  one: the "new revision, no diff" a grouped Story reports, traced to the line that causes it
+  (`src/server/phrase/revisions.ts:494,523-524`) with the candidate fixes recorded as an open decision
+  rather than a new requirement.
 
 ### Running it
 

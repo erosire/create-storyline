@@ -32,13 +32,18 @@ import type { Store } from '../store';
 // the two inputs of the cut below, and the number must keep ONE definition — `loop/records.ts` owns
 // it, `loop/work.ts:summarySamplingOf` is only a named alias of it, and importing the alias here would
 // put a cycle between this module and the planner that dispatches with it.
+// W5 adds the two reads the review seat's retry counter needs: `isReportedRun` (the closed state that
+// means an ANSWER, not merely a run row) and `SAMPLING_RETRY_ALLOWANCE` (the loop's one retry budget,
+// which `groupReviewAttemptCap` reuses instead of inventing a number here).
 import {
     createdAfterSeq,
     creationSeq,
     isLiveRun,
+    isReportedRun,
     liveRuns,
     runsForItem,
     samplingSizeOf,
+    SAMPLING_RETRY_ALLOWANCE,
     screeningSizeOf,
     storyFindings
 } from '../loop/records';
@@ -627,10 +632,117 @@ export function planGroupDraftBatch(
     return batch.sort((left, right) => phraseGroupRank(left.group.key) - phraseGroupRank(right.group.key));
 }
 
-/** Whether every structured review seat of one vector has already produced a run row. */
-export function allReviewSeatsRun(store: Store, vectorHash: string, critics: number): boolean {
+// ---------------------------------------------------------------------------
+// The structured review seat's ledger reads (W5 — resultless seats re-arm)
+// ---------------------------------------------------------------------------
+
+/**
+ * The attempt ceiling of ONE vector's structured review family (W5).
+ *
+ * WHY A CEILING AT ALL: before W5 a seat was paid by ANY run row — a `torn_down` answer or a pass killed
+ * at `run/executor.ts:STRUCTURED_REQUEST_MAX_MS` with `tokens: 0` paid it the same. Measured on the Bird
+ * Brain store: 16 `wi_review_groups_*` runs, 3 of them `abandoned`, and 13 `sample_reviews` rows — so
+ * exactly the three dead passes left NOTHING on the record and the vector kept only 2 of its 5 Critic
+ * reads (`DEFAULT_SUMMARY_CRITICS`, `shared/types.ts:284`), permanently, until the group vector moved.
+ * A dead provider therefore cost the book 20-60% of its review, silently.
+ *
+ * WHY `critics + SAMPLING_RETRY_ALLOWANCE`: it is the loop's existing answer to "the provider is not
+ * answering the schema" — `records.ts:screeningCapOf` caps one draft's SCREENING family at its owed
+ * passes plus the allowance, and the screening family is the same shape as this one (`critics` owed
+ * passes over one artifact). Reusing the expression, rather than inventing a number, means the same
+ * grace everywhere: one pass per seat plus `SAMPLING_RETRY_ALLOWANCE` retries to spend ACROSS the set.
+ * For the default dial that is 5 owed seats and 3 spare attempts, so a fully dead vector costs 8 runs
+ * instead of 5 — never a run per sweep, and never more than `critics` at a time (the fan-out ceiling
+ * `types.ts:DEFAULT_GLOBAL_MAX_CONCURRENT` budgets is untouched: this queue is the same size it was).
+ *
+ * WHY FAMILY-WIDE rather than per-seat, stated because a reader will check: per-seat caps multiply
+ * (5 seats × 4 = 20 runs on one dead vector). The family counter spreads one allowance over the set,
+ * exactly as `records.ts:screenAttempts` does for screens, and it degrades the same way — see
+ * {@link groupReviewSeatSettled}'s exhaustion clause.
+ */
+export const groupReviewAttemptCap = (critics: number): number => critics + SAMPLING_RETRY_ALLOWANCE;
+
+/**
+ * The structured review seat's claim key — the SAME spelling `loop/work.ts:phase1GroupCandidates`
+ * builds its candidate with and `api/projections.ts` counts closed runs under. A seat is keyed by the
+ * GROUP VECTOR, so an install re-arms every seat by itself (the redesign's replacement for screening
+ * N candidates); the literals cannot drift because the generator and this builder are pinned to one
+ * shape by `loop/phase1-groups-restart.test.ts` and the projection test.
+ *
+ * W5 KEEPS THE KEY EXACTLY AS IT IS while letting a dead seat run again, and that is deliberate: the
+ * seat's identity is the `(vector, pass)` pair, not the attempt, and three readers parse or count the
+ * key by that shape (`api/projections.ts:1945`'s family count, `GROUP_PIPELINE_RUN_PREFIXES`, and the
+ * dashboard's seat view). Appending an attempt segment — the sampler's `claimKey(prefix, attempts + 1)`
+ * idiom — would have moved all three. A retry is a SECOND RUN ROW under the same key, which is what
+ * `runsForItem` already reads and what `records.ts:isReportedRun` grades.
+ */
+export const groupReviewSeatKey = (vectorHash: string, pass: number): string =>
+    `${GROUP_REVIEW_ITEM_PREFIX}_${vectorHash}_${pass}`;
+
+/** One vector's whole structured review family, prefix form — the anchor `records.ts:screenPrefixOf` uses. */
+export const groupReviewSeatFamily = (vectorHash: string): string => `${GROUP_REVIEW_ITEM_PREFIX}_${vectorHash}_`;
+
+/**
+ * How many CLOSED passes this vector's review family has spent — the retry counter W5 arms on.
+ *
+ * Counted over the FAMILY (`wi_review_groups_<hash>_`, every pass) and not per seat, because the cap
+ * above is a family budget. Live rows are excluded: a seat in flight has not failed yet, and `records.ts
+ * :isClaimed` is what stops the same seat being dispatched twice (so an attempt is only ever counted
+ * once it has an outcome). Story scoping follows `runsForItem` exactly as this family counted before
+ * W5 — the vector hash is the scope, the same content-derived anchor every other read here uses.
+ */
+export const groupReviewAttempts = (store: Store, vectorHash: string): number => {
+    const family = groupReviewSeatFamily(vectorHash);
+
+    return store.runs
+        .list()
+        .filter((run) => (run.work_item_ref ?? '').startsWith(family) && !isLiveRun(run)).length;
+};
+
+/**
+ * Whether one seat brought an ANSWER back, as opposed to having once been tried (W5).
+ *
+ * This is the predicate that was missing: the generator used to ask "does a run row exist?"
+ * (`runsForItem(store, key).length > 0`), which a killed pass answers just as well as a real review.
+ * `records.ts:isReportedRun` is the only state whose structured answer reached `engine.ts:1756`'s
+ * `groupReview.ok` guard and therefore wrote a `sample_reviews` row.
+ */
+export const groupReviewSeatAnswered = (store: Store, vectorHash: string, pass: number): boolean =>
+    runsForItem(store, groupReviewSeatKey(vectorHash, pass)).some(isReportedRun);
+
+/**
+ * Is one seat DONE, so the vector no longer owes it? (W5)
+ *
+ * Two ways, and they are the whole rule — the same pair `records.ts:isFullyScreened` states for a
+ * draft's screens:
+ *   1. it ANSWERED (`groupReviewSeatAnswered`), which is the normal case and is byte-identical to what
+ *      the old "a run row exists" test accepted, since every healthy seat closes `torn_down`; or
+ *   2. its family SPENT THE CAP (`groupReviewAttempts ≥ groupReviewAttemptCap`) — the degrade path. A
+ *      provider that answers `GroupReview` never again is not fixed by a ninth pass; without this
+ *      clause, tightening the gate would strand the vector forever: the review seats would stay owed,
+ *      the deep cross-group pass (`work.ts` leg 3) would never arm, and the drain would hold on work
+ *      the loop can no longer buy. Exhaustion therefore SETTLES the seat, and the dead passes are
+ *      visible on the ledger as the `abandoned`/`failed` rows the count reads.
+ *
+ * A live run satisfies NEITHER clause, which is right: a seat that is still deciding has produced
+ * nothing yet, and `candidate()`'s own `isClaimed` guard (`work.ts:612`) is what keeps the in-flight
+ * seat off the queue — one row per seat per sweep, never two.
+ */
+export const groupReviewSeatSettled = (store: Store, vectorHash: string, critics: number, pass: number): boolean =>
+    groupReviewSeatAnswered(store, vectorHash, pass) ||
+    groupReviewAttempts(store, vectorHash) >= groupReviewAttemptCap(critics);
+
+/**
+ * Whether every structured review seat of one vector is DONE — answered, or out of attempts (W5).
+ *
+ * Renamed on 2026-11-26 because the name it had asked for a RUN, and a run is not a result — that is
+ * what made the bug comfortable. The deep cross-group pass is armed by this, so a vector whose three
+ * seats died at the request-liveness ceiling no longer reaches its tool-carrying review on the strength
+ * of rows that filed nothing — it waits for the retries, or accepts the exhausted set (clause 2).
+ */
+export function allReviewSeatsReported(store: Store, vectorHash: string, critics: number): boolean {
     for (let pass = 1; pass <= critics; pass += 1) {
-        if (runsForItem(store, groupReviewSeatKey(vectorHash, pass)).length === 0) return false;
+        if (!groupReviewSeatSettled(store, vectorHash, critics, pass)) return false;
     }
 
     return true;
@@ -641,14 +753,14 @@ export function allReviewSeatsRun(store: Store, vectorHash: string, critics: num
 // ---------------------------------------------------------------------------
 
 /**
- * The structured review seat's claim key — the SAME spelling `loop/work.ts:phase1GroupCandidates`
- * builds its candidate with and `api/projections.ts` counts closed runs under. A seat is keyed by the
- * GROUP VECTOR, so an install re-arms every seat by itself (the redesign's replacement for screening
- * N candidates); the literals cannot drift because the generator and this builder are pinned to one
- * shape by `loop/phase1-groups-restart.test.ts` and the projection test.
+ * The structured review seat's claim-key family (`loop/work.ts` legs 2 and 3, both phrases).
+ *
+ * Named so the three readers of this family spell it once: {@link groupReviewSeatKey} builds a seat,
+ * {@link groupReviewSeatFamily} builds the prefix the retry counter scans, and
+ * `GROUP_PIPELINE_RUN_PREFIXES` below lists it for the in-flight read. `api/projections.ts:1945` still
+ * interpolates the literal itself, because a projection is not part of this vocabulary.
  */
-export const groupReviewSeatKey = (vectorHash: string, pass: number): string =>
-    `wi_review_groups_${vectorHash}_${pass}`;
+export const GROUP_REVIEW_ITEM_PREFIX = 'wi_review_groups';
 
 /** The deep cross-group review seat's claim-key family — §6.4 step 6, the tool-carrying pass (R5). */
 export const GROUP_CHECK_ITEM_PREFIX = 'wi_group_check';
@@ -679,6 +791,121 @@ export const groupCheckVectorHashOf = (claimKey: string): string => {
 
     return split <= 0 ? rest : rest.slice(0, split);
 };
+
+/**
+ * One vector's whole deep-review family, prefix form — the anchor the attempt counter below scans and
+ * the rail counts DISTINCT seats under (MAJOR 3, 2026-11-26).
+ *
+ * The trailing `_` is the same family anchor `records.ts:screenPrefixOf` insists on: the pass number is
+ * a counter, so `…_1` must not also match `…_10`.
+ */
+export const groupCheckSeatFamily = (vectorHash: string): string => `${GROUP_CHECK_ITEM_PREFIX}_${vectorHash}_`;
+
+/**
+ * Did one DEEP-REVIEW seat actually bring a report back? (MAJOR 3 — the deep family's answer read.)
+ *
+ * WHY `isReportedRun` IS NOT ENOUGH HERE, which is the whole of the defect this closes: the structured
+ * seats answer in ONE structured turn, so `torn_down` (the state `run/executor.ts` writes from its
+ * success branch) implies the answer validated and `loop/engine.ts` persisted it — that is
+ * `records.ts:isReportedRun`'s evidence, and W5 gates the structured family on it. A deep pass is
+ * TOOL-CARRYING: its success branch is reached whenever the session simply ENDED, and `torn_down` says
+ * nothing about whether the pass ever filed. Measured in `run/plugins/critic-termination.ts`'s own
+ * header, this pass runs 6-17 minutes and 200k-380k tokens, and the plugin exists because a Critic that
+ * runs out of turns used to close `torn_down` with nothing on the record. So this family needs the
+ * REPORT, not the state.
+ *
+ * WHAT COUNTS AS THE REPORT: a `verdicts` row the seat's own run filed. `submitVerdict` is the ONE call
+ * that ENDS a Critic pass and it carries the review's verdict lines AND its findings
+ * (`run/plugins/critic-termination.ts:CRITIC_TERMINAL_REPORT_TOOLS`, and the deep-review notes in
+ * `loop/work.ts` say "File ONE submitVerdict"), while a critic that only filed `raiseFinding` "has
+ * reported something but has NOT concluded" by that plugin's own wording — so a verdict row is the
+ * evidence the pass concluded, and a finding without one is a pass that stopped mid-report. Attribution
+ * is the row's own `run_ref`, the join `records.ts:wholeStoryVerdicts` already uses; no journal scan and
+ * no new field, so the read survives a restart off rows the product already writes.
+ *
+ * SCOPED BY STORY ON PURPOSE: `runsForItem` is key-scoped (see `records.ts:isClaimed`'s S-RUNTIME note),
+ * and the vector hash makes a cross-book collision practically impossible, but this predicate is called
+ * from a projection that is Story-scoped, so it answers the same question at the same scope rather than
+ * a wider one.
+ */
+export const groupCheckSeatAnswered = (store: Store, storyId: string, claimKey: string): boolean => {
+    const runIds = new Set(
+        runsForItem(store, claimKey)
+            .filter((run) => run.story_id === storyId)
+            .map((run) => run.id)
+    );
+
+    if (runIds.size === 0) return false;
+
+    return store.verdicts
+        .list()
+        .some(
+            (verdict) =>
+                verdict.story_id === storyId &&
+                verdict.run_ref !== undefined &&
+                verdict.run_ref !== null &&
+                runIds.has(verdict.run_ref)
+        );
+};
+
+/**
+ * The attempt ceiling of ONE vector's deep-review family (MAJOR 3).
+ *
+ * `critics + SAMPLING_RETRY_ALLOWANCE` — the identical expression `groupReviewAttemptCap` uses for the
+ * structured seats and `records.ts:screeningCapOf` uses for a draft's screens: one pass per seat plus
+ * `SAMPLING_RETRY_ALLOWANCE` retries to spend ACROSS the set, not a fresh allowance per seat (per-seat
+ * caps multiply: 5 seats × 4 = 20 deep passes on one dead vector).
+ *
+ * WHY THE CEILING MATTERS MORE HERE THAN DOWNSTREAM: this is the expensive family — 6-17 minutes and
+ * 200k-380k tokens a pass (`run/plugins/critic-termination.ts` header; 12 deep passes were 86.8% of one
+ * run's tokens). On the default dial the healthy vector buys 5 passes (≈30-85 min); a vector whose
+ * provider keeps closing without filing spends at most 5 + 3 = 8 passes (≈48-136 min) before the family
+ * is parked, instead of one 6-17 minute pass every sweep forever. Fan-out is unchanged: one candidate
+ * per seat per sweep, and `loop/work.ts:candidate`'s `isClaimed` guard drops a seat whose run is live.
+ */
+export const groupCheckAttemptCap = (critics: number): number => critics + SAMPLING_RETRY_ALLOWANCE;
+
+/**
+ * How many CLOSED passes this vector's deep family has spent — the retry counter MAJOR 3 arms on.
+ *
+ * FAMILY-wide and not per seat, because the ceiling above is a family budget (the same shape as
+ * `groupReviewAttempts` reads for the structured seats); live rows are excluded because a seat in flight
+ * has not failed yet. Story scoping follows `runsForItem`, exactly as the sibling family counts: the
+ * vector hash is the scope.
+ */
+export const groupCheckAttempts = (store: Store, vectorHash: string): number => {
+    const family = groupCheckSeatFamily(vectorHash);
+
+    return store.runs
+        .list()
+        .filter((run) => (run.work_item_ref ?? '').startsWith(family) && !isLiveRun(run)).length;
+};
+
+/**
+ * Is one deep-review seat DONE, so the vector no longer owes it? (MAJOR 3)
+ *
+ * The SAME pair of clauses `groupReviewSeatSettled` states for the structured seats, so the two review
+ * families finally degrade the same way:
+ *   1. it PRODUCED A REPORT ({@link groupCheckSeatAnswered} — a verdict row its own run filed), or
+ *   2. its family SPENT THE CAP (`groupCheckAttempts ≥ groupCheckAttemptCap`) — the degrade path, so a
+ *      provider that keeps ending the session without filing parks the vector rather than buying a
+ *      6-17 minute pass every sweep, and the sign-off and the drain cannot strand on it.
+ *
+ * WHAT THIS REPLACES, stated because the parity claim in `loop/status.ts` depends on it: the gate used to
+ * settle a deep seat on ANY CLOSED row (`runsForItem(key).length > 0` in `loop/work.ts`, and `closedOn`
+ * here), which a capped or abandoned pass that filed nothing paid just as well — while the Author's rail
+ * counted that seat as NOT reviewed. One dead deep pass therefore printed "0 of 5 deep reviews" beside a
+ * `phase_signoff` offer with nothing owed. Both readers now call THIS function's predicate.
+ */
+export const groupCheckSeatSettled = (
+    store: Store,
+    storyId: string,
+    vectorHash: string,
+    critics: number,
+    pass: number
+): boolean =>
+    groupCheckSeatAnswered(store, storyId, groupCheckSeatKey(vectorHash, pass)) ||
+    groupCheckAttempts(store, vectorHash) >= groupCheckAttemptCap(critics);
 
 /**
  * The Reader's section-score seat's claim key (D-65) — ONE seat per group vector, not one per pass.
@@ -722,7 +949,7 @@ export const sectionScoreVectorHashOf = (claimKey: string): string =>
  */
 export const GROUP_PIPELINE_RUN_PREFIXES = [
     `${GROUP_DRAFT_ITEM_PREFIX}_`,
-    'wi_review_groups_',
+    `${GROUP_REVIEW_ITEM_PREFIX}_`,
     `${GROUP_CHECK_ITEM_PREFIX}_`,
     `${SECTION_SCORE_ITEM_PREFIX}_`
 ] as const;
@@ -738,9 +965,9 @@ export const isGroupPipelineRun = (run: Run): boolean => {
 export interface GroupPipelineOwed {
     /** Groups with first-draft or finding-driven work inside the attempt cap (parked groups: no). */
     drafts: number;
-    /** Structured Critic seats at the CURRENT vector without a CLOSED run yet. */
+    /** Structured Critic seats at the CURRENT vector with no ANSWER yet and attempts still in hand (W5). */
     structuredReviews: number;
-    /** Deep-review seats at the current vector, owed only once every structured seat has reported. */
+    /** Deep-review seats at the CURRENT vector with no REPORT yet and attempts still in hand (MAJOR 3). */
     deepReviews: number;
 }
 
@@ -749,11 +976,24 @@ export interface GroupPipelineOwed {
  * sign-off gate, built from EXACTLY the generator's rules so the probe and the queue can never tell
  * two stories (the same argument `researchGate` makes for the sampling pipeline):
  *
- *   * a seat is owed while it has no CLOSED run — the evidence rule `records.ts:deepReviewPassesOwed`
- *     already applies to the legacy deep review: a seat whose run is still live has not REPORTED, so
- *     the sign-off must not proceed over it (and the in-flight line names the live run meanwhile);
- *   * the deep seats are owed only once every structured seat of the same vector has reported, which
- *     is the generator's own `allReviewSeatsRun` gate, not a second opinion on it;
+ *   * a structured seat is owed while it has produced no ANSWER and still has attempts in hand — W5
+ *     tightened this from "no CLOSED run", because a pass killed at the request-liveness ceiling closes
+ *     a run row and brings back nothing, and a drain that called that paid would sign off an Overview
+ *     read by fewer Critics than the dial asked for. The evidence rule is the SAME one
+ *     `records.ts:deepReviewPassesOwed` applies to the legacy deep review (a live row has not REPORTED)
+ *     plus `records.ts:isFullyScreened`'s exhaustion clause, so a dead provider parks the vector rather
+ *     than holding the drain forever — and the queue this count describes is `groupReviewSeatSettled`,
+ *     the generator's own predicate, not a second opinion on it;
+ *   * a deep seat is owed while it has produced NO REPORT and its family still has attempts in hand —
+ *     MAJOR 3 (2026-11-26) replaced "no CLOSED run" here, because a tool-carrying pass that was capped or
+ *     abandoned closes a run row and files NOTHING, and a drain that called that paid signed off an
+ *     Overview the rail still showed as unreviewed. The evidence rule is
+ *     {@link groupCheckSeatAnswered} (a `verdicts` row the seat's own run filed — `submitVerdict` is the
+ *     one call that ends a Critic pass and carries its verdicts and findings) plus
+ *     {@link groupCheckAttemptCap}'s exhaustion clause, so a dead provider parks the vector rather than
+ *     holding the drain forever, exactly as the structured clause above does;
+ *   * the deep seats are owed only once every structured seat of the same vector is settled, which
+ *     is the generator's own `allReviewSeatsReported` gate, not a second opinion on it;
  *   * a capped (parked) group is NOT owed — the loop parks it and the open finding IS the escalation
  *     (see the allowance's note), so the drain must not hold on work the design refused to buy.
  *
@@ -776,20 +1016,26 @@ export function groupPipelineOwed(store: Store, story: Story, phraseId?: string)
     // The ONE vector this phrase's seats key on: the primary phrase's when the caller names none, so the
     // Summary's review seats keep hashing the same five-group combination they always did.
     const vectorHash = groupVectorHash(groupRevisionVector(store, story.id, phraseId));
-    const closedOn = (key: string): boolean => runsForItem(store, key).some((run) => !isLiveRun(run));
 
     let structuredReviews = 0;
 
+    // W5: owed = the seat has no ANSWER and the family has attempts left — the SAME predicate
+    // `loop/work.ts` legs 2 and 3 arm on, so the drain can never report an owed pass the queue has
+    // stopped offering (a seat at the cap is parked, and the drain must not hold on parked work).
     for (let pass = 1; pass <= critics; pass += 1) {
-        if (!closedOn(groupReviewSeatKey(vectorHash, pass))) structuredReviews += 1;
+        if (!groupReviewSeatSettled(store, vectorHash, critics, pass)) structuredReviews += 1;
     }
 
     if (structuredReviews > 0) return { drafts, structuredReviews, deepReviews: 0 };
 
     let deepReviews = 0;
 
+    // MAJOR 3: the deep family is read with the GENERATOR's own predicate, the same pair of clauses the
+    // structured seats above use — ANSWERED (a verdict row the seat's run filed) or out of attempts. The
+    // `closedOn` read this replaces called a capped/abandoned deep pass paid, which is how a vector ended
+    // with `deepReviews: 0` while the rail still showed the seat as never reviewed.
     for (let pass = 1; pass <= critics; pass += 1) {
-        if (!closedOn(groupCheckSeatKey(vectorHash, pass))) deepReviews += 1;
+        if (!groupCheckSeatSettled(store, story.id, vectorHash, critics, pass)) deepReviews += 1;
     }
 
     return { drafts, structuredReviews, deepReviews };

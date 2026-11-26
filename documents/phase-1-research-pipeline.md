@@ -992,11 +992,15 @@ written; this appendix is the truthful as-built record (pinned by the tests name
   screening schema closes severity at critical/high (T-11) and the Summary prompts cost wording and
   sentence-shape notes as minor/taste (R6) — where a `taste` row is a `kind: proposal` by D-33b, so the
   ladder's preference rung never arrives labelled as a defect — while chapter prose keeps the §9 wording.
-  D-33c/D-33d add the ORDER to that sentence rather than changing it: a `kind: proposal` is filed in a
-  review pass that has no unresolved `issue` on the Story and never in the same pass as one, and it cannot
-  be approved while an issue is still open, so a round spends its Writer capacity on the defects first and
-  the improvement comes in the pass that has none left (`tools/reader.ts:raiseFinding`,
-  `tools/editor.ts:approveFinding`, `loop/records.ts:openIssueFindings`).
+  D-33c/D-33d add the ORDER to that sentence rather than changing it: a `kind: proposal` filed while any
+  `issue` on the Story is unresolved is DISMISSED on the call — no row, no `seen_count`, no work armed, and
+  no retry to spend (2026-11-26; the retired rule refused it and invited the crew to bring it in a later
+  pass) — and it cannot be approved while an issue is still open, so a round spends its Writer capacity on
+  the defects first and the improvement simply is not part of that round. The pass itself ends on ONE
+  terminal `submitVerdict` carrying both verdict lines and every finding it is sure of (S-10), and the
+  open-issue count is printed at the top of the brief so the Critic never spends a call learning it
+  (`tools/reader.ts:fileFinding`, `tools/editor.ts:approveFinding`, `loop/records.ts:openIssueFindings`,
+  `run/brief.ts:criticOpenIssueState`).
 - **H1-C1/F2 — an ungradeable round that OWES fixes is refused, not accepted (2026-11-23).** The one
   eligibility exemption is "nothing is outstanding". A candidate whose screening set cannot hold a
   certificate at all — no `fix_refs` and no verdict on any row (`ScoredSample.legacyScreening`), which is

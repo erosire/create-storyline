@@ -145,7 +145,42 @@ const SCREEN_INSTRUCTION =
     'Word choice, sentence structure, grammar, register and a preference for another phrasing of the same ' +
     'commitment are NOT issues at this phase — they are minor, nothing here ranks them, and the prose that carries ' +
     'them is written and judged in phase \u2462. Quote the offending field verbatim in `quote`, name the field in ' +
-    '`location`, cite `C-14`, `C-15` or `seed` in `criterion`. Return {"issues":[]} when the draft holds.';
+    '`location`, say in `detail` what is wrong and where, and cite `C-14`, `C-15` or `seed` in `criterion`. ' +
+    'Return {"issues":[]} when the draft holds.';
+
+/**
+ * Phrase ②'s screening contract — the chapter-contract twin of {@link SCREEN_INSTRUCTION}.
+ *
+ * WHY IT EXISTS SEPARATELY: a chapter contract is not a Summary. The Summary's two severities, its
+ * C-14/C-15 criteria and its "the prose is phase ③'s problem" sentence are all wrong for a chapter
+ * review; the phase table puts contract defects on C-7/C-8/C-9 (and the plotline contract on
+ * C-0…C-6), and "a contract may be sparse and still correct" is the calibration the chapter lane
+ * needs. Reusing `SCREEN_INSTRUCTION` here was one of the phase-mismatch defects: it told a chapter
+ * Critic to cite the Summary's criteria and to judge a Summary.
+ *
+ * The two severities stay `critical`/`high` because the structured schema closes on those words;
+ * `high` is the finding ladder's `major`. No minor, taste or proposal belongs in this answer — a
+ * `review_groups` pass produces REVIEW NOTES, not findings, and the schema has no field for the
+ * lower rungs.
+ */
+const CONTRACT_SCREEN_INSTRUCTION =
+    'Report ONLY critical and high issues, and reserve those two words for what a CHAPTER CONTRACT has to get RIGHT: ' +
+    'a critical contradicts the phrase seed, a critical Knowledge entry, or the contract chain itself — a payoff with no ' +
+    'setup, a setup no later chapter collects, a state or knowledge that resets, a contract that cannot be written against, ' +
+    'or a chapter that contradicts what another contract states. A high leaves unpaid a commitment the phrase seed states ' +
+    'EXPLICITLY. The phrase seed is general and is not an outline: where it is silent, the Writer may invent any specific ' +
+    'that does not contradict it. So an added detail, a seed question left open, a stake or consequence the seed never ' +
+    'stated, and setup the chapter set did not promise are NOT issues. What stays reportable is a contradiction you can ' +
+    'quote, or a commitment the seed states centrally that the chapter set plainly does not carry. Proof is a quotation: ' +
+    'an issue that can quote only an absence, and not what the contract contradicts, is an invalid answer. Do not report ' +
+    'prose, staging, or a chapter you would have written differently: this pass judges contracts, and phase \u2462 writes ' +
+    'the sentences. EVERY issue names its `group_refs` — the chapter ids printed in the headings. Put the chapter your ' +
+    '`quote` came from FIRST in `group_refs`, and for every other chapter you name add a `group_quotes` entry with its ' +
+    '`group_ref`, `quote` and `location`: a chapter named without a quote is refused. Quote the offending line verbatim ' +
+    'in `quote`, name the chapter it came from in `location`, say in `detail` what is wrong and where, and cite ' +
+    '`C-7`, `C-8` or `C-9` in `criterion` for a chapter contract, `C-0` through `C-6` for the plotline contract the ' +
+    'chapter fails, or `seed` for a direct breach of the phrase seed. Never cite `C-14` or `C-15` here: those are the ' +
+    'Summary\u2019s criteria. Return {"issues":[]} when the chapter contracts hold.';
 
 /**
  * H1/R2 — the fix-verification contract, stated where the fix list is: in the TARGET DRAFT section,
@@ -272,13 +307,28 @@ const GROUP_DRAFT_INSTRUCTION =
 const GROUP_REVIEW_INSTRUCTION =
     'EVERY issue you report names its `group_refs`: the group ids shown in the OVERVIEW section above. Name the one ' +
     'group the defect is in; name several, or all five, when the defect is in how they fit together \u2014 a promise the ' +
-    'Ending does not keep, a Theme the Premise never grounds. An issue that cannot name a group is not an answer this ' +
+    'Ending does not keep, a Theme the Premise never grounds. Put the group your `quote` came from FIRST in `group_refs`, ' +
+    'then every other group the defect crosses. An issue that cannot name a group is not an answer this ' +
     'pass may give: the loop routes work by group, and a defect with no group is work nobody can do.\n' +
     // R3 — the shape of an issue has to match the shape of the repair. A defect crossing three groups
      // is one Writer batch, so three issues would buy three revisions of the same text; the closure
      // join runs on the ids, so a multi-group fix is only certified once every group carries it; and a
      // review is a read, never a write, so there is no rationing argument for holding an issue back.
-    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story\u2019s rewrite allowance, so report what you find without rationing.\n' +
+     // D-33c COHERENCE (F4, 2026-11-26) — the anti-silence half stays, the digging half goes. This block is
+     // appended to EVERY `critic-screening` seat (`loop/work.ts`, the group review pass), and the effort
+     // bound it belongs to lives in the SYSTEM turn (`templates.ts`, the `critic-screening` role copy beside
+     // `CRITIC_EFFORT_RULE`). A bare "…so report what you find without rationing." here was the last
+     // unqualified copy of that licence in shipped Critic text, and it sits in the USER turn, where an
+     // Author's custom template replaces the role copy (R7) — so the bound has to be said in this sentence,
+     // not leaned on next door. Not rationing what the pass SAW is the rule; going after what it did not
+     // see is the thing the owner's "a very hidden problem could take ages to find" forbids. The other two
+     // seats this file shares with the reviewer were checked against the same reading and need nothing:
+     // `SCREEN_INSTRUCTION` above is restrictive only ("Report ONLY critical and high issues", "Return
+     // {"issues":[]} when the draft holds"), and Phrase ②'s override
+     // (`phrase/controllers/plotlines.ts:PLOTLINES_REVIEW_INSTRUCTION`, the `lane.controller?.instructions.review`
+     // slot `compileGroupReviewPrompt` reads) stops at "This pass writes nothing." — a fact, not a licence
+     // to keep digging.
+    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. Put the primary quote in `quote`; for every OTHER group you name, add a `group_quotes` entry with that group\u2019s `group_ref`, its `quote` and its `location` \u2014 a group named without a quote is refused, because naming it is a claim that you read it. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story\u2019s rewrite allowance, so report what you find without rationing — and only what you found: nothing here asks you to go looking for a defect the Overview has not already surfaced.\n' +
     // PHRASE GROUP LOCK (R-lock) — the reviewer's side of the same rule the Writer is held to. A locked
     // group IS still reviewable (its text can be contradicted by an unlocked one), and the domain routes
     // such a claim to the groups that can move (`phrase/findings.ts:findingActionableScope`); what the
@@ -308,8 +358,10 @@ const SECTION_SCORE_INSTRUCTION =
     'name; do NOT deduct for detail the Seed never promised, for prose the chapters have not written yet, or for a change you ' +
     'would personally prefer \u2014 that is a taste, not a fault, and a number that moves on taste is a number nobody can read. ' +
     'Copy each section\u2019s `group_ref` from the heading above into `group_ref`, give ONE short `rationale` (the reason for the ' +
-    'number, in a sentence) and ONE `evidence` quote taken verbatim from that section \u2014 the line the judgement rests on, ' +
-    'which for a cross-section fault is the line that cannot be true alongside the section you scored. Name every group exactly ' +
+    'number, in a sentence) and ONE `evidence` quote taken verbatim from the section you scored, or \u2014 for a cross-section ' +
+    'fault \u2014 from the section it contradicts; when the line is not from the scored section, name the section it came from in ' +
+    '`rationale`. The schema carries one `evidence` string per section, so the quote is the one line the judgement rests on, ' +
+    'not a bundle of lines from several sections. Name every group exactly ' +
     'once and no group twice. This pass REPORTS a number: it files no finding, opens no task, grades no fix, edits nothing, and ' +
     'answers nothing else.\n' +
     // PHRASE GROUP LOCK (R-lock): one sentence, and it is here because a section marked LOCKED has no
@@ -524,16 +576,26 @@ function phraseSeedSection(store: Store, storyId: string, phraseId: string | und
 /** The template slug whose `writer` role prompt is the sampler's system turn (§8). */
 export const SAMPLE_TEMPLATE_SLUG = 'writer-summary-sampler';
 
-/** The template slug whose `critic` role prompt is the screening Critic's system turn (§8). */
+/** The template slug whose `critic` role prompt is the Summary screening Critic's system turn (§8). */
 export const SCREEN_TEMPLATE_SLUG = 'critic-screening';
 
 /**
- * READER SCORING (D-65): the template slug whose `reader` role prompt is the scoring pass's system
- * turn. The consistency reader is the built-in whose whole brief is "the contract chain has to
- * hold", which is what a cross-section score is; the scale and the answer shape stay engine-owned
- * (`SECTION_SCORE_INSTRUCTION`), so an Author editing this template tunes the voice, not the contract.
+ * Phrase ②'s structured-review role prompt. It is deliberately a DIFFERENT built-in from
+ * `critic-screening`: the Summary prompt's C-14/C-15 criteria and its "a Summary is not prose"
+ * calibration are wrong for chapter contracts, and the phase-② seat has no tools. The engine-owned
+ * phase law still lives in {@link CONTRACT_SCREEN_INSTRUCTION}; this slug only supplies the voice.
  */
-export const SCORE_TEMPLATE_SLUG = 'reader-consistency';
+export const PLOTLINES_SCREEN_TEMPLATE_SLUG = 'critic-screening-plotlines';
+
+/**
+ * READER SCORING (D-65): the template slug whose `reader` role prompt is the scoring pass's system
+ * turn. A dedicated score-only prompt is the fix for the old wiring: `reader-consistency` is a
+ * TOOL-CARRYING review prompt (verdict, findings, tasks, `createTask`, `readLedger`), while the
+ * score seat is `toolMode: 'none'` and may file nothing (P6). The scale and answer shape stay
+ * engine-owned (`SECTION_SCORE_INSTRUCTION`), so an Author editing this template tunes the voice,
+ * not the contract.
+ */
+export const SCORE_TEMPLATE_SLUG = 'reader-score';
 
 /**
  * The output contract every no-tool run ends its system turn with. The schema NAME is the whole
@@ -1198,7 +1260,12 @@ export function compileGroupReviewPrompt(
     // review block come from the phrase. With the slug and role defaulting to the screening Critic, a
     // summary seat's bytes are exactly what they were.
     const lane = promptLaneOf(store, storyId, opts.groupRefs);
-    const system = `${rolePromptOf(store, slugFor(lane, opts.templateSlug, SCREEN_TEMPLATE_SLUG), opts.roleName ?? 'critic')}\n\n${outputContract(GROUP_REVIEW_SCHEMA_NAME)}`;
+    // The STRUCTURED seat's voice is the screening template for its phrase, never a deep-review
+    // angle's tool-using prompt. This compiler is only reached for `review_groups` (`toolMode:
+    // 'none'`), so `item.templateRef` is a scheduling label, not the prompt's voice — trusting it
+    // was the phase-② defect that handed a no-tools seat the `raiseFinding`/`submitVerdict` copy.
+    const canonical = lane.plotlines ? PLOTLINES_SCREEN_TEMPLATE_SLUG : SCREEN_TEMPLATE_SLUG;
+    const system = `${rolePromptOf(store, canonical, opts.roleName ?? 'critic')}\n\n${outputContract(GROUP_REVIEW_SCHEMA_NAME)}`;
 
     const sections: Array<{ heading: string; body: string }> = [
         lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)
@@ -1228,7 +1295,12 @@ export function compileGroupReviewPrompt(
         heading: lane.plotlines
              ? '## CHAPTER CONTRACTS — every entry as it stands (every issue names the groups it is about)'
              : '## OVERVIEW — the five groups as they stand (every issue names the groups it is about)',
-        body: `${overview === '' ? '(this Story has no phrase groups yet — there is nothing installed to judge)' : overview}\n\n${SCREEN_INSTRUCTION}\n\n${
+        body: `${overview === '' ? '(this Story has no phrase groups yet — there is nothing installed to judge)' : overview}\n\n${
+            // The phase contract, not the Summary's. A chapter review citing C-14/C-15 or calling the
+            // artifact a Summary was the phase-mismatch defect; `CONTRACT_SCREEN_INSTRUCTION` carries
+            // the chapter-contract calibration and the C-7/C-8/C-9 (plus C-0…C-6) citation rule.
+            lane.plotlines ? CONTRACT_SCREEN_INSTRUCTION : SCREEN_INSTRUCTION
+        }\n\n${
             // Phrase ②'s review block says what a CONTRACT review owes — the chain of setups and payoffs
             // across chapters, and the rule that a sparse contract is not a defect — because the text in
             // front of this Critic is a set of contracts, not prose. It is the controller's own slot, the
@@ -1302,11 +1374,13 @@ export function compileSectionScorePrompt(
         );
     }
 
-    const system = `${rolePromptOf(
-        store,
-        slugFor(lane, opts.templateSlug, SCORE_TEMPLATE_SLUG),
-        opts.roleName ?? 'reader'
-    )}\n\n${outputContract(SECTION_SCORES_SCHEMA_NAME)}`;
+    // The score seat is `toolMode: 'none'` (P6, D-65), so its voice is ALWAYS the dedicated
+    // score template. `opts.templateSlug` is a scheduling label here, not the prompt: trusting a
+    // tool-carrying reader template was the defect that told the score seat to file findings,
+    // open tasks and read the ledger. `SCORE_TEMPLATE_SLUG` is the one score-only built-in.
+    const system = `${rolePromptOf(store, SCORE_TEMPLATE_SLUG, opts.roleName ?? 'reader')}\n\n${outputContract(
+        SECTION_SCORES_SCHEMA_NAME
+    )}`;
 
     const sections: Array<{ heading: string; body: string }> = [
         lane.plotlines ? phraseSeedSection(store, storyId, lane.phraseId) : seedSection(store, storyId)

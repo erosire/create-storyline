@@ -86,12 +86,19 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'writer-chapters',
             'editor-general',
             'critic-screening',
+            // Phrase ②'s tool-less review voice (bound by `run/phase1-prompt.ts:PLOTLINES_SCREEN_TEMPLATE_SLUG`).
+            // It is a separate row because `critic-screening`'s C-14/C-15 criteria and Summary calibration are
+            // wrong for chapter contracts, and R7 keeps the binding sentences engine-owned either way.
+            'critic-screening-plotlines',
             'editor-group-lock',
             'critic-genre',
             'critic-plausibility',
             'critic-audience',
             'critic-mystery',
             'reader-consistency',
+            // D-65's score-only reader (`run/phase1-prompt.ts:SCORE_TEMPLATE_SLUG`): the seat the scoring pass
+            // compiles from, which files nothing (P6).
+            'reader-score',
             'reader-prose',
             'writer-plotlines-sampler',
             'editor-plotlines-structure'
@@ -117,11 +124,17 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // tests — a rename on either side silently changes which copy the seat runs on.
         expect(byName('editor-group-lock').roles.map((role) => role.kind)).toEqual(['editor']);
         expect(
-            ['critic-screening', 'critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery'].map(
-                (name) => byName(name).roles[0].kind
-            )
-        ).toEqual(['critic', 'critic', 'critic', 'critic', 'critic']);
+            [
+                'critic-screening',
+                'critic-screening-plotlines',
+                'critic-genre',
+                'critic-plausibility',
+                'critic-audience',
+                'critic-mystery'
+            ].map((name) => byName(name).roles[0].kind)
+        ).toEqual(['critic', 'critic', 'critic', 'critic', 'critic', 'critic']);
         expect(byName('reader-consistency').roles[0].kind).toBe('reader');
+        expect(byName('reader-score').roles[0].kind).toBe('reader');
         expect(byName('reader-prose').roles[0].kind).toBe('reader');
     });
 
@@ -258,6 +271,134 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(screening.escalation_rule).toBeUndefined();
     });
 
+    // PHRASE ②'s STRUCTURED REVIEW VOICE — the row `run/phase1-prompt.ts:PLOTLINES_SCREEN_TEMPLATE_SLUG`
+    // compiles its system turn from, the twin of `critic-screening` for the chapter lane. It exists because
+    // the Summary row's criteria (C-14/C-15) and its "a Summary is a set of facts" calibration are simply
+    // false for chapter contracts, and because the phase-② seat is tool-less: its prompt is the whole
+    // contract, so the chapter rules have to be HERE (D-17a) while the binding sentences stay engine-owned
+    // (`run/phase1-prompt.ts:CONTRACT_SCREEN_INSTRUCTION`, R7).
+    it('Phrase ② has its own tool-less review voice, and it produces review notes rather than findings', () => {
+        const screening = byName('critic-screening-plotlines');
+        const role = screening.roles[0];
+
+        // The row's shape mirrors `critic-screening`: a tool-less, one-turn, structured-answer seat, scoped to
+        // the ONE phase it judges (L-4), with the same `max_concurrent: 6` ceiling as a review seat that
+        // writes nothing (`work.ts:candidate` reads it for the S-5 limit).
+        expect([
+            screening.title,
+            screening.serves_phase,
+            screening.attempts,
+            screening.delegation,
+            screening.max_concurrent
+        ]).toEqual(['Critic (chapter contracts, screening)', ['plotlines'], 1, [], 6]);
+        expect(screening.roles.map((entry) => [entry.name, entry.kind, entry.web, entry.agents])).toEqual([
+            ['critic', 'critic', false, 1]
+        ]);
+        // A run with no tools holds no tool that could escalate (the same absence `critic-screening` pins).
+        expect(screening.next_phase).toBe('');
+        expect(screening.escalation_rule).toBeUndefined();
+        expect(screening.description).toBe(
+            'One turn, no tools: answers the compiled Phrase ② review prompt with one structured GroupReview object of critical and high chapter-contract defects only. Every issue names the chapter group_refs it is about and quotes each named chapter; the pass produces review notes, not findings.'
+        );
+        // The done-line states the schema-shaped answer AND the quote-every-named-chapter rule, because that
+        // scope is what the deep review routes the repair by (R3's join, chapter edition).
+        expect(screening.done_definition).toBe(
+            'A schema-valid review delivered in one turn with no tool calls: critical and high chapter-contract issues only, every issue carrying the `group_refs` it is about and a quote for each named chapter, one `fix_verifications` entry for every FIX TASKS id, and an empty issues list when the contracts hold.'
+        );
+
+        // ONE turn, ONE `GroupReview`, every issue scoped, and the fix certificate by task id.
+        expect(role.prompt).toContain(
+            'You have NO tools in this run and exactly one turn: answer with ONE JSON object matching the `GroupReview` schema — an `issues` array in which EVERY issue names its `group_refs`, plus a `fix_verifications` entry for every task the FIX TASKS section names — and nothing else (no prose frame, no tool call, no question back).'
+        );
+        expect(role.prompt).toContain('Report ONLY critical and high problems.');
+        // The artifact is the chapter set against the PHRASE seed, and a sparse contract is a valid contract
+        // — the calibration the Summary row cannot carry.
+        expect(role.prompt).toContain(
+            'What is in front of you is the CHAPTER CONTRACTS as the book now holds them, and the PHRASE SEED.'
+        );
+        expect(role.prompt).toContain(
+            'A contract may be SPARSE and still correct: judge it as a contract, not as a scene nobody wrote, and never report a note because you would have staged the chapter differently — phase ③ writes the sentences.'
+        );
+        // The criteria: the chapter contract's own ladder, never the Summary's C-14/C-15.
+        expect(role.prompt).toContain(
+            'Cite the criterion in `criterion`: `C-7`, `C-8` or `C-9` for a chapter contract, `C-0` through `C-6` for the plotline contract the chapter fails, or `seed` for a direct breach of the phrase seed.'
+        );
+        expect(role.prompt).toContain('Never cite `C-14` or `C-15` here: those are the Summary’s criteria.');
+        // R3, chapter edition: the primary quote's chapter is FIRST, and every OTHER named chapter carries
+        // its own `group_quotes` entry — a named-but-unquoted chapter would be rewritten for a sentence
+        // nobody read (`phrase/findings.ts:findingGroupScope` closes on every id the note names).
+        expect(role.prompt).toContain(
+            'Put the chapter your `quote` came from FIRST in `group_refs`, then every other chapter the defect crosses.'
+        );
+        // THE SCHEMA'S REQUIRED `detail` IS NAMED HERE NOW (2026-11-27), in the same sentence as the
+        // per-chapter evidence rule: `shared/schemas/group-review.ts` puts `detail` in `required` with
+        // `minLength: 1`, and this seat answers in `json_object` mode when the provider downgrades (§4.2),
+        // where the schema is not on the wire — the copy is the only thing that tells it the field exists.
+        expect(role.prompt).toContain(
+            'Put the primary quote in `quote`; for every OTHER chapter you name, add a `group_quotes` entry with that chapter’s `group_ref`, its `quote` and its `location` — do not name a chapter you have not quoted from. `detail` is what is wrong and where (chapter and section), and it is required.'
+        );
+        expect(role.prompt.match(/`detail`/g)).toHaveLength(1);
+        // THE ONE-REPORT CONTRACT, from the other side: this seat files nothing at all, so a tool sentence
+        // pasted into its copy would be an instruction it cannot obey (D-30).
+        expect(role.prompt).toContain(
+            'This pass produces REVIEW NOTES for the deep review; it does not file findings, open tasks, or submit a verdict.'
+        );
+        expect(role.prompt).not.toContain('raiseFinding');
+        expect(role.prompt).not.toContain('submitVerdict');
+        expect(role.prompt).toContain('Return {"issues":[]} when the contracts hold.');
+    });
+
+    // D-65's SCORE-ONLY VOICE — the row `run/phase1-prompt.ts:SCORE_TEMPLATE_SLUG` compiles from. The number
+    // is a display surface the loop never reads (P6), so this row's whole job is to hold no filing copy at
+    // all: the tool-carrying review voice stays `reader-consistency`.
+    it('D-65 — the score-only reader scores every section once and holds no filing copy', () => {
+        const scorer = byName('reader-score');
+        const role = scorer.roles[0];
+
+        // It serves every phase (the score seat re-arms wherever the crew installs text), one turn, one
+        // concurrent seat, and it delegates nothing: a structured turn has no sub-context to hand work to.
+        expect([scorer.title, scorer.serves_phase, scorer.attempts, scorer.delegation, scorer.max_concurrent]).toEqual([
+            'Reader — section scoring',
+            ['summary', 'plotlines', 'chapters'],
+            1,
+            [],
+            1
+        ]);
+        expect(scorer.roles.map((entry) => [entry.name, entry.kind, entry.web, entry.agents])).toEqual([
+            ['reader', 'reader', false, 1]
+        ]);
+        // No web: the score is a reading of the reviewed text plus the Seed and Knowledge the prompt carries.
+        expect(scorer.next_phase).toBe('');
+        expect(scorer.escalation_rule).toBeUndefined();
+        expect(scorer.description).toBe(
+            'One turn, no tools: scores every section of the reviewed Overview 0–100 with one rationale and one quoted line per section. It files no finding, opens no task and submits no verdict (D-65).'
+        );
+        expect(scorer.done_definition).toBe(
+            'Every section is scored exactly once with a rationale and one quoted evidence line, and the pass files no finding, task or verdict (D-65, P6).'
+        );
+
+        // The answer shape: one entry per section, a whole number 0–100, ONE rationale, ONE evidence quote.
+        expect(role.prompt).toContain(
+            'Your whole output is ONE JSON object matching the `SectionScores` schema: one entry per section, each naming its `group_ref`, a whole number 0–100, one `rationale`, and one `evidence` quote.'
+        );
+        expect(role.prompt).toContain('You have NO tools in this run and exactly one turn.');
+        // The scale, not the cost ladder — a reader that silently switched to critical/major/minor would put
+        // a triage where the Author reads a progress number.
+        expect(role.prompt).toContain(
+            'Use the 0–100 anchors exactly as the instruction states; do not substitute a critical/major/minor triage for the scale.'
+        );
+        // Evidence per section, quoted from the section it is about, and every section named exactly once.
+        expect(role.prompt).toContain(
+            'Quote one line verbatim in `evidence` for every section, taken from the section you scored, or — for a cross-section fault — from the section it contradicts; say in `rationale` which section the line came from when it is not the scored one.'
+        );
+        expect(role.prompt).toContain('Name every section exactly once and no section twice.');
+        // THE ABSENCE THAT DEFINES THE ROW (D-65, P6): nothing in this copy may name a tool the seat does not
+        // hold, and the number may not be sold as a decision the loop takes.
+        for (const tool of ['raiseFinding', 'submitVerdict', 'createTask', 'readLedger', 'proposeIdea'])
+            expect(role.prompt).not.toContain(tool);
+        expect(role.prompt).toContain('the number is a progress surface for the Author and display work the loop never reads (P6, D-65)');
+    });
+
     it('H1/R6 — the calibration is Summary-only: the deep review keeps the minor/taste ladder', () => {
         // The screening Critic is phase ①'s one-turn judge. The tool-using Critics rate artifacts in
         // every phase (§6.4 step 6, phase ② and ③), and there minor and taste notes ARE part of the
@@ -331,40 +472,44 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
                     'When the artifact under review is a SUMMARY (phase \u2460): the Seed is general, not an outline, and the Writer may invent any detail it does not contradict \u2014 so an added detail, a Seed question left open, stakes the Seed never stated, and a payoff that arrives without earlier planting are not genre defects at this phase.',
                 laterPhases:
                     'The same setup-and-payoff checks stay in force in phases \u2461 and \u2462, where the plotlines and chapters do make those commitments.',
-                // D-33b: the angle's own improvement outlet. Convention can be satisfied AND outdone, and
-                // the second half is a proposal, not the defect this prompt spends its standing on. The
-                // cost clause is part of the pin: D-33b's ladder gives a proposal `major`/`minor`/`taste`
-                // and refuses `critical`, so an angle that names the kind without naming the ladder sends
-                // the Critic to a cost the tool will reject (`tools/reader.ts:raiseFinding`).
+                // D-33b + W1: the angle's own improvement outlet — convention can be satisfied AND
+                // outdone, and the second half is a proposal, not the defect this prompt spends its
+                // standing on. The cost clause is still part of the pin (D-33b's ladder gives a
+                // proposal `major`/`minor` and refuses `critical`, and
+                // `tools/reader.ts:raiseFinding` rejects a cost outside it); the sentence no longer
+                // carries the D-33c refusal, which is now stated once for all four angles.
                 improvement:
-                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, file that with raiseFinding as `kind: proposal` at cost `major` or `minor` (title it as a proposal, quote the passage it would improve, and say what changes and why the pass is worth it), because it is a proposal about a book that breaks nothing, not a defect.'
+                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, that observation is a proposal, not a defect \u2014 `kind: proposal` at cost `major` or `minor`, titled as a proposal, quoting the passage it would improve and saying what changes and why the pass is worth it.'
             },
             'critic-plausibility': {
                 silence:
                     'This is a plotline and chapter check: when the artifact under review is a SUMMARY (phase \u2460) there is no ledger and no earlier chapter yet, so "nothing established it" is not a factual doubt there, and the Writer is free to establish a fact the Seed never named as long as it contradicts nothing.',
                 laterPhases:
                     'Phases \u2461 and \u2462 keep every check above unchanged: there the ledger and the earlier chapters DO make those promises, and a setup that never arrives is a defect again.',
-                // D-33b: this angle is the one carrying a source, so its proposal is worth citing.
+                // D-33b + W1: this angle is the one carrying a source, so its proposal is worth
+                // citing — and the outlet says so once, without the refusal that used to follow it.
                 improvement:
-                    'And when the fact checks out but you can cite a better one, the truer detail the book could carry instead, say so with raiseFinding as `kind: proposal`: quote the passage it would improve, name the source that supports the better version, and keep it a proposal rather than a defect, because a text that is merely improvable has broken nothing.'
+                    'And when the fact checks out but you can cite a better one \u2014 the truer detail the book could carry instead \u2014 that is a proposal, not a defect, because a text that is merely improvable has broken nothing: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage it would improve, naming the source that supports the better version, and saying why the pass is worth taking.'
             },
             'critic-audience': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460), none of those complaints has a page to stand on unless the Summary itself promises the setup and then breaks it: the Seed is general, the Writer may invent any detail the Seed does not rule out, and an unpaid setup, an unstated stake or a consequence the Seed left open is not a reader complaint at this phase.',
                 laterPhases: 'Phases \u2461 and \u2462 keep the full list \u2014 there the book has made the promise and owes the payoff.',
-                // D-33b: this angle's signature complaint IS an absence ("the payoff arrived without the
-                // setup"). Stood down at phase ① it had nowhere to go; it now routes to the proposal kind.
+                // D-33b + W1: this angle's signature complaint IS an absence ("the payoff arrived
+                // without the setup"). Stood down at phase ① it had nowhere to go; it routes to the
+                // proposal kind, and the sentence says only that — the gating rule is shared.
                 improvement:
-                    'file it with raiseFinding as `kind: proposal`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.'
+                    'And when the unpaid setup is not a promise the Summary broke but a change its readers would thank it for, that is the audience speaking as an editor would, and it belongs in the report as a proposal: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.'
             },
             'critic-mystery': {
                 silence:
                     'When the artifact under review is a SUMMARY (phase \u2460): there is no ledger and no chapter order yet, so do not file "it was never planted" or "the answer arrives without its setup" against one \u2014 the Writer is allowed to bring in what the Seed never stated, and the Summary\u2019s own ending is not owed an earlier hint.',
                 laterPhases: 'Phases \u2461 and \u2462 keep every setup-and-payoff check in this prompt unchanged.',
-                // D-33b: "this came too early" was the SUSPICION framing; at phase ① there is no planting
-                // to jump, so the sentence is really a reorder request.
+                // D-33b + W1: "this came too early" was the SUSPICION framing; at phase ① there is
+                // no planting to jump, so the sentence is a reorder request — the angle's outlet,
+                // minus the D-33c refusal that used to be stapled to its end.
                 improvement:
-                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: file it with raiseFinding as `kind: proposal`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.'
+                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.'
             }
         };
 
@@ -395,58 +540,162 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         expect(byName('critic-audience').roles[0].prompt).toContain('payoff that arrived without the setup');
     });
 
-    it('D-33c/D-33d — every role that is invited to propose is told, in its own words, that issues come first', () => {
-        // WHY THIS IS PINNED PER ROLE, IN FULL SENTENCES, AND NOT ONCE GLOBALLY: the filing rule and the
-        // approval rule are enforced in CODE (`tools/reader.ts:raiseFinding`, `tools/editor.ts:approveFinding`)
-        // and stated in the engine-owned brief (`run/brief.ts`), and neither of those is Author-editable.
-        // What IS editable is the role prompt — and the sentence that invites each angle to file a
-        // proposal is the sentence the model actually acts on. An angle whose invitation says "file the
-        // improvement" and nothing else sends the Critic into a refusal it has to spend a turn decoding,
-        // which is the same failure T3 pinned for the absence rule. So the gating note is pinned for each
-        // angle that has an outlet, in that angle's own wording: deleting one is a regression in one
-        // angle's behaviour, and a regex would let three of the four silently disappear.
-        const gating: Record<string, { outlet: string; review: string }> = {
+    it('D-33c/D-33d — the critic convergence rule: issues first, effort-then-value, one report', () => {
+        // WHY THE SHAPE OF THIS PIN CHANGED (2026-11-26, W1). The rule used to be pinned as TWO
+        // hand-copied paragraphs per angle — an `outlet` sentence that invited the improvement and
+        // refused it in the same breath, and a `review` sentence that refused it again. The shipped
+        // prose said the same D-33c refusal two or three times per angle, and each copy ended with a
+        // retry invitation ("bring the genre move in a pass that has none left"), which is the loop
+        // the owner measured: critics at 95.8% of the agent time and ten records naming a D-33c
+        // refusal (`tools/reader.ts:raiseFinding`, the 2026-11-26 note on the gate). The prose now
+        // states the rule ONCE, as four shared constants in `templates.ts` — `CRITIC_EFFORT_RULE`,
+        // `CRITIC_PRIORITY`, `CRITIC_TERMINAL_REPORT` and `CRITIC_DISMISSAL` — with the angle's own
+        // tail bolted onto the dismissal. These assertions moved with the prose, and each one still
+        // tests a RULE rather than echoing a string:
+        //   .effort    — the effort-then-value rule / nit-pick ban governs the pass (the owner's "a very
+        //                hidden problem could take ages to find", so it is not worth a Writer round)
+        //   .priority  — issues outrank proposals, and the critic reports as soon as it is CERTAIN
+        //   .terminal  — one closing call carries every verdict and finding, and a two-step report is
+        //                forbidden (the owner's "one tool call... that should be the end of it")
+        //   .dismissal — a proposal filed while issues are open is DISMISSED, not deferred: no row, no
+        //                work armed, no second hearing, and no invitation to try again
+        // Each is asserted of ALL FOUR angles, which is the property four hand-copies could not give:
+        // with one copy, deleting a rule breaks four angles at once and this test names it.
+        const CONVERGENCE = {
+            effort:
+                'The rule that governs this whole pass: effort is not value, and a defect that is hard to find is not worth filing. Report the issues that surface as soon as you read for them \u2014 the contradiction in front of you, the promise the text plainly does not keep, the fact that fails one question. A filing you had to DIG for is not worth a Writer round: something you must cross-reference several times, go looking for, or build a case around before it becomes a defect was not found by this pass, and a pass spent hunting it spends the round the book needed for the defects that were easy to see. Nit-picking is not a service here: each filing costs a Writer round and every round spent on a buried blemish is a round not spent on an open break. Report what this pass surfaced, at the cost you actually believe \u2014 do not ration a defect you can already name, and do not dig for one you cannot.',
+            priority:
+                'Issues before proposals, always, and stop when you are certain \u2014 not when you feel you have looked enough. Writer time is finite and a broken commitment outranks a nicer alternative, so a pass that found an issue files only issues: every one you are certain of, each filed once, all of them in the same report, however many there turn out to be. A proposal is worth your turn only when the pass found no issue at all. Certainty is the trigger: the moment you can quote the defect and name its cost, it is reported \u2014 the next line you read is already spent.',
+            terminal:
+                'One terminal report ends the pass. When you report, you report ONCE: the single closing call — `submitVerdict` — carries every verdict the pass owes together with everything else it is certain of: every issue it found, and the one proposal the rule above allows if there is one. Do not report in two steps, and do not leave anything for the next call: it is not a summary filed after the findings, it is the report they all ride in, filed the moment you are certain. The thread is over the moment it fires: nothing after it is read, so there is no second call to make and nothing to keep hunting.',
+            dismissal:
+                'And while issues are open, a proposal is out of the question — not deferred, not parked for a better pass: a `kind: proposal` finding filed by a pass that also has issues to report is dismissed on sight, with no row, no work armed and no second hearing — one line of boilerplate saying the round belongs to the defects, which is not an invitation and not an answer worth a turn. So do not spend a turn naming the improvement you did not file: if the pass found no issue, the one improvement worth naming rides in that same report.'
+        };
+
+        // What stays per angle, in the angle's own voice: its improvement outlet (D-33b), the tail it
+        // appends to the shared dismissal, the sentence that carries its EXPERTISE (so the rewrite for
+        // convergence cannot flatten the four angles into one critic), and the sentence that binds its
+        // own over-research habit (T-10), which is the angle-local half of the stop rule.
+        const gating: Record<string, { outlet: string; tail: string; expertise: string; stop: string }> = {
             'critic-genre': {
                 outlet:
-                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring the genre move in a pass that has none left.',
-                review:
-                    'This is a review pass unless the job says otherwise: report defects, and file a genuine improvement as a `kind: proposal` finding rather than an Idea — do not restock the Ideas tray. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file genre moves with proposeIdea and read the decided Ideas first (readIdeas, D-28, D-32).'
+                    'Convention satisfied is not the same as convention outdone: when the Summary promises what the genre asks and you can still name the better version of it, that observation is a proposal, not a defect \u2014 `kind: proposal` at cost `major` or `minor`, titled as a proposal, quoting the passage it would improve and saying what changes and why the pass is worth it.',
+                tail:
+                    'For this angle that means the convention the book could outdo, not the one it broke: name the better version of the genre move only in a pass that found no break to report.',
+                expertise:
+                    'Ask what a reader of this genre was promised by the premise, whether this Overview delivers it, and whether it delivers it the way the genre does — the beat, the convention, the amount of distance the reader is allowed to keep.',
+                stop:
+                    'Use searchWeb and fetchPage only when a specific claim needs the convention rather than your memory: one source you can cite settles it, you cite it, and the research is over.'
             },
             'critic-plausibility': {
                 outlet:
-                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring the sourced improvement in a pass that has none left.',
-                review:
-                    'This is a review pass unless the job says otherwise: report findings, and file a genuine improvement as a `kind: proposal` finding rather than an Idea. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file the sourced possibility with proposeIdea (D-26, D-27).'
+                    'And when the fact checks out but you can cite a better one \u2014 the truer detail the book could carry instead \u2014 that is a proposal, not a defect, because a text that is merely improvable has broken nothing: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage it would improve, naming the source that supports the better version, and saying why the pass is worth taking.',
+                tail:
+                    'For this angle, the improvement that waits is the truer, better-sourced detail the book could carry instead of one that is merely true.',
+                expertise:
+                    'Your job is the sentence that makes a reader put the book down because it is not true: a technology that does not exist in the chapter\u2019s year, a medical claim that does not hold, a motive that would not survive one question, a reference to something this Story never established.',
+                stop:
+                    'State the minor or taste doubts that are already obvious and no others, and when the last issue you are certain of is filed, stop \u2014 report, and the pass is over.'
             },
             'critic-audience': {
                 outlet:
-                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the defect in this pass and bring what readers deserve in a pass that has none left.',
-                review:
-                    'This is a review pass unless the job says otherwise: report findings only — a genuine improvement is filed as a `kind: proposal` finding, not restocked in the Ideas tray. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, propose the fix as an Idea (proposeIdea) — you are expected to be wrong often, and that is what makes proposing cheap (D-28); consult the decided Ideas first (readIdeas, D-32).'
+                    'And when the unpaid setup is not a promise the Summary broke but a change its readers would thank it for, that is the audience speaking as an editor would, and it belongs in the report as a proposal: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage it would improve and saying in `detail` why the payoff lands better if the setup moves.',
+                tail:
+                    'For this angle, the improvement that waits is the added beat or the reorder its readers would thank the book for and which its Seed never promised.',
+                expertise:
+                    'Read the Summary as the book now holds it — its five groups, or one whole-Summary draft on a legacy book — and report the complaints THIS Author\u2019s own audience would file, in their words: the pacing that sags where it used to, the character who stopped being likeable for no reason the reader was given, the payoff that arrived without the setup, the line of dialogue nobody speaks, the twist that arrived too early for the reader who is two chapters ahead.',
+                stop:
+                    'It is not a mandate to go looking: a complaint you have to search the shelf for is not worth a Writer round.'
             },
             'critic-mystery': {
                 outlet:
-                    'File Proposals only when no issue is open: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call and the Editor cannot approve one either (D-33c, D-33d) — report the pacing defect in this pass and bring the reorder in a pass that has none left.',
-                review:
-                    'This is a review pass unless the job says otherwise: report findings, and file a genuine improvement as a `kind: proposal` finding rather than an Idea. File Proposals only when no issue is open, and never beside one: while an issue is unresolved the tool refuses a `kind: proposal` call, and an issue and a proposal never share a pass (D-33c). When the job explicitly asks for proposals, file reorderings, withheld reveals and moved plantings with their reasoning (proposeIdea), checking what is already decided first (readIdeas, D-32). Never write the book, and never propose removing the mystery altogether — the Author kept it for a reason you can read in the Seed (P5).'
+                    'Where the artifact under review is a SUMMARY there is no planting to jump, so the same observation is a PROPOSAL rather than a suspicion: put it in the `findings[]` array of the one terminal `submitVerdict` as `kind: proposal`, quoting the passage that gives the game away and saying in `detail` which move would earn the reveal, and the Editor weighs whether the book is better for the reorder rather than whether the Seed ever promised one.',
+                tail:
+                    'For this angle, the improvement that waits is the withheld reveal or the moved planting: name it in a pass that found no break, never beside one.',
+                expertise:
+                    'Report where the answer is spent before it is earned: a reveal that lands too early, a suspense the prose dissolves by explaining it, a setup paid off too far from its planting, a chapter doing a job its neighbour already did (C-11).',
+                stop:
+                    'File the critical and major issues; a minor pacing note is reportable when it is already obvious, and it is never worth a re-read of the sequence.'
             }
         };
 
         for (const [name, clauses] of Object.entries(gating)) {
             const prompt = byName(name).roles[0].prompt;
 
-            // The outlet sentence: the invitation and its gate, in the same breath.
+            // The four shared rules, verbatim, in every angle (D1, D2, D3, D4).
+            expect([name, prompt.includes(CONVERGENCE.effort)]).toEqual([name, true]);
+            expect([name, prompt.includes(CONVERGENCE.priority)]).toEqual([name, true]);
+            expect([name, prompt.includes(CONVERGENCE.terminal)]).toEqual([name, true]);
+            expect([name, prompt.includes(CONVERGENCE.dismissal)]).toEqual([name, true]);
+
+            // The stop is IMPERATIVE ("stop when you are certain"), and the permissive wording the
+            // owner objected to is gone rather than merely de-emphasised (D2). The engine-owned sweep
+            // notes still carry "an empty pass is valid" — that is `loop/work.ts`, not the seat's copy.
+            expect(prompt).toContain('and stop when you are certain');
+            expect(prompt).not.toMatch(/you may stop|an empty pass is valid|stop once the issues/);
+            // ...and each angle still binds its OWN research habit, in its own words.
+            expect(prompt).toContain(clauses.stop);
+
+            // D-33b's outlet survives the de-duplication, in the angle's own terms, and the Ideas ban
+            // with it (the `review pass unless the job says otherwise` line and `proposeIdea` are
+            // pinned in the phase-scoping test above).
             expect(prompt).toContain(clauses.outlet);
-            // The standing "this is a review pass" line, which is the sentence a pass with no Summary
-            // defect still reads — and the one that used to end at "do not restock the Ideas tray".
-            expect(prompt).toContain(clauses.review);
+
+            // The dismissal paragraph: the shared rule and the angle's tail are ONE paragraph, joined
+            // by the single space the constant ends with. That is how the rule stays one sentence while
+            // still being spoken in the angle's voice (D6).
+            expect(prompt).toContain(CONVERGENCE.dismissal + ' ' + clauses.tail);
+
+            // D3 — the wasted-proposal trap is gone: the refusal sentence that invited the retry, the
+            // retry itself, and the retired mirror rule cannot come back. A proposal now costs the critic
+            // nothing to learn about, because the copy tells it up front that the claim is dismissed.
+            expect(prompt).not.toContain('File Proposals only when no issue is open');
+            expect(prompt).not.toContain('in a pass that has none left');
+            expect(prompt).not.toContain('never share a pass');
+
+            // D4 — the terminal report, and the ONE payload field this copy names. `submitVerdict`'s shape is
+            // still owned by `tools/reader.ts` (its `findings[]` is the `raiseFinding` body lifted UNCHANGED),
+            // so the role copy names the array the findings ride in and nothing else: which record each
+            // verdict line targets (`target_ref`) belongs to the engine-owned brief (`run/brief.ts`), and a
+            // call-syntax form would freeze an argument list the prompt cannot check.
+            expect(prompt).toContain('`findings[]`');
+            expect(prompt).not.toContain('target_ref');
+            expect(prompt).not.toMatch(/submitVerdict\(|submitVerdict with /);
+            // THE RETIRED ROUTE (2026-11-27): the four angles used to be told to file the claim with
+            // `raiseFinding` AND report with `submitVerdict` — two endpoints, and the second one filed
+            // nothing, because the first had already closed the thread. A finding now has exactly ONE home in
+            // this copy: the `findings[]` array of the call that ends the pass.
+            expect(prompt).not.toContain('raiseFinding');
+        }
+
+        // D6 — four critics, not one. Each angle's expertise sentence is its own, appears in its own
+        // prompt, and appears in NONE of the other three: the convergence rewrite is allowed to share
+        // the rules, not the judgement those rules are applied with.
+        for (const [name, clauses] of Object.entries(gating)) {
+            const prompt = byName(name).roles[0].prompt;
+
+            expect([name, prompt.includes(clauses.expertise)]).toEqual([name, true]);
+
+            for (const [other, otherClauses] of Object.entries(gating)) {
+                if (other !== name) expect(prompt).not.toContain(otherClauses.expertise);
+            }
         }
 
         // The Consistency reader files Proposals too (D-33b moved its "preference" there), so the same
         // gate is written where its cost ladder is written.
         expect(byName('reader-consistency').roles[0].prompt).toContain(
-            'A Proposal is also the LAST thing you file, not a side order: while this Story has an unresolved issue, `raiseFinding` refuses a `kind: proposal` call, and an issue and a Proposal never share a pass (D-33c) — report the contradictions and bring the preference once the book has no defect left to answer.'
+            'A Proposal is also the LAST thing you file, not a side order: while this Story has an unresolved issue, `raiseFinding` DISMISSES a `kind: proposal` call — no row, no work armed and no retry to spend — so an issue is always filable and a Preference belongs in a pass that found no issue (D-33c).'
         );
+
+        // …AND THE RETIRED WORDING MUST STAY OUT OF IT (2026-11-26 reconciliation). This is the one place
+        // outside the four critic angles that ever spelled D-33c out in an Author-editable prompt, and it
+        // is the one place the convergence pass left the mirror rule and the old refusal standing — the
+        // `not.toContain` bans above loop over the ANGLES only, so this reader needed its own. A dismissed
+        // proposal writes no row and offers no retry, so neither the pass-pairing rule nor a sentence
+        // inviting the claim back can be true here.
+        for (const retired of ['never share a pass', 'refuses a `kind: proposal`', 'in a pass that has none left']) {
+            expect(byName('reader-consistency').roles[0].prompt.toLowerCase()).not.toContain(retired);
+        }
 
         // The Editor is the OTHER half: a Critic told not to file is a saved round, an Editor not told is
         // a turn spent calling a tool that refuses. This paragraph is the Author-editable twin of the
@@ -470,6 +719,39 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
         // pasting a tool sentence into a tool-less prompt (D-30's no-tools contract).
         expect(byName('critic-screening').roles[0].prompt).not.toContain('D-33c');
         expect(byName('critic-screening').roles[0].prompt).not.toContain('raiseFinding');
+    });
+
+    it('D-33c — all four angles end their done-definition at the one terminal report', () => {
+        // WHY THIS LINE MATTERS AT ALL: `run/brief.ts:jobStatement` prints `done_definition` as the
+        // "Done means: …" line for a Critic job that is NOT a `check_unit` review (a review seat gets the
+        // engine-owned `criticReviewDone` line instead, which is why the gap survived). So on those jobs
+        // this is the ONLY ending the angle is given, and an angle whose done-line stops at "the issues are
+        // filed" is an angle with no stop rule — the loop the owner measured ("it should file as soon as it
+        // is certain of its findings"). All four now close on the SAME clause, pinned exactly; what stays
+        // per angle is its own filing rule, in its own words.
+        const TERMINAL = 'one terminal report that carries the verdict and every issue together (D-33c).';
+
+        for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery']) {
+            const done = byName(name).done_definition ?? '';
+
+            expect([name, done.endsWith(TERMINAL)]).toEqual([name, true]);
+            // The non-terminal shapes this pin bans: a done-line that stops at the filing, or that leaves
+            // the minor/taste notes "optional" (an option is a reason to keep reading), describes an ending
+            // the loop does not honour. `critic-genre` was the one left behind with both.
+            expect([name, /(?:is|are) filed\.$|are optional/.test(done)]).toEqual([name, false]);
+            // And a done-line may not quietly become a digging licence either: what it may permit is a note
+            // that is ALREADY there, never a search for one.
+            expect(done).toMatch(/only when (?:they are already obvious|it is already in front of the reader)/);
+        }
+
+        // `critic-genre` pinned WHOLE, because it is the angle this pass fixed (2026-11-26 reconciliation):
+        // the sentence must keep the two rules its old copy carried — the taste note stays optional only in
+        // the "already obvious" sense (T-10: never a search), and the Ideas tray stays shut in a review pass
+        // (T-9, D-26) — while closing on the shared terminal clause. A rewrite that drops either rule, or
+        // drops the ending, fails here rather than in a run.
+        expect(byName('critic-genre').done_definition).toBe(
+            'Every critical or major genre break is filed with its passage and evidence, rated against the promise and the convention this book’s premise invokes; a taste note rides along only when it is already in front of the reader, never because the shelf was searched, and no Idea is proposed in a review pass. The pass closes on one terminal report that carries the verdict and every issue together (D-33c).'
+        );
     });
 
     it('T3 — the Editor disputes an omission-only finding instead of confirming the absence', () => {
@@ -585,12 +867,17 @@ describe('W8 — the built-in catalogue (§4.12)', () => {
             'writer-chapters': ['reader'],
             'editor-general': ['critic', 'reader'],
             'critic-screening': [],
+            // Phrase ②'s review seat is a single structured turn: it writes nothing and has no sub-context
+            // to hand a reading to, so a delegation would be a role the run cannot spawn.
+            'critic-screening-plotlines': [],
             'editor-group-lock': [],
             'critic-genre': [],
             'critic-plausibility': [],
             'critic-audience': [],
             'critic-mystery': [],
             'reader-consistency': [],
+            // D-65's score seat: one structured turn, no tools, nothing to delegate.
+            'reader-score': [],
             'reader-prose': [],
             // T-W2: Phrase ②'s two crews delegate nothing. The chapter draft is ONE structured turn
             // whose whole answer the engine installs or discards (`installGroupRevisions`), so a
@@ -719,6 +1006,11 @@ describe('W8 — T-0 structural assignment rules', () => {
             'critic-audience',
             'critic-mystery',
             'reader-consistency',
+            // D-65's score-only reader sits IMMEDIATELY AFTER `reader-consistency` on purpose: an unbound
+            // `check_unit` reader job binds the FIRST assigned reader row (`records.ts:templatesFor` order →
+            // `work.ts:candidate`'s `pool[0]`), and that seat must keep the tool-carrying consistency reader —
+            // the score seat holds no tools and files nothing, so it could not answer a review job.
+            'reader-score',
             // T-W2: Phrase ②'s structure gate and its contract Writer ride along for the same reason
             // `editor-group-lock` does — each seat binds its crew BY SLUG
             // (`loop/work.ts:phase2GroupCandidates` sets `templateRef`) and the prompt resolves from
@@ -726,7 +1018,29 @@ describe('W8 — T-0 structural assignment rules', () => {
             // listed before `writer-plotlines` would become the unbound phase-② write crew and move
             // what a classic-mode Story's `write_unit` run looks like.
             'editor-plotlines-structure',
-            'writer-plotlines-sampler'
+            'writer-plotlines-sampler',
+            // Phrase ②'s structured review voice, LAST for the same reason: the `review_groups` seat binds
+            // `critic-screening-plotlines` by slug (`run/phase1-prompt.ts:PLOTLINES_SCREEN_TEMPLATE_SLUG`)
+            // and resolves its copy from the catalogue, so staying behind the four angles keeps
+            // `templatesFor(..., 'critic')[0]` on `critic-screening`.
+            'critic-screening-plotlines'
+        ]);
+
+        // THE POOL PICKS, stated rather than implied by the list above. The reader pair is the pair the new
+        // row could have moved: `reader-consistency` stays the review crew because the score row follows it,
+        // and `critic-screening-plotlines` cannot displace `critic-screening` because it is last.
+        expect(
+            DEFAULT_ASSIGNMENT.filter((name) => byName(name).roles.some((role) => role.kind === 'reader'))
+        ).toEqual(['reader-consistency', 'reader-score']);
+        expect(
+            DEFAULT_ASSIGNMENT.filter((name) => byName(name).roles.some((role) => role.kind === 'critic'))
+        ).toEqual([
+            'critic-screening',
+            'critic-genre',
+            'critic-plausibility',
+            'critic-audience',
+            'critic-mystery',
+            'critic-screening-plotlines'
         ]);
     });
 
@@ -1002,36 +1316,113 @@ describe('SUMMARY PHRASE — the built-in crews are taught the five-group contra
         expect(prompt).toContain('Name in `location` the group the quote came from');
         expect(prompt).toContain('do not name a group you have not quoted from');
 
+        // THE `group_quotes` LANE (2026-11-27). This seat answers with a schema object rather than with a
+        // Finding, so unlike the tool-carrying angles it CAN carry one quote per named group — and it MUST,
+        // because R3 closes the issue only once every group it names has been revised
+        // (`phrase/findings.ts:findingGroupScope`), and an unevidenced group cannot be dragged into the scope
+        // of a defect it was never evidence for. The primary group goes FIRST in `group_refs`, which is what
+        // keeps `quote` and `location` pointed at the same text.
+        expect(prompt).toContain(
+            'EVERY issue names its `group_refs`: the group ids printed in the OVERVIEW headings.'
+        );
+        expect(prompt).toContain(
+            'Put the group you are reporting FIRST in `group_refs`, then every other group the defect crosses; for every other group you name, add a `group_quotes` entry with that group’s `group_ref`, its `quote` and its `location` — every named group has to be evidenced.'
+        );
+        // THE SCHEMA'S REQUIRED `detail` IS NAMED HERE NOW (2026-11-27), in the same breath as the evidence
+        // rule: `GroupReviewSchema` puts `detail` in `required` with `minLength: 1`, and a seat answering in
+        // `json_object` mode (§4.2's fallback, schema not on the wire) has only this copy to tell it so.
+        expect(prompt).toContain('`detail` is what is wrong and where (section, paragraph or lines), and it is required.');
+        expect(prompt.match(/`detail`/g)).toHaveLength(1);
+        // Once, and only in the lane that has the field: a second copy is what D-33c's de-duplication removed.
+        expect(prompt.match(/group_quotes/g)).toHaveLength(1);
+
         // H1/R2 with R3: the certificate is per-group, and a review never spends the rewrite allowance.
         expect(prompt).toContain('`resolved` only when EVERY one of those groups now carries the repair');
         expect(prompt).toContain('costs the Story no Writer attempt');
+
+        // D-33c COHERENCE (F4) — the effort sentence this seat is briefed with, pinned as ONE sentence so
+        // both halves are held: the anti-silence licence (the seat is a read, so an issue it saw must not be
+        // rationed away — the reported failure was Critics staying quiet or hedging) AND the bound that
+        // closes it in the same breath ("and report nothing when the text holds. Effort is not value here
+        // either"), which is what stops the licence reading as a licence to dig for a break the Overview
+        // never showed. Pinning the pair is the point: either half alone is the defect the other prevents.
+        expect(prompt).toContain(
+            'so report what you find without rationing, and report nothing when the text holds. Effort is not value here either'
+        );
+        // And the same seat may not be told twice: the bound lives here, in the role copy, while the
+        // engine-owned user-turn block (`run/phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION`) carries its own
+        // once — a second copy of the rule in one prompt is what D-33c's de-duplication removed.
+        expect(prompt.match(/without rationing/g)).toHaveLength(1);
 
         // The earlier T3 gates (Seed silence, the style ladder) are still in force beside the group text.
         expect(prompt).toContain('A critical is a contradiction the text under review cannot live with');
         expect(prompt).toContain('are NOT issues at this phase');
     });
 
-    it('every tool-carrying review angle scopes a Summary defect to its groups (R3)', () => {
-        // The refusal is the reason: `tools/reader.ts:raiseFinding` refuses an unscoped Summary finding
-        // on a group-managed book, so a role that is not told this burns the pass on a refusal.
+    it('every tool-carrying review angle scopes a Summary defect to its groups, inside the ONE terminal report (R3, D-33c)', () => {
+        // The refusal is still the reason for the SCOPE: `tools/reader.ts:raiseFinding` refuses an unscoped
+        // Summary finding on a group-managed book, so a role that is not told this burns the pass on a
+        // refusal. WHAT MOVED (2026-11-27) is the ROUTE: a finding no longer rides on its own
+        // `raiseFinding` call — every finding is an entry of the one `submitVerdict` that ends the pass, so
+        // the copy has to name the array AND the tool that carries it, or the seat files into a call its own
+        // terminal report then repeats.
+        const FILING = 'the `findings[]` array of the one terminal `submitVerdict`';
+
         for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery']) {
             const prompt = promptOf(name);
 
-            expect(prompt).toContain('raiseFinding');
             expect(prompt).toContain('group_refs');
             expect(prompt).toContain('the group ids the brief prints');
+            expect(prompt).toContain(FILING);
         }
 
-        // Each angle states the one-finding rule in its own terms (and the mystery angle in BOTH groups').
+        // THE QUOTE RULE, per angle, in the angle's own words. A Finding holds ONE evidence string
+        // (`shared/types.ts:Finding.evidence`), so the retired demand — "quote every group you name" — asks
+        // for a field the schema does not have. The quote belongs to the group named in `location`; the other
+        // groups the defect crosses are named in `group_refs`.
+        const quoting: Record<string, string> = {
+            'critic-genre':
+                'Quote the line from the group you name in `location`; name the other groups the defect crosses in `group_refs`, and never name a group you did not read.',
+            'critic-plausibility':
+                'Quote the line from the group you name in `location`, and name the other groups the defect crosses in `group_refs`; one factual defect crossing three groups is ONE finding naming three groups, never three findings.',
+            'critic-audience':
+                'Quote the line from the group you name in `location`, and keep it ONE finding however many groups it names: three findings for one reader sentence buy three Writer rounds for one complaint.',
+            'critic-mystery':
+                'Quote the line from the group you name in `location`, and name the other groups the defect crosses in `group_refs`; never name a group you did not read: a five-group scope on a two-group complaint rewrites three groups to answer one sentence (D-33).'
+        };
+
+        for (const [name, sentence] of Object.entries(quoting)) expect([name, promptOf(name).includes(sentence)]).toEqual([name, true]);
+
+        // …AND NONE OF THEM MAY ASK FOR `group_quotes`: that field belongs to the structured `GroupReview`
+        // answer (`critic-screening`, `critic-screening-plotlines`), and a tool-carrying angle told to fill it
+        // is told to fill a field `raiseFinding` has nowhere to put.
+        for (const name of ['critic-genre', 'critic-plausibility', 'critic-audience', 'critic-mystery'])
+            expect([name, promptOf(name).includes('group_quotes')]).toEqual([name, false]);
+
+        // Each angle states the one-finding rule in its own terms (and the genre angle in the cross-group
+        // judgement this pass exists for).
         expect(promptOf('critic-genre')).toContain('ONE finding naming three groups');
         expect(promptOf('critic-genre')).toContain('judge the groups AGAINST EACH OTHER');
-        expect(promptOf('critic-plausibility')).toContain('ONE finding naming three groups, never three findings');
         expect(promptOf('critic-audience')).toContain('keep it ONE finding however many groups it names');
-        expect(promptOf('critic-mystery')).toContain('never name one you have not quoted from');
 
-        // The Consistency reader scopes a Summary defect by group and every later defect by its artifact.
+        // And the sentence that says what ENDS the run, in the two angles that carry it verbatim: the findings
+        // ride in the report, they do not precede it in a separate call.
+        expect(promptOf('critic-genre')).toContain(
+            'You never write the book — your output is ONE terminal `submitVerdict` report carrying your findings in `findings[]`; `proposeIdea` is for jobs that explicitly ask for Ideas (T-9, D-26).'
+        );
+        expect(promptOf('critic-audience')).toContain(
+            'You never write the book — your output is ONE terminal `submitVerdict` report carrying your findings in `findings[]`, plus `proposeIdea` when the job asks for it (T-9, D-26).'
+        );
+
+        // The Consistency reader is the OTHER tool-carrying reviewer and its route is unchanged: it still
+        // files with `raiseFinding`, scopes a Summary defect by group with the same one-quote rule, and
+        // scopes every later defect by its own artifact.
         expect(promptOf('reader-consistency')).toContain('group_refs');
+        expect(promptOf('reader-consistency')).toContain(
+            'and quote the line from the group you name in `location`; name the other groups in `group_refs`'
+        );
         expect(promptOf('reader-consistency')).toContain('needs no group ids');
+        expect(promptOf('reader-consistency')).toContain('raiseFinding');
     });
 
     it('the Researcher feeds whichever phase-① prompt exists, so it is not taught "the sampler"', () => {

@@ -14,7 +14,8 @@ import {
     compileScreenPrompt,
     compileSectionScorePrompt,
     hashPhase1Prompt,
-    renderFixTask
+    renderFixTask,
+    SCORE_TEMPLATE_SLUG
 } from './phase1-prompt';
 import { AUTHOR_ATTR, seedFinding, seedStory, seedTask, seedTemplate } from './mock';
 import { ensurePhraseCatalog } from '../phrase/catalog';
@@ -285,6 +286,17 @@ const FIX_TASK_BLOCK = `[task_0 · priority 30 · finding_0] pay the promise
  * outline with unfilled boxes. The rule now names invention as allowed and makes the quote the test: an
  * absence cannot be quoted, so it is not admissible. The contradiction grounds stay, and so does the
  * requirement to name the field — this array is what the selection is gated on.
+ *
+ * THE `detail` CLAUSE (the schema-required field the sentence now names): the last sentence used to stop
+ * at "name the field in `location`, cite `C-14`… in `criterion`", so the one field the answer schema makes
+ * NON-OPTIONAL (`shared/schemas/group-review.ts:102,127` — `detail: { type: 'string', minLength: 1 }`, in
+ * `required`) was never asked for in the engine-owned wording, and a Critic that quoted a line without
+ * saying what is wrong with it still bought a valid, unusable answer. The clause lives here, in the mirror,
+ * because a reword that drops `detail` has to fail this file: the prompt and the schema are ONE contract,
+ * and `run/prompt-schema-parity.test.ts` checks the same pairing from the schema side. Phrase ②'s twin
+ * (`phase1-prompt.ts:CONTRACT_SCREEN_INSTRUCTION`) carries the same clause plus the engine-owned
+ * `group_refs`/`group_quotes` coverage rule; its byte pins live in the phrase-② seats
+ * (`integration/plotlines-groups.test.ts`), not in this Summary-lane file.
  */
 const SCREEN_CONTRACT =
     'Report ONLY critical and high issues, and reserve those two words for what a Summary has to get RIGHT: ' +
@@ -301,7 +313,7 @@ const SCREEN_CONTRACT =
     'Word choice, sentence structure, grammar, register and a preference for another phrasing of the same ' +
     'commitment are NOT issues at this phase — they are minor, nothing here ranks them, and the prose that carries ' +
     'them is written and judged in phase ③. Quote the offending field verbatim in `quote`, name the field in ' +
-    '`location`, cite `C-14`, `C-15` or `seed` in `criterion`. Return {"issues":[]} when the draft holds.';
+    '`location`, say in `detail` what is wrong and where, and cite `C-14`, `C-15` or `seed` in `criterion`. Return {"issues":[]} when the draft holds.';
 
 /**
  * H1/R2 — the fix-verification contract. `resolved` needs a quotation from the target draft, and a
@@ -805,11 +817,16 @@ describe('phase1-prompt — T3: the Seed-silence rule reaches every model-facing
         }
 
         // The gates this change must NOT relax: the two severities, the verbatim quote, the criterion
-        // names, and the empty answer as a legitimate reply.
+        // names, and the empty answer as a legitimate reply. The quote/location/detail/criterion sentence is
+        // pinned WHOLE — `detail` is the schema-required field the clause now names
+        // (`shared/schemas/group-review.ts:102,127`), and this test is the one place the doctrine is checked
+        // against an Author's CUSTOM role prompt, so a mirror that drops the clause on a custom template has
+        // to fail here rather than silently cost the book an answer with no stated defect.
         expect(compiled.user).toContain('a critical contradicts the Seed Brief or a critical Knowledge entry');
         expect(compiled.user).toContain('A high leaves unpaid a commitment the Seed Brief states EXPLICITLY');
-        expect(compiled.user).toContain('Quote the offending field verbatim in `quote`');
-        expect(compiled.user).toContain('cite `C-14`, `C-15` or `seed` in `criterion`');
+        expect(compiled.user).toContain(
+            'Quote the offending field verbatim in `quote`, name the field in `location`, say in `detail` what is wrong and where, and cite `C-14`, `C-15` or `seed` in `criterion`.'
+        );
         expect(compiled.user).toContain('Return {"issues":[]} when the draft holds');
     });
 
@@ -1090,15 +1107,29 @@ const GROUP_DRAFT_INSTRUCTION =
     '- Nothing here is judged on style: wording and sentence shape are settled in phase ③, when the chapters are ' +
     'written.';
 
-/** R3 — the group Critic's attribution rule, mirrored from `phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION`. */
+/**
+ * R3 — the group Critic's attribution rule, mirrored from `phase1-prompt.ts:GROUP_REVIEW_INSTRUCTION`.
+ *
+ * D-15/`group_quotes` adds the EVIDENCE half of the attribution rule, and it is mirrored here because it is
+ * the half the engine later enforces (`phrase/revisions.ts:parseGroupReviewAnswer` refuses an issue whose
+ * extra `group_refs` carry no quote). Two sentences carry it: the primary quote's group goes FIRST in
+ * `group_refs`, and every other named group needs a `group_quotes` entry. Deleting either from the source
+ * breaks the exact `toBe` below and the refusal pins in `phrase/revisions.test.ts` — the prompt and the
+ * validator are one contract, and a prompt that promises a rule the validator does not run is a lie.
+ */
 const GROUP_REVIEW_INSTRUCTION =
     'EVERY issue you report names its `group_refs`: the group ids shown in the OVERVIEW section above. Name the one ' +
     'group the defect is in; name several, or all five, when the defect is in how they fit together — a promise the ' +
-    'Ending does not keep, a Theme the Premise never grounds. An issue that cannot name a group is not an answer this ' +
+    'Ending does not keep, a Theme the Premise never grounds. Put the group your `quote` came from FIRST in `group_refs`, ' +
+    'then every other group the defect crosses. An issue that cannot name a group is not an answer this ' +
     'pass may give: the loop routes work by group, and a defect with no group is work nobody can do.\n' +
     // T3 — mirrored from the source: one defect = one issue, the quote carries its address, a multi-group
     // fix certifies only when every named group carries it, and a review is a read (R3/R5).
-    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story’s rewrite allowance, so report what you find without rationing.\n' +
+    // D-33c COHERENCE (F4) — the last clause is mirrored too, because it is the half the reviewer flagged:
+    // "report what you find without rationing" survives (the seat spends no rewrite allowance, so it must
+    // not stay quiet to save effort) and is bound in the same sentence, so the licence cannot be read as a
+    // licence to keep digging. The dedicated rule assertions are in the group-review describe below.
+    'One defect that crosses several groups is ONE issue naming every group it crosses — never one issue per group, which would buy several rewrites of the same complaint. Say in `location` which group your `quote` came from and where in it the line sits: ids and headings are the address the Writer revises, prose summaries of the book are not. Put the primary quote in `quote`; for every OTHER group you name, add a `group_quotes` entry with that group’s `group_ref`, its `quote` and its `location` — a group named without a quote is refused, because naming it is a claim that you read it. When the prompt carries FIX TASKS, a task whose finding names several groups is `resolved` only once EVERY one of those groups carries the repair — one group fixed is not the finding fixed. And this pass writes nothing: it spends none of the Story’s rewrite allowance, so report what you find without rationing — and only what you found: nothing here asks you to go looking for a defect the Overview has not already surfaced.\n' +
     // T6b — mirrored from the source: a LOCKED section is still reviewable, but a complaint whose only
     // possible repair is a rewrite of fixed text is unworkable work (`findingActionableScope` routes the
     // claim to the groups that CAN move), so the reviewer is told to name the unlocked side.
@@ -1307,6 +1338,121 @@ describe('phase1-prompt — the group review pass (R3, R5)', () => {
         );
     });
 
+    it('binds the review pass’s "report without rationing" to what the Overview surfaced (D-33c)', () => {
+        // WHY THIS TEST EXISTS: the seat that gets this block is a READ — it spends none of a group's rewrite
+        // allowance (`loop/work.ts:groupWriteAttempts` counts WRITES only), which is the whole reason it is
+        // told not to ration. The owner's rule cuts the other way as well: "a very hidden problem could take
+        // ages to find", so a defect that has to be dug for is not worth a Writer round. The old copy stopped
+        // at the licence, and one half of the prompt (this block, the USER turn) said only "keep reporting".
+        // Both halves are pinned from the RENDERED turn, because the binding is what an edit can lose.
+        const { store, story, groups } = seedGroupStore();
+        const review = compileGroupReviewPrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            fixRefs: []
+        });
+
+        // (1) THE ANTI-SILENCE HALF SURVIVES — the seat is not told to hold an issue back to save effort.
+        //     Deleting this is the failure D-33c was written against, so it is pinned on its own.
+        expect(review.user).toContain(
+            'And this pass writes nothing: it spends none of the Story’s rewrite allowance, so report what you find without rationing'
+        );
+
+        // (2) THE SAME SENTENCE IS BOUND — "only what you found", and the pass is told plainly that no part
+        //     of the prompt is asking it to go looking for a break the text has not surfaced.
+        expect(review.user).toContain(
+            'so report what you find without rationing — and only what you found: nothing here asks you to go looking for a defect the Overview has not already surfaced.'
+        );
+
+        // (3) THE SHAPE THAT READ AS A LICENCE IS GONE. The old sentence ENDED at the licence ("…without
+        //     rationing."), and a full stop there is what let it be read as "report exhaustively". Banning
+        //     the terminator means the bound has to sit inside the sentence: rewording the clause past the
+        //     pins above is fine, ending it there again is not.
+        expect(review.user).not.toContain('without rationing.');
+
+        // (4) SAID ONCE. The convergence pass (D-33c) removed near-duplicate copies of these rules because a
+        //     rule stated three ways reads as a rule with three exceptions, so the licence appears exactly
+        //     once in this seat's user turn — with its bound attached.
+        expect(review.user.match(/without rationing/g)).toHaveLength(1);
+    });
+
+    it('names the quote every named group has to carry, and where the primary one goes (R3, D-15)', () => {
+        // WHY THIS IS A PROMPT TEST AT ALL: the answer schema has ONE `quote` per issue, so a cross-group
+        // complaint used to prove only ONE of the groups it named — "name three, quote one". The fix is a pair
+        // of rules stated HERE and enforced there (`phrase/revisions.ts:parseGroupReviewAnswer`, pinned in
+        // `phrase/revisions.test.ts`): the primary quote's group goes FIRST in `group_refs`, and every other
+        // named group carries a `group_quotes` entry. A prompt that promised less than the validator enforces
+        // costs the book a refused pass per attempt, so both halves are pinned from the RENDERED turn.
+        const { store, story, groups } = seedGroupStore();
+        const review = compileGroupReviewPrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            fixRefs: []
+        });
+
+        // (1) THE POSITION — the validator reads `group_refs[0]` as the quoted group, so the order is part of
+        //     the contract and not a style preference.
+        expect(review.user).toContain(
+            'Put the group your `quote` came from FIRST in `group_refs`, then every other group the defect crosses.'
+        );
+
+        // (2) THE FIELD NAMES — an entry the engine cannot route is a refusal, so the sentence names the three
+        //     fields exactly as `shared/schemas/group-review.ts:GroupReviewQuote` defines them.
+        expect(review.user).toContain(
+            'Put the primary quote in `quote`; for every OTHER group you name, add a `group_quotes` entry with ' +
+                'that group’s `group_ref`, its `quote` and its `location` — a group named without a quote is refused, ' +
+                'because naming it is a claim that you read it.'
+        );
+
+        // (3) THE REFUSAL IS PROMISED, not hinted: the seat that cannot quote a group has been told naming it
+        //     is a claim of having read it, which is the sentence that makes the refusal non-arbitrary.
+        expect(review.user).toContain('a group named without a quote is refused, because naming it is a claim that you read it.');
+
+        // (4) SAID ONCE, AND NOTHING ELSE IN THE BLOCK MOVED: one mention of the array in this seat (no second
+        //     copy elsewhere in the turn to drift from it), and the whole attribution block is the mirror.
+        expect(review.user.match(/group_quotes/g)).toHaveLength(1);
+        expect(review.user).toContain(GROUP_REVIEW_INSTRUCTION);
+    });
+
+    it('briefs the structured review with the screening template whatever slug the seat was scheduled with (D-17d)', () => {
+        // WHY: a `review_groups` Work Item's `templateRef` is a POOL pick — which Critic angle runs the pass is
+        // a scheduling fact, and D-17d's divergence settings live on that row. This seat is `toolMode: 'none'`,
+        // so trusting the label handed it a deep reviewer's `raiseFinding`/`submitVerdict` copy: the model
+        // answers a structured schema with tool vocabulary and the pass is refused. The whole system turn is
+        // pinned identical, because the CONTRACT sentence rides the role prompt and a wrong slug would move it.
+        const { store, story, groups } = seedGroupStore();
+
+        seedTemplate(store, {
+            name: 'critic-deep-review',
+            roles: [
+                {
+                    name: 'critic',
+                    kind: 'critic',
+                    prompt: 'You are the deep Reviewer: read the ledger, file findings and submit a verdict.'
+                }
+            ],
+            serves_phase: ['summary']
+        });
+
+        const refs = { groupRefs: groups.map((group) => group.id), fixRefs: ['task_0'] };
+        const scheduled = compileGroupReviewPrompt(store, story.id, {
+            ...refs,
+            templateSlug: 'critic-deep-review'
+        });
+        const plain = compileGroupReviewPrompt(store, story.id, refs);
+
+        expect(scheduled.system).toBe(
+            'You are the screening Critic for phase ①. Report ONLY critical and high problems.\n\n' +
+                'Answer with ONE JSON object matching the `GroupReview` schema. You have no tools and exactly one turn. No prose outside the JSON.'
+        );
+        expect(scheduled.system).toBe(plain.system);
+        expect(scheduled.user).toBe(plain.user);
+        expect(scheduled.hash).toBe(plain.hash);
+        // The decoy is in the catalogue, so this is a leak detector and not a tautology: the tool-using copy is
+        // nowhere on the wire, and the fallback sentence is absent because the screening row WAS found (D-17a).
+        expect(store.templates.list().map((template) => template.name)).toContain('critic-deep-review');
+        expect(scheduled.system).not.toContain('deep Reviewer');
+        expect(`${scheduled.system}\n${scheduled.user}`).not.toContain('no role prompt from');
+    });
+
     it('compiles identically twice, and carries no clock or run id (R7)', () => {
         const { store, story, groups } = seedGroupStore();
         const refs = { groupRefs: groups.map((group) => group.id), fixRefs: ['task_0'] };
@@ -1350,11 +1496,23 @@ const LATER_TEXTS: Record<string, string> = {
 };
 
 /**
- * The score seat's role prompt (`SCORE_TEMPLATE_SLUG` = `reader-consistency`, role `reader`). Any
- * template with any sentence works — the point of seeding one is that the fallback sentence is NOT
- * what the seat sends when the catalogue does hold the built-in.
+ * The score seat's role prompt (`phase1-prompt.ts:SCORE_TEMPLATE_SLUG` = `reader-score`, role `reader`).
+ * Any template with any sentence works — the point of seeding one is that the fallback sentence is NOT
+ * what the seat sends when the catalogue does hold the score-only built-in. It is a STUB rather than the
+ * built-in's own copy on purpose: the seat's contract is WHICH slug the compiler reads and the engine-owned
+ * instruction block, and both are independent of the Author-editable voice (`templates.ts` pins the
+ * built-in's text).
  */
 const READER_ROLE_PROMPT = 'You are the Reader for the section score. Judge only the sections printed below.';
+
+/**
+ * The DECOY the score seat must never be briefed with: `reader-consistency` is the TOOL-CARRYING review
+ * reader (verdict, findings, tasks, `readLedger`), and reading the seat's scheduling label as its voice was
+ * the defect that told a `toolMode: 'none'` pass to file findings (P6). Its `kind` and its sentence are
+ * distinctive so the pin below can name the leak it is guarding.
+ */
+const TOOL_READER_ROLE_PROMPT =
+    'You are the deep Reader: read the ledger, file findings, open tasks and submit a verdict.';
 
 /** §17.16's rule sentence above the sections, mirrored verbatim from `compileSectionScorePrompt`. */
 const REVIEWED_SCORE_PREAMBLE =
@@ -1375,8 +1533,13 @@ const SECTION_SCORE_INSTRUCTION =
     'name; do NOT deduct for detail the Seed never promised, for prose the chapters have not written yet, or for a change you ' +
     'would personally prefer \u2014 that is a taste, not a fault, and a number that moves on taste is a number nobody can read. ' +
     'Copy each section\u2019s `group_ref` from the heading above into `group_ref`, give ONE short `rationale` (the reason for the ' +
-    'number, in a sentence) and ONE `evidence` quote taken verbatim from that section \u2014 the line the judgement rests on, ' +
-    'which for a cross-section fault is the line that cannot be true alongside the section you scored. Name every group exactly ' +
+    // D-15 (cross-section evidence): the quoted line may come from the section the scored one CONTRADICTS, and
+    // the rationale then names that other section. An absence cannot be quoted, so a cross-section fault whose
+    // only proof sits in the neighbour has to be quotable somewhere or the Reader refuses to answer with a taste.
+    'number, in a sentence) and ONE `evidence` quote taken verbatim from the section you scored, or \u2014 for a cross-section ' +
+    'fault \u2014 from the section it contradicts; when the line is not from the scored section, name the section it came from in ' +
+    '`rationale`. The schema carries one `evidence` string per section, so the quote is the one line the judgement rests on, ' +
+    'not a bundle of lines from several sections. Name every group exactly ' +
     'once and no group twice. This pass REPORTS a number: it files no finding, opens no task, grades no fix, edits nothing, and ' +
     'answers nothing else.\n' +
     // T6b — mirrored from the source: a LOCKED section has no future tense, so a deduction for "I would have
@@ -1436,10 +1599,13 @@ function stampCurrentVector(store: Store, story: Story, runRef: string) {
 
 /**
  * The state a `score_sections` seat is dispatched into (D-67): the five groups installed at number 1,
- * the fixture's premise-scoped finding CLOSED, and the `reader-consistency` template the system turn
- * reads. Closing that finding is not decoration — `approved` is an OPEN state on D-33c's rule
- * (`loop/records.ts:isOpenIssueFinding`), so while it stands nothing is selectable for premise and the
- * whole selection is incomplete.
+ * the fixture's premise-scoped finding CLOSED, and the TWO reader templates the two seats read —
+ * `reader-score`, the score-only built-in this seat's system turn comes from
+ * (`phase1-prompt.ts:SCORE_TEMPLATE_SLUG`), and the tool-carrying `reader-consistency` whose copy must
+ * NEVER reach the score seat (the prompt would then ask a `toolMode: 'none'` pass to file findings and
+ * open tasks, which is the wiring defect D-65 named). Closing the finding is not decoration — `approved`
+ * is an OPEN state on D-33c's rule (`loop/records.ts:isOpenIssueFinding`), so while it stands nothing is
+ * selectable for premise and the whole selection is incomplete.
  *
  * `stamped` comes back so the tests state their own precondition rather than assume one.
  */
@@ -1457,8 +1623,15 @@ function seedScoreStore() {
     );
 
     seedTemplate(store, {
-        name: 'reader-consistency',
+        name: 'reader-score',
         roles: [{ name: 'reader', kind: 'reader', prompt: READER_ROLE_PROMPT }],
+        serves_phase: ['summary']
+    });
+    // The decoy: a seat that trusted its own `templateRef` (a scheduling label, D-17d's divergence rows
+    // live there) would render THIS copy and hand a tool-using brief to a run that has no tools.
+    seedTemplate(store, {
+        name: 'reader-consistency',
+        roles: [{ name: 'reader', kind: 'reader', prompt: TOOL_READER_ROLE_PROMPT }],
         serves_phase: ['summary']
     });
 
@@ -1531,6 +1704,68 @@ describe('phase1-prompt — the section score reads the clean selection (D-65, D
         expect(compiled.user).not.toContain('run_2');
         expect(compiled.user).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
         expect(compiled.hash).toBe(hashPhase1Prompt(compiled.system, compiled.user));
+    });
+
+    it('is briefed by the score-only template, never by the tool-carrying reader its seat was scheduled with (D-65, P6)', () => {
+        // THE WIRING D-65 KILLED: `reader-consistency` is the TOOL-CARRYING review reader — its copy tells the
+        // model to file findings, open tasks and read the ledger — while the score seat is `toolMode: 'none'`
+        // and may file NOTHING (P6). A seat's `templateRef` is a scheduling label (which row ran the pass), so
+        // reading the prompt's VOICE from it briefed a no-tools Reader to file findings, and its answer was
+        // refused by a schema with no field for them. `SCORE_TEMPLATE_SLUG` is the one score-only built-in.
+        const { store, story, groups } = seedScoreStore();
+        const opts = { groupRefs: groups.map((group) => group.id), vectorHash: selectionHashAt(groups, 1) };
+        const asScheduled = compileSectionScorePrompt(store, story.id, {
+            ...opts,
+            templateSlug: 'reader-consistency'
+        });
+        const plain = compileSectionScorePrompt(store, story.id, opts);
+
+        // The slug is the compiler's constant, not the caller's — and the fixture seeds exactly that row, which
+        // is what makes the expected system string below the SCORE template's copy rather than a fallback.
+        expect(SCORE_TEMPLATE_SLUG).toBe('reader-score');
+        expect(store.templates.list().map((template) => template.name)).toContain(SCORE_TEMPLATE_SLUG);
+
+        expect(asScheduled.system).toBe(
+            `${READER_ROLE_PROMPT}\n\nAnswer with ONE JSON object matching the \`SectionScores\` schema. You have no tools and exactly one turn. No prose outside the JSON.`
+        );
+        expect(asScheduled.system).toBe(plain.system);
+        expect(asScheduled.user).toBe(plain.user);
+        expect(asScheduled.hash).toBe(plain.hash);
+
+        // The decoy is in the catalogue, so this is a leak detector and not a tautology: the tool-using copy is
+        // nowhere on the wire, and D-17a's stated absence sentence is absent too (the row WAS found, so the
+        // seat is not being briefed by its output contract alone).
+        expect(store.templates.list().map((template) => template.name)).toContain('reader-consistency');
+        expect(`${asScheduled.system}\n${asScheduled.user}`).not.toContain(TOOL_READER_ROLE_PROMPT);
+        expect(asScheduled.system).not.toContain('no role prompt from');
+    });
+
+    it('lets the evidence quote come from the section the scored one contradicts, and names it in the rationale (D-15)', () => {
+        // WHY THE RULE MOVED: a cross-section fault's proof sits in the NEIGHBOUR — the Ending the Premise
+        // earns is contradicted by a line in the Ending. Demanding the quote come from "that section" left a
+        // Reader holding a real contradiction with two bad options: invent a line in the scored section, or
+        // score the seam away. The answer schema still carries ONE `evidence` string per section, so the
+        // licence to cross sections comes with the rule that the rationale says where the line came from —
+        // otherwise the rail shows a quote the section it is filed under does not contain.
+        const { store, story, groups } = seedScoreStore();
+        const score = compileSectionScorePrompt(store, story.id, {
+            groupRefs: groups.map((group) => group.id),
+            vectorHash: selectionHashAt(groups, 1)
+        });
+
+        expect(score.user).toContain(
+            'ONE `evidence` quote taken verbatim from the section you scored, or — for a cross-section fault — from ' +
+                'the section it contradicts; when the line is not from the scored section, name the section it came from in `rationale`.'
+        );
+        expect(score.user).toContain(
+            'The schema carries one `evidence` string per section, so the quote is the one line the judgement rests on, ' +
+                'not a bundle of lines from several sections.'
+        );
+
+        // THE OLD WORDING IS GONE, and the cap on the quote is unchanged: two `evidence` mentions in this seat —
+        // the rule, and the one-line-per-section limit that stops it becoming a bundle.
+        expect(score.user).not.toContain('verbatim from that section');
+        expect(score.user.match(/`evidence`/g)).toHaveLength(2);
     });
 
     it('refuses when the selection has gone — a stamped row is not selectable while a defect names its group', () => {

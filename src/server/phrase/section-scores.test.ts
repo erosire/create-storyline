@@ -13,7 +13,10 @@
 //   3. `parseSectionScoreAnswer` refuses a partial or invented answer whole, in a fixed order
 //      (unknown ref → duplicate → bad number → missing text → missing sections), and the REFUSAL SENTENCE
 //      is the product copy the Author reads in the held task's history — so each one is pinned verbatim,
-//      not matched loosely.
+//      not matched loosely. The one thing it does NOT police: an `evidence` quote may come from the section
+//      the scored one CONTRADICTS (the cross-section rule in `run/phase1-prompt.ts:SECTION_SCORE_INSTRUCTION`),
+//      and the parse keeps the neighbour's line verbatim instead of refusing a quote that is not inside the
+//      scored row — D-15 says the quote is the Reader's, not the loop's to reconcile.
 //
 // WHY EXACT VALUES: a half-accepted answer is the failure mode this module exists for. If it stored
 // three of five sections, the rail would draw a number for two sections that were never judged, and a
@@ -242,6 +245,42 @@ describe('parseSectionScoreAnswer accepts a complete answer and orders it by the
                 score: 72,
                 rationale: `${group.key} needs its stakes on the page`,
                 evidence: `${group.key}: the line the Author committed to.`
+            }))
+        });
+    });
+    it('accepts an evidence quote from the section the scored one CONTRADICTS, untouched (D-15)', () => {
+        // THE SEAT'S CONTRACT, AT THE VALIDATOR'S DOOR: the score prompt lets a cross-section fault quote the
+        // section it contradicts, provided the `rationale` names that other section
+        // (`run/phase1-prompt.ts:SECTION_SCORE_INSTRUCTION`, pinned in `run/phase1-prompt.test.ts`). What the
+        // parse must NOT do is police WHICH section the line came from: the quote is the Reader's evidence, not
+        // the loop's to reconcile with the row (D-15), and a membership check would refuse the honest answer
+        // and leave the reviewed vector unscored while the rail draws "not scored". So the neighbour's line and
+        // the rationale that names it survive byte-for-byte.
+        const { store, story, groups } = seedBook();
+        const crossSection = answer(groups).sections.map((entry, index) =>
+            index === 0
+                ? {
+                      ...entry,
+                      rationale: 'premise fights the ending — it plants a map the ending then burns',
+                      evidence: `${groups[4].key}: the line the Author committed to.`
+                  }
+                : entry
+        );
+
+        expect(parseSectionScoreAnswer(store, story.id, { sections: crossSection })).toEqual({
+            ok: true,
+            scores: groups.map((group, index) => ({
+                group,
+                // The numbers come from the ANSWER's positions, which here are the catalog's.
+                score: 60 + index * 8,
+                rationale:
+                    index === 0
+                        ? 'premise fights the ending — it plants a map the ending then burns'
+                        : `${group.key} holds together as written`,
+                evidence:
+                    index === 0
+                        ? 'ending: the line the Author committed to.'
+                        : `${group.key}: the line the Author committed to.`
             }))
         });
     });

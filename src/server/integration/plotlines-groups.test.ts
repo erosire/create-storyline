@@ -295,8 +295,13 @@ describe('PHRASE ② — the chapter group pipeline, from the Summary lock to th
 
             // The seat keys are the SAME families phase ① uses, and the vector is what keeps the two
             // phrases apart: `writtenVectorHash` is a map of the CHAPTER rows' ids, so no Summary seat can
-            // answer for it. The crew is the deep-review rotation's first angle — Phase ② has no
-            // `critic-screening` in its pool, so the seats rotate the assigned angles.
+            // answer for it. THE CREW IS PHRASE ②'s OWN screening template, not a deep-review angle: the
+            // structured `review_groups` seat has `toolMode: 'none'`, so it binds `critic-screening-plotlines`
+            // (`loop/work.ts` leg 3, 2026-11-26 rewiring) and the compiler resolves that voice from
+            // `run/phase1-prompt.ts:PLOTLINES_SCREEN_TEMPLATE_SLUG`. Before the rewiring this row reported
+            // `critic-genre` — `DEEP_REVIEW_TEMPLATES[0]`, a tool-carrying `check_unit` angle whose
+            // `raiseFinding`/`submitVerdict` copy is not this seat's contract. The DEEP seat below keeps
+            // that angle: the rotation still belongs to the tool-carrying pass.
             expect(groupReviewSeatKey(writtenVectorHash, 1)).toBe(`wi_review_groups_${writtenVectorHash}_1`);
 
             expect(
@@ -304,7 +309,7 @@ describe('PHRASE ② — the chapter group pipeline, from the Summary lock to th
                     .list()
                     .filter((run) => (run.work_item_ref ?? '').startsWith(`wi_review_groups_${writtenVectorHash}_`))
                     .map((run) => `${run.work_item_ref}[${run.template_ref}/${run.role}]`)
-            ).toEqual([`${groupReviewSeatKey(writtenVectorHash, 1)}[critic-genre/critic]`]);
+            ).toEqual([`${groupReviewSeatKey(writtenVectorHash, 1)}[critic-screening-plotlines/critic]`]);
 
             expect(groupCheckSeatKey(writtenVectorHash, 1)).toBe(`wi_group_check_${writtenVectorHash}_1`);
 
@@ -463,7 +468,13 @@ describe('PHRASE ② — the chapter group pipeline, from the Summary lock to th
                     `${structureKey}[editor-plotlines-structure/editor]=torn_down`,
                     `wi_draft_groups_${claimRef}_${draftFamilyHash}_1[writer-plotlines-sampler/writer]=torn_down`,
                     `wi_draft_groups_${claimRef}_${draftFamilyHash}_2[writer-plotlines-sampler/writer]=torn_down`,
-                    `${groupReviewSeatKey(writtenVectorHash, 1)}[critic-genre/critic]=torn_down`,
+                    // THE TWO CRITIC SEATS RUN UNDER TWO DIFFERENT CREWS, and that split IS the 2026-11-26
+                    // wiring. The structured `review_groups` seat is tool-less and reports the phase-②
+                    // screening template; the deep `group_check` seat carries the tools and keeps the
+                    // rotation's first angle (`loop/work.ts:DEEP_REVIEW_TEMPLATES[0]`). A ledger that put
+                    // `critic-genre` on the first row, or the screening slug on the second, is a seat reading
+                    // the wrong phase's law block while still "working".
+                    `${groupReviewSeatKey(writtenVectorHash, 1)}[critic-screening-plotlines/critic]=torn_down`,
                     `${groupCheckSeatKey(writtenVectorHash, 1)}[critic-genre/critic]=torn_down`,
                     `wi_verify_finding_${chapterFinding.id}_1[editor-general/editor]=torn_down`
                 ])

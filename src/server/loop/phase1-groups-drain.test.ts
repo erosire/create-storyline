@@ -29,8 +29,10 @@
  *     answers zero there.
  *
  * Values were read off the rig, not guessed. Runs are seeded as rows (`store.runs.create`) so each stage
- * is one state, and a closed run — not a live one — is what pays a seat (`records.ts:deepReviewPassesOwed`
- * applies the same evidence rule to the legacy deep review).
+ * is one state, and a closed run — not a live one — is what pays a STRUCTURED seat
+ * (`records.ts:deepReviewPassesOwed` applies the same evidence rule to the legacy deep review). The DEEP
+ * cross-group seat is the exception MAJOR 3 (2026-11-26) added: it is paid by the report its run filed, so
+ * the "every seat paid" stage also writes that seat's `verdicts` row — see `fileSeatReport` below.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -45,6 +47,10 @@ import {
     sectionScoreClaimKey
 } from '../phrase/exclusion';
 import { groupRevisionVector, groupVectorHash, installGroupRevisions } from '../phrase/revisions';
+// MAJOR 3 (2026-11-26) — a DEEP seat is paid by the REPORT its run filed, not by the row it closed, so the
+// "every seat is paid" stage of this fixture writes the row `tools/reader.ts:submitVerdict` writes.
+// `storySummary` is the artifact the real deep pass judges, so the seeded report targets it.
+import { storySummary } from './records';
 import { AUTHOR_ATTR } from '../run/mock';
 import type { PhraseGroup, RunState } from '../../shared/types';
 
@@ -83,8 +89,8 @@ const vectorHashOf = (rig: Rig): string => groupVectorHash(groupRevisionVector(r
 const drain = (rig: Rig) => drainPreconditions(rig.store, rig.story());
 
 /** One run row of the group pipeline — `state` decides whether it holds the drain or pays a seat. */
-function seedRun(rig: Rig, key: string, state: RunState, groupRefs?: string[]): void {
-    rig.store.runs.create(
+function seedRun(rig: Rig, key: string, state: RunState, groupRefs?: string[]) {
+    const run = rig.store.runs.create(
         {
             story_id: rig.storyId,
             work_item_ref: key,
@@ -99,6 +105,37 @@ function seedRun(rig: Rig, key: string, state: RunState, groupRefs?: string[]): 
             ...(groupRefs === undefined ? {} : { group_refs: groupRefs })
         },
         { run_ref: null, author: true, why: `seed: a ${state} group-pipeline run on ${key}` }
+    );
+
+    return run;
+}
+
+/**
+ * The terminal report a DEEP pass files when it CONCLUDES (MAJOR 3, 2026-11-26) — the row that pays a deep
+ * seat, and the only thing that does.
+ *
+ * `phrase/exclusion.ts:groupCheckSeatAnswered` asks whether one of the seat's runs filed a `verdicts` row,
+ * and `api/projections.ts` counts the rail's deep numerator with that SAME read. A CLOSED deep row alone
+ * proves nothing: this is the tool-carrying family, its success branch is reached whenever the session
+ * merely ENDED (`run/plugins/critic-termination.ts`), and a capped or abandoned pass files nothing while
+ * still closing a row. The row below is what `tools/reader.ts:submitVerdict` writes from the pass's ONE
+ * terminal report — `run_ref` is the run that filed it, the join `records.ts:wholeStoryVerdicts` makes.
+ */
+function fileSeatReport(rig: Rig, run: ReturnType<typeof seedRun>): void {
+    rig.store.verdicts.create(
+        {
+            story_id: rig.storyId,
+            target_ref: storySummary(rig.store, rig.storyId)?.id ?? rig.storyId,
+            target_kind: 'summary',
+            run_ref: run.id,
+            template_ref: 'critic-genre',
+            round: 1,
+            criteria_passed: [{ criterion: 'C-14', result: true, evidence: 'no contradiction the pass could quote' }],
+            hard_pass: true,
+            soft_count: 1,
+            recommendation: 'advance'
+        },
+        { run_ref: run.id, why: `seed: the deep seat's terminal report on ${run.work_item_ref} (MAJOR 3)` }
     );
 }
 
@@ -216,7 +253,9 @@ describe('the drain probe names the group pipeline stage by stage (§6.7, R2/R3/
             { run_ref: null, author: true, why: 'seed: the live seat is replaced by its closed ledger row' }
         );
         seedRun(rig, groupReviewSeatKey(hash, 1), 'torn_down');
-        seedRun(rig, groupCheckSeatKey(hash, 1), 'torn_down');
+        // The DEEP seat is paid by the REPORT its run filed, not by the row it closed (MAJOR 3): a closed
+        // tool-carrying row is not evidence, because a capped or abandoned pass closes one and files nothing.
+        fileSeatReport(rig, seedRun(rig, groupCheckSeatKey(hash, 1), 'torn_down'));
 
         expect(groupPipelineOwed(rig.store, rig.story())).toEqual({ drafts: 0, structuredReviews: 0, deepReviews: 0 });
         expect(drain(rig)).toEqual({ met: true, unmet: [] });

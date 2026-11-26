@@ -532,36 +532,14 @@ export function openIssueFindings(store: Store, storyId: string): Finding[] {
     return storyFindings(store, storyId).filter(isOpenIssueFinding);
 }
 
-/**
- * The findings ONE RUN filed — attributed by RUN through the journal, the same mechanism
- * `records.ts:revisionReviewFindings` and `researchPrerequisiteEvidence` use (D-33c's second rule).
- *
- * D-33c's no-mixing rule asks "did THIS pass already file a proposal?", and the answer is not on the
- * row: §4.10 has no `run_ref` field, and `related_refs` says what a finding is ABOUT, not who filed it.
- * The create event's `attribution.run_ref` is the fact (P11), so the journal is the only honest source.
- *
- * Only `create` counts. A D-16 re-sighting is a `seen_count` bump on a row an EARLIER pass filed, and
- * that pass — not this one — is what the row is attributed to; crediting the bump would let a Critic be
- * refused for filing an issue because it re-read a proposal some other round raised.
- *
- * An absent `runId` (an Author-invoked tool context with no run row, a direct test call) answers the
- * question "no run, so no pass to conflict with", which is the safe reading: the rule cannot hold work
- * the loop cannot attribute.
- */
-export function findingsRaisedByRun(store: Store, storyId: string, runId: string | undefined): Finding[] {
-    if (runId === undefined || runId === '') return [];
-
-    return store.journal
-        .filter(
-            (event) =>
-                event.collection === 'findings' &&
-                event.op === 'create' &&
-                event.attribution?.run_ref === runId
-        )
-        .map((event) => store.findings.get(event.id))
-        .filter((finding): finding is Finding => finding !== undefined && finding.story_id === storyId)
-        .sort((left, right) => left.id.localeCompare(right.id));
-}
+// W5 DEAD-CODE REMOVAL: `findingsRaisedByRun` (the journal read behind D-33c's pass-PAIRING rule — "did
+// THIS run already file a proposal?") is gone. `documents/specifications.md:333` records the rule's
+// removal on 2026-11-26 and left the helper behind "for the loop's own attribution reads"; a repo-wide
+// search found none — no production caller, no test caller, only prose. The five sentences that still
+// named it (`run/mock.ts`, `tools/reader.ts` ×2, and the doc comments in `run/mock.test.ts` and
+// `tools/runtime.test.ts`) were rewritten in the reconciliation pass that followed, so within `src/`
+// this file is the only place the old name still appears. The docs now name it ONLY as deleted, or as
+// the retired rule's reader (`documents/specifications.md:333`, `knowledge.md:124`, `:1912`, `:1963`).
 
 /**
  * Phase ①'s bar is critical/major — plus `minor` when the Author's dial makes minor real work
@@ -2592,6 +2570,30 @@ export function openEscalationTask(
 export const LIVE_RUN_STATES: RunState[] = ['spawning', 'working', 'reporting'];
 
 export const isLiveRun = (run: Run): boolean => LIVE_RUN_STATES.includes(run.state);
+
+/**
+ * Whether one CLOSED run actually brought an answer back (W5).
+ *
+ * `RUN_STATES` has exactly three closed states, and they are NOT interchangeable as evidence:
+ *   - `torn_down` — the only one that means the pass reported. `run/executor.ts:608-616` writes it from
+ *     the success branch, and for a structured (toolMode:'none') seat that branch is reached only after
+ *     the answer validated against the response schema, which is the exact condition the settle writes
+ *     its product under (`loop/engine.ts:1756` persists the review row behind `groupReview.ok`). A
+ *     `torn_down` structured review seat therefore HAS a persisted review row; measured, the Bird Brain
+ *     store's 13 `torn_down` `wi_review_groups_*` rows map 1:1 onto its 13 `sample_reviews` rows.
+ *   - `abandoned` — killed: the Author's cord, a lapsed lease, a stopped Story, or a provider request
+ *     that outlived `STRUCTURED_REQUEST_MAX_MS` (`run/executor.ts:162`, kill text `:196-197`). `tokens: 0`
+ *     and `no_op: true`: thirty minutes of wall clock, nothing on the record.
+ *   - `failed` — the throw path (`run/executor.ts:641-658`), same product: no row.
+ *
+ * WHY THIS IS NOT `!no_op`: the flag counts REPORT TURNS, and a structured run sets it by a different
+ * rule on each path — hard `false` on success (`run/executor.ts:586`) and `tally.reports.length === 0`
+ * on the abort/throw path (`:617`). So on a structured seat `no_op` is a by-product of HOW the run ended,
+ * not evidence of WHAT it brought back: 11 of the 13 answered review rows above carry `issues: []`, which
+ * is a real verdict of "nothing wrong", and it is the state that distinguishes it from a dead pass. The
+ * flag stays loop accounting (S-4) and is never an evidence predicate.
+ */
+export const isReportedRun = (run: Run): boolean => run.state === 'torn_down';
 
 export function liveRuns(store: Store, storyId?: string): Run[] {
     return store.runs

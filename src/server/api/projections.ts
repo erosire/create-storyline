@@ -16,10 +16,12 @@ import { CONFIRMED_FINDING_STATES, type LevelHistoryEntry, type LoopStory } from
 import { DISCARDABLE_FINDING_STATES, DISCARDABLE_IDEA_STATES } from '../loop/status';
 import {
     findingsAwaitingAuthor,
-    // SUMMARY PHRASE R6: the view says "has this text been reviewed?" from CLOSED run rows, so it needs
-    // the same liveness test the loop uses (`isLiveRun`) and the Author's seat count (`screeningSizeOf`),
-    // rather than a second opinion about what "running" and "how many Critics" mean.
-    isLiveRun,
+    // SUMMARY PHRASE R6 (W5 correction, 2026-11-26): the view says "has this text been reviewed?" from
+    // run rows that ANSWERED, so it borrows the loop's own evidence predicate (`isReportedRun`) and the
+    // Author's seat count (`screeningSizeOf`) rather than holding a second opinion about what "brought a
+    // review back" and "how many Critics" mean. The older `isLiveRun` read counted any CLOSED row, which
+    // called a killed pass a review — see `reportedSeatsFor`.
+    isReportedRun,
     // D-67 — the rail names the defects holding a clean verdict back, over D-33c's ONE open-issue read
     // (`isOpenIssueFinding` behind it), so the sentence on the rail and the gate in the stamp can never
     // disagree about which states still hold a group open.
@@ -59,6 +61,10 @@ import {
     // re-derived, so the rail's badge and the loop's refusal read the same flag
     // (`phrase/catalog.ts:isPhraseGroupLocked`).
     isPhraseGroupLocked,
+    // MAJOR 3 (2026-11-26) — the deep seat's ANSWER read, borrowed rather than restated so the rail's
+    // `deep_reviews_on_current_vector` and the loop's deep seat gate cannot disagree about what
+    // "this seat was reviewed" means (`reportedDeepSeatsFor`, and `phrase/exclusion.ts:groupCheckSeatSettled`).
+    groupCheckSeatAnswered,
     // F8 / R4 — the same held-group read the dispatch and the Author's 409 use, so the rail's disabled
     // button and the server's refusal can never disagree about who is writing this group.
     liveGroupRefs,
@@ -1351,7 +1357,15 @@ export interface PhraseReviewState {
     /** `{groupId: revisionNumber}` — the identity the reviews and the deferrals are keyed by. */
     vector: Record<string, number>;
     vector_hash: string;
-    /** Critic seats the Author's dial asks for on this vector, and how many have produced a review. */
+    /**
+     * Critic seats the Author's dial asks for on this vector, and how many have PRODUCED AN ANSWER.
+     *
+     * `review_seats` is the DIAL (`records.ts:screeningSizeOf`) — a seat count, never run rows, and the
+     * meaning W5 gave it stands. The two numerators are SEATS THAT ANSWERED (distinct `work_item_ref`
+     * holding at least one `loop/records.ts:isReportedRun` row): a seat re-armed after a dead pass counts
+     * ONCE, and a seat whose only closed row is `abandoned`/`failed` counts NOT AT ALL, because it has
+     * produced no review. The pair therefore never exceeds `review_seats`.
+     */
     review_seats: number;
     reviews_on_current_vector: number;
     deep_reviews_on_current_vector: number;
@@ -1554,11 +1568,82 @@ function plotlineBriefView(store: Store, phraseId: string): PhraseBriefView | nu
     };
 }
 
-/** Closed runs of one claim family — the "has this seat reported yet?" read (L-3: the rows are the state). */
-function closedRunsFor(store: Store, storyId: string, prefix: string): number {
-    return store.runs.list().filter(
-        (run) => run.story_id === storyId && !isLiveRun(run) && (run.work_item_ref ?? '').startsWith(prefix)
-    ).length;
+/**
+ * SEATS of one claim family that PRODUCED AN ANSWER — the rail's "N of M" numerator (L-3: the rows are
+ * the state), counted DISTINCT BY `work_item_ref` and graded by `loop/records.ts:isReportedRun`, never by
+ * run rows.
+ *
+ * TWO RULES, BOTH REQUIRED (W5, 2026-11-26):
+ *   1. DISTINCT, NOT COUNTED. A review seat re-arms when its run closes WITHOUT an answer
+ *      (`phrase/exclusion.ts:groupReviewSeatSettled`), so a retried seat leaves TWO closed rows under the
+ *      ONE seat key `wi_review_groups_<hash>_<pass>`. Reading rows made the rail answer "6 of 5" — more
+ *      reviews than the Critic dial has seats — because a seat that died at the request-liveness ceiling
+ *      and then answered paid for itself twice. A seat IS a `work_item_ref`, so the seat is the unit: one
+ *      seat counts once, however many attempts it spent.
+ *   2. ANSWERED, NOT MERELY CLOSED (the 2026-11-26 ruling). The numerator means "reviews this vector
+ *      actually GOT", so a seat counts only if it holds AT LEAST ONE `isReportedRun` row — the one closed
+ *      state whose run reached `loop/engine.ts:1756`'s `groupReview.ok` guard and wrote a review row. A
+ *      seat whose only closed row is `abandoned`/`failed` brought back NOTHING (`tokens: 0`, `no_op:
+ *      true`) and the family still owes its retry, so calling it reviewed printed "5 of 5" beside a vector
+ *      with four verdicts and a fifth seat still running.
+ *
+ * WHY `isReportedRun` IS REUSED AND NOT RESTATED: it is the SAME predicate the retry gate reads
+ * (`phrase/exclusion.ts:groupReviewSeatAnswered`, `runsForItem(key).some(isReportedRun)`), so the rail can
+ * never call a seat reviewed that the loop is still re-arming — and the `!isLiveRun` filter this helper
+ * used before is now IMPLIED (`torn_down` is a closed state), which is why it is gone rather than kept.
+ *
+ * THE OWEED SIDE IS UNTOUCHED: `review_seats` stays `records.ts:screeningSizeOf(story)` — the Author's
+ * dial — so the pair reads "answers this vector got / seats the dial asked", and the numerator can never
+ * exceed the denominator (a seat with an answer is a seat).
+ *
+ * THE DEEP FAMILY (`wi_group_check_<hash>_`) NO LONGER SHARES THIS READ (MAJOR 3, 2026-11-26). For these
+ * tool-carrying seats `torn_down` is NOT evidence of an answer: the executor's success branch is reached
+ * whenever the session merely ENDED, and `run/plugins/critic-termination.ts` exists because this pass runs
+ * 6-17 minutes and used to close with nothing filed. Counting an answered CLOSED row here therefore kept
+ * reporting a capped/abandoned deep pass as "a review this vector got" — the seat's OWN ledger (the queue,
+ * the drain and the sign-off) read a CLOSED row and owed nothing, while the rail refused to count it, so
+ * the Author saw "2 of 5 critic seats reviewed" beside a `phase_signoff` offer with nothing owed. The deep
+ * numerator is `reportedDeepSeatsFor` below, whose predicate is the one the gate arms on.
+ */
+function reportedSeatsFor(store: Store, storyId: string, prefix: string): number {
+    const seats = new Set<string>();
+
+    for (const run of store.runs.list()) {
+        const seat = run.work_item_ref ?? '';
+
+        // `isReportedRun` also carries the closed-state test the old read needed `isLiveRun` for.
+        if (run.story_id === storyId && seat.startsWith(prefix) && isReportedRun(run)) seats.add(seat);
+    }
+
+    return seats.size;
+}
+
+/**
+ * DEEP-REVIEW SEATS that PRODUCED A REPORT — the deep family's numerator, and the second half of the
+ * gate/rail parity MAJOR 3 exists to restore (2026-11-26).
+ *
+ * ONE PREDICATE, NOT A LOOK-ALIKE: every seat key under `prefix` is put through
+ * `phrase/exclusion.ts:groupCheckSeatAnswered`, the SAME read `groupCheckSeatSettled` short-circuits on,
+ * which `loop/work.ts`'s two deep legs arm with and `phrase/exclusion.ts:groupPipelineOwed` counts owed
+ * passes with. A seat the loop is still re-arming cannot be counted reviewed here, and a seat counted
+ * reviewed here cannot still be owed — one key, one answer, three readers.
+ *
+ * SEATS, NOT ROWS, for the same reason `reportedSeatsFor` counts seats: a re-armed deep seat leaves a
+ * second row under the SAME `(vector, pass)` key, so rows would out-number the Author's dial. The `seats`
+ * short-circuit also keeps the verdict read at one scan per seat rather than one per row.
+ */
+function reportedDeepSeatsFor(store: Store, storyId: string, prefix: string): number {
+    const seats = new Set<string>();
+
+    for (const run of store.runs.list()) {
+        const seat = run.work_item_ref ?? '';
+
+        if (run.story_id !== storyId || !seat.startsWith(prefix) || seats.has(seat)) continue;
+
+        if (groupCheckSeatAnswered(store, storyId, seat)) seats.add(seat);
+    }
+
+    return seats.size;
 }
 
 /**
@@ -1939,11 +2024,20 @@ function phraseProjection(store: Store, story: Story, phraseKey: string): Phrase
             vector_hash: vectorHash,
             review_seats: seats,
             // Keyed by the vector hash the generator uses (`loop/work.ts:phase1GroupCandidates`), so the
-            // count answers "has this TEXT been read?" and a new install re-arms the seats by itself.
-            // The hash is built from THIS phrase's ids, so a chapter vector and a Summary vector count
-            // their own passes.
-            reviews_on_current_vector: closedRunsFor(store, story.id, `wi_review_groups_${vectorHash}_`),
-            deep_reviews_on_current_vector: closedRunsFor(store, story.id, `wi_group_check_${vectorHash}_`),
+            // count answers "has this TEXT been READ, and did the read come BACK?" and a new install
+            // re-arms the seats by itself. The hash is built from THIS phrase's ids, so a chapter vector
+            // and a Summary vector count their own passes. SEATS THAT ANSWERED, not run rows: a W5 retry
+            // writes a second row under the same seat key and `reportedSeatsFor` counts that seat once,
+            // while a seat whose only row is `abandoned`/`failed` is not counted at all — so the pair
+            // below can never out-number `review_seats`, the dial.
+            reviews_on_current_vector: reportedSeatsFor(store, story.id, `wi_review_groups_${vectorHash}_`),
+            // MAJOR 3: the DEEP family's numerator is its own read, because `torn_down` is not evidence for
+            // a tool-carrying pass. It goes through `exclusion.ts:groupCheckSeatAnswered` — the predicate
+            // `loop/work.ts`'s deep legs and `groupPipelineOwed` arm and count with — so this number and the
+            // `phase_signoff` gate underneath it answer for the SAME seat set: a deep pass that was capped or
+            // abandoned without filing is not counted here AND is still owed by the queue (until the family
+            // spends `groupCheckAttemptCap` = critics + SAMPLING_RETRY_ALLOWANCE, which degrades BOTH).
+            deep_reviews_on_current_vector: reportedDeepSeatsFor(store, story.id, `wi_group_check_${vectorHash}_`),
             open_findings: openFindings.length,
             // The blocking bar is §6.8's, unchanged by the redesign: `critical` and `major` (the two
             // words `FINDING_COSTS` gates on), never a cost the sign-off tolerates.
