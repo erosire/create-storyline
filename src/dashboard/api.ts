@@ -109,6 +109,46 @@ export interface StoryRow {
     completion_proposed: boolean;
 }
 
+/**
+ * T12 — what ONE phase lock did, as the `/lock` response's additive `lock_receipt` (swagger's
+ * `PhaseLockReceipt`; the object `server/api/routes.ts:/stories/:id/lock` builds).
+ *
+ * WHY IT IS ADDITIVE AND OPTIONAL. The pinned client reads the lock response as a `StoryRow`, and every row
+ * field is byte-stable across the change — the accept's accounting is a NEW OBJECT beside the row, not a wider
+ * row, so a client that ignores it is unaffected. `lock_receipt` is therefore optional on the response type:
+ * a body from before the receipt exists is one this client still has to survive.
+ *
+ * WHY THE THREE OPTIONAL FIELDS ARE OPTIONAL RATHER THAN ZERO-BY-DEFAULT: they are Summary-leg facts. A
+ * `plotlines` or `chapters` lock voids no finding, closes no task and starts no phrase, so a `0` there would
+ * report a decision the Author never took — absent means "that leg writes no such rows" (L-25b's accounting,
+ * recorded from inside the lock commit by `loop/invalidation.ts:lockWrites`). Likewise `phrase_started: false`
+ * on the summary leg is a successful NO-OP with its reason beside it (already started, nothing compiled to
+ * copy, or the classic lane), never a failed lock.
+ *
+ * TYPING ONLY — NOTHING RENDERS IT. The desk computes the accept's counts off its own phrase read
+ * (`story-contract.ts:summaryAcceptLeftovers`), so this type exists so the client and the wire agree, not so
+ * the rail can read the receipt instead.
+ */
+export interface PhaseLockReceipt {
+    /** The phase the lock closed — the phase the Story was on when the request landed. */
+    phase: StoryPhase;
+    /** D-36 — the phase's Ideas rows the lock deleted, decided rows included. */
+    deleted_ideas: number;
+    /** L-7 — the phase the Story moved to; null when the lock IS the completion (L-25a). */
+    next_phase: StoryPhase | null;
+    /** R3 — findings on the SUMMARY PHRASE the accept voided to `discarded`. Summary leg only. */
+    voided_findings?: number;
+    /** R3 — queued jobs the accept closed as `wontfix`. Summary leg only. */
+    wontfixed_tasks?: number;
+    /** R4 — true only when THIS accept created the Plotlines Phrase, seeded from the compiled Summary. */
+    phrase_started?: boolean;
+    /** `''` when it started; otherwise the sentence the rail shows under a successful accept. */
+    phrase_start_reason?: string;
+}
+
+/** `POST /stories/:id/lock` — the Story row the desk already reads, plus the receipt beside it. */
+export type PhaseLockResult = StoryRow & { lock_receipt?: PhaseLockReceipt };
+
 /** §10.2 U-6 — one failing criterion with the smallest change that would clear it (G-2). */
 export interface FailingCriterion {
     criterion: string;
@@ -555,7 +595,11 @@ export interface PhraseReviewState {
     reviews_on_current_vector: number;
     deep_reviews_on_current_vector: number;
     open_findings: number;
-    /** The critical/major rows the sign-off treats as blocking (§6.8's bar, unchanged by R6). */
+    /**
+     * The open rows at §6.8's critical/major severity bar (unchanged by R6) — the cost band the Reviewer
+     * weighs, and the number the desk prints as "N critical/major". A SEVERITY band, not a gate: the Summary
+     * accept does not wait on these rows, it voids them in the lock commit (D-78).
+     */
     blocking_findings: number;
     open_tasks: number;
     /** R6's compatibility mirror: does the legacy `summaries` prose still say what the groups say? */
@@ -1405,7 +1449,7 @@ export interface ApiClient {
     resume(storyId: string): Promise<StoryRow>;
     clearPending(storyId: string): Promise<StoryRow>;
     /** U-16 — locks the CURRENT phase; 409 naming the Ideas tray when it is non-empty (L-7a). */
-    lockPhase(storyId: string): Promise<StoryRow>;
+    lockPhase(storyId: string): Promise<PhaseLockResult>;
     /** L-32 — 409-style text names what would be deleted; the client confirms first. */
     backtrack(storyId: string, phase: BacktrackPhase): Promise<StoryRow>;
     approveFinding(storyId: string, findingId: string, why: string): Promise<StoryRow>;
@@ -1700,7 +1744,9 @@ export const api: ApiClient = {
     stop: (storyId) => post<StoryRow>(storyPath(storyId, '/stop')),
     resume: (storyId) => post<StoryRow>(storyPath(storyId, '/resume')),
     clearPending: (storyId) => post<StoryRow>(storyPath(storyId, '/clear-pending')),
-    lockPhase: (storyId) => post<StoryRow>(storyPath(storyId, '/lock')),
+    // T12 — the row PLUS `lock_receipt` (additive, see `PhaseLockReceipt`). The desk ignores the receipt and
+    // keeps computing its own accept counts; the type only keeps this file honest about the wire.
+    lockPhase: (storyId) => post<PhaseLockResult>(storyPath(storyId, '/lock')),
     backtrack: (storyId, phase) => post<StoryRow>(storyPath(storyId, '/backtrack'), { phase }),
     approveFinding: (storyId, findingId, why) =>
         post<StoryRow>(storyPath(storyId, `/findings/${encodeURIComponent(findingId)}/approve`), { why }),

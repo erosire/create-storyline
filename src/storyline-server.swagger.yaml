@@ -410,6 +410,15 @@ paths:
         is deliberately phase-AGNOSTIC — starting ② is the Author's move and the loop never requires it —
         and the chapter catalog is seeded inside the SAME commit, so the rail's first read after a start
         already has group rows to show.
+        THE SUMMARY ACCEPT PERFORMS THIS START (T12/R4). Accepting the final Summary — `POST
+        /v1/storyline/stories/{id}/lock` while the Story is in phase ① — runs THIS verb's `source: compiled`
+        arm for the Author, in a commit of its own right after the lock, and reports the outcome on the
+        lock's `lock_receipt` (`phrase_started`, `phrase_start_reason`) rather than as a refusal: an accept
+        that finds nothing compiled to copy, or a phrase that is already started, leaves the Summary locked
+        and says so in a 200. THIS verb remains available and unchanged — it is the only way to hand Phrase
+        ② the Author's own `text`, it is the move that starts the phrase after the dial moves to `'groups'`,
+        and it is the move that finishes the job when the accept had nothing to copy. Its refusals stay
+        exactly as written above: an accept REPORTS a start it could not make, a manual start REFUSES it.
         REFUSALS: 400 when `source: custom` arrives without a non-blank `text` (a blank Seed would start
         the crew on nothing, and this verb does not author prose on the Author's behalf); 409 when `source:
         compiled` finds no compiled Summary to copy — a Story whose Summary is still flat text is named,
@@ -746,19 +755,49 @@ paths:
     post:
       tags: [Stories]
       operationId: lockStoryPhase
-      summary: Lock the Story's current phase
+      summary: Lock the Story's current phase — for phase ①, this is "Accept final Summary"
       description: >-
         U-16's sign-off. The engine's own 409 is the product copy when the Ideas tray is not
         empty (L-7a); this route additionally refuses a phase whose Goal does not pass, naming
         the failing criteria (U-16). On success the phase's artifacts become read-only and the
         Story advances. The route takes no body.
+        ACCEPTING THE FINAL SUMMARY (phase ①, L-30/P5). The button means "this clean Summary is the
+        Summary", and the accept completes the phrase in ONE commit: the Story's `summary_locked` and the
+        Summary's `locked` flags go on, the phase's Ideas tray is emptied (D-36 — the tray is the only thing
+        a lock DELETES), every finding still OPEN ON THE SUMMARY PHRASE is voided to `discarded` through the
+        same void path a group lock uses (its row survives as provenance, P11; `fixed` and `discarded` rows
+        are terminal and untouched), and every task still in the queue moves to `wontfix`. Scope is the
+        PHRASE being completed, not the Story: a claim naming a Plotlines entry — alone or alongside a
+        Summary group — stays open, because that is the text the next phrase is about to write. Nothing here
+        is a gate: findings and tasks never blocked the accept, and they still do not (L-25b — "completion
+        does not require an empty findings list"); what the act does is STOP the leftovers and RECORD the
+        counts, which is what `lock_receipt` is for.
+        PHRASE ② THEN STARTS ITSELF (R4), in a SECOND commit after the lock: the Plotlines Phrase is created
+        from the COMPILED Summary — the bytes `projections.ts:compiledSummaryOf` composes (the complete
+        reviewed Overview when the crew produced one, the composed Overview otherwise), which is what the
+        rail's handoff button reads — exactly as `POST …/phrases/plotlines/start` with `source: compiled`
+        would. It is idempotent (an
+        already-started Phrase ② is left exactly as it is, its copied seed included), it is skipped on a
+        Story whose `plotlines_mode` is not `'groups'` (that lane has no Phrase ② row), and a start that
+        cannot happen NEVER undoes the lock and NEVER answers 409: the response stays 200 with the lock
+        committed, and the reason rides in the receipt. A `plotlines` or `chapters` lock starts nothing and
+        reports nothing about Phrase ②.
+        THE RESPONSE is the Story row plus ONE additive key, `lock_receipt` (see `PhaseLockReceipt`): the
+        row the pinned client already reads is byte-stable, and the accept's accounting is a new object
+        beside it. `voided_findings`, `wontfixed_tasks` and the two `phrase_*` fields appear on the SUMMARY
+        leg only — absent means that leg wrote no such rows.
       responses:
         '200':
-          description: Updated Story row.
+          description: The Story row, plus `lock_receipt` — the tray, findings and tasks the lock stopped, and whether Phrase ② started.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StoryRow'
+                allOf:
+                  - $ref: '#/components/schemas/StoryRow'
+                  - type: object
+                    properties:
+                      lock_receipt:
+                        $ref: '#/components/schemas/PhaseLockReceipt'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -2917,6 +2956,50 @@ components:
           type: integer
         completion_proposed:
           type: boolean
+    PhaseLockReceipt:
+      type: object
+      description: >-
+        T12 — what ONE lock commit did, as the `/lock` response's `lock_receipt`. The accept of a final
+        Summary stops live work on the Author's behalf, and L-25b's rule for that is "whatever is still open
+        at that moment is discarded by the act of completing, and the count is recorded and shown": these
+        counts are the recorded half, and the rail's sentence under the button is the shown half.
+        The three `phrase_*`/leftover fields are ABSENT on a `plotlines` or `chapters` lock — that leg voids
+        no finding, closes no task and starts no phrase, and a zero there would report a decision the Author
+        never took. `phrase_started: false` on the summary leg is a successful NO-OP with its reason beside
+        it (already started, nothing compiled to copy, or the classic lane), never a failed lock.
+      required:
+        - phase
+        - deleted_ideas
+        - next_phase
+      additionalProperties: false
+      properties:
+        phase:
+          $ref: '#/components/schemas/StoryPhase'
+        deleted_ideas:
+          type: integer
+          description: D-36 — the phase's Ideas rows the lock deleted, decided ones included.
+        next_phase:
+          allOf:
+            - $ref: '#/components/schemas/StoryPhase'
+          nullable: true
+          description: L-7 — the phase the Story moved to; null when the lock IS the completion (L-25a).
+        voided_findings:
+          type: integer
+          description: >-
+            R3 — findings open ON THE SUMMARY PHRASE that the accept voided to `discarded`. Phrase-scoped: a
+            claim naming a Plotlines entry is not counted and is not moved.
+        wontfixed_tasks:
+          type: integer
+          description: R3 — queued jobs the accept closed as `wontfix` (`open` and `claimed`; §4.7).
+        phrase_started:
+          type: boolean
+          description: >-
+            R4 — true only when THIS accept created the Plotlines Phrase, seeded from the compiled Summary.
+        phrase_start_reason:
+          type: string
+          description: >-
+            Empty when it started; otherwise the sentence the rail shows under a successful accept, naming
+            the one move that finishes the job.
     FailingCriterion:
       type: object
       required: [criterion, fix_hint]
@@ -4385,7 +4468,10 @@ components:
           type: integer
         blocking_findings:
           type: integer
-          description: The critical/major rows the sign-off treats as blocking (§6.8's bar).
+          description: >-
+            The open rows at §6.8's critical/major severity bar — the cost band the Reviewer weighs, not a
+            gate. It is a count of SEVERITY: the Summary accept does not wait on these rows, it voids them in
+            the lock commit (D-78), so nothing here says the sign-off is held.
         open_tasks:
           type: integer
         mirror:

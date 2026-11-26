@@ -179,6 +179,141 @@ describe('SummaryPane — locked law, and the one way in (U-4, U-16, L-30, L-32)
         expect(screen.getByText('Author-declared · read-only for every agent (D-3b)')).toBeTruthy();
     });
 
+    it('renders a §4.2 field as prose, and keeps a missing field plain text', () => {
+        // WHY TWO HALVES IN ONE TEST. The field values are prose the engine wrote, so a title or an
+        // emphasis inside one is MARKDOWN and printing it shows the source (`## Premise`, `**sealed**`) —
+        // that is what `MarkdownText` is for. The MISSING marker is the opposite case: `not written yet` is
+        // this pane's own sentence, never Author text, and it must not go near the parser (a marker that
+        // happened to read as syntax would otherwise be restyled). Pinned together so the branch itself,
+        // not just one side of it, is under test.
+        const summary = {
+            ...fixtureSummary(),
+            premise: '## Premise\n\nA flooded city keeps its memory in a **sealed** cathedral.',
+            ending: undefined
+        };
+
+        const { container } = render(
+            <SummaryPane story={{ ...fixtureStory(), summary_locked: false }} summary={summary} />
+        );
+
+        /** One §4.2 row, found by its own `dt` — the label is what names the field, not its position. */
+        const fieldOf = (label: string): HTMLElement => {
+            const row = Array.from(container.querySelectorAll('.sv-summary-field')).find(
+                (field) => field.querySelector('dt')?.textContent === label
+            );
+
+            if (!row) throw new Error(`no §4.2 field labelled ${label}`);
+
+            return row as HTMLElement;
+        };
+
+        // Written field: a real heading, a real `<strong>`, and neither marker left in the text.
+        const premise = fieldOf('Premise');
+
+        expect(
+            Array.from(premise.querySelectorAll('h1,h2,h3,h4,h5,h6,p')).map(
+                (block) => `${block.tagName}:${block.textContent ?? ''}`
+            )
+        ).toEqual([
+            'H2:Premise',
+            'P:A flooded city keeps its memory in a sealed cathedral.'
+        ]);
+        expect(premise.querySelector('strong')?.textContent).toBe('sealed');
+        expect(premise.textContent).not.toContain('## ');
+        expect(premise.textContent).not.toContain('**');
+        // The Markdown wrapper sits ON the element the pane's flex rule sizes (`story.css:475-480`), so the
+        // field's layout did not move when its text became blocks.
+        expect(premise.querySelector('.sv-summary-text')?.className).toBe('sv-markdown sv-summary-text');
+
+        // Missing field: the pane's own words, as they were before — a plain span with no rendered child.
+        const ending = fieldOf('Ending');
+        const marker = ending.querySelector('.sv-summary-text') as HTMLElement;
+
+        expect(marker.tagName).toBe('SPAN');
+        expect(marker.className).toBe('sv-summary-text');
+        expect(marker.textContent).toBe('not written yet');
+        expect(marker.children).toHaveLength(0);
+    });
+
+    it('renders a draft revision’s prose fields as Markdown, and keeps its own words plain (U-23, T4)', () => {
+        // WHY THIS IS A DIFFERENT TEST FROM THE ONE ABOVE. The case above is the Summary ON RECORD; this one is
+        // §4.15's DRAFT, whose fields are the same §4.2 prose (`Revision.body` is a complete Summary on disk).
+        // The reported defect lived only here: the draft's `<dd>` carries no `white-space` rule
+        // (`styles/story.css:3580-3585`), so an Author looking at a draft read the literal `## Premise` AND had
+        // the field's own lines run together — inside a pane §10.2's U-23 declares rendered.
+        //
+        // The three states in one body are the whole branch: `premise` is markdown, `tone` is line-oriented
+        // text with no markdown in it at all (what `chapterEntryContent` stores, and the half that a markdown
+        // parser would otherwise flatten into one sentence), and `world_rules` is written in NEITHER the draft
+        // nor the Summary on record, so the value on screen is this pane's sentence `not written yet` — which
+        // is `prose: false` and stays out of the parser.
+        const draft = {
+            ...REVISION,
+            id: 'rv-sum-markdown',
+            state: 'competing' as const,
+            body: {
+                premise: '## Premise\nA flooded city keeps its memory in a **sealed** cathedral.',
+                tone: 'Voice: spare\nPOV: third\nTense: past'
+            }
+        };
+
+        render(
+            <SummaryPane
+                story={{ ...fixtureStory(), phase: 'summary', summary_locked: false }}
+                summary={{ ...fixtureSummary(), world_rules: undefined }}
+                focus={{ ...ENTRY, revision: draft, index: 3 }}
+                focusSelectable
+                onSelectRevision={() => undefined}
+            />
+        );
+
+        /** One draft field, found by its own `dt`, exactly as the on-record case above does it. */
+        const fieldOf = (label: string): HTMLElement => {
+            const row = Array.from(document.querySelectorAll('.sv-summary-draft-field')).find(
+                (field) => field.querySelector('dt')?.textContent === label
+            );
+
+            if (!row) throw new Error(`no draft field labelled ${label}`);
+
+            return row as HTMLElement;
+        };
+
+        // Six rows: every §4.2 field, and nothing else — the field list did not change when its values became documents.
+        expect(document.querySelectorAll('.sv-summary-draft-field')).toHaveLength(6);
+
+        // The markdown field: a heading and an emphasis, with neither marker left on the page.
+        const premise = fieldOf('Premise').querySelector('dd') as HTMLElement;
+
+        expect(premise.querySelector('h2')?.textContent).toBe('Premise');
+        expect(premise.querySelector('strong')?.textContent).toBe('sealed');
+        expect(premise.textContent).not.toContain('## ');
+        expect(premise.textContent).not.toContain('**');
+        // THE MARKUP, exactly. The wrapper is the markdown element and nothing else: the `<dd>`'s own rule is
+        // specificity 0,2,0 and carries this row's 0.75rem/1.45 (`styles/story.css:3580-3585`), so a surface
+        // class here would have made the card's type depend on the parser's.
+        expect(premise.innerHTML).toBe(
+            '<div class="sv-markdown"><h2>Premise</h2>\n<p>A flooded city keeps its memory in a <strong>sealed</strong> cathedral.</p></div>'
+        );
+
+        // The line-oriented field: no markdown in it, so markdown gives one paragraph — and the writer's three
+        // lines stay three lines, which is the half a plain markdown render loses.
+        const tone = fieldOf('Tone (voice · POV · tense · register)').querySelector('dd') as HTMLElement;
+
+        expect(tone.querySelectorAll('p')).toHaveLength(1);
+        expect(tone.querySelectorAll('br')).toHaveLength(2);
+        // THE MARKUP, exactly — including the `\n` react-markdown writes after each break node. That is why the
+        // breaks have to be `<br>` and not newlines: this row has no `white-space` rule, so under the default
+        // `normal` a bare newline would print as a space, while a `<br>` is a line break the writer asked for.
+        expect(tone.querySelector('div')?.innerHTML).toBe('<p>Voice: spare<br>\nPOV: third<br>\nTense: past</p>');
+
+        // The field nobody wrote: the pane's sentence, plain, with no rendered child to restyle it.
+        const rules = fieldOf('World rules').querySelector('dd') as HTMLElement;
+
+        expect(rules.textContent).toBe('not written yet');
+        expect(rules.querySelector('.sv-markdown')).toBeNull();
+        expect(rules.children).toHaveLength(0);
+    });
+
     it('does not put a chapter count on the phase-① Summary', () => {
         render(
             <SummaryPane

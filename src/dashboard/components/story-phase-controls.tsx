@@ -2,8 +2,16 @@
 // they share.
 //
 // Lock states in one line what becomes read-only, and is disabled unless the phase's Goal has
-// passed AND the Ideas tray is empty (L-7a); the disabled state names the blocker, because a
+// passed AND the Ideas tray is empty (L-7a); the disabled state must name the blocker, because a
 // greyed button with no reason leaves the Author guessing at the machine's rules.
+//
+// WHY EVERY STRING ON THIS CONTROL COMES FROM `lockCheck` AND NONE IS WRITTEN HERE: the Summary's accept is
+// the one lock that ALSO runs out of this commit — it voids the phase's open findings, closes its open tasks
+// as wontfix and opens Phrase 2 from the compiled Summary (T12's server leg, D-72) — so the enabled state has
+// to promise those acts and the disabled state has to name only the waits that are real (R2: open findings and
+// an open queue are NOT waits any more). `story-contract.lockCheck` is the single source of both halves, and
+// the rail's ready tick reads the same call, so a greyed button can never sit under a tick that promises the
+// click is possible.
 //
 // Backtrack states in one line what gets DELETED and asks once. L-32 forbids offering it as
 // "revert to an earlier draft", so the confirm line is generated from the live record counts
@@ -118,6 +126,11 @@ export function PhaseControls({ view, actions, lock, showLock = true }: PhaseCon
                 <div className="sv-lock-block">
                     <ConfirmButton
                         className="sv-lock-button"
+                        // The verb's destination is part of the control's name: phase ①'s lock IS the accept of
+                        // the final Summary, and on the grouped book the accept is the act that opens Phrase 2
+                        // (D-72) — which is why the arrow is a promise the statement line then spells out
+                        // (`story-contract.summaryAcceptStatement`), not decoration. The other two phases get the
+                        // lock sentence, because their lock signs an artifact and starts nothing.
                         label={gate.phase === 'summary' ? 'Accept final Summary → Phrase 2' : `Lock phase ${PHASE_LABELS[gate.phase]}`}
                         confirmText={gate.statement}
                         // U-16: enabled only when the Goal passes AND the tray is empty.

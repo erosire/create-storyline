@@ -23,7 +23,6 @@ import {
     groupLockActor,
     groupLockRevision,
     groupOpenFindings,
-    groupOpenTasks,
     groupPreviousScorePercent,
     groupScorePercent,
     isDecidedIdea,
@@ -38,6 +37,9 @@ import {
     // group rules: `plotlinesEntries` is the same composition-order sort the phrase's own panes use, and
     // `plotlinesSurfaceView` is what lets the shared finding/lock selectors answer about Phrase ②'s rows.
     isPlotlinesGroups,
+    // R2 — the rail's ready tick for a grouped Summary is the phase gate itself, so the tick and the Accept
+    // button cannot drift again the way two hand-written clause lists did.
+    lockCheck,
     plotlinesEntries,
     plotlinesEntryById,
     plotlinesStarted,
@@ -48,8 +50,7 @@ import {
     phraseReadLanded,
     selectedSummaryRevision,
     summaryBlockingFindings,
-    summaryScopeContext,
-    unwrittenGroups
+    summaryScopeContext
 } from './story-contract';
 import type { FindingRevisionScope, RevisionUnit, StoryViewData } from './story-contract';
 
@@ -163,29 +164,30 @@ export function phraseLabel(spec: StoryPhraseSpec): string {
  * left to improve) or when the Author has already signed it. A locked Summary keeps its tick —
  * the rail should not make a signed artifact look unfinished.
  *
- * The defect check goes through `summaryBlockingFindings`, the SAME read `lockCheck` uses, so the tick
- * and the Accept button can never disagree about which revision a finding sits on (T5).
+ * THE SAMPLING HALF keeps its own clause set, and its defect check goes through
+ * `summaryBlockingFindings`, the SAME read `lockCheck` uses, so the tick and the Accept button can never
+ * disagree about which revision a finding sits on (T5).
+ *
+ * R2 — THE GROUPED BRANCH NOW DELEGATES TO THE GATE ITSELF. The rail's tick and the Accept button used to be
+ * two hand-written clause lists over the same rows, which is exactly how they drifted once the clause set
+ * changed: findings and open tasks stopped being blockers (T13), and a hand-written copy of the rule would
+ * have kept ticking (or refusing) on the strength of a wait the gate no longer has. One call to `lockCheck`
+ * IS the agreement, in both directions, and only two cases are decided here rather than by the gate:
+ *   - the read has not landed → no tick, whatever the gate would say about zero rows (R-T2/F1, F2), because
+ *     the rail must not verdict rows it never received; and
+ *   - the Summary is already signed → the tick stands (L-30). The gate's group clauses are switched off for a
+ *     locked book precisely because the accept has happened, and a rail that went un-ticked at that point
+ *     would tell the Author the signed artifact came apart.
  */
 export function summaryReadyForReview(view: StoryViewData): boolean {
     if (storyInSummaryPhase(view) && isGroupSummary(view)) {
-        // R6 — THE GROUP DERIVATION. A grouped Summary is ready when the Overview is fully written and
-        // nothing on it is outstanding: no unwritten group (R1), no open finding at the Summary's blocking
-        // costs scoped to any group (R3), no open group task, and no live Writer pass holding a group (R4 —
-        // a Summary that is about to move is not ready to sign). None of this reads `sampling.active_round`,
-        // which is a sampler-pipeline number a grouped Story never runs.
-        // R-T2/F1 — THE READ IS A PRECONDITION, NOT ONE OF THE CHECKS. Every clause below counts rows, and
-        // `phraseGroups` answers `[]` for a phrase read that has not landed, so an in-flight (or failed) read
-        // would fall through all four checks and the rail would tick a five-group Summary it has never seen —
-        // while the Accept button, which reads `groupSignOffBlockers`, refuses on exactly that fact. An
-        // already-locked book is no exception: with no rows the desk cannot show what was signed.
+        // None of this reads `sampling.active_round`, which is a sampler-pipeline number a grouped Story never
+        // runs (U3), and none of it counts findings or queue tasks any more — the accept voids and closes
+        // those, so they are neither a wait here nor one in the gate.
         if (!phraseReadLanded(view)) return false;
         if (view.story.summary_locked) return true;
-        if (view.goal.failing.length > 0) return false;
-        if (unwrittenGroups(view).length > 0) return false;
-        if (phraseGroups(view).some(isGroupWriterBusy)) return false;
-        if (groupOpenTasks(view).length > 0) return false;
 
-        return phraseGroups(view).every((group) => groupBlockingFindings(view, group.id).length === 0);
+        return lockCheck(view).canLock;
     }
 
     if (view.story.summary_locked) {

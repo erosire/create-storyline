@@ -1501,3 +1501,90 @@ describe('the Reviewed Summary on the wire, and the Author\'s choose (D-67, D-68
         );
     });
 });
+
+// T15 — THE QUEUE SET ON THE WIRE. The phrase read used to select its task rows with `state !== 'done'`,
+// which left a `wontfix` row — a job the crew settled by DECLINING it — listed as open work and counted in
+// `review.open_tasks`. That is the state the Summary accept writes for the whole queue in its own commit
+// (`loop/invalidation.ts:lockWrites`), so the desk printed MORE open tasks on the Overview than in the
+// confirm line beside it (`dashboard/components/story-contract.ts:OPEN_TASK_STATES`, whose mirror this read
+// now is). `done` and `wontfix` are the two closed states in the store (`shared/types.ts:171 TASK_STATES`).
+describe('the view counts the queue on the engine’s open set, so a `wontfix` row is settled work (T15)', () => {
+    /** One task per state the store can hold (`shared/types.ts:171`), in that state order. */
+    function seedOneTaskPerState(store: Store): void {
+        for (const state of ['open', 'claimed', 'blocked', 'done', 'wontfix'] as const) {
+            store.tasks.create(
+                { story_id: 'story_0', kind: 'fix', title: `A ${state} fix`, state, priority: 1, attempts: 0 },
+                { why: `seed: a ${state} task (T15)` }
+            );
+        }
+    }
+
+    /** The task rows minus the minted uuid: `[title, state, owner_role, attempts, finding_ref]`. */
+    const taskShape = (reply: Reply) =>
+        (viewOf(reply).tasks as Array<Record<string, unknown>>).map((row) => [
+            row.title,
+            row.state,
+            row.owner_role,
+            row.attempts,
+            row.finding_ref
+        ]);
+
+    it('lists the three unfinished states, on the pinned Summary read and on the per-phrase read', async () => {
+        const world = await seedGroupStory();
+
+        seedOneTaskPerState(world.store);
+
+        const reply = await call(world.app, 'GET', '/stories/story_0/phrases');
+
+        expect(taskShape(reply)).toEqual([
+            ['A open fix', 'open', null, 0, null],
+            ['A claimed fix', 'claimed', null, 0, null],
+            ['A blocked fix', 'blocked', null, 0, null]
+        ]);
+        // The count is the SAME list, not a second predicate: `review.open_tasks` is `tasks.length`.
+        expect(reviewOf(reply).open_tasks).toBe(3);
+
+        // BOTH reads share one projection (`projections.ts:phraseProjection`), so the Phrase ② read closes a
+        // `wontfix` row exactly as the pinned rail read does — a client cannot get two answers by choosing a
+        // route.
+        const detail = await call(world.app, 'GET', '/stories/story_0/phrases/summary');
+
+        expect(taskShape(detail)).toEqual(taskShape(reply));
+        expect(reviewOf(detail).open_tasks).toBe(3);
+    });
+
+    it('counts an accept’s wontfix queue as closed, which is the number the confirm line carries', async () => {
+        const world = await seedGroupStory();
+
+        seedOneTaskPerState(world.store);
+
+        // WHAT `lockWrites` DOES to the queue in the accept commit: every unfinished row goes `wontfix`
+        // (L-25b — completion discards what is still open and records the count).
+        for (const task of world.store.tasks.list()) {
+            if (task.state === 'open' || task.state === 'claimed' || task.state === 'blocked') {
+                world.store.tasks.update(
+                    task.id,
+                    { state: 'wontfix' },
+                    { run_ref: null, author: true, why: 'the accept closed the queue (R3, T12)' },
+                    [{ id: task.id, rev: task.rev }]
+                );
+            }
+        }
+
+        expect(world.store.tasks.list().map((task) => task.state)).toEqual([
+            'wontfix',
+            'wontfix',
+            'wontfix',
+            'done',
+            'wontfix'
+        ]);
+
+        const reply = await call(world.app, 'GET', '/stories/story_0/phrases');
+
+        // Nothing is left to close, which is what the accept statement's "closes N open tasks … as wontfix"
+        // clause counted at the click. A `state !== 'done'` read would answer 2 rows here and put the
+        // Overview one task above its own sentence.
+        expect(taskShape(reply)).toEqual([]);
+        expect(reviewOf(reply).open_tasks).toBe(0);
+    });
+});

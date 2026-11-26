@@ -16,6 +16,9 @@
 // Author's "Use Revision" (U-13, D-24), because R1 leaves the overview holding only the accepted row.
 import { useEffect, useState } from 'react';
 import { ConfirmButton } from './story-phase-controls';
+// §4.2's prose fields are Author text on the same footing as every other Summary surface, so they are
+// printed as Markdown. `className` keeps `.sv-summary-text` (the field's flex sizing) on the wrapper.
+import { MarkdownText } from './MarkdownText';
 import {
     DEFAULT_SUMMARY_CRITICS,
     DEFAULT_SUMMARY_SAMPLING,
@@ -36,15 +39,22 @@ import {
 } from './story-contract';
 import type { SummaryRevisionEntry } from './story-nav';
 
-/** §4.2's prose fields, in the order the Writer fills them. `chapter_count` is excluded: D-3b makes it Author truth, never prose. */
-const SUMMARY_FIELDS: Array<{ key: keyof Summary; label: string }> = [
-    { key: 'premise', label: 'Premise' },
-    { key: 'promise', label: 'Promise' },
-    { key: 'theme', label: 'Theme' },
+/**
+ * §4.2's prose fields, in the order the Writer fills them. `chapter_count` is excluded: D-3b makes it Author
+ * truth, never prose. `prose` says which values are a DOCUMENT rather than a value, and here that is every
+ * field — the six §4.2 fields are the Writer's/Author's sentences — which is what `RevisionFields` renders on.
+ * A field that is NOT prose (an id, a state, a date, a declared number) stays plain text: the standing rule is
+ * that field VALUES read as values, and `.sv-markdown`'s block scale would shrink a token into prose
+ * (`CharactersPane` and a `group-score-rationale` line follow the same rule).
+ */
+const SUMMARY_FIELDS: Array<{ key: keyof Summary; label: string; prose: true }> = [
+    { key: 'premise', label: 'Premise', prose: true },
+    { key: 'promise', label: 'Promise', prose: true },
+    { key: 'theme', label: 'Theme', prose: true },
     // `tone` is the sheet C-12/C-13 are graded against (G-3a), so its label names what it is for.
-    { key: 'tone', label: 'Tone (voice · POV · tense · register)' },
-    { key: 'ending', label: 'Ending' },
-    { key: 'world_rules', label: 'World rules' }
+    { key: 'tone', label: 'Tone (voice · POV · tense · register)', prose: true },
+    { key: 'ending', label: 'Ending', prose: true },
+    { key: 'world_rules', label: 'World rules', prose: true }
 ];
 
 export interface SummaryPaneProps {
@@ -129,7 +139,7 @@ function countValue(raw: string, fallback: number): number {
 function revisionFields(
     revision: Revision,
     summary?: Summary | null
-): Array<{ key: keyof Summary; label: string; value: string; inherited: boolean }> {
+): Array<{ key: keyof Summary; label: string; value: string; inherited: boolean; prose: boolean }> {
     const body = revision.body;
     const record =
         body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
@@ -139,19 +149,21 @@ function revisionFields(
             ? (nested as Record<string, unknown>)
             : record;
 
-    return SUMMARY_FIELDS.map(({ key, label }) => {
+    return SUMMARY_FIELDS.map(({ key, label, prose }) => {
         const own = source[key];
         const fallback = summary?.[key];
 
         if (typeof own === 'string' && own.trim().length > 0) {
-            return { key, label, value: own, inherited: false };
+            return { key, label, value: own, inherited: false, prose };
         }
 
         if (typeof fallback === 'string' && fallback.trim().length > 0) {
-            return { key, label, value: fallback, inherited: true };
+            return { key, label, value: fallback, inherited: true, prose };
         }
 
-        return { key, label, value: 'not written yet', inherited: false };
+        // The empty case is THIS pane's sentence, not Author text, so it is not prose: `not written yet` must
+        // never be re-styled by a character a markdown parser happens to read as syntax.
+        return { key, label, value: 'not written yet', inherited: false, prose: false };
     });
 }
 
@@ -226,17 +238,42 @@ function RevisionFindingList({ entry }: { entry: SummaryRevisionEntry }) {
     );
 }
 
-/** Fields + state, shared by the revision card and the opened revision. */
+/**
+ * Fields + state, shared by the revision card and the opened revision.
+ *
+ * U-23/F3 — A PROSE FIELD IS RENDERED, NOT PRINTED. §4.2's six fields carry the §4.19 convention the rest of
+ * the pipeline honours, so a draft body can legitimately open on `## Premise`; printed as a string in the `<dd>`
+ * the Author read the marker AND had the field's lines run together, because the `<dd>` carries no `white-space`
+ * rule (`styles/story.css:3580-3585`) and nothing kept the newlines. `MarkdownText` answers both halves: the
+ * markers become blocks, and the newlines the writer installed become real breaks (`MarkdownText.tsx`).
+ *
+ * WHAT STAYS PLAIN, and it is not an oversight: the pane's own `not written yet` sentence (`revisionFields`
+ * marks it `prose: false`), and every field value that is a token rather than a document — the standing rule
+ * that field values read as values (`CharactersPane`, a `group-score-rationale` line). The `<dl>` markup is
+ * untouched: `<div>` inside `<dd>` is valid HTML5 and the pane's grid (`story.css:3567-3585`) addresses the
+ * `dt`/`dd` pair, not what hangs inside the `dd`. Because `.sv-summary-draft-field dd` is specificity 0,1,1 — one
+ * class plus the `dd` type — against `.sv-markdown`'s 0,1,0, the FIELD keeps its 0.75rem/1.45 scale and the
+ * rendered document cannot shrink the card's type: the markdown's own block margins do the paragraphing, and
+ * its `:last-child` rule (`story.css:3264`) keeps the row the height a one-line value always was.
+ */
 function RevisionFields({ revision, summary }: { revision: Revision; summary?: Summary | null }) {
     return (
         <dl className="sv-summary-draft-fields">
-            {revisionFields(revision, summary).map(({ key, label, value, inherited }) => (
+            {revisionFields(revision, summary).map(({ key, label, value, inherited, prose }) => (
                 <div className="sv-summary-draft-field" key={key}>
                     <dt>
                         {label}
                         {inherited ? <span className="sv-summary-inherited"> · from the Summary on record</span> : null}
                     </dt>
-                    <dd>{value}</dd>
+                    <dd>
+                        {prose ? (
+                            /* No `testId`: the pane's revision tests address the CARD, and a wrapper that exists
+                               in one state and not the other is how an absent-vs-present assertion turns vacuous. */
+                            <MarkdownText>{value}</MarkdownText>
+                        ) : (
+                            value
+                        )}
+                    </dd>
                 </div>
             ))}
         </dl>
@@ -610,7 +647,15 @@ export function SummaryPane({
                         <div className="sv-summary-field" key={key}>
                             <dt>{label}</dt>
                             <dd className="sv-summary-value">
-                                <span className="sv-summary-text">{text || 'not written yet'}</span>
+                                {/* The field's prose is Markdown, so it is rendered rather than printed — but an
+                                    EMPTY field is this pane's own sentence, not Author text, and it stays a plain
+                                    span. Only text that came off the wire goes through the parser, so `not written
+                                    yet` can never be restyled by a character the parser reads as syntax. */}
+                                {text === '' ? (
+                                    <span className="sv-summary-text">not written yet</span>
+                                ) : (
+                                    <MarkdownText className="sv-summary-text">{text}</MarkdownText>
+                                )}
                             </dd>
                         </div>
                     );

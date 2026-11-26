@@ -20,7 +20,9 @@ import { PlotlinesEntryPane, PlotlinesOverviewPane } from './PlotlinesPhrasePane
 import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
 import { plotlinesSurfaceView, type StoryViewData } from './story-contract';
 import { phraseDetailView } from '../testing/shell-fakes';
+import { chapterEntryContent } from '../../server/phrase/plotpoints';
 import type { PhraseDetailView, PhraseGroupRow } from '../api';
+import type { PhraseGroup } from '../../shared/types';
 import type { StorySelection } from './story-nav';
 
 /**
@@ -101,6 +103,24 @@ describe('PlotlinesOverviewPane — the chapter-entry rows (T-W4)', () => {
         fireEvent.click(screen.getByTestId('plotlines-entry-chapter_2').querySelector('button')!);
 
         expect(selections).toEqual([{ panel: 'plotlines', ref: 'plotlines-group:entry-chapter_2' }]);
+    });
+
+    it('prints no Markdown source of its own — the phrase’s prose is the entry record, and it is rendered', () => {
+        // T2/AC3 — where Phrase ②'s raw-Markdown problem could have hidden a second time. The phrase read carries
+        // a composed `overview` that IS Markdown (`## Chapter 1 …` per entry, joined with blank lines), and this
+        // Overview pane prints no prose at all: rows, the brief card, the counts. So the pane is checked in BOTH
+        // directions — it may not print the phrase's overview as source, and it may not print a row's Markdown
+        // un-rendered. The one prose region on the surface is `PlotlinesEntryPane`'s, and the case below pins it
+        // rendering as blocks rather than printing them.
+        const detail = phraseDetailView('s1');
+        const { container } = render(<PlotlinesOverviewPane view={surfaceView({ detail })} />);
+
+        // The source really is Markdown, so the two negatives below are assertions and not vacuums.
+        expect(detail.overview).toContain('## Chapter 1 — The Salt Road');
+        expect(container.textContent).not.toContain('## ');
+        expect(container.textContent).not.toContain('- Must happen:');
+        // And this pane holds no prose region: `group-content` is the entry pane's node.
+        expect(container.querySelector('[data-testid="group-content"]')).toBeNull();
     });
 
     it('states the state the wire reports per row — writer, to write, clean (R4)', () => {
@@ -274,13 +294,45 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         return { ...rendered, ...harness, selections };
     }
 
+    /**
+     * The same pane with ONE entry's stored text replaced by bytes a producer wrote, so a test can pin a shape
+     * `phraseDetailView` does not model (the labelled block) without touching the shared fixture every other
+     * suite reads. The row keeps its id, state and empty `previous_content`, which is what keeps this the
+     * whole-text branch rather than the word diff.
+     */
+    function labelledEntryPane(content: string, key = 'chapter_1') {
+        const detail = phraseDetailView('s1');
+        const rendered = entryPane({
+            detail: {
+                ...detail,
+                groups: detail.groups.map((row) => (row.key === key ? { ...row, content } : row))
+            }
+        });
+
+        return { ...rendered, prose: screen.getByTestId('group-content') as HTMLElement };
+    }
+
     it('opens the entry the ref addresses, with six empty contract fields (R-T2/F6)', () => {
         const { container } = entryPane();
 
         expect(container.querySelector('[data-testid="plotlines-pane-chapter_1"]')).toBeTruthy();
         expect(screen.getByTestId('group-title').textContent).toBe('Chapter 1 — The Salt Road');
         // The prose region is the RECORD the server composed from the fields; the fields below are the write.
-        expect(screen.getByTestId('group-content').textContent).toContain('Must happen: the crossing is attempted.');
+        // T2/AC3 — and it is composed as MARKDOWN, so Phrase ② had the same raw-source problem Phrase ① did.
+        // WHAT THIS FIXTURE CARRIES is the `## <chapter>` heading and one `- ` bullet per field — the shape a
+        // composed phrase TEXT has (`shared/phrase.ts:composePhraseContent` puts that heading in front of an
+        // entry). It is NOT what the wire stores for one entry: that is `Label: value` lines, and the test below
+        // ('renders the labelled plotpoint block …') pins THAT shape against the producer's own function. The
+        // bullet text here is still the assertion — the prose must survive the renderer — and the heading and the
+        // list are what prove this fixture was RENDERED rather than printed.
+        const prose = screen.getByTestId('group-content');
+
+        expect(prose.textContent).toContain('Must happen: the crossing is attempted.');
+        expect(prose.querySelector('h2')?.textContent).toBe('Chapter 1 — The Salt Road');
+        expect(Array.from(prose.querySelectorAll('li')).map((item) => item.textContent)).toEqual([
+            'Must happen: the crossing is attempted.',
+            "Must change: the mentor's price is paid."
+        ]);
         // There is no prose textarea on this surface at all: editing the composition would be editing a rendering.
         expect(container.querySelector('textarea')).toBeNull();
 
@@ -313,6 +365,89 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         expect(submit.getAttribute('title')).toBe(
             "Write Must happen and Must change first — the route composes the entry's text and its plotlines contract from those two together, and refuses an entry without them (P4)."
         );
+    });
+
+    it('renders the composed chapter record as Markdown, so Phrase ② reads prose and not `## Chapter 1`', () => {
+        // T2/AC3 — the whole reason this change is not Phrase ①'s. Rendered as text — which is what this pane did
+        // — the Author of a chapter-entry book read the source of the composition the route had just generated
+        // from their own two fields. WHAT THIS FIXTURE SENDS is the composed shape: `phraseDetailView`'s rows
+        // carry a `## <chapter>` heading and one `- ` bullet per field, which is what
+        // `shared/phrase.ts:composePhraseContent` puts in front of an entry when it joins a phrase's whole text
+        // (and what this pane's Overview shows). The text the wire STORES on one entry is the labelled
+        // `Label: value` block instead — that shape is pinned by the next test, against the producer's own
+        // function, because the two shapes need different things from the renderer.
+        const { container } = entryPane();
+        const prose = screen.getByTestId('group-content');
+
+        // One wrapper, carrying every hook: the pane's sizing class, the reading copy's class, and the block
+        // scale — and it is the ONLY copy of the record (the six fields below are the write, not a second prose
+        // node), and nothing hides it from assistive tech.
+        expect(container.querySelectorAll('[data-testid="group-content"]')).toHaveLength(1);
+        expect(prose.tagName).toBe('DIV');
+        expect(prose.className).toBe('sv-markdown sv-summary-text sv-group-content');
+        expect(prose.getAttribute('aria-hidden')).toBeNull();
+
+        // The blocks, in source order, exactly.
+        expect(Array.from(prose.querySelectorAll('h1,h2,h3,h4,h5,h6,p,ul')).map((block) =>
+            block.tagName === 'UL'
+                ? `UL:${Array.from(block.querySelectorAll('li'))
+                      .map((item) => item.textContent ?? '')
+                      .join('|')}`
+                : `${block.tagName}:${block.textContent ?? ''}`
+        )).toEqual([
+            'H2:Chapter 1 — The Salt Road',
+            'UL:Must happen: the crossing is attempted.|Must change: the mentor\'s price is paid.'
+        ]);
+        // The markers are gone from the whole pane, not only from the region that renders them.
+        expect(container.textContent).not.toContain('## ');
+        expect(container.textContent).not.toContain('- Must happen:');
+        // And no revision is being compared here (`previous_content` is empty), so this is the prose branch — the
+        // word diff is the one surface that still prints Markdown source, and it is a `<p>`, not this node.
+        expect(prose.querySelectorAll('del,ins')).toHaveLength(0);
+    });
+
+    it('renders the labelled block the route STORES on an entry, one line per contract field (R-T2/F6)', () => {
+        // THE SHAPE THE WIRE ACTUALLY SENDS, which is NOT the composed one the fixture above carries:
+        // `server/phrase/plotpoints.ts:chapterEntryContent` (70-78) stores one `Label: value` line per field the
+        // Writer filled, in that function's fixed order, joined with a SINGLE `\n`, with no blank lines, no
+        // bullets and no heading of its own — the three write sites agree (`server/api/routes.ts:1271`,
+        // `server/phrase/plotpoints.ts:191`, `server/phrase/controllers/plotlines.ts:523`). That text has no
+        // markdown syntax in it at all, so markdown alone gives ONE paragraph with the six labels run together;
+        // the writer's newlines have to become real breaks, and this asserts it with the producer's own bytes
+        // rather than a re-typed string.
+        const stored = chapterEntryContent({ id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup, {
+            heading: 'The Salt Road',
+            must_happen: 'the crossing is attempted',
+            must_change: "the mentor's price is paid"
+        });
+
+        expect(stored).toBe(
+            "Heading: The Salt Road\nMust happen: the crossing is attempted\nMust change: the mentor's price is paid"
+        );
+
+        const detail = phraseDetailView('s1');
+        const { prose, container } = labelledEntryPane(stored);
+
+        // Nothing invented: the stored text has no heading, so the prose region has none — the chapter's title is
+        // its own `group-title` node outside the record — and it has no list, because the labels are not bullets.
+        expect(prose.querySelectorAll('h1,h2,h3,h4,h5,h6')).toHaveLength(0);
+        expect(prose.querySelectorAll('ul,ol,li')).toHaveLength(0);
+        expect(screen.getByTestId('group-title').textContent).toBe('Chapter 1 — The Salt Road');
+        // One paragraph box, one break per stored newline, and the three fields on three lines — spelled as
+        // markup, because `textContent` reads the same whether the breaks are there or not.
+        expect(prose.querySelectorAll('p')).toHaveLength(1);
+        expect(prose.querySelectorAll('br')).toHaveLength(2);
+        expect(prose.innerHTML).toBe(
+            '<p>Heading: The Salt Road<br>\n' +
+                'Must happen: the crossing is attempted<br>\n' +
+                "Must change: the mentor's price is paid</p>"
+        );
+        // The pane's own hooks are untouched by the renderer: the record is ONE node carrying BOTH of its classes,
+        // it is not hidden from assistive tech, and there is still no prose textarea on the surface.
+        expect(container.querySelectorAll('[data-testid="group-content"]')).toHaveLength(1);
+        expect(prose.className).toBe('sv-markdown sv-summary-text sv-group-content');
+        expect(prose.getAttribute('aria-hidden')).toBeNull();
+        expect(container.querySelector('textarea')).toBeNull();
     });
 
     it('sends the two required fields and nothing else, addressed by the entry uuid', () => {

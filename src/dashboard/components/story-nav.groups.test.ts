@@ -10,6 +10,11 @@
 //        states are told apart by `phraseLoaded`, which is the only honest answer available).
 //   U5 — readiness, attention and the directive bar's refs all come from the group rows, not from the
 //        sampler's numbers.
+//
+// T13 adds the AC5 set at the bottom of the readiness block: the rail's ready tick and the Accept button are
+// ONE fact (`story-nav.summaryReadyForReview` delegates to `story-contract.lockCheck` for a grouped book), and
+// the cases pin the agreement in both directions — including the post-lock frame, where the tick deliberately
+// stays on and the gate deliberately stops naming the group's waits.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -38,8 +43,9 @@ import {
     summaryReadyForReview
 } from './story-nav';
 import type { PlotlineRailEntry } from './story-nav';
-import { fixturePhrase, fixtureView } from './story-fixtures';
-import { groupedPhraseView, phraseDetailView } from '../testing/shell-fakes';
+import { groupSignOffBlockers, lockCheck } from './story-contract';
+import { fixtureGoal, fixtureIdeas, fixturePhrase, fixtureView } from './story-fixtures';
+import { groupedPhraseView, phraseDetailView, reviewedPhraseView } from '../testing/shell-fakes';
 // T-W4 — the Phrase ② read's type is pinned by name so the fixture builder above cannot drift off the wire
 // shape, and `StoryViewData` is the view every helper below is called with.
 import type { PhraseDetailView, PhraseView } from '../api';
@@ -55,11 +61,16 @@ function midReview() {
 }
 
 /** The same book, moved into phase ① with a passing Goal and an empty Ideas tray. */
-function summaryPhase(overrides: { locked?: boolean; failing?: boolean } = {}) {
+function summaryPhase(
+    overrides: { locked?: boolean; failing?: boolean; phrase?: PhraseView } = {}
+) {
     const view = midReview();
 
     return {
         ...view,
+        // T13/AC5 — the agreement cases need a book whose REVIEWED state is one of the wire's three, which is
+        // the one input the accept's bar reads; the rest of the frame stays the mid-review book's.
+        phrase: overrides.phrase ?? view.phrase,
         story: {
             ...view.story,
             phase: 'summary' as const,
@@ -312,7 +323,11 @@ describe('story-nav — readiness for a group-managed Summary (U5)', () => {
         expect(summaryReadyForReview({ ...busy, ...summaryPhase(), phrase: busy.phrase })).toBe(false);
     });
 
-    it('refuses it while a finding at a blocking cost names a group (R3)', () => {
+    it('grants the tick over a finding at a blocking cost, because the accept voids it (R2, L-36)', () => {
+        // THE REPLACED PIN: this frame used to answer `false`, which is the rail agreeing with a greyed Accept
+        // over a defect the click itself clears. The finding is NOT hidden — it is counted into the statement
+        // the control prints — and the tick and the button still answer the same thing, which is the half of
+        // the requirement that never relaxed.
         const base = groupedPhraseView('s1');
         const view = summaryPhase();
         const withFinding = {
@@ -337,9 +352,14 @@ describe('story-nav — readiness for a group-managed Summary (U5)', () => {
             }
         };
 
-        expect(summaryReadyForReview(withFinding)).toBe(false);
-        // The same book with only a MINOR note is ready: the Summary's cost bar is the dial-aware one
-        // (`auto_approve: ['critical','major']`), so a note is a note.
+        expect(summaryReadyForReview(withFinding)).toBe(true);
+        expect(lockCheck(withFinding).canLock).toBe(true);
+        expect(lockCheck(withFinding).statement).toContain('voids 1 open finding on the Summary phrase');
+
+        // The same book with only a MINOR note: still ticked, and the note is STILL counted as an open row the
+        // accept voids — the leftover count is never the Summary's cost bar, so the line under the control
+        // agrees with the Overview's status line about cost. It is NOT the same number as that line in STATES
+        // either: the accept books the rows the sweep discards, and the band below stops at three of them.
         const noteOnly = {
             ...withFinding,
             phrase: {
@@ -349,9 +369,30 @@ describe('story-nav — readiness for a group-managed Summary (U5)', () => {
         };
 
         expect(summaryReadyForReview(noteOnly)).toBe(true);
+        expect(lockCheck(noteOnly).canLock).toBe(true);
+        expect(lockCheck(noteOnly).statement).toContain('voids 1 open finding on the Summary phrase');
+
+        // THE `disputed` ROW: not in the rail's open set, not in the Overview's review band (U5 files a dispute as
+        // archived), and STILL voided by the click — `phrase/locks.ts:VOIDABLE_FINDING_STATES` takes it, because
+        // D-33c reads a dispute as a live claim about text that has just stopped being writable. So the line
+        // under the control counts the act, not the band: this book's review number is 0 and its accept number is
+        // 1, and the pre-fix copy printed no clause at all while the receipt answered `voided_findings: 1`.
+        const disputed = {
+            ...withFinding,
+            phrase: {
+                ...withFinding.phrase!,
+                findings: withFinding.phrase!.findings.map((finding) => ({ ...finding, state: 'disputed' as const })),
+                review: { ...base.review, open_findings: 0, blocking_findings: 0 }
+            }
+        };
+
+        expect(summaryReadyForReview(disputed)).toBe(true);
+        expect(lockCheck(disputed).canLock).toBe(true);
+        expect([disputed.phrase!.review.open_findings, disputed.phrase!.review.blocking_findings]).toEqual([0, 0]);
+        expect(lockCheck(disputed).statement).toContain('voids 1 open finding on the Summary phrase');
     });
 
-    it('refuses it while the group queue still has work, and grants it when the surface is clear', () => {
+    it('grants the tick over the queue’s open work, and keeps it over the work already closed (R2, L-25b)', () => {
         const base = groupedPhraseView('s1');
         const view = summaryPhase();
 
@@ -375,17 +416,171 @@ describe('story-nav — readiness for a group-managed Summary (U5)', () => {
             }
         };
 
-        expect(summaryReadyForReview(withTask)).toBe(false);
-        // A `done` row is not an open task, and does not hold the tick.
-        expect(
-            summaryReadyForReview({
+        // THE REPLACED PIN, and the reported defect's second half: an open task held the tick AND the button
+        // shut, and a `wontfix` one held them shut forever after.
+        expect(summaryReadyForReview(withTask)).toBe(true);
+        expect(lockCheck(withTask).canLock).toBe(true);
+        expect(lockCheck(withTask).statement).toContain('closes 1 open task in the queue as wontfix');
+
+        // A `done` row is not open work, and neither is a `wontfix` one: neither is named in the line, which is
+        // the count the Author would otherwise read as "work the click still owes".
+        for (const state of ['done', 'wontfix'] as const) {
+            const settled = {
                 ...withTask,
+                phrase: { ...withTask.phrase!, tasks: withTask.phrase!.tasks.map((task) => ({ ...task, state })) }
+            };
+
+            expect(summaryReadyForReview(settled)).toBe(true);
+            expect(lockCheck(settled).statement).not.toContain('closes');
+        }
+
+        // …and the open states are ALL accounted for, in the wire's set (`open`/`claimed`/`blocked`).
+        const unfinished = {
+            ...withTask,
+            phrase: {
+                ...withTask.phrase!,
+                tasks: (['open', 'claimed', 'blocked'] as const).map((state, index) => ({
+                    ...withTask.phrase!.tasks[0],
+                    id: `t-${index}`,
+                    state
+                }))
+            }
+        };
+
+        // D-78 keeps the tick over every one of them — a `blocked` row is no more a blocker than an `open` one
+        // — but U-16 splits the SENTENCE: the sweep takes `open`/`claimed` (`loop/types.ts:OPEN_TASK_STATES`,
+        // the set `loop/records.ts:wontfixTasks` walks), so the "closes" clause counts 2 and the blocked row is
+        // named as what the click LEAVES rather than folded into the closed count.
+        expect(summaryReadyForReview(unfinished)).toBe(true);
+        expect(lockCheck(unfinished).statement).toContain('closes 2 open tasks in the queue as wontfix');
+        expect(lockCheck(unfinished).statement).toContain('leaves 1 blocked task for you');
+        expect(lockCheck(unfinished).statement).not.toContain('closes 3 open tasks');
+    });
+
+    // -----------------------------------------------------------------------
+    // T13 / AC5 — the tick and the button are ONE fact.
+    //
+    // `summaryReadyForReview`'s grouped branch now delegates to the gate itself (`story-nav.ts` explains why a
+    // second hand-written clause list is what drifted last time), and these cases pin the agreement in BOTH
+    // directions rather than asserting one side and trusting the other: a `true` tick over a disabled button is
+    // the reported bug, and a `false` tick over an enabled button is the one flipping it would produce.
+    // -----------------------------------------------------------------------
+    describe('the rail tick and the Accept button cannot disagree (AC5)', () => {
+        /** The Sign-off frame around one of the reviewed fixture's states. */
+        const frame = (state: 'pending' | 'ready' | 'chosen' | 'stale' | 'writer_busy') =>
+            summaryPhase({ phrase: reviewedPhraseView('s1', state) });
+
+        it('answers the same way for every reviewed state the wire sends', () => {
+            const cases = [
+                ['ready', true],
+                ['stale', true],
+                ['chosen', true],
+                ['pending', false],
+                // R4 — a clean selection the Writer is about to move is not signable in either surface.
+                ['writer_busy', false]
+            ] as const;
+
+            for (const [state, expected] of cases) {
+                const view = frame(state);
+
+                expect(summaryReadyForReview(view), state).toBe(expected);
+                expect(lockCheck(view).canLock, state).toBe(expected);
+            }
+        });
+
+        it('answers the same way over the leftovers the accept clears', () => {
+            const clean = frame('ready');
+            const withLeftovers = {
+                ...clean,
                 phrase: {
-                    ...withTask.phrase!,
-                    tasks: withTask.phrase!.tasks.map((task) => ({ ...task, state: 'done' as const }))
+                    ...clean.phrase!,
+                    findings: [
+                        {
+                            id: 'f-open',
+                            title: 'the Ending contradicts the promise it opens on',
+                            cost: 'major' as const,
+                            kind: 'issue' as const,
+                            state: 'approved' as const,
+                            seen_count: 1,
+                            group_refs: ['grp-tone'],
+                            unscoped: false,
+                            targeted: ['grp-tone'],
+                            resolved: [],
+                            missing: ['grp-tone'],
+                            resolved_all: false
+                        }
+                    ],
+                    tasks: [
+                        {
+                            id: 't-open',
+                            title: 'close out the tone the premise implies',
+                            state: 'claimed' as const,
+                            owner_role: 'writer' as const,
+                            attempts: 1,
+                            finding_ref: 'f-open'
+                        }
+                    ]
                 }
-            })
-        ).toBe(true);
+            };
+
+            expect(summaryReadyForReview(withLeftovers)).toBe(true);
+            expect(lockCheck(withLeftovers).canLock).toBe(true);
+            // …and the leftovers are visible where R2 put them: in the line the control prints.
+            expect(lockCheck(withLeftovers).statement).toContain('voids 1 open finding on the Summary phrase');
+            expect(lockCheck(withLeftovers).statement).toContain('closes 1 open task in the queue as wontfix');
+        });
+
+        it('answers the same way for the two waits the server really refuses on', () => {
+            const clean = frame('ready');
+            const goal = fixtureGoal();
+            const failing = {
+                ...clean,
+                goal: { ...clean.goal, failing: goal.failing, phase_progress: goal.phase_progress }
+            };
+            const [proposal] = fixtureIdeas().filter((idea) => idea.state === 'proposed');
+            const tray = { ...clean, ideas: [{ ...proposal, id: 'i-here', phase: 'summary' as const }] };
+
+            for (const view of [failing, tray]) {
+                expect(summaryReadyForReview(view)).toBe(false);
+                expect(lockCheck(view).canLock).toBe(false);
+            }
+        });
+
+        it('keeps the signed Summary ticked, and raises no group blocker over it, in either direction (L-30)', () => {
+            // THE POST-LOCK CASE. The rail's rule is deliberate: a signed artifact keeps its mark, and the gate
+            // switches its group clauses off for the same reason — the accept has already happened. So the pair
+            // still agrees, just on the other side of the button.
+            const signed = summaryPhase({ locked: true, failing: true });
+
+            expect(signed.story.summary_locked).toBe(true);
+            expect(summaryReadyForReview(signed)).toBe(true);
+            // The GATE — the surface the button reads — is what stops naming the group's waits once the book is
+            // signed (`lockCheck` skips `groupSignOffBlockers` for a locked Summary), because "no clean Summary
+            // to accept yet" over a Summary that WAS accepted is the lie this case rules out. The derivation
+            // itself still reports them, which is honest: the rows say what they say, and the gate decides.
+            expect(groupSignOffBlockers(signed)).toHaveLength(3);
+            expect(lockCheck(signed).reasons.some((reason) => reason.includes('no clean Summary'))).toBe(false);
+            expect(lockCheck(signed).reasons.some((reason) => reason.includes('Summary group'))).toBe(false);
+            // The signed book's statement is the lock's own line, not the accept's: the acts are done, and the
+            // auto-start promise would describe a click that cannot happen twice.
+            expect(lockCheck(signed).statement).toBe(
+                'Locking the Summary makes it read-only for every agent (P5, L-30) and deletes this phase\u2019s Ideas tray in the same commit (D-36).'
+            );
+            // The one line left is the phase Goal, which is not the accept's bar and is the only reason the two
+            // surfaces may answer differently here: the tick reports the signed artifact, the gate reports the
+            // phase's own waits.
+            expect(lockCheck(signed).reasons).toEqual(['the Goal has not passed: C-8 still failing (4/4)']);
+        });
+
+        it('withholds both while the phrase read has not landed, and grants both when the rows arrive (F1)', () => {
+            const inFlight = { ...frame('ready'), phrase: undefined };
+
+            expect(summaryReadyForReview(inFlight)).toBe(false);
+            expect(lockCheck(inFlight).canLock).toBe(false);
+            expect(lockCheck(inFlight).reasons).toEqual([
+                'the Summary group rows have not been read yet — the sign-off waits for the phrase read to answer'
+            ]);
+        });
     });
 
     it("grants it to a Summary the Author has already signed, whatever the rows say (L-30's read)", () => {

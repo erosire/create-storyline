@@ -25,6 +25,9 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { SummaryOverviewPane } from './SummaryOverviewPane';
 import { fixturePhrase, fixtureView } from './story-fixtures';
 import { summaryGroupRef } from './story-nav';
+// T14/AC2 — the pane prints `reviewedSummaryText(view)`; this test calls the SAME selector to prove the
+// decoration is applied at render and never written into the text the selector answers.
+import { reviewedSummaryText } from './story-contract';
 import {
     click,
     fakeApi,
@@ -36,8 +39,8 @@ import {
     storyRow
 } from '../testing/shell-fakes';
 import { createDashboardStore } from '../state';
-import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
-import type { PhraseFindingRow, PhraseView } from '../api';
+import { composePhraseContent, orderedPhraseGroupDefinitions } from '../../shared/phrase';
+import type { PhraseFindingRow, PhraseGroupScore, PhraseView } from '../api';
 
 /** The mid-review grouped book: the fixture phrase, wired into the view the panes read. */
 function midReviewView() {
@@ -180,22 +183,24 @@ describe('SummaryOverviewPane — the compiled Overview and the five groups (U2)
         ).toBe('to write');
     });
 
-    it('counts the open findings per group and says which of them hold the sign-off (U2)', () => {
+    it('counts the open findings per group and the critical/major band beside them (U2)', () => {
         const { container } = render(<SummaryOverviewPane view={midReviewView()} />);
 
         const findingsLine = (key: string): string | null =>
             container.querySelector(`[data-testid="summary-group-${key}-findings"]`)?.textContent ?? null;
 
         // The counts are the derivations', not the pane's: Premise is named only by the unscoped major
-        // (1 open, and it is blocking); Promise is named by the critical, the minor note and the unscoped
-        // major (3 open, 2 of them blocking); Theme by the critical and the unscoped major; Tone and
-        // Ending by the unscoped major alone — including Ending, because an UNSCOPED finding is a statement
-        // about the whole Overview, so it aims at a group that has no text yet (R3).
-        expect(findingsLine('premise')).toBe('1 open finding · holds the sign-off');
-        expect(findingsLine('promise')).toBe('3 open findings · holds the sign-off');
-        expect(findingsLine('theme')).toBe('2 open findings · holds the sign-off');
-        expect(findingsLine('tone')).toBe('1 open finding · holds the sign-off');
-        expect(findingsLine('ending')).toBe('1 open finding · holds the sign-off');
+        // (1 open, and it is in the band); Promise is named by the critical, the minor note and the unscoped
+        // major (3 open, 2 of them critical/major — the minor note is out of the band); Theme by the critical
+        // and the unscoped major; Tone and Ending by the unscoped major alone — including Ending, because an
+        // UNSCOPED finding is a statement about the whole Overview, so it aims at a group that has no text
+        // yet (R3). R2/T15 — the second number names the COST BAND, not a wait: D-78 has the accept void
+        // these rows, so `holds the sign-off` contradicted the confirm line under the same rows.
+        expect(findingsLine('premise')).toBe('1 open finding · 1 critical/major');
+        expect(findingsLine('promise')).toBe('3 open findings · 2 critical/major');
+        expect(findingsLine('theme')).toBe('2 open findings · 2 critical/major');
+        expect(findingsLine('tone')).toBe('1 open finding · 1 critical/major');
+        expect(findingsLine('ending')).toBe('1 open finding · 1 critical/major');
         // What the findings line replaces: the archived count is only printed when nothing is open, so a
         // row never has to choose between two numbers. An unwritten group says so in its state word.
         expect(
@@ -268,8 +273,11 @@ describe('SummaryOverviewPane — the compiled Overview and the five groups (U2)
 
         // open_findings 3 (the critical, the unscoped major, the minor note — `fixed` is archived),
         // blocking_findings 2, open_tasks 2 (`t-theme` claimed + `t-ending` open; `t-tone` is done).
+        // R2/T15 — the middle count names the COST BAND (`review.blocking_findings` is the critical/major
+        // subset of the open pile), not a wait: the accept signs a clean Summary off over these rows and voids
+        // them, so "holding the sign-off" contradicted the confirm line this pane sits under.
         expect(screen.getByTestId('summary-review').textContent).toBe(
-            '3 open findings · 2 holding the sign-off · 2 open tasks'
+            '3 open findings · 2 critical/major · 2 open tasks'
         );
     });
 
@@ -313,7 +321,7 @@ describe('SummaryOverviewPane — the compiled Overview and the five groups (U2)
             })
         });
 
-        render(<SummaryOverviewPane view={view} />);
+        const { container } = render(<SummaryOverviewPane view={view} />);
 
         // U4's purposeful empty state survives D-67 in the waiting list: the pane says what is missing and who
         // fills it, and the badge states the reviewed state rather than a Summary that is not there.
@@ -328,6 +336,9 @@ describe('SummaryOverviewPane — the compiled Overview and the five groups (U2)
             'Ending: nothing written yet'
         ]);
         expect(screen.queryByTestId('summary-text')).toBeNull();
+        // AC5 — the placeholder is still a `<p>` of prose, not an empty markdown card: the renderer is
+        // mounted over text that exists, so the empty state keeps the exact node count it had before.
+        expect(container.querySelectorAll('.sv-markdown')).toHaveLength(0);
         expect(screen.getByTestId('summary-written').textContent).toBe('0 of 5 groups written');
     });
 
@@ -337,6 +348,9 @@ describe('SummaryOverviewPane — the compiled Overview and the five groups (U2)
         const { container } = render(<SummaryOverviewPane view={groupedView({ overview: '' })} />);
 
         expect(container.querySelectorAll('.sv-group-row')).toHaveLength(5);
+        // The live Overview being empty does NOT empty the card: this pane prints the REVIEWED text (D-67),
+        // so the renderer is still mounted — and it is the only markdown block in the pane.
+        expect(container.querySelectorAll('[data-testid="summary-text"].sv-markdown')).toHaveLength(1);
     });
 });
 
@@ -440,7 +454,7 @@ describe('SummaryOverviewPane — the rail selects the group, the pane navigates
         // The accessible name is the row's whole text: title, state word, and the findings count with the
         // sentence saying what the count means. Word boundaries between the three are real spaces, so a
         // screen reader never announces "Promiseblocking3 open findings".
-        expect(row.textContent).toBe('Promise blocking 3 open findings · holds the sign-off');
+        expect(row.textContent).toBe('Promise blocking 3 open findings · 2 critical/major');
     });
 });
 
@@ -542,6 +556,27 @@ function reviewedRowTexts(root: ParentNode = document): string[] {
     );
 }
 
+/**
+ * THE SUMMARY CARD, BLOCK BY BLOCK, as `TAG:text` in DOM order.
+ *
+ * The Overview this card prints is MARKDOWN (`shared/phrase.ts:composePhraseContent` joins the groups as
+ * `## <title>\n<content>`, and `server/phrase/reviewed.ts:composeReviewedOverview` compiles the reviewed one
+ * the same way), so it is rendered by `MarkdownText` rather than printed. The paragraphing therefore moved
+ * out of the string and into block elements: `getByTestId('summary-text').textContent` is no longer the
+ * source, and a `toBe(source)` here would be an assertion about the SOURCE rather than about what a reader
+ * sees. This helper keeps the same exactness — one exact string per rendered block, in order — plus the tag,
+ * which is what proves a heading was read as a heading and a group as a paragraph.
+ */
+function summaryBlocks(root: ParentNode = document): string[] {
+    const card = root.querySelector('[data-testid="summary-text"]');
+
+    if (card === null) throw new Error('no `summary-text` card in this render');
+
+    return Array.from(card.querySelectorAll('h1,h2,h3,h4,h5,h6,p')).map(
+        (block) => `${block.tagName}:${block.textContent ?? ''}`
+    );
+}
+
 describe('SummaryOverviewPane — only the reviewed version is the Summary (D-67)', () => {
     it('prints the reviewed Overview as THE Summary, and the live composed text nowhere', () => {
         const phrase = reviewedPhraseView('s1', 'ready');
@@ -549,15 +584,23 @@ describe('SummaryOverviewPane — only the reviewed version is the Summary (D-67
         const text = String(container.textContent);
 
         // The printed text is `reviewed.overview`: the four groups the Writer installed (which ARE the
-        // selected rows) plus the CLEAN Ending — not the Ending the live Overview carries.
-        expect(screen.getByTestId('summary-text').textContent).toBe(
-            [
-                'Premise — the text the Writer installed (group 1).',
-                'Promise — the text the Writer installed (group 2).',
-                'Theme — the text the Writer installed (group 3).',
-                'Tone — the text the Writer installed (group 4).',
-                'Ending — the clean text the Reviewers passed at Revision 2.'
-            ].join('\n\n')
+        // selected rows) plus the CLEAN Ending — not the Ending the live Overview carries. The five sentences
+        // are asserted exactly, one per rendered block, in the order the Overview composes them.
+        expect(summaryBlocks(container)).toEqual([
+            'P:Premise — the text the Writer installed (group 1).',
+            'P:Promise — the text the Writer installed (group 2).',
+            'P:Theme — the text the Writer installed (group 3).',
+            'P:Tone — the text the Writer installed (group 4).',
+            'P:Ending — the clean text the Reviewers passed at Revision 2.'
+        ]);
+        // This fixture's Overview has no headings; what it DOES pin is that nothing renders as raw source —
+        // no `## ` marker, and no `<p>` count higher than the five groups.
+        expect(container.querySelector('[data-testid="summary-text"] h2')).toBeNull();
+        expect(container.textContent).not.toContain('## ');
+        // The card is the shared renderer: the pane's sizing class and the Markdown block scale sit on ONE
+        // element, which is what keeps the pane's height/scroll rule working.
+        expect(container.querySelector('[data-testid="summary-text"]')?.className).toBe(
+            'sv-markdown sv-summary-text'
         );
         // The live Overview is absent, whole and in part: the pane does not print it, does not print it
         // "smaller" under a label, and does not print its Ending line at all.
@@ -566,6 +609,119 @@ describe('SummaryOverviewPane — only the reviewed version is the Summary (D-67
         expect(text).not.toContain(phrase.overview);
         expect(screen.queryAllByTestId('summary-live-text')).toHaveLength(0);
         expect(screen.getByTestId('reviewed-state').textContent).toBe('reviewed Summary ready');
+    });
+
+    it('renders the compiled Overview as Markdown, so `## Premise` reads as a heading', () => {
+        // THE SHAPE THE PRODUCER ACTUALLY SENDS. `shared/phrase.ts:composePhraseContent` maps every entry to
+        // `` `## ${title}\n${content}` `` and joins them with `\n\n`, and `server/phrase/reviewed.ts` compiles
+        // the reviewed Overview the same way — which is the whole defect this change fixes: printed as text,
+        // the Author read `## Premise` on the card instead of a heading over the group's prose. The
+        // heading-free fixtures above pin the WORDING; this one pins the READING.
+        const overview = [
+            '## Premise',
+            'A keeper of a lighthouse begins lying to the sea.',
+            '',
+            '## Promise',
+            "A sealed cathedral of data holds the city's memory.",
+            '',
+            '## Tone',
+            'Plain sentences, salt in every image.'
+        ].join('\n');
+
+        const { container } = render(
+            <SummaryOverviewPane
+                view={groupedView({
+                    overview,
+                    reviewed: reviewedBlock({
+                        state: 'ready',
+                        complete: true,
+                        vector_hash: 'vector-1',
+                        overview
+                    })
+                })}
+            />
+        );
+
+        const card = screen.getByTestId('summary-text') as HTMLElement;
+
+        // The headings are headings, in composition order, and the prose under each is its own paragraph.
+        expect(Array.from(card.querySelectorAll('h1,h2,h3,h4,h5,h6')).map((h) => h.textContent)).toEqual([
+            'Premise',
+            'Promise',
+            'Tone'
+        ]);
+        expect(card.querySelector('h2')?.textContent).toBe('Premise');
+        expect(summaryBlocks(container)).toEqual([
+            'H2:Premise',
+            'P:A keeper of a lighthouse begins lying to the sea.',
+            'H2:Promise',
+            "P:A sealed cathedral of data holds the city's memory.",
+            'H2:Tone',
+            'P:Plain sentences, salt in every image.'
+        ]);
+        // The marker is gone everywhere in the pane — not just from the card, which is where a `pre-wrap`
+        // paragraph would otherwise have kept it — and the paragraphing is three paragraphs, not three
+        // paragraphs plus the blank lines the old `textContent` render used to print.
+        expect(container.textContent).not.toContain('## ');
+        expect(card.querySelectorAll('p')).toHaveLength(3);
+        // The heading is INSIDE the card the pane's sizing rule addresses, so the pane's height and scroll
+        // behaviour still apply to the rendered prose.
+        expect(card.className).toBe('sv-markdown sv-summary-text');
+    });
+
+    it('puts every line of the compiled Overview on its own line, including the ones with no markdown in them (U-23)', () => {
+        // THE OTHER HALF OF THE RENDERED READING, and the half markdown alone gets wrong. The Overview is composed
+        // entry-by-entry as `## <title>\n<content>` — the heading renders, done — but a group's `<content>` is
+        // LINE-oriented text: an agent wraps a paragraph mid-sentence, and a §4.2 sheet like Tone is written as
+        // `Label: value` lines, which is exactly how `server/phrase/plotpoints.ts:chapterEntryContent` stores a
+        // chapter entry too. Those lines are separated by a SINGLE `\n`, which is a soft break: with no
+        // `white-space: pre-wrap` left on the card (`styles/story.css:506-513`), markdown alone would print the
+        // whole sheet as one running sentence. `MarkdownText` keeps the writer's line breaks (`remark-breaks`).
+        //
+        // The payload is BUILT by the producer — `shared/phrase.ts:composePhraseContent` — rather than typed here,
+        // so the single-vs-blank newline distinction this test is about is the real one.
+        const overview = composePhraseContent([
+            { key: 'premise', title: 'Premise', content: 'A keeper of a lighthouse\nbegins lying to the sea' },
+            { key: 'tone', title: 'Tone', content: 'Voice: spare\nPOV: third\nTense: past' }
+        ]);
+
+        expect(overview).toBe(
+            '## Premise\nA keeper of a lighthouse\nbegins lying to the sea\n\n' +
+                '## Tone\nVoice: spare\nPOV: third\nTense: past'
+        );
+
+        const { container } = render(
+            <SummaryOverviewPane
+                view={groupedView({
+                    overview,
+                    reviewed: reviewedBlock({
+                        state: 'ready',
+                        complete: true,
+                        vector_hash: 'vector-1',
+                        overview
+                    })
+                })}
+            />
+        );
+
+        const card = screen.getByTestId('summary-text') as HTMLElement;
+        const paragraphs = Array.from(card.querySelectorAll('p'));
+
+        // The two sections are still sections — this test is about what sits UNDER them, not instead of them.
+        expect(Array.from(card.querySelectorAll('h1,h2,h3,h4,h5,h6')).map((h) => h.textContent)).toEqual([
+            'Premise',
+            'Tone'
+        ]);
+        expect(container.textContent).not.toContain('## ');
+        // Two paragraph boxes (the blank line between entries is a block break, not a break) holding three real
+        // line breaks — one for the wrapped sentence, two for the three lines of the sheet.
+        expect(paragraphs).toHaveLength(2);
+        expect(card.querySelectorAll('br')).toHaveLength(3);
+        expect(paragraphs[0]!.innerHTML).toBe('A keeper of a lighthouse<br>\nbegins lying to the sea');
+        expect(paragraphs[1]!.innerHTML).toBe('Voice: spare<br>\nPOV: third<br>\nTense: past');
+        // The card the pane's sizing rule addresses is still the renderer's wrapper, so neither the height floor
+        // nor the scroll container moved when the text became blocks and breaks.
+        expect(card.className).toBe('sv-markdown sv-summary-text');
     });
 
     it('shows each group the revision it stands behind, the score that judged it, and the newer one it fell past', () => {
@@ -598,8 +754,10 @@ describe('SummaryOverviewPane — only the reviewed version is the Summary (D-67
         const text = String(container.textContent);
 
         // The waiting state shows NO Summary text — `pending` never borrows the live Overview — and no choose,
-        // because there is nothing to choose.
+        // because there is nothing to choose. The renderer is absent altogether, not present-but-empty: the
+        // markdown wrapper is only ever mounted over text that exists, so an empty card cannot pad the pane.
         expect(screen.queryByTestId('summary-text')).toBeNull();
+        expect(container.querySelectorAll('.sv-markdown')).toHaveLength(0);
         expect(container.querySelector('[data-testid="reviewed-choose"]')).toBeNull();
         expect(screen.getByTestId('reviewed-state').textContent).toBe('no reviewed Summary yet');
         expect(phrase.overview).not.toBe('');
@@ -635,15 +793,16 @@ describe('SummaryOverviewPane — only the reviewed version is the Summary (D-67
         const { container } = render(<SummaryOverviewPane view={reviewedView('chosen')} />);
 
         expect(screen.getByTestId('reviewed-state').textContent).toBe('reviewed Summary chosen');
-        expect(screen.getByTestId('summary-text').textContent).toBe(
-            [
-                'Premise — the text the Author chose.',
-                'Promise — the text the Author chose.',
-                'Theme — the text the Author chose.',
-                'Tone — the text the Author chose.',
-                'Ending — the text the Author chose.'
-            ].join('\n\n')
-        );
+        // The CHOSEN text, block by block — the same five sentences, asserted exactly, and each one inside a
+        // rendered paragraph rather than one preformatted string.
+        expect(summaryBlocks(container)).toEqual([
+            'P:Premise — the text the Author chose.',
+            'P:Promise — the text the Author chose.',
+            'P:Theme — the text the Author chose.',
+            'P:Tone — the text the Author chose.',
+            'P:Ending — the text the Author chose.'
+        ]);
+        expect(container.textContent).not.toContain('## ');
         // The date is the wire's `chosen.at`, printed as the wire sent it: `2026-11-09T14:00:00.000Z` →
         // `2026-11-09`. The time of day is noise on a Summary the Author compares day against day.
         expect(screen.getByTestId('reviewed-caption').textContent).toBe(
@@ -890,5 +1049,286 @@ describe('SummaryOverviewPane — the Author chooses the reviewed Summary (D-68)
         );
 
         expect(container.querySelector('[data-testid="reviewed-choose-error"]')?.textContent).toBe(refusal);
+    });
+});
+
+// -----------------------------------------------------------------------------
+// T14 — THE SECTION HEADING CARRIES THE CLEAN REVISION AND THE READER'S NUMBER.
+//
+// The user's format is `Premise (v2) 100%`, and the whole rule lives in `summary-heading.ts` as a pure text
+// transform (its own `.test.ts` pins every edge of the matching). What is pinned HERE is the two things only a
+// render can pin: that the card's `h2` says the decorated words — through `MarkdownText`, `remark-gfm` and
+// `remark-breaks` intact — and that the decoration changed nothing about the TEXT the pane was handed, because
+// that text is what Phrase ② copies onto its Seed and hashes (§4.20 / D-72) and because D-65 keeps a Reader's
+// number out of stored content.
+//
+// The fixtures below therefore state BOTH sides in the same test: `reviewed.overview` (the wire, undecorated)
+// and the `h2` (the render, decorated). A fixture whose reviewed rows carry no groups — which is what every
+// pre-existing Markdown case above uses — answers no rows at all, which is why those `H2:Premise` pins still
+// hold and why the decoration needed a fixture of its own.
+
+/** One Critic score row, in the shape the projection attaches to a reviewed group (`api.ts:PhraseGroupScore`). */
+function vectorScore(value: number): PhraseGroupScore {
+    return { value, vector_hash: 'vh-t14', at: '2026-11-09T13:00:00.000Z', run_ref: 'run_critic_vh-t14' };
+}
+
+/** One group the reviewed Overview holds: its wire id, and the two numbers T14 prints. */
+interface DecoratedRow {
+    id: string;
+    key: string;
+    /** `null` is the wire's "no clean revision" — the heading then carries no `(v<n>)`. */
+    revision: number | null;
+    /** Absent means no pass reported against the selection's hash, and the heading carries no `<pct>%`. */
+    score?: number;
+}
+
+/**
+ * A grouped book whose reviewed Overview is the PRODUCER's shape (`## <title>` per section) and whose reviewed
+ * rows carry the clean revision and the score the strip already prints. `groupedView`'s catalog rows supply the
+ * TITLES the heading matcher compares against, so the match under test is against real catalog titles (`Premise
+ * …`), not against strings this file invented.
+ *
+ * `chosenFor` switches the frame to D-68's `chosen` book, where the numbers come off the CHOICE record
+ * (`chosen.vector` / `chosen.scores`) instead of the live selection — and where a group the choice did not name
+ * answers neither number, which is the real "no numbers" state on this surface.
+ */
+function decoratedView(overview: string, rows: DecoratedRow[], chosenFor?: DecoratedRow[]) {
+    const chosen = chosenFor === undefined;
+
+    return groupedView({
+        overview,
+        reviewed: reviewedBlock({
+            state: chosen ? 'ready' : 'chosen',
+            complete: true,
+            vector_hash: chosen ? 'vh-t14' : 'vh-t14-chosen',
+            overview,
+            groups: rows.map((entry) =>
+                reviewedGroup({
+                    id: entry.id,
+                    key: entry.key,
+                    selected_revision: chosen ? entry.revision : 1,
+                    // `latest_revision` is the group's NEWEST number and is never null on the wire (0 when the
+                    // group is unwritten), so a null selection reads as 0 here rather than as `null`.
+                    latest_revision: chosen ? (entry.revision ?? 0) : 1,
+                    // The score rows that judged THIS selection — `story-contract.reviewedGroupRows` reads the
+                    // first finite one and hands `phraseScorePercent`'s number to the heading, so an entry with
+                    // no `score` here is the fixture's "no pass reported against this hash" case.
+                    scores: chosen && entry.score !== undefined ? [vectorScore(entry.score)] : []
+                })
+            ),
+            chosen: chosen
+                ? null
+                : {
+                      // A choice record that names NO revision and NO score for one group is what leaves that
+                      // section's heading plain: both numbers are absent, so the rule writes neither.
+                      vector: Object.fromEntries(
+                          chosenFor.filter((entry) => entry.revision !== null).map((entry) => [entry.id, entry.revision as number])
+                      ),
+                      vector_hash: 'vh-t14-chosen',
+                      at: '2026-11-09T14:00:00.000Z',
+                      overview,
+                      scores: Object.fromEntries(
+                          chosenFor
+                              .filter((entry) => entry.score !== undefined)
+                              .map((entry) => [entry.id, [vectorScore(entry.score as number)]])
+                      )
+                  }
+        })
+    });
+}
+
+describe('SummaryOverviewPane — the Overview heading carries the revision and the reader\'s number (T14)', () => {
+    /** The producer's own payload, built by `composePhraseContent` rather than typed out. */
+    const THREE_SECTIONS = composePhraseContent([
+        { key: 'premise', title: 'Premise', content: 'A keeper of a lighthouse begins lying to the sea.' },
+        { key: 'promise', title: 'Promise', content: "A sealed cathedral of data holds the city's memory." },
+        { key: 'tone', title: 'Tone', content: 'Plain sentences, salt in every image.' }
+    ]);
+
+    it('renders `Premise (v7) 100%` as the heading, and each section carries its own numbers (AC1)', () => {
+        const view = decoratedView(THREE_SECTIONS, [
+            { id: 'grp-premise', key: 'premise', revision: 7, score: 100 },
+            { id: 'grp-promise', key: 'promise', revision: 2, score: 74 },
+            // No score row against this selection: the heading carries the revision and nothing else, which is
+            // the same honesty the rail and the strip already keep (an absence is not a zero).
+            { id: 'grp-tone', key: 'tone', revision: 4 }
+        ]);
+
+        render(<SummaryOverviewPane view={view} />);
+
+        const card = screen.getByTestId('summary-text') as HTMLElement;
+
+        // THE EXACT RENDERED CARD, block by block: the decorated heading, its body as its own paragraph, in
+        // composition order. `v7` is the CLEAN revision the selection stands behind and `100%` is the number
+        // that judged exactly that text — the user's `Premise (v2) 100%`, in the producer's section order.
+        expect(summaryBlocks()).toEqual([
+            'H2:Premise (v7) 100%',
+            'P:A keeper of a lighthouse begins lying to the sea.',
+            'H2:Promise (v2) 74%',
+            "P:A sealed cathedral of data holds the city's memory.",
+            'H2:Tone (v4)',
+            'P:Plain sentences, salt in every image.'
+        ]);
+        expect(Array.from(card.querySelectorAll('h2')).map((heading) => heading.textContent)).toEqual([
+            'Premise (v7) 100%',
+            'Promise (v2) 74%',
+            'Tone (v4)'
+        ]);
+        // The marker is still gone from the whole pane, not just from the card.
+        expect(document.querySelector('[data-testid="summary-overview"]')?.textContent).not.toContain('## ');
+        // The card is still the one wrapper the pane's sizing rule addresses, so no markup moved.
+        expect(card.className).toBe('sv-markdown sv-summary-text');
+        // The numbers appear on the strip exactly as before — the heading ADDS a place to read them, it does not
+        // move them, and the strip still carries the gap reasons and the `Revision N is newer` case.
+        expect(reviewedRowTexts()).toEqual([
+            'Premise reviewed Revision 7 Score 100%',
+            'Promise reviewed Revision 2 Score 74%',
+            'Tone reviewed Revision 4'
+        ]);
+    });
+
+    it('decorates at render and leaves the wire text exactly as it arrived (AC2)', () => {
+        const view = decoratedView(THREE_SECTIONS, [
+            { id: 'grp-premise', key: 'premise', revision: 7, score: 100 },
+            { id: 'grp-promise', key: 'promise', revision: 2, score: 74 },
+            { id: 'grp-tone', key: 'tone', revision: 4, score: 88 }
+        ]);
+
+        // THE WIRE SIDE, asserted before any render: the stored text is the producer's bytes, heading and all.
+        // Nothing in this feature can reach it — no new field, no rewritten `overview` — because Phrase ②'s Start
+        // copies this text verbatim onto its Seed and hashes it, and D-65 refuses a Reader's number as content.
+        expect(view.phrase?.reviewed.overview).toBe(THREE_SECTIONS);
+        expect(reviewedSummaryText(view)).toBe(
+            '## Premise\nA keeper of a lighthouse begins lying to the sea.\n\n' +
+                "## Promise\nA sealed cathedral of data holds the city's memory.\n\n" +
+                '## Tone\nPlain sentences, salt in every image.'
+        );
+        expect(reviewedSummaryText(view)).toContain('## Premise\n');
+        expect(reviewedSummaryText(view)).not.toContain('(v7)');
+
+        render(<SummaryOverviewPane view={view} />);
+
+        // …and THE RENDERED SIDE, from the same fixture: the numbers are only ever on the card.
+        expect(screen.getByTestId('summary-text').textContent).toContain('Premise (v7) 100%');
+        expect(screen.getByTestId('summary-text').textContent).not.toContain('## Premise');
+    });
+
+    it('leaves a section no reviewed row names, and every `## ` inside a fenced block, exactly as written', () => {
+        // THREE THINGS A NAIVE REPLACE WOULD BREAK. (1) `## Something the catalog never named` is a section of
+        // the TEXT but not one of the book, so it renders as a heading with no numbers — matching is by exact
+        // title against the rows, never by position. (2) A Writer can quote its own Overview back inside a
+        // fence, and code is not a heading: that `## Premise` stays literal characters. (3) The body's own line
+        // breaks are the writer's (`remark-breaks`) and the decoration must not disturb them.
+        const overview = [
+            '## Premise',
+            'A keeper of a lighthouse',
+            'begins lying to the sea.',
+            '',
+            '## Something the catalog never named',
+            'A section no reviewed row addresses.',
+            '',
+            '```',
+            '## Premise',
+            'the Overview quoted back at the Author',
+            '```',
+            '',
+            '## Tone',
+            'Voice: spare',
+            'POV: third'
+        ].join('\n');
+
+        const { container } = render(
+            <SummaryOverviewPane
+                view={decoratedView(overview, [
+                    { id: 'grp-premise', key: 'premise', revision: 7, score: 100 },
+                    { id: 'grp-tone', key: 'tone', revision: 4, score: 61 }
+                ])}
+            />
+        );
+        const card = screen.getByTestId('summary-text') as HTMLElement;
+
+        // One `h2` per heading in the text — the decorated two, and the un-named one plain.
+        expect(Array.from(card.querySelectorAll('h2')).map((heading) => heading.textContent)).toEqual([
+            'Premise (v7) 100%',
+            'Something the catalog never named',
+            'Tone (v4) 61%'
+        ]);
+        // The fenced copy stays source: `## Premise` is CODE there, and it is the only place on the card the
+        // marker still shows. (A fixture with a fence therefore cannot reuse the pane's `not.toContain('## ')`
+        // pin — the pin is about the rendered prose, which is what the `h2` list above asserts.)
+        expect(card.querySelector('pre code')?.textContent).toBe('## Premise\nthe Overview quoted back at the Author\n');
+        // The decoration survives `remark-breaks`: the heading is still ONE heading element (a break inside it
+        // would have split it), and each body keeps its own line breaks in its own paragraph.
+        const paragraphs = Array.from(card.querySelectorAll('p'));
+
+        expect(paragraphs).toHaveLength(3);
+        expect(paragraphs[0]!.innerHTML).toBe('A keeper of a lighthouse<br>\nbegins lying to the sea.');
+        expect(paragraphs[1]!.innerHTML).toBe('A section no reviewed row addresses.');
+        expect(paragraphs[2]!.innerHTML).toBe('Voice: spare<br>\nPOV: third');
+        // Nothing in the fenced block became a heading: three `h2`, and no `h2` inside the `<pre>`.
+        expect(card.querySelectorAll('pre h2')).toHaveLength(0);
+        expect(container.querySelector('[data-testid="summary-text"]')).toBe(card);
+    });
+
+    it('leaves a section the choice names no revision and no score exactly as `## <title>`', () => {
+        // D-68's `chosen` book is where BOTH numbers are genuinely absent at once: the choice record carries
+        // `vector` and `scores` per group, and a group it does not name answers neither. The rule writes no
+        // suffix then — and the heading is still a heading, because the producer's `##` is unchanged.
+        const overview = composePhraseContent([
+            { key: 'premise', title: 'Premise', content: 'A keeper pays the tide to cross.' },
+            { key: 'theme', title: 'Theme', content: 'The ledger is the debt.' }
+        ]);
+
+        render(
+            <SummaryOverviewPane
+                view={decoratedView(
+                    overview,
+                    // The live selection's rows still exist in the `chosen` frame; the pane reads the numbers
+                    // off the CHOICE, which is what makes Tone answer neither.
+                    [
+                        { id: 'grp-premise', key: 'premise', revision: 7, score: 100 },
+                        { id: 'grp-theme', key: 'theme', revision: 7, score: 100 }
+                    ],
+                    [
+                        { id: 'grp-premise', key: 'premise', revision: 3, score: 76 },
+                        { id: 'grp-theme', key: 'theme', revision: null }
+                    ]
+                )}
+            />
+        );
+
+        expect(summaryBlocks()).toEqual([
+            'H2:Premise (v3) 76%',
+            'P:A keeper pays the tide to cross.',
+            'H2:Theme',
+            'P:The ledger is the debt.'
+        ]);
+        // The numbers come from the CHOICE, not from the live selection: `v3 76%`, never `v7 100%`.
+        expect(screen.getByTestId('reviewed-state').textContent).toBe('reviewed Summary chosen');
+    });
+
+    it('prints no markdown wrapper at all when the reviewed Overview is empty, decorated or not', () => {
+        // The empty branch is untouched by T14: `summary-text` appears only over text that exists (D-67), and a
+        // decoration of `''` is still `''`, so no empty card can pad the pane.
+        const { container } = render(
+            <SummaryOverviewPane
+                view={groupedView({
+                    overview: '',
+                    reviewed: reviewedBlock({
+                        state: 'ready',
+                        complete: true,
+                        vector_hash: 'vh-t14-empty',
+                        overview: '',
+                        groups: [reviewedGroup({ id: 'grp-premise', key: 'premise', selected_revision: 7, scores: [vectorScore(100)] })]
+                    })
+                })}
+            />
+        );
+
+        expect(screen.getByTestId('summary-empty').textContent).toBe(
+            'No reviewed Overview yet — the selection has no composed text to show.'
+        );
+        expect(screen.queryByTestId('summary-text')).toBeNull();
+        expect(container.querySelectorAll('.sv-markdown')).toHaveLength(0);
     });
 });

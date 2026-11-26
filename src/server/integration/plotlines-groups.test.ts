@@ -13,11 +13,15 @@
 //                                     review's `raiseFinding`, and the lock that opens phase ③ is the
 //                                     Author's answer to a sign-off the Story reached on its own.
 //
-// WHY THE PHRASE START SITS IN THE TEST AND NOT IN THE LOOP. `startPlotlinesPhrase` is an Author act:
-// the seed Phrase ② reads is the compiled Summary the phase-① lock produced (`phrases.content`), copied
-// into the phrase row so the two phrases stay discrete (R1, "one phrase down"). The API route that hands
-// it over is the NEXT wave; the server-side truth this test pins is what the loop does once the row
-// exists — and what it refuses to do before it does (the drain clause in `loop/status.ts:phase2Unmet`).
+// WHY THE PHRASE START IS NO LONGER IN THE TEST (T12/R4). `startPlotlinesPhrase` is still an Author act —
+// it just ISN'T the test's act any more: accepting the final Summary (`POST /stories/:id/lock`, phase ①)
+// performs the start for the Author, seeded from the compiled Summary the phase-① lock produced
+// (`projections.ts:compiledSummaryOf`), copied into the phrase row so the two phrases stay discrete (R1,
+// "one phrase down", D-72). What this file pins now is the consequence: the row exists the moment the lock
+// answers, its seed is the projection's bytes, a second push is REFUSED (D-72), and the lane runs from
+// there. The drain clause for a book that has NO Phrase ② (`loop/status.ts:phase2Unmet`) is still real — a
+// `plotlines_mode: 'classic'` Story never gets the auto-start, and neither does a book whose Summary had
+// nothing compiled to copy — and it is pinned in `loop/phase2-groups.test.ts`.
 //
 // WHAT IS PINNED AS A NUMBER AND WHY IT MAY BE ONE: the ids are real UUIDs issued per boot, so every
 // claim key is RECOMPUTED from the store's rows through the same helpers the planner uses
@@ -38,6 +42,9 @@
 import { describe, expect, it } from 'vitest';
 import { bootStoryline, createSliceStory, crewRows, openDial, storyRow, type StorylineFixture } from './harness';
 import { startPlotlinesPhrase } from '../phrase';
+// T12/R4 — THE SEED THE ACCEPT COPIES. The phrase's seed is asserted against the SAME projection the
+// handoff button previews, so a lane that handed over different bytes than the rail showed fails here.
+import { compiledSummaryOf } from '../api/projections';
 import { PHRASE_PLOTLINES_KEY, PHRASE_SUMMARY_KEY } from '../../shared/phrase';
 import { drainPreconditions } from '../loop/status';
 import { plotlinesStructureKeyOf } from '../loop/records';
@@ -134,37 +141,59 @@ describe('PHRASE ② — the chapter group pipeline, from the Summary lock to th
             const store = fixture.store;
             const story = store.stories.get(storyId)!;
 
-            // The dial the lane reads is the PHRASE's own, and a new Story gets it by default: the classic
+            // THE dial the lane reads is the PHRASE's own, and a new Story gets it by default: the classic
             // §4.3 tools stay reachable for a book the Author puts back on them (`plotlines_mode:
             // 'classic'`), and an old row with no field reads classic.
             expect(story.plotlines_mode).toBe('groups');
 
-            // ② — PHRASE ② UNSTARTED: the lane generates nothing, and the drain says so in the Author's
-            // own terms. This is the state every pre-Phrase-② book is in, and it must not be reported as
-            // "the crew is done" while the chapter pipeline nobody started is still owed (L-37's condition
-            // 1 is answered by a probe that has to look at the work). The clause is pinned byte for byte
-            // because the drain ROW is what the Author reads to know what to do next.
+            // ② — THE ACCEPT STARTED PHRASE ② (T12/R4). The lock's receipt says so, and the row says the
+            // same thing: the seed is `projections.ts:compiledSummaryOf`, the bytes the handoff button
+            // previews, copied — not referenced — onto the phrase (D-72). Before R4 this block pinned the
+            // OPPOSITE (an unstarted phrase and the drain clause that named it); the clause survives in
+            // `loop/status.ts:phase2Unmet` for the books that still have no phrase — a classic-lane Story,
+            // or one whose Summary had nothing compiled — and it is pinned there by `loop/phase2-groups
+            // .test.ts`, which seeds the phrase lane directly rather than walking an accept.
+            const accepted = afterLock.body.lock_receipt as Record<string, unknown>;
+
+            expect(accepted).toEqual({
+                phase: 'summary',
+                deleted_ideas: expect.any(Number),
+                next_phase: 'plotlines',
+                voided_findings: expect.any(Number),
+                wontfixed_tasks: expect.any(Number),
+                phrase_started: true,
+                phrase_start_reason: ''
+            });
+
             const unstarted = store.stories.get(storyId)!;
 
             expect(unstarted.phase).toBe('plotlines');
             expect(drainPreconditions(store, unstarted)).toEqual({
                 met: false,
                 unmet: [
-                    'Phrase ② has not been started — the compiled Summary (or the Author’s own text) has to be pushed into the Plotlines Phrase before any chapter contract is drafted (R1, one phrase down)'
+                    'no accepted Plotline Brief declares the chapter count — the Editor has not structured the Phrase ② seed yet (P5, D-3b)'
                 ]
             });
 
-            // ③ — the Author pushes the compiled Summary into Phrase ②. The copied seed IS the phase-①
-            // phrase's composed text: nothing recomposes it, and the hash every Phrase ② gate hashes is
-            // the hash of THAT text (P5, one phrase down).
+            // ③ — THE AUTHOR DOES NOT PUSH IT BY HAND ANY MORE, and the domain refuses anyone who tries:
+            // the row is the identity its entries, revisions and claim keys name, so a second start is a
+            // backtrack, not a re-seed (D-72). `started` keeps the shape the walk below plans against.
             const summaryPhrase = store.phrases.list().find((row) => row.story_id === storyId && row.key === PHRASE_SUMMARY_KEY)!;
-            const started = startPlotlinesPhrase(store, store.stories.get(storyId)!, summaryPhrase.content, {
-                author: true,
-                why: 'the Author pushed the locked Summary into Phrase ② (R1, one phrase down)'
-            });
 
-            expect(started.started).toBe(true);
-            expect(started.phrase.seed).toBe(summaryPhrase.content.trim());
+            expect(() =>
+                startPlotlinesPhrase(store, store.stories.get(storyId)!, summaryPhrase.content, {
+                    author: true,
+                    why: 'the Author tried to push the locked Summary into Phrase ② again (R1, one phrase down)'
+                })
+            ).toThrow(/already has a Plotlines Phrase/);
+
+            const started = {
+                phrase: store.phrases.list().find((row) => row.story_id === storyId && row.key === PHRASE_PLOTLINES_KEY)!
+            };
+
+            // THE COPIED SEED, asserted against the projection the button reads rather than against a copy
+            // of its sentence: the text the Author was shown IS the text every Phrase ② gate hashes (P5).
+            expect(started.phrase.seed).toBe(compiledSummaryOf(store, store.stories.get(storyId)!));
             expect(started.phrase.key).toBe(PHRASE_PLOTLINES_KEY);
             expect(chapterGroupsOf(store, started.phrase.id)).toEqual([]);
 

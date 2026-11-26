@@ -479,6 +479,43 @@
     white-space: pre-wrap;
 }
 
+/* WHEN `.sv-summary-text` HOLDS RENDERED MARKDOWN (`MarkdownText.tsx`) IT IS A BLOCK BOX, NOT A STRING.
+   The base rule's `white-space: pre-wrap` is right for the plain-text case: a field the engine never
+   composed is printed character-for-character, so its newlines ARE the paragraphing. It is the ONE
+   declaration that fights the rendered case, and the fight is real rather than theoretical — react-markdown
+   emits a newline TEXT NODE between sibling blocks (`<h2>Premise</h2>\n<p>…</p>\n<h2>Promise</h2>\n<p>…</p>`,
+   see `MarkdownText.test.tsx`'s exact-text assertion), so under `pre-wrap` every block break printed as an
+   EXTRA line: a heading pushed a line off its own prose, and a blank line opened between groups. That is the
+   doubled vertical gap in the Summary card this change removes. Going to `normal` is only SAFE because the
+   payload's own line breaks stopped being carried by CSS: `MarkdownText` turns every newline the writer put in
+   prose into a real `<br>` (`remark-breaks`, `MarkdownText.tsx`), which is what keeps the line-oriented text the
+   producers emit — `server/phrase/plotpoints.ts:chapterEntryContent` joins one `Label: value` line per contract
+   field with a single `\n` — on separate lines once `pre-wrap` is gone. Both classes sit on the SAME element
+   (`sv-markdown sv-summary-text`), so the two-class rule wins the tie by specificity and the plain-text
+   panes that also use `.sv-summary-text` are untouched, and there are exactly TWO of them: the U3 word-diff
+   `<p>` at `PhraseEntries.tsx:981`, which prints `RevisionDiff`'s inline runs and WANTS every newline it sent
+   kept, and the `not written yet` span at `SummaryPane.tsx:655` — a field's VALUE, not a document. Every other
+   consumer carries `sv-markdown` on the same element, so the two-class rule reaches it.
+
+   The other two declarations keep the pane's own sizing honest. The same element is a flex ITEM in both
+   panes (`SummaryOverviewPane.tsx`'s column, and the §4.2 field's row at `story.css:467-473`): `min-width: 0`
+   is what lets a long GFM table or code fence shrink inside the `minmax(0, 1fr)` field column instead of
+   forcing it wider than the pane, and `flex: 1 1 18rem` is left alone, as is the pane's scroll container
+   (`.sv-group-overview .sv-summary-text`, below) — this wrapper never scrolls.
+   `line-height` is HELD at this pane's 1.55 rather than taking `.sv-markdown`'s 1.6, and it is held by being
+   DECLARED HERE, not by the cascade: `.sv-markdown` is specificity 0,1,0 and this rule is 0,2,0, so the two-class
+   rule wins on specificity — and file order would have decided the OTHER way, because `.sv-markdown` sits far
+   below at `story.css:3245`. And the `min-height: calc(3 * 1.55em)` floor is not that rule's: it belongs to
+   `.sv-group-overview .sv-summary-text`, where it is documented as THREE LINES of this text — and a 1.6 leading
+   would silently make that floor shorter than three lines, which is the clipping bug it exists to prevent.
+   The reading SCALE does come from `.sv-markdown` (0.8rem against the pane's 0.8125rem, `story.css:3245`),
+   i.e. the same size; only the paragraphing moves from newlines to block margins. */
+.sv-summary-text.sv-markdown {
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.55;
+}
+
 .sv-summary-flag {
     color: var(--dim);
     font-size: 0.68rem;
@@ -1008,6 +1045,25 @@
     flex: none;
     min-height: calc(3 * 1.55em);
     overflow-wrap: anywhere;
+}
+
+/* T2 — THE READING COPY IS A `<div class="sv-markdown sv-summary-text sv-group-content">` now
+   (`PhraseEntries.tsx`'s whole-text branch), and the tag change costs one thing the rule above does not carry: a
+   `<div>` has no UA paragraph margin. Where that margin was doing real work is the ENTRY pane — `.sv-pane` is a
+   BLOCK container, so the prose region used to sit off its `Current content` label, and off the editor under it,
+   by the `<p>` default of `1em`. It is spelled out here rather than left to the tag: in the wrapper's own
+   font-size (`.sv-markdown`, 0.8rem) `1em` is the ~0.8rem gap it replaces, so the pane's rhythm is unchanged and
+   now comes from this file instead of from the user-agent sheet. The rule is keyed on `.sv-group-content`, which
+   exists ONLY in that entry pane: the Summary Overview card T1 converted carries `sv-summary-text` but never this
+   class, and it must not gain a margin — `.sv-group-overview` is a flex COLUMN with `gap: 0.5rem`, and a margin on
+   a flex item ADDS to that gap instead of collapsing into it.
+
+   The TWO-CLASS selector is the other safety: the sibling branch of the same region — `… sv-group-content
+   sv-group-diff`, the U3 word diff, still a `<p>` printing `RevisionDiff`'s inline `<del>`/`<ins>` runs — keeps
+   exactly the margin it has today. That branch is a diff, not prose to be re-typeset
+   (`documents/specifications.md:464`), and its sizing is not this change's to touch. */
+.sv-group-content.sv-markdown {
+    margin: 1em 0;
 }
 
 /* R2 / U3 — the latest revision against the one it replaced. The diff is prose, not a patch viewer: the
@@ -1630,6 +1686,18 @@
         sans-serif;
     line-height: 1.6;
     white-space: pre-wrap;
+}
+
+/* T5 — THE SAME DEFECT AS `.sv-summary-text.sv-markdown` (`story.css:482-510`), ON THE REVISION COMPARISON.
+   The rule above carries `white-space: pre-wrap`, and react-markdown writes a newline TEXT NODE between sibling
+   blocks (`MarkdownText.test.tsx`'s exact-text assertion pins it), so under `pre-wrap` every block break printed
+   as an EXTRA line on top of the renderer's own block margins — the doubled gap, not a missing one. `min-width:
+   0` is the COLUMN's: it lets a long fenced block or GFM table shrink inside `.sv-revision-cols`'s
+   `minmax(16rem, 1fr)` above instead of widening the track. Both classes sit on the SAME element
+   (`sv-markdown sv-revision-body`) → specificity 0,2,0, so the win never depends on file order. */
+.sv-revision-body.sv-markdown {
+    white-space: normal;
+    min-width: 0;
 }
 
 .sv-revision-note {
@@ -3220,6 +3288,15 @@
 
 .sv-markdown > :first-child:is(h1, h2, h3, h4, h5, h6) {
     margin-top: 0;
+}
+
+/* …and the same at the BOTTOM. The `h1…h6` shorthand below sets `margin: 1rem 0 0.35rem` at specificity 0,1,1, so
+   the plain `> :last-child { margin-bottom: 0 }` above already OUTRANKS it at 0,2,0 — file order never entered
+   into it, and a pane whose text ends on a heading (an Overview whose last group has no prose under its title)
+   has never pad-floated 0.35rem past the last thing there is to read inside a scroll container. `:is()` lifts
+   this rule to 0,2,1: it is defensive and explicit, not order-critical — the cascade was already right. */
+.sv-markdown > :last-child:is(h1, h2, h3, h4, h5, h6) {
+    margin-bottom: 0;
 }
 
 .sv-markdown h1 {

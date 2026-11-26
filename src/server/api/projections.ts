@@ -1356,7 +1356,11 @@ export interface PhraseReviewState {
     reviews_on_current_vector: number;
     deep_reviews_on_current_vector: number;
     open_findings: number;
-    /** The critical/major rows the sign-off treats as blocking (§6.8's bar, unchanged by the redesign). */
+    /**
+     * The open rows at §6.8's critical/major severity bar — the cost band the Reviewer weighs (unchanged by
+     * the redesign), and the number the desk prints as "N critical/major". A SEVERITY band, not a gate: the
+     * Summary accept does not wait on these rows, it voids them in the lock commit (D-78).
+     */
     blocking_findings: number;
     open_tasks: number;
     /**
@@ -1868,7 +1872,18 @@ function phraseProjection(store: Store, story: Story, phraseKey: string): Phrase
     const openFindings = findings.filter(
         (finding) => finding.state !== 'fixed' && finding.state !== 'discarded' && finding.state !== 'disputed'
     );
-    const openTasks = store.tasks.list().filter((task) => task.story_id === story.id && task.state !== 'done');
+    // T15 — THE SAME OPEN SET THE QUEUE AND THE ENGINE USE: `OPEN_TASK_STATES` (above, `:804`), which closes
+    // BOTH terminal states, `done` and `wontfix`. The filter used to be `state !== 'done'`, so a task the crew
+    // settled by DECLINING it still rode in `tasks` and in `review.open_tasks` as though it were work — and
+    // after an accept moved the queue to `wontfix` (T12's `lockWrites`), this read reported one MORE open task
+    // than the accept statement's "closes N open tasks" it sits beside on the desk. `wontfix` is a closed state
+    // in the store (`shared/types.ts:171 TASK_STATES`) and in `loop/records.ts:151`, and the desk's own mirror
+    // (`dashboard/components/story-contract.ts:OPEN_TASK_STATES`) already agreed with this set, so the wire was
+    // the only side still counting it. The rows stay story-scoped — a `Task` carries a `finding_ref` and no
+    // phrase or group id, so nothing here may claim a phrase scope (see the `review.open_tasks` note below).
+    const openTasks = store.tasks
+        .list()
+        .filter((task) => task.story_id === story.id && OPEN_TASK_STATES.includes(task.state));
 
     const vector = groupRevisionVector(store, story.id, phrase?.id ?? '');
     const vectorHash = groupVectorHash(vector);

@@ -1094,7 +1094,28 @@ export function lockCheck(view: StoryViewData): LockCheck {
             'Accepting completion locks the chapters exactly as the Summary and plotlines were locked (L-25a), and everything still open is closed with a count on it (L-25b).'
     };
 
-    return { phase, canLock: reasons.length === 0, reasons, statement: statements[phase] };
+    // U-16: the statement is the sentence under the control, printed while the Author is still deciding (and
+    // reused verbatim as the confirm line), so it must say what THIS click does.
+    //
+    // WHY THE SUMMARY BRANCHES ON `isGroupSummary`: the leftover clauses (void findings / close tasks) and the
+    // auto-start of Phrase 2 are what the GROUPED accept's server leg does (T12: void the phrase's open
+    // findings, move its open tasks to `wontfix`, start Phrase ② from the compiled Summary — D-72). The
+    // sampler's Summary has no such act on this desk — its Phrase ② start is the Author's own verb in
+    // `PlotlinesHandoff` — so that book keeps the sentence it has always shown rather than being promised a
+    // start this client cannot verify. Once the Summary is signed the accept has happened, so the line falls
+    // back to what the lock itself did (P5, L-30, D-36).
+    const summaryStatement =
+        phase === 'summary' && story.summary_locked === false && isGroupSummary(view)
+            ? summaryAcceptStatement(summaryAcceptLeftovers(view))
+            : statements.summary;
+
+    return {
+        phase,
+        canLock: reasons.length === 0,
+        reasons,
+        // The Summary is the only phase whose line is recomputed; ② and ③ keep their own sentences.
+        statement: phase === 'summary' ? summaryStatement : statements[phase]
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -1382,7 +1403,11 @@ export function phraseGroupById(
     return phraseGroups(view).find((group) => group.id === groupId);
 }
 
-/** A finding is open while it is not settled: R6's own open set, mirror of `projections.ts`'s filter. */
+/**
+ * A finding is open while it is not settled: R6's own open set, mirror of `projections.ts`'s filter, and the
+ * band `review.open_findings` counts. NOT the set the accept voids — that one also takes `disputed`
+ * ({@link ACCEPT_VOIDED_FINDING_STATES}), because a lock retires an unproven claim rather than gating work on it.
+ */
 export const OPEN_PHRASE_FINDING_STATES: FindingState[] = ['unconfirmed', 'confirmed', 'approved'];
 
 export function isOpenPhraseFinding(finding: PhraseFindingRow): boolean {
@@ -1427,27 +1452,160 @@ export function groupOpenFindings(view: StoryViewData, groupId: string): PhraseF
 }
 
 /**
- * The open findings on this group that hold the sign-off: the Summary's own cost bar
- * (`summaryBlockingCost`, dial included), so the badge, the pane and the Accept gate cannot disagree
- * about which rows are work.
+ * The open findings on this group that sit at the Summary's own COST bar (`summaryBlockingCost`, dial
+ * included), so the badge, the pane and the rail cannot disagree about which rows are the critical/major
+ * band. D-78 — the band is what the Reviewer weighs and what the row's `blocking` word names; it is no longer
+ * a wait for the sign-off, which is why every surface that prints this number names the band rather than a
+ * hold.
  */
 export function groupBlockingFindings(view: StoryViewData, groupId: string): PhraseFindingRow[] {
     return groupOpenFindings(view, groupId).filter((finding) => summaryBlockingCost(view.story, finding.cost));
 }
 
 /**
- * The open STORY tasks the sign-off waits on (R3's other half) — NOT a group-scoped queue.
+ * THE QUEUE SET THE DESK MIRRORS — `projections.ts:OPEN_TASK_STATES` (`open`/`claimed`/`blocked`), the wire's
+ * own constant, which `phraseProjection`'s `openTasks` filters the phrase read's `tasks` rows and
+ * `review.open_tasks` by. It is the number the Overview's review line prints as "N open tasks".
  *
- * R-T2/F3, from the server: `projections.ts:1208` builds the phrase read's `tasks` rows as
- * `store.tasks.list().filter(task => task.story_id === story.id && task.state !== 'done')` — every open task
- * of the Story, whatever phase or kind it belongs to — and `PhraseTaskRow` carries no group attribution at
- * all, so the client COULD NOT scope them even if it wanted to. The engine does gate the phase on queued
- * work (`loop/status.ts`'s `${n} task(s) still queued` and phase ①'s fix/rewrite/merge clause), so an open
- * task is a true wait; what would be a lie is calling it a "group" task. The copy says `Story task` for
- * that reason, and the count stays equal to `review.open_tasks` because the filter is the projection's own.
+ * THE SERVER RUNS A SECOND, NARROWER SET, and the difference between the two is now the whole content of the
+ * accept's sentence: `loop/types.ts:OPEN_TASK_STATES` (`open`/`claimed`) is what the engine dispatches
+ * (`loop/records.ts:openTasks`) and therefore what the accept moves to `wontfix`
+ * (`loop/records.ts:wontfixTasks`). A `blocked` row is in the queue but out of the sweep — it is the crew
+ * asking the Author something, and an accept is not the Author's answer. `ACCEPT_SWEPT_TASK_STATES` below is
+ * the client's mirror of the sweep, and the statement uses THAT count, never this one.
+ *
+ * WHY THE CLIENT CARRIES ITS OWN COPY INSTEAD OF IMPORTING THE SERVER'S: `src/server/**` is a separate
+ * module boundary from the desk (this file's standing rule — the desk derives from the WIRE it is handed,
+ * never from server internals), and the three-state list is the fact the desk has to agree with.
+ *
+ * THE DEFECT THIS REMOVES: the gate used to ask `task.state !== 'done'`, which left a `wontfix` row — a task
+ * the crew settled by DECLINING it — holding the Accept button greyed forever. `wontfix` is a closed state
+ * in the store (`shared/types.ts:171 TASK_STATES`) and in the engine's open set, so the one difference
+ * between the old filter and this one is exactly the state that should never have blocked.
+ */
+export const OPEN_TASK_STATES: PhraseTaskRow['state'][] = ['open', 'claimed', 'blocked'];
+
+/**
+ * The open tasks the Summary phrase's read carries — the phrase read's WHOLE queue, never a group-scoped
+ * one, and never a set the client may describe as phrase-owned.
+ *
+ * R-T2/F3, from the server: `phraseProjection`'s `openTasks` builds the phrase read's `tasks` rows as
+ * `store.tasks.list().filter(task => task.story_id === story.id && OPEN_TASK_STATES.includes(task.state))` —
+ * every unfinished task of the Story — and `PhraseTaskRow` carries no group AND no phrase attribution at all,
+ * so the client could not narrow them even if it wanted to. What the desk may therefore say is what it
+ * actually counted: the rows the Summary phrase's read sent. The old copy promised "on this Summary or
+ * anywhere in the Story", a scope claim the rows cannot support in either direction (defect 2 of T13) — the
+ * sentence now names the queue the read carries, which is the same count the Author sees on the phrase's own
+ * surface.
+ *
+ * THE SERVER HALF HAS LANDED (T15), so the old note is gone: that projection used to filter on
+ * `state !== 'done'` and count a declined (`wontfix`) row as open, so the desk's count could read LOWER than
+ * `review.open_tasks`. `phraseProjection`'s `openTasks` now filters on the server's own `OPEN_TASK_STATES`,
+ * so the wire and this function agree state-for-state and neither counts a `wontfix` row.
+ *
+ * WHAT THIS COUNT IS NOT. It is the QUEUE, three states wide; it is not what the accept CLOSES. The sweep
+ * takes only `open`/`claimed` (`ACCEPT_SWEPT_TASK_STATES`), so the confirm statement counts the two halves
+ * separately rather than describing this number as "tasks the click closes".
  */
 export function groupOpenTasks(view: Pick<StoryViewData, 'phrase'>): PhraseTaskRow[] {
-    return (view.phrase?.tasks ?? []).filter((task) => task.state !== 'done');
+    return (view.phrase?.tasks ?? []).filter((task) => OPEN_TASK_STATES.includes(task.state));
+}
+
+/**
+ * THE STATES THE ACCEPT ACTUALLY CLOSES — the desk's mirror of `loop/types.ts:OPEN_TASK_STATES`
+ * (`open`/`claimed`), the set `loop/records.ts:openTasks` hands to `loop/records.ts:wontfixTasks`, which is
+ * the act the lock route runs inside the accept's commit (D-78 / L-25b — the count comes back to the desk as
+ * `lock_receipt.wontfixed_tasks`). `blocked` is deliberately absent: a blocked row is the crew's question to
+ * the Author, and an accept is not an answer to it, so the sweep leaves it standing.
+ *
+ * WHY A SEPARATE CONSTANT FROM `OPEN_TASK_STATES` ABOVE. The queue and the act are two different sets, and the
+ * sentence under the control used to name one with the other's number: with a `blocked` row in the queue the
+ * line promised "closes 3 open tasks … as wontfix" while the receipt reported 2. §10.2's U-16 rule is that a
+ * line naming a leftover this book does not have is the same lie as a blocker that is not one, so the
+ * statement counts the swept pair and, when blocked rows exist, names them as what the click LEAVES.
+ *
+ * THE GATE IS UNTOUCHED: a `blocked` row, like every other open row, is not a blocker for Accept (D-78). Only
+ * the counting inside the statement changed.
+ */
+export const ACCEPT_SWEPT_TASK_STATES: PhraseTaskRow['state'][] = ['open', 'claimed'];
+
+/** The queue rows the accept moves to `wontfix` — the only rows "closes N open tasks … as wontfix" may count. */
+export function groupTasksClosedByAccept(view: Pick<StoryViewData, 'phrase'>): PhraseTaskRow[] {
+    return (view.phrase?.tasks ?? []).filter((task) => ACCEPT_SWEPT_TASK_STATES.includes(task.state));
+}
+
+/** The open rows the sweep skips: `blocked` survives the accept, so the statement has to say so out loud. */
+export function groupTasksLeftByAccept(view: Pick<StoryViewData, 'phrase'>): PhraseTaskRow[] {
+    return (view.phrase?.tasks ?? []).filter((task) => task.state === 'blocked');
+}
+
+/**
+ * THE FINDING STATES THE ACCEPT ACTUALLY VOIDS — the desk's mirror of `phrase/locks.ts:VOIDABLE_FINDING_STATES`
+ * (`unconfirmed`/`confirmed`/`approved`/`disputed`), the state filter `phrase/locks.ts:voidFindingsOnLock` runs
+ * over the rows `loop/invalidation.ts:acceptSummaryLeftovers` selects. That void is the act whose count comes
+ * back to this desk as `lock_receipt.voided_findings` (D-78 / L-25b's "the count is recorded and shown").
+ *
+ * WHY `disputed` IS HERE AND NOT IN `OPEN_PHRASE_FINDING_STATES` ABOVE. Those two lists answer two different
+ * questions and are deliberately not merged. That one is the REVIEW band — what still reads as live work — and
+ * it is the wire's own `projections.ts:openFindings` set, which is what `review.open_findings` sends and what
+ * D-33c's holding set (`loop/types.ts:ISSUE_HOLDING_STATES`) agrees with. This one is the LOCK set: D-33c counts
+ * a dispute as a LIVE claim ("not proven yet") about text that has just stopped being writable, so a lock
+ * retires it rather than leaving it unanswerable — the split `phrase/locks.ts` and §17's "Findings are voided,
+ * not resolved" state for the group lock too. `fixed` and `discarded` are terminal in §4.10's ladder and are
+ * left exactly as they are for either question.
+ *
+ * WHY A SEPARATE CONSTANT FROM `ACCEPT_SWEPT_TASK_STATES`, and the defect this removes. The findings half of the
+ * confirm line used to borrow the review band's number, so a book carrying a `disputed` row printed
+ * "voids 3 open findings" while the same commit discarded 4 and the receipt reported `voided_findings: 4` — the
+ * same failure class the swept-tasks constant already eliminated for the "closes N" clause. §10.2's U-16 rule:
+ * a line naming a leftover this book does not have is the same lie as a blocker that is not one.
+ */
+export const ACCEPT_VOIDED_FINDING_STATES: FindingState[] = ['unconfirmed', 'confirmed', 'approved', 'disputed'];
+
+/**
+ * THE ROWS THE ACCEPT DISCARDS — the only rows "voids N open finding(s) on the Summary phrase" may count, and
+ * the exact client-side mirror of what `loop/invalidation.ts:acceptSummaryLeftovers` hands to
+ * `phrase/locks.ts:voidFindingsOnLock`.
+ *
+ * THE STATE SET IS {@link ACCEPT_VOIDED_FINDING_STATES}. A `fixed` or `discarded` row rides in the read and is
+ * never counted: the sweep leaves a terminal row where it is.
+ *
+ * THE SCOPE IS THE SWEEP'S, NOT THE RAIL'S. A row counts when it is the SUMMARY's own claim:
+ *   - UNSCOPED (`finding.unscoped` — the row named no group): the legacy "the Overview as a whole" meaning, and
+ *     the Overview IS the artifact being accepted, so it goes. The sweep takes it the same way, including on a
+ *     book with no Summary Phrase row, where its own group set is empty and every claim is unscoped; and
+ *   - EVERY group the claim names is one of THIS phrase read's entries — the sweep's
+ *     `scope.refs.every((id) => summaryGroupIds.has(id))`, over the same ids this read's `groups` carries.
+ * A MIXED claim (a Summary group PLUS a Phrase ② chapter entry) is therefore NOT counted, even though the
+ * projection put it in this read: the read admits any row whose scope touches at least one of the phrase's
+ * entries, while the sweep skips the mixed row on purpose — the chapter half is text the next phrase is about to
+ * write — so counting it would promise a void this click does not perform (the count running HIGH is the same
+ * lie, the other direction). `targeted` and `unscoped` are the wire's own resolution of
+ * `phrase/findings.ts:findingGroupScope` (`projections.ts:findingRows`), the same read the sweep runs, so a ref
+ * naming a group this Story does not have is already dropped there and is not re-decided at the desk. A legacy
+ * row with `targeted: []` and `unscoped: false` counts too: `findingGroupScope` only empties `refs` by reading
+ * the row as unscoped, which is the first branch, so the sweep discards that row as well.
+ *
+ * THE ONE ASYMMETRY THAT CANNOT BE CLOSED ON THIS SIDE. The desk counts the rows of the phrase read it is
+ * HOLDING; the sweep reads the store at the instant the commit lands. An agent that raises or settles a finding
+ * between the render and the click therefore moves `lock_receipt.voided_findings` relative to this number, and
+ * that is honest rather than a mismatch: each figure was true of the book at the moment it was written, and the
+ * line is the book of the frame the Author pressed in.
+ */
+export function groupFindingsVoidedByAccept(view: Pick<StoryViewData, 'phrase'>): PhraseFindingRow[] {
+    // The Summary phrase's own entries: the same id set `acceptSummaryLeftovers` builds from
+    // `phraseGroupsOf(store, story.id, phrase.id)`, read off the rows this desk is holding.
+    const summaryGroupIds = new Set((view.phrase?.groups ?? []).map((group) => group.id));
+
+    return phraseFindings(view).filter((finding) => {
+        if (!ACCEPT_VOIDED_FINDING_STATES.includes(finding.state)) return false;
+
+        // The legacy whole-Overview claim is the Summary's own, whatever the book's group set looks like.
+        if (finding.unscoped) return true;
+
+        // Every named group belongs to the phrase being completed; one Phrase ② ref and the row survives.
+        return finding.targeted.every((groupId) => summaryGroupIds.has(groupId));
+    });
 }
 
 /** The revisions superseded on this group — countable; only the latest's predecessor travels as prose. */
@@ -1809,12 +1967,26 @@ export const EDITOR_GROUP_LOCKING_NOTE =
     'On, the Editor may lock a Summary group in on its own judgement — it weighs the Critic findings open on that group now, with the Reader score and rationale beside them, and commits the text that stands. Off (the default), only the Author locks a group. Either way, only the Author can unlock one.';
 
 /**
- * The sign-off blockers the GROUP model adds to the phase gate (U5's last test).
+ * THE sign-off blockers the GROUP model adds to the phase gate (U5's last test), under R2's rule.
  *
  * The route itself still gates on the phase Goal and the Ideas tray (`routes.ts:POST /stories/:id/lock`),
  * and the dashboard may not invent a blocker the engine ignores — but it may not ACCEPT a ready-looking
  * gate over a Summary the group rows say is incomplete either. Each reason below is a fact off the phrase
  * read, phrased as the wait it is, and an empty list means the group surface has nothing outstanding.
+ *
+ * R2 — WHAT STOPPED BEING A BLOCKER, in this function's own words: an open Critic finding and an open queue
+ * task used to be reasons here. They are not, because the accept VOIDS the phrase's open findings and moves
+ * its open tasks to `wontfix` (T12's server leg, L-25b's precedent), so holding the control shut over them
+ * asks the Author to clear work the click clears (L-36). They are counted into the accept's statement instead
+ * (`summaryAcceptStatement`), which is where the Author reads what the click does with them.
+ *
+ * WHAT STILL BLOCKS, and why each one earns its place:
+ *   - the phrase read has not landed / failed (R-T2/F1, F2) — it is the only source of every fact below;
+ *   - an unwritten group (R1) — the Overview cannot be complete, so no clean Summary can exist over it;
+ *   - no clean Summary to accept (R2) — one sentence naming the gap (`cleanSummaryGateReason`), never a
+ *     findings/tasks list, because the gaps ARE the missing selection;
+ *   - a live Writer holding a group (R4) — a Writer installing text AFTER the accept would write over a
+ *     read-only Summary (P5), which is the one rule this desk may not break silently.
  */
 export function groupSignOffBlockers(view: StoryViewData): string[] {
     if (!isGroupSummary(view)) return [];
@@ -1836,6 +2008,8 @@ export function groupSignOffBlockers(view: StoryViewData): string[] {
         ];
     }
 
+    // R1 FIRST, because it is the gap the Author can see: an unwritten group is not in the Overview at all,
+    // and naming the title beats naming the state of a selection derived from it.
     const unwritten = unwrittenGroups(view);
 
     if (unwritten.length > 0) {
@@ -1846,45 +2020,16 @@ export function groupSignOffBlockers(view: StoryViewData): string[] {
         );
     }
 
+    // R2 — THE BAR, replacing the two rows this function used to push here. `grouped()`'s clean five-group
+    // book answers `''` (no reason at all); the mid-review book answers ONE gap sentence in place of the old
+    // findings line and task line. An UNSCOPED finding naming all five groups, and a `claimed` task, now ride
+    // in the statement (`summaryAcceptStatement`) — they are what the accept voids and closes, not what it
+    // waits for.
+    const gate = cleanSummaryGateReason(view);
+
+    if (gate !== '') reasons.push(gate);
+
     const groups = phraseGroups(view);
-    const blocking = phraseFindings(view).filter(
-        (finding) => isOpenPhraseFinding(finding) && summaryBlockingCost(view.story, finding.cost)
-    );
-
-    if (blocking.length > 0) {
-        const names = (rows: PhraseFindingRow[]): string =>
-            rows
-                .slice(0, 3)
-                .map((finding) => findingGroups(finding, groups).map((group) => group.title).join('/') || 'the Overview')
-                .join(', ');
-
-        reasons.push(
-            `${reasonCount(blocking.length, 'open finding', 'open findings')} on the Summary groups — ${names(
-                blocking
-            )} still ${
-                blocking.some((finding) => finding.state === 'approved')
-                    ? 'await the revision that answers them (R3)'
-                    : 'await your decision (D-34)'
-            }`
-        );
-    }
-
-    const openTasks = groupOpenTasks(view);
-
-    if (openTasks.length > 0) {
-        // R-T2/F3: the read's task rows are every open task of the STORY (`projections.ts:1208`) and carry no
-        // group attribution, so the sentence may not call them the groups' — a chapter repair task waiting in
-        // the queue holds the Summary sign-off too, and that IS the engine's rule (`loop/status.ts`'s queued-
-        // work clause), not a blocker this gate invented.
-        reasons.push(
-            `${reasonCount(
-                openTasks.length,
-                'Story task',
-                'Story tasks'
-            )} still open in the queue — the crew has work it has not closed, on this Summary or anywhere in the Story`
-        );
-    }
-
     const busy = groups.filter(isGroupWriterBusy);
 
     if (busy.length > 0) {
@@ -1895,6 +2040,105 @@ export function groupSignOffBlockers(view: StoryViewData): string[] {
 
     return reasons;
 }
+
+/**
+ * THE leftovers the accept clears, counted off the SAME rows the gate reads — so the number the Author reads
+ * in the confirm line can never disagree with the state the panes draw above it, nor with the receipt the
+ * route answers with.
+ *
+ * WHY NO NEW WIRE FIELD (AC6): `findings` is `groupFindingsVoidedByAccept` — the phrase read's rows at the
+ * states `phrase/locks.ts:voidFindingsOnLock` discards (`ACCEPT_VOIDED_FINDING_STATES`, mirror of
+ * `VOIDABLE_FINDING_STATES`) and at the scope `loop/invalidation.ts:acceptSummaryLeftovers` selects (the
+ * Summary's own claims: an unscoped legacy row, or a row whose every named group is one of this phrase's
+ * entries). That is the set the click performs, so it is the set the "voids N …" clause may name;
+ * `lock_receipt.voided_findings` reports exactly that many, for the frame the read is holding.
+ *
+ * IT IS NOT THE OVERVIEW'S REVIEW NUMBER, AND THE TWO NUMBERS ANSWER DIFFERENT QUESTIONS. The card's own
+ * review line ("N open findings · M critical/major") is `review.open_findings` / `review.blocking_findings` —
+ * a SEVERITY band over the three-state OPEN set (`OPEN_PHRASE_FINDING_STATES`, the wire's `openFindings`), which
+ * counts no `disputed` row (D-33c files a dispute as archived) and takes every scope the read carries. The
+ * accept's count is wider in STATES and narrower in SCOPE, because it books an act rather than a queue: it takes
+ * the `disputed` row the sweep discards, and it skips the mixed-phrase claim the band still counts. On a book
+ * with a `disputed` row the review line says 3 and the accept line says 4, and both are true. A count drawn from
+ * `summaryBlockingCost` would be wrong again, in the other direction — the accept voids every claim the phrase
+ * owns, not only the ones at the Summary's cost bar.
+ *
+ * THE TWO TASK NUMBERS, which is what this used to get wrong. `tasks` counts `groupTasksClosedByAccept` —
+ * `open` + `claimed`, the set the route's `wontfixTasks` sweep actually moves — because the clause it feeds
+ * says "closes … as wontfix", and `lock_receipt.wontfixed_tasks` reports exactly that many. `blocked` counts
+ * `groupTasksLeftByAccept`: an open row the sweep skips, because a blocked task is the crew's question to the
+ * Author and the accept is not an answer. The desk's QUEUE number (`groupOpenTasks`, three states, the
+ * Overview's "K open tasks") is still the sum of the two, and it is deliberately not what the "closes" clause
+ * carries: on a book with a blocked row, a line claiming it closed that row too promised a leftover this book
+ * does not have. Both come from `view.phrase`, the one read this gate is built from.
+ */
+export function summaryAcceptLeftovers(view: StoryViewData): {
+    findings: number;
+    tasks: number;
+    blocked: number;
+} {
+    if (!phraseReadLanded(view)) return { findings: 0, tasks: 0, blocked: 0 };
+
+    return {
+        findings: groupFindingsVoidedByAccept(view).length,
+        tasks: groupTasksClosedByAccept(view).length,
+        blocked: groupTasksLeftByAccept(view).length
+    };
+}
+
+/**
+ * The grouped Summary's confirm/statement line (U-16): what the accept DOES, in the frame before the click.
+ *
+ * R3/R4 move two acts into this one commit (T12's server leg), so the copy says so: the Summary phrase's own
+ * claims are VOIDED and the queue's swept tasks closed as `wontfix` (L-25b's "closed with a count on it"), and
+ * Phrase 2 opens from the compiled Summary as the Author's act rather than as a second verb (D-72 — the accept is
+ * what starts it, and `PlotlinesHandoff` then correctly reports the phrase as started).
+ *
+ * WHY THE TWO LEFTOVERS GET DIFFERENT SCOPE WORDS, which is defect 2 of the reported copy: the phrase read's
+ * FINDINGS are phrase-scoped, and the clause narrows them once more to what the sweep actually swallows —
+ * `groupFindingsVoidedByAccept` keeps the Summary's OWN claims, meaning an unscoped legacy row (R3 reads that as
+ * "the whole Overview", which is the artifact being accepted) or a row whose every named group is one of this
+ * phrase's entries (`loop/invalidation.ts:acceptSummaryLeftovers`). "On the Summary phrase" is therefore a fact
+ * the wire supports on BOTH sides, and a mixed Summary-plus-Phrase-② claim — which the read does show, and which
+ * the sweep leaves standing for the phrase this same accept starts — is not counted. Its TASKS are not phrase
+ * scoped at all (`projections.ts:phraseProjection`'s `openTasks` filters on `story_id` alone and `PhraseTaskRow`
+ * carries no phrase or group id), so the task clause says "in the queue" — the count the read sent — and never
+ * claims a scope the rows cannot support in either direction, which is exactly what the old "on this Summary or
+ * anywhere in the Story" sentence did.
+ *
+ * WHY THE "voids" CLAUSE MAY NOT COUNT THE REVIEW BAND, which is defect 4 and the findings twin of defect 3: the
+ * void it describes (`phrase/locks.ts:voidFindingsOnLock` over `VOIDABLE_FINDING_STATES`) takes `disputed` as
+ * well — D-33c counts a dispute as a live claim about text that has just stopped being writable — while the
+ * Overview's review line stays a three-state severity band. The old clause borrowed the band's number, so a book
+ * carrying a disputed row printed "voids 3 open findings" over a receipt answering `voided_findings: 4`. The
+ * clause is now fed by `ACCEPT_VOIDED_FINDING_STATES`, and it needs no "leaves …" twin of its own: everything the
+ * accept can void, it does void, so nothing goes quietly out of the sentence.
+ *
+ * WHY THE "closes" CLAUSE MAY NOT COUNT THE WHOLE QUEUE, which is defect 3: the sweep it describes
+ * (`loop/records.ts:wontfixTasks`) takes `open` + `claimed` only, so a `blocked` row — the crew's question to
+ * the Author, which the accept is not an answer to — survives the click. The old line counted it and promised
+ * to close it, so the confirm could read "closes 3 open tasks" over a receipt reporting
+ * `wontfixed_tasks: 2`. §10.2's U-16 rule: a line naming a leftover this book does not have is the same lie as
+ * a blocker that is not one. Hence `tasks` (the swept pair) and a separate "leaves N blocked tasks for you"
+ * clause for what survives, so nothing goes quietly.
+ *
+ * THE CLAUSES ARE CONDITIONAL, all three of them: they appear only when the read actually carries them, because
+ * an empty "voids no findings" / "leaves no blocked tasks" clause would describe a state this book is not in.
+ * The blocked clause comes BEFORE the closing "and starts Phrase 2" leg so the sentence stays one list that ends
+ * in the phrase's own verb, and it carries no "and" of its own for that reason.
+ */
+const summaryAcceptStatement = (leftovers: { findings: number; tasks: number; blocked: number }): string =>
+    'Accepting the final Summary makes it read-only for every agent (P5, L-30), deletes this phase\u2019s Ideas tray in the same commit (D-36)' +
+    (leftovers.findings > 0
+        ? `, voids ${reasonCount(leftovers.findings, 'open finding', 'open findings')} on the Summary phrase`
+        : '') +
+    (leftovers.tasks > 0
+        ? `, closes ${reasonCount(leftovers.tasks, 'open task', 'open tasks')} in the queue as wontfix`
+        : '') +
+    (leftovers.blocked > 0
+        ? `, leaves ${reasonCount(leftovers.blocked, 'blocked task', 'blocked tasks')} for you`
+        : '') +
+    ', and starts Phrase 2 from the compiled Summary (D-72).';
 
 // ---------------------------------------------------------------------------
 // D-67 / D-68 — the REVIEWED Summary the Summary tab renders
@@ -2055,6 +2299,76 @@ export function reviewedGaps(view: Pick<StoryViewData, 'phrase' | 'story'>): Arr
     return reviewedGroupRows(view)
         .map((row) => ({ ...row, reason: reviewedGapReason(row.reviewed) }))
         .filter((row) => row.reason !== '');
+}
+
+/**
+ * R2 — IS THERE A CLEAN SUMMARY TO ACCEPT? The one fact the Accept control now hangs on.
+ *
+ * THE RULE, in the Author's words: the button opens when a clean Summary EXISTS — the reviewed selection is
+ * complete, or the Author has taken one. `story-contract` mirrors the server's own state token
+ * (`projections.ts:reviewedSummaryView`: `ready`/`chosen` are exactly "complete selection" and "a valid
+ * recorded choice"), so the desk does not re-derive the selection from the group rows it happens to be
+ * holding, and cannot disagree with the choose route about what is clean.
+ *
+ * WHAT THIS PREDICATE IS *NOT* A BLOCKER FOR (the reported defect): open Critic findings and open queue tasks
+ * used to grey this control, which asked the Author to decide work the accept voids and closes in the same
+ * commit (L-36: "an unapproved finding does not halt a Story by itself … a pending decision, not a blocked
+ * Story", and L-25b's precedent for closing leftovers with a count on them). They are still READ here — they
+ * are what the statement counts — they simply no longer shut the door. The waits that stay are the ones the
+ * server really refuses on, or the ones a click would corrupt: the phrase read (`groupSignOffBlockers`'s
+ * first clause), the Ideas tray (L-7a), the phase Goal (U-16), and a live Writer holding a group (R4 — text
+ * installed after the accept would break the P5 read-only rule).
+ *
+ * `pending` is the false case: no complete selection AND no valid choice, which is what
+ * `cleanSummaryGateReason` turns into the single gap sentence the gate prints.
+ */
+export function cleanSummaryExists(view: Pick<StoryViewData, 'phrase'>): boolean {
+    if (!phraseReadLanded(view)) return false;
+
+    return phraseReviewed(view).state !== 'pending';
+}
+
+/**
+ * The one sentence that replaces the old findings/tasks blockers: WHY there is no clean Summary yet, naming
+ * each group the reviewed Overview is missing with the wire's own reason for it (`reviewedGapReason`, so a gap
+ * token the server never sent is never dressed up as one).
+ *
+ * WHY ONE SENTENCE AND NOT THREE: the gaps ARE the missing clean Summary. Emitting an "N open findings" and an
+ * "M open tasks" bullet beside it would re-add, as a blocker, the very rows R2 stopped blocking — and on the
+ * mid-review book every gap row is `issues_open`, so the Author would read the same defect twice, once as a
+ * wait and once as a fact.
+ *
+ * WHY AN UNWRITTEN GROUP IS NOT REPEATED HERE: R1's own bullet names every group the LIVE rows say has no text
+ * (`unwrittenGroups`), and that fact already explains why the selection cannot close. Naming `Ending` twice —
+ * once as "still unwritten (R1)", once as "nothing written yet" — is the duplicate reason this gate was told
+ * not to emit. A gap row whose live sibling IS written stays, because only this sentence can name it, and a
+ * book with nothing left to name after R1 answers `''` (R1 alone is the honest single reason).
+ *
+ * WHY EACH CLAUSE IS LABELLED WITH A COLON: the gap reasons are predicates of a group title (`has open
+ * issues`, `nothing written yet`, `awaiting a clean pass`), and a comma-joined list of bare predicates breaks
+ * grammar the moment one unwritten group sits among them ("Ending nothing written yet"). `Title: reason` keeps
+ * the wire's words verbatim — the reason vocabulary is pinned in `reviewedGapReason`, and this layer may not
+ * re-conjugate it or invent a reason the read did not send.
+ *
+ * `''` means clean: the same convention `plotlinesHandoffRefusal` and `reviewedChooseRefusal` use.
+ */
+export function cleanSummaryGateReason(view: Pick<StoryViewData, 'phrase' | 'story'>): string {
+    if (cleanSummaryExists(view)) return '';
+
+    const gaps = reviewedGaps(view);
+
+    if (gaps.length === 0) {
+        // The wire says `pending` but sent no gap rows — an empty catalog, or a payload older than D-67. The
+        // desk may name the state, but it may not invent a reason the read did not carry.
+        return 'no clean Summary to accept yet — the reviewed selection has not been reported by the phrase read';
+    }
+
+    const unwritten = new Set(unwrittenGroups(view).map((group) => group.id));
+    const named = gaps.filter((row) => !(row.group !== undefined && unwritten.has(row.group.id)));
+
+    if (named.length === 0) return '';
+
+    return `no clean Summary to accept yet — ${named.map((row) => `${row.title}: ${row.reason}`).join('; ')}`;
 }
 
 /** The unresolved issues holding a clean verdict back, each with the group TITLES it scopes to. */
@@ -2439,6 +2753,18 @@ export function draftVerdicts(
 /**
  * The prose of one revision, tolerant of the three body shapes §4.15 allows: a Summary is its
  * prose fields, a plotline its contract fields, a chapter its `ChapterSection[]` (D-7).
+ *
+ * WHAT EACH BRANCH RETURNS IS A CONTRACT, NOT AN INCIDENTAL, because `RevisionsCompare.tsx` renders this text
+ * through `MarkdownText` and the reader's line breaks come from what is written here:
+ *   - a string is returned untouched — it is the stored phrase prose, newlines and all;
+ *   - a chapter body's sections are joined with a BLANK line, the same paragraphing the prose pane gives them;
+ *   - an object body joins `key: value` with a SINGLE `\n` — one field per line, and no blank line between
+ *     them, which is how `chapterEntryContent` (`src/server/phrase/plotpoints.ts:70-78`) stores a contract
+ *     block too. Those single newlines are soft breaks in markdown, so they only stay on separate lines because
+ *     `MarkdownText` runs `remark-breaks`; the node this feeds was a literal `<pre>` until U-23, i.e. it used to
+ *     be the UA stylesheet that kept them apart.
+ * It stays DERIVED rather than stored: the §4.15 body shape is the wire's, and flattening it here is what keeps
+ * an old draft readable beside a new one instead of asking every producer to agree on one text.
  */
 export function revisionBodyText(body: unknown): string {
     if (typeof body === 'string') {

@@ -24,20 +24,35 @@ import {
     deletePhaseIdeas,
     loopAttr,
     storyChapters,
+    storyFindings,
     storyIdeas,
     storyPlotlines,
     storySummary,
+    wontfixTasks,
     loopChapter
 } from './records';
-import { TASK_KINDS, UNDO_STACK_LIMIT, type LoopChapter, type UndoEntry } from './types';
+import { TASK_KINDS, UNDO_STACK_LIMIT, type LoopChapter, type PhaseLockReceipt, type UndoEntry } from './types';
 // HARDENING (D-25/D-25a group reset): `scrapPhasesAfter` has to scrap the group pipeline's history
 // alongside the legacy `revisions` rows — see the block in the function — and the switch is the book
 // itself (`phrase/catalog.ts:isGroupManagedStory`). `phraseGroupsOf` + `isPhraseGroupLocked` are the two
 // reads the D-69 lock clear needs, and they come from the SAME catalog module the write layer reads, so
 // a scrap can never disagree with `phrase/locks.ts` about which row carries a live lock.
-import { isGroupManagedStory, isPhraseGroupLocked, isPhraseGroupManaged, phraseGroupsOf, storyPhraseByKey } from '../phrase';
-// PHRASE ② (T-W2): the phrase KEY the scrap gate above names (see `shared/phrase.ts`).
-import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
+// T12/R3 adds `voidFindingsOnLock` to that list: the Summary accept voids its open findings through the
+// SAME void path a group lock uses, rather than writing `discarded` a second time in a second file.
+import {
+    isGroupManagedStory,
+    isPhraseGroupLocked,
+    isPhraseGroupManaged,
+    phraseGroupsOf,
+    storyPhraseByKey,
+    // T12/R3: the finding's OWN scope read, so the accept asks the same question the rail asks, and the
+    // void path itself.
+    findingGroupScope,
+    voidFindingsOnLock
+} from '../phrase';
+// PHRASE ② (T-W2): the phrase KEY the scrap gate above names (see `shared/phrase.ts`). T12 adds the
+// SUMMARY key: the accept's leftover sweep is scoped to the phrase it is completing.
+import { PHRASE_PLOTLINES_KEY, PHRASE_SUMMARY_KEY } from '../../shared/phrase';
 import type { Chapter, ChapterSection, Story, StoryPhase, Task } from '../../shared/types';
 import type { Store } from '../store';
 
@@ -585,16 +600,17 @@ export const scrapEverythingButTheSeed = (store: Store, story: Story, why: strin
  * L-7 / L-7a / L-7's mirror rule, in one commit: the Story's flag, the artifact's flag, every
  * `contract_locked` mirror, and the emptied tray (D-36).
  *
+ * THE SUMMARY LEG ALSO ACCEPTS (T12/R3): locking phase ① is the Author declaring the Summary final, so the
+ * phrase's outstanding work stops in the SAME commit — open findings are voided and open tasks go to
+ * `wontfix`. See {@link acceptSummaryLeftovers} for why each is a state change and why the sweep is
+ * phrase-scoped. The `plotlines` and `chapters` legs are untouched by this: a sign-off there closes a
+ * contract, it does not complete an artifact the Author has just signed.
+ *
  * The phase advance is here too, because "one action on the Dashboard" (L-7) means the lock and the
  * phase movement cannot be observed separately — a Story whose plotlines are locked but whose phase is
  * still `plotlines` would re-offer the plotline sign-off on the next sweep.
  */
-export function lockWrites(
-    store: Store,
-    story: Story,
-    phase: StoryPhase,
-    at: string
-): { deleted_ideas: number; next_phase: StoryPhase | null } {
+export function lockWrites(store: Store, story: Story, phase: StoryPhase, at: string): PhaseLockReceipt {
     let deleted = 0;
 
     if (phase === 'summary') {
@@ -618,7 +634,16 @@ export function lockWrites(
 
         deleted = deletePhaseTray(store, story, 'summary');
 
-        return { deleted_ideas: deleted, next_phase: 'plotlines' };
+        // T12/R3, AFTER the tray and before the phase move, in this same commit: the accept's leftovers are
+        // part of the decision, not a follow-up the store can be observed without.
+        const leftovers = acceptSummaryLeftovers(store, story, at);
+
+        return {
+            deleted_ideas: deleted,
+            next_phase: 'plotlines',
+            voided_findings: leftovers.voided_findings,
+            wontfixed_tasks: leftovers.wontfixed_tasks
+        };
     }
 
     if (phase === 'plotlines') {
@@ -670,6 +695,87 @@ export function lockWrites(
  */
 function deletePhaseTray(store: Store, story: Story, phase: StoryPhase): number {
     return deletePhaseIdeas(store, story.id, phase);
+}
+
+/**
+ * T12 / R3 — "accept the final Summary" stops the Summary phrase's outstanding work, in the caller's
+ * commit, and reports the counts (L-25b's shape for an accept with leftovers: "whatever is still open at
+ * that moment — findings, `proposed` Ideas — is discarded by the act of completing, and the count is
+ * recorded and shown").
+ *
+ * WHY A STATE CHANGE AND NEVER A ROW DELETE: D-36 empties the Ideas TRAY by DELETING rows, and
+ * `documents/specifications.md` pins the difference on the same act — a lock's findings survive as
+ * provenance (P11). A voided finding is the Author declining a claim about text that is now signed off,
+ * which is exactly `discarded` in §4.10's ladder (D-33c reads `fixed`/`discarded` as CLOSED), and a task
+ * the accept will not run is `wontfix` in §4.7's ladder. Delete either and the Author loses the record of
+ * what the crew said about the book; move the state and the queue empties with the audit intact.
+ *
+ * WHY PHRASE-SCOPED AND NOT STORY-WIDE (R3): the artifact being completed is the SUMMARY, so the accept
+ * swallows the Summary's claims. A finding that names ONLY Phrase ②'s chapter entries is still live work
+ * for the phrase this same accept is about to start, and one that names groups in BOTH phrases keeps its
+ * Phrase ② half for the same reason. An UNSCOPED finding (`Finding.group_refs` absent or naming no group
+ * this book has) is the legacy whole-Overview meaning — `phrase/findings.ts:findingGroupScope` is the one
+ * reader of that absence — which is the Summary's own claim, so it goes.
+ *
+ * THE STATE FILTER IS NOT HERE: `phrase/locks.ts:voidFindingsOnLock` owns it, so `fixed` and `discarded`
+ * rows are untouched by construction and `disputed` moves because D-33c counts a dispute as a live claim.
+ * That is the SAME void the group lock performs, one layer up — which is the point of calling it.
+ *
+ * THE TASKS: §4.7's rows carry no phase and no phrase, so "the Summary phrase's open tasks" is every task
+ * still in the queue at the moment of the accept — which at a phase-① sign-off IS Summary work, because
+ * phase-② work is only opened by this commit's phase move. They go to `wontfix` through
+ * `records.ts:wontfixTasks` (the L-36 path), not a delete: §4.7's word for a job that will not be done,
+ * and the queue's history stays readable.
+ */
+function acceptSummaryLeftovers(
+    store: Store,
+    story: Story,
+    at: string
+): { voided_findings: number; wontfixed_tasks: number } {
+    // THE PHRASE BEING COMPLETED. A book with no Summary Phrase row has no group namespace, so the only
+    // findings it can hold are the unscoped legacy ones — which are still the Summary's, and still go.
+    const phrase = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY);
+    const summaryGroupIds = new Set(
+        phrase === undefined ? [] : phraseGroupsOf(store, story.id, phrase.id).map((group) => group.id)
+    );
+
+    const candidates = storyFindings(store, story.id).filter((finding) => {
+        // THE SCOPE IS THE DOMAIN'S OWN READ (`phrase/findings.ts:findingGroupScope`), not the raw
+        // `group_refs`: that function is the one place that interprets an absent-or-unknown ref list as
+        // "the whole Overview" (R3), and re-deciding it here would give the accept a second, slightly
+        // different meaning of "whose claim is this".
+        const scope = findingGroupScope(store, story, finding);
+
+        // Unscoped: the legacy "the Overview as a whole" claim, which is the artifact being accepted.
+        if (scope.unscoped) return true;
+
+        // Every group it names belongs to Phrase ①: the claim is about the text that just stopped being
+        // writable. (Mixed refs stay open on purpose — the Phrase ② half is still writable, and voiding a
+        // live claim the accept did not freeze is the mistake R3's scope rule exists to prevent.)
+        return scope.refs.every((id) => summaryGroupIds.has(id));
+    });
+
+    // ONE attribution for both sweeps: the accept is one decision, and every row it moves carries the same
+    // sentence (the void path appends its own per-finding clause to it).
+    const attribution = authorAttr(`the Author accepted the Summary at ${at} (L-7a, T12)`);
+
+    const voided = voidFindingsOnLock(store, story, candidates, attribution, (finding, scope) =>
+        scope.unscoped
+            ? `${attribution.why}; discarded ${finding.id} because it named no group and the Overview it was raised against is now signed off (summary accept)`
+            : `${attribution.why}; discarded ${finding.id} because every group it names (${scope.refs
+                  .map((id) => store.phraseGroups.get(id)?.key ?? id)
+                  .join(', ')}) is settled text the accept will not rewrite (summary accept)`
+    );
+
+    const wontfixed = wontfixTasks(
+        store,
+        story.id,
+        authorAttr(
+            `the Author accepted the Summary at ${at}; its open tasks are wontfix because the phrase is complete (T12, R3)`
+        )
+    );
+
+    return { voided_findings: voided.length, wontfixed_tasks: wontfixed.length };
 }
 
 /**

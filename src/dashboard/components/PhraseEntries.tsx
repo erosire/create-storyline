@@ -27,6 +27,9 @@ import { useState } from 'react';
 import type { PhraseFindingRow, PhraseGroupRow, PhrasePlotpointsInput } from '../api';
 import type { StorySelection } from './story-nav';
 import { plotlineGroupRef, summaryGroupRef } from './story-nav';
+// T2 — the entry's prose region is rendered Markdown (`MarkdownText.tsx`); the diff beside it is not (see the
+// branch at `:965`).
+import { MarkdownText } from './MarkdownText';
 import { RevisionDiff } from './RevisionDiff';
 import {
     canAuthorLockGroup,
@@ -222,8 +225,11 @@ export function entryStateLabel(
         return { label: 'to write', tone: 'todo' };
     }
 
-    // The gate's own bar: a critical/major finding open on this row holds the sign-off, so the row says
-    // `blocking`. A minor or taste note is a note, and the row says `open`.
+    // §6.8's COST bar, not a door: a critical/major finding open on this row makes the row say `blocking`,
+    // while a minor or taste note is a note and the row says `open`. D-78 — the word names the band the
+    // Reviewer weighs (exactly the set `summaryBlockingCost` gates, the same number the Overview's row and
+    // this rail's badge print); it is NOT a promise that the sign-off waits, because the accept VOIDS these
+    // rows (L-25b). The state word has to stay — a row with a critical open on it is not `clean` either.
     if (groupBlockingFindings(view, entry.id).length > 0) {
         return { label: 'blocking', tone: 'blocking' };
     }
@@ -306,7 +312,12 @@ export function PhraseEntryRow({
                         data-testid={`${surface.rowId(entry.key)}-findings`}
                     >
                         {`${open.length} open finding${open.length === 1 ? '' : 's'}` +
-                            (blocking.length > 0 ? ' · holds the sign-off' : '')}
+                            // D-78 — the clause names the COST BAND the number counts, never a wait. The old
+                            // ` · holds the sign-off` promised the Accept would stay shut over these rows; it
+                            // does not (the accept voids them), and the words now match the Overview's own
+                            // review line (`SummaryOverviewPane`, ` · N critical/major`) and the confirm line
+                            // that says the click voids them.
+                            (blocking.length > 0 ? ` · ${blocking.length} critical/major` : '')}
                     </span>
                 ) : (
                     <span className="sv-group-row-quiet">
@@ -823,7 +834,12 @@ export function PhraseEntryDetail({
                 </span>
                 {blocking.length > 0 ? (
                     <span className="sv-badge sv-badge-warn" data-testid="group-blocking">
-                        {`${blocking.length} holding the sign-off`}
+                        {/* D-78 — the badge names the severity band the number counts (§6.8's bar,
+                            `summaryBlockingCost`), not a wait it no longer creates: the accept voids these rows,
+                            so "holding the sign-off" contradicted the confirm line two rows below it. A noun is
+                            needed here because the badge stands alone in the head, outside the "Open findings"
+                            row that carries the noun in the body. */}
+                        {`${blocking.length} critical/major finding${blocking.length === 1 ? '' : 's'}`}
                     </span>
                 ) : null}
                 {busy ? (
@@ -966,7 +982,15 @@ export function PhraseEntryDetail({
                 previous !== '' ? (
                     /* R2 / U3 — the latest revision against the one it replaced: deletions struck in red, additions
                        in green. `previous_content` is the immediately preceding revision ONLY, so this is never a
-                       cumulative diff over the archived history. */
+                       cumulative diff over the archived history.
+
+                       T2 — this branch is NOT Markdown, deliberately (specifications.md:464, U-18): U3's rule is the
+                       WORD diff — every removed word in one struck run, every added word in one green run — and those
+                       `<del>`/`<ins>` runs are inline HTML this renderer would have to escape, not prose it could
+                       render. So a group whose text is Markdown shows its source here while it is being compared,
+                       which the spec accepts ("the diff is prose, not a patch viewer", `styles/story.css:1050-1067`);
+                       the whole-text branch below renders it properly. It keeps the same test id and the same two
+                       classes, so the reading copy is one node in either state. */
                     <p className="sv-summary-text sv-group-content sv-group-diff" data-testid="group-content">
                         <RevisionDiff previous={previous} current={entry.content} />
                     </p>
@@ -974,10 +998,29 @@ export function PhraseEntryDetail({
                     /* R-T2/F6 — the ONE reading copy of the row's text. It is prose, not a control, so a screen
                        reader reads the paragraph once; the editor below is an empty edit, not a second copy. For a
                        chapter entry this is the prose the server COMPOSED from the contract fields, which is why the
-                       editor under it edits the fields and never this text. */
-                    <p className="sv-summary-text sv-group-content" data-testid="group-content">
+                       editor under it edits the fields and never this text.
+
+                       T2 — AND IT IS RENDERED AS MARKDOWN, for both phrases. A Summary group's text is the prose the
+                       Writer/Author installed, in the same `## <title>` shape `shared/phrase.ts:composePhraseContent`
+                       joins the Overview from, so printed as text the Author read the SOURCE — `## Premise`, a literal
+                       `- ` — which is the complaint this change answers. A chapter entry's text is
+                       `phrase/plotpoints.ts:chapterEntryContent`, and its shape is NOT a heading and bullets, whatever
+                       a fixture may carry: one `Label: value` line per contract field the Writer filled, in that
+                       function's fixed order, joined with a SINGLE `\n`, with no blank lines and no heading of its own
+                       (the entry's title is the heading, and `composePhraseContent` is what puts `## Chapter N — …` in
+                       front of it when it composes the phrase's whole text — `server/api/routes.ts:1271`,
+                       `server/phrase/controllers/plotlines.ts:523`). Its half of the complaint is the opposite one:
+                       markdown folds a lone newline away, so six labelled fields read as one running sentence —
+                       `Heading: … Must happen: … Must change: …` — unless the renderer keeps the breaks the writer
+                       installed, which is why `MarkdownText` turns every newline in prose into a real break
+                       (`MarkdownText.tsx`, `remark-breaks`). `MarkdownText` renders it, and
+                       it stays the ONE copy: one wrapper element, the same `data-testid`, and BOTH classes it always
+                       carried (`sv-summary-text` is the pane's sizing rule, `sv-group-content` is the reading copy),
+                       so the sizing contract at `styles/story.css:1040-1048` and the R-T2/F6 pin still address it.
+                       Raw HTML in agent prose stays escaped (`MarkdownText` has no `rehype-raw`). */
+                    <MarkdownText className="sv-summary-text sv-group-content" testId="group-content">
                         {entry.content}
-                    </p>
+                    </MarkdownText>
                 )
             ) : (
                 /* U4's purposeful empty state: why it is empty and what fills it. */
@@ -1032,10 +1075,13 @@ export function PhraseEntryDetail({
                 </div>
                 <div className="sv-summary-field">
                     <dt>Open findings</dt>
+                    {/* D-78 — the second number is §6.8's critical/major band (`groupBlockingFindings` →
+                        `summaryBlockingCost`, dial included), the same count the head badge and the rail's row
+                        print. It used to read "M hold the sign-off", which promised a wait the accept does not
+                        impose — it voids these rows in the lock commit. The `<dt>` carries the noun, so the band
+                        needs none here. */}
                     <dd className="sv-summary-value" data-testid="group-findings-count">
-                        {open.length === 0
-                            ? 'none open'
-                            : `${open.length} open · ${blocking.length} hold${blocking.length === 1 ? 's' : ''} the sign-off`}
+                        {open.length === 0 ? 'none open' : `${open.length} open · ${blocking.length} critical/major`}
                     </dd>
                 </div>
                 {/* R3: the findings this row's NEXT text has to answer. It is the server's number, so the pane

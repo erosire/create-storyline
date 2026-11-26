@@ -81,7 +81,12 @@ that drives it, from one origin.
   Editor's brief card, and a **Handoff** card that starts the phrase — by default from the compiled Summary, or
   from the Author's own words — while a classic
   book keeps the §4.3 records view. What that leg still lacks is proof: no dashboard test exercises the Start verb
-  or the phrase's panes (specifications.md §18.8, §10.2's U-20).
+  or the phrase's panes (specifications.md §18.8, §10.2's U-20). All of that prose renders as Markdown
+  through `src/dashboard/components/MarkdownText.tsx` (raw HTML in agent text stays escaped), so the compiled
+  Overview's `## <title>` reads as a heading and not as source (specifications.md §10.2's U-23) — and on the
+  Summary card each section heading also carries the reviewed numbers, `Premise (v2) 100%`: the
+  clean revision and the Reader's percentage, displayed at render and never written into the text the
+  next phrase copies (specifications.md §10.2's U-24).
 - **The HTTP contract** is `src/storyline-server.swagger.yaml` (OpenAPI 3.0.3), the same pattern as
   the harness server's contract: every route, body, projection, status code, and the SSE feed at
   `/v1/storyline/stream` in one document. The UI renders server projections and mutates only through
@@ -186,9 +191,12 @@ with its attempts visible, so the recovery is on the finding — decide it, or r
 with the Revise control. Nothing installs a least-bad text and nothing re-arms a stall by itself. The
 Summary is not offered for sign-off until that reading has happened: while seats or deep passes are
 owed on the text currently installed, the loop keeps the Story `ready` instead of offering
-`phase_signoff`, and the Accept button stays blocked while a group is unwritten, a blocking finding is
-open, or a Writer is mid-rewrite on a group. A Story whose Summary is still the legacy whole-Summary
-shape (`summary_mode: 'sampling'`) keeps the older rules and their escalation rows: it writes
+`phase_signoff`, and the Accept button stays blocked while a group is unwritten, while the reviewed
+selection has no clean Summary to accept, or while a Writer is mid-rewrite on a group. An open finding
+and an open task no longer block it — accepting the final Summary voids the Summary's open findings and
+closes its open tasks as `wontfix`, with those counts shown, and starts Plotlines ② from the compiled
+Summary in the same act (specifications.md §6.3a's D-78). A Story whose Summary is still the legacy
+whole-Summary shape (`summary_mode: 'sampling'`) keeps the older rules and their escalation rows: it writes
 `summary_sampling` competing drafts per round, installs only one, and a round that finds nothing
 acceptable installs NOTHING — it keeps the text it had, buys attempts while each measurably improves on
 the best it has proved, and stops (with one question in your queue) when the attempts stop proving

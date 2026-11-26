@@ -489,6 +489,34 @@ export interface CreateStoryInput {
     plotlines_mode?: 'groups' | 'classic';
 }
 
+/**
+ * T12 — what ONE lock commit wrote, reported back to the Author's accept (U-16's lock button).
+ *
+ * WHY A RESULT AT ALL, when the verb used to answer `void`: accepting the final Summary is the one lock
+ * that throws away live work on the Author's behalf, and L-25b's shape for that is "whatever is still
+ * open at that moment is discarded by the act of completing, and the count is recorded and shown". A
+ * receipt is the recording half; `api/routes.ts`'s `/lock` response is the showing half.
+ *
+ * `voided_findings` and `wontfixed_tasks` are ABSENT on a `plotlines`/`chapters` lock, and absent means
+ * "that leg writes no such rows" rather than zero: a plotline sign-off stops nothing, so a zero would
+ * report a decision that was never taken. They ride on the SAME object `loop/invalidation.ts:lockWrites`
+ * returns from inside the commit, which is what makes them an accounting of the commit rather than a
+ * later re-derivation.
+ */
+export interface PhaseLockReceipt {
+    /** D-36: the phase's Ideas rows the lock deleted (the tray, decided rows included). */
+    deleted_ideas: number;
+    /** L-7: the phase the Story moved to, or `null` when the lock IS the completion (phase ③, L-25a). */
+    next_phase: StoryPhase | null;
+    /**
+     * R3: findings OPEN ON THE SUMMARY PHRASE that the accept voided to `discarded` — phrase-scoped, not
+     * Story-wide, and journaled per row. Summary leg only (see the header).
+     */
+    voided_findings?: number;
+    /** R3: tasks still in the queue that the accept closed as `wontfix`. Summary leg only. */
+    wontfixed_tasks?: number;
+}
+
 /** What `changeChapterCount` returns, because D-3c's removal needs an explicit confirmation first. */
 export interface ChapterCountResult {
     /** Set when chapters would be removed and `opts.confirm` was not given — nothing was deleted. */
@@ -577,8 +605,16 @@ export interface EngineApi {
      */
     requestSummaryRevision(storyId: string, note?: string): Promise<void>;
 
-    /** L-6a/L-7/L-7a: the sign-off. Locks the phase's artifact, empties that phase's Ideas (D-36). */
-    lockPhase(storyId: string, phase: StoryPhase): Promise<void>;
+    /**
+     * L-6a/L-7/L-7a: the sign-off. Locks the phase's artifact, empties that phase's Ideas (D-36), and —
+     * on the SUMMARY leg — voids the phrase's open findings and closes its open tasks (T12/R3).
+     *
+     * It answers {@link PhaseLockReceipt} because the accept has leftovers to declare (L-25b's shape: the
+     * count is recorded and shown). The AUTO-START of Phrase ② (R4) is deliberately NOT here: it is a
+     * second commit that must survive a refusal without touching the lock, and it belongs to the Author's
+     * verb (`api/routes.ts`'s `/lock`), not to the phase machine.
+     */
+    lockPhase(storyId: string, phase: StoryPhase): Promise<PhaseLockReceipt>;
 
     /** L-31/D-25: the only way a lock opens. Scraps every later artifact, keeps the provenance. */
     backtrack(storyId: string, phase: StoryPhase): Promise<void>;

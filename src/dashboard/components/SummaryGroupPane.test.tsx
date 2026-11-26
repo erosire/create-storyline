@@ -81,6 +81,26 @@ function renderGroup(
     };
 }
 
+/**
+ * T2 — every block the group's prose region emitted, in DOM order, as `TAG:text`.
+ *
+ * The prose region is `MarkdownText` now, so a group's text is a BLOCK box rather than one string, and an exact
+ * `textContent` comparison no longer says anything about whether `## Premise` became a heading or stayed a
+ * literal — a heading and a literal hash produce the same words minus two characters. The blocks do say. A
+ * list is flattened to its items joined by `|`, because a list's own `textContent` runs items together and a
+ * dropped item would survive the assertion. Same device as `SummaryOverviewPane.test.tsx`'s `summaryBlocks`, but
+ * handed the region node itself (`screen.getByTestId('group-content')`), which is how this file reads the copy.
+ */
+function groupBlocks(prose: ParentNode): string[] {
+    return Array.from(prose.querySelectorAll('h1,h2,h3,h4,h5,h6,p,ul,ol')).map((block) =>
+        block.tagName === 'UL' || block.tagName === 'OL'
+            ? `${block.tagName}:${Array.from(block.querySelectorAll('li'))
+                  .map((item) => item.textContent ?? '')
+                  .join('|')}`
+            : `${block.tagName}:${block.textContent ?? ''}`
+    );
+}
+
 describe('SummaryGroupPane — the group stated by name, purpose, text and revision (U3)', () => {
     it('shows Premise by title, its current text diffed against the revision it replaced, and its revision number', () => {
         const { container } = renderGroup('grp-premise');
@@ -94,6 +114,15 @@ describe('SummaryGroupPane — the group stated by name, purpose, text and revis
 
         expect(prose.querySelector('del')?.textContent).toBe('starts ');
         expect(prose.querySelector('ins')?.textContent).toBe('begins ');
+        // T2/AC4 — this branch is deliberately NOT the Markdown renderer. U3's rule is the WORD diff: one struck
+        // run of removed words and one added run (`RevisionDiff.tsx`), which are inline HTML that
+        // `react-markdown` would ESCAPE rather than render. So a group that is being compared still shows its
+        // Markdown source — the spec accepts it ("the diff is prose, not a patch viewer",
+        // `documents/specifications.md:1056`), and the tag plus the absence of `sv-markdown` are how the DOM says
+        // which branch the Author is looking at.
+        expect(prose.tagName).toBe('P');
+        expect(prose.classList.contains('sv-markdown')).toBe(false);
+        expect(prose.classList.contains('sv-group-diff')).toBe(true);
         expect(screen.getByTestId('group-diff-from').textContent).toBe(' · diff against Revision 2');
         // The status line is the CURRENT revision's own row: its number and its size, from the `latest`
         // history row the projection sends (R2).
@@ -155,8 +184,66 @@ describe('SummaryGroupPane — the group stated by name, purpose, text and revis
         const prose = screen.getByTestId('group-content');
 
         expect(prose.textContent).toBe(threeLines);
+        // T2 — the reading copy is the shared Markdown renderer now, and it keeps every hook the pane and the
+        // stylesheet address: ONE element (`sv-markdown` is appended, never replaced), the sizing class
+        // (`sv-summary-text`, whose three-line/overflow contract `styles/story.css:1033-1060` holds), the reading
+        // copy's own class, and no `aria-hidden`. The tag moved `p` → `div` with the renderer; no selector in
+        // `styles/story.css` or `styles/app.css` addresses this node BY TAG, which is why the pane's sizing
+        // survives the change.
+        expect(prose.tagName).toBe('DIV');
+        expect(prose.className).toBe('sv-markdown sv-summary-text sv-group-content');
         expect(prose.classList.contains('sv-group-content')).toBe(true);
         expect(prose.getAttribute('aria-hidden')).toBeNull();
+    });
+
+    it('renders a group’s text as Markdown, so `## Tone` is a heading and a `- ` line is a list item', () => {
+        // WHAT THE PRODUCERS ACTUALLY SEND. A group's text is the prose the loop composes in the same shape
+        // `shared/phrase.ts:composePhraseContent` joins the Overview from — a `## <title>` line, prose, and the
+        // Markdown the Writer and the Author both type (bullets, `**bold**`). Printed as text the Author read the
+        // SOURCE in the group pane, which is the complaint this change answers. The other fixtures in this file
+        // pin the WORDING of single-line group texts; this one pins the READING of a shaped one.
+        const markdown = [
+            '## Tone',
+            '',
+            'Plain sentences, salt in **every** image.',
+            '',
+            '- no authorial wink',
+            '- the sea keeps the ledger'
+        ].join('\n');
+        const base = groupedPhraseView('s1');
+        const view = groupedView({
+            groups: base.groups.map((group) => (group.key === 'tone' ? { ...group, content: markdown } : group))
+        });
+
+        const { container } = renderGroup('grp-tone', { view });
+        const prose = screen.getByTestId('group-content');
+
+        // The exact blocks, in source order: the heading is a heading, the paragraph is a paragraph with its
+        // bold run, and the three bullets are ONE list of exactly those items.
+        expect(groupBlocks(prose)).toEqual([
+            'H2:Tone',
+            'P:Plain sentences, salt in every image.',
+            'UL:no authorial wink|the sea keeps the ledger'
+        ]);
+        expect(prose.querySelector('strong')?.textContent).toBe('every');
+        // The markers a reader must not see — asserted against the WHOLE pane, because a stray `pre-wrap`
+        // paragraph beside the card would keep printing them while the card itself looked right.
+        expect(container.textContent).not.toContain('## ');
+        expect(container.textContent).not.toContain('**');
+        expect(container.textContent).not.toContain('- no authorial wink');
+        // The exact text the wrapper holds, which is the payload assertion (R-T2/F6): every word the server sent
+        // is here, once, in order. The `\n` runs are not paragraphing the renderer lost — `mdast-util-to-hast`
+        // writes a newline TEXT NODE between sibling blocks and between list items (which is why a `pre-wrap`
+        // container printed Markdown as double-spaced columns; `.sv-summary-text.sv-markdown` at
+        // `styles/story.css:506-510` is what collapses them in ink). The BLOCKS above are what prove the shape.
+        expect(prose.textContent).toBe(
+            'Tone\nPlain sentences, salt in every image.\n\nno authorial wink\nthe sea keeps the ledger\n'
+        );
+        // AC2 — the full prose is still the pane's ONE accessible reading copy: nothing is hidden, and the
+        // editor below is still empty rather than a second copy of the text.
+        expect(prose.getAttribute('aria-hidden')).toBeNull();
+        expect(container.querySelectorAll('[data-testid="group-content"]')).toHaveLength(1);
+        expect((screen.getByRole('textbox', { name: 'Rewrite Tone' }) as HTMLTextAreaElement).value).toBe('');
     });
 
     it('counts the archived revisions and shows only the immediately previous body, as the diff (U3)', () => {
@@ -176,11 +263,11 @@ describe('SummaryGroupPane — the group stated by name, purpose, text and revis
         expect(screen.queryAllByRole('button', { name: /archived|history|previous/i })).toHaveLength(0);
     });
 
-    it('states the finding count with the sentence that says what the count costs', () => {
+    it('states the finding count with the severity band that says which rows the band holds', () => {
         renderGroup('grp-promise');
 
-        expect(screen.getByTestId('group-findings-count').textContent).toBe('3 open · 2 hold the sign-off');
-        expect(screen.getByTestId('group-blocking').textContent).toBe('2 holding the sign-off');
+        expect(screen.getByTestId('group-findings-count').textContent).toBe('3 open · 2 critical/major');
+        expect(screen.getByTestId('group-blocking').textContent).toBe('2 critical/major findings');
     });
 });
 
@@ -572,8 +659,9 @@ describe('SummaryGroupPane — a reader hears the pane the author sees (U7)', ()
         expect(screen.getByRole('textbox', { name: 'Rewrite Premise' })).toBeTruthy();
         expect(screen.getByRole('textbox', { name: 'Note for the Editor' })).toBeTruthy();
         expect(screen.getByRole('button', { name: 'Revise this group' })).toBeTruthy();
-        // The badges say what the number costs, never the number alone.
-        expect(screen.getByTestId('group-blocking').textContent).toBe('1 holding the sign-off');
+        // The badges name the severity band the number counts, never the number alone (D-78 — never a wait,
+        // either: the accept voids these rows).
+        expect(screen.getByTestId('group-blocking').textContent).toBe('1 critical/major finding');
         expect(screen.queryByTestId('group-writer')).toBeNull();
     });
 

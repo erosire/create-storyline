@@ -25,6 +25,7 @@
 // text it started from, and links to the surface that opened.
 import { useState } from 'react';
 import { PHRASE_PLOTLINES_KEY } from '../api';
+import { MarkdownText } from './MarkdownText';
 import {
     customSeedRefusal,
     plotlinesHandoffRefusal,
@@ -106,12 +107,40 @@ export function PlotlinesHandoff({ view, actions = {}, onSelect }: PlotlinesHand
                         ? 'Phrase 2 has started on this Story: its Seed is copied, and every chapter entry, revision and claim key is written against it (D-72).'
                         : `Phrase 2 has started on this Story. Its Seed is ${chars} characters of the Summary the crew compiled, and every chapter entry, revision and claim key is written against it (D-72).`}
                 </p>
-                {/* The head is a READING copy, not a summary: the projection sends a 400-character prefix, and the
-                    Author recognising which text the phrase was started from is the fact the field exists for. */}
+                {/* The head is a READING copy, not a summary: the projection sends a 400-character prefix
+                   (`projections.ts:2016` `seed_head: seed.slice(0, SEED_HEAD_CHARS)`), and the Author recognising
+                   which text the phrase was started from is the fact the field exists for.
+
+                   WHY IT IS RENDERED AS MARKDOWN. That prefix is a slice of the compiled Overview, and the Overview is
+                   `shared/phrase.ts:composePhraseContent` output — `## <group>\n<content>` joined — so a compiled head
+                   OPENS on `## Premise` (`phrase-start-routes.test.ts:556` shows exactly that string on the wire).
+                   Printed, the Author reads the source of the text they already chose; rendered, they read the text.
+                   A custom-seed head (the skip arm) is the Author's own prose, and one paragraph of it renders
+                   unchanged, so both arms benefit and neither is hurt. `MarkdownText` is the same renderer the
+                   Summary card uses (`SummaryOverviewPane.tsx:404`), and `className="sv-summary-text"` keeps both
+                   existing hooks on the ONE wrapper: the sizing rule (`styles/story.css:475-480`) and `data-testid`.
+                   The stylesheet already carries the markdown case of that class —
+                   `.sv-summary-text.sv-markdown { white-space: normal }` (`styles/story.css:513-517`) — which is what
+                   stops react-markdown's newline text nodes between blocks printing as extra blank lines under the
+                   base rule's `pre-wrap`.
+
+                   THE TRUNCATION HAZARD, AND WHY IT DOES NOT VETO RENDERING. The head is a CHARACTER slice, so it can
+                   end mid-`**bold`, mid-`` `code ``, mid-fence, or right after a `## ` with no body. Each case was
+                   probed and is pinned in `PlotlinesHandoff.test.tsx`: an unmatched `**` or backtick stays literal
+                   text (CommonMark, not a structure), a `## ` cut before its body is still an `<h2>`, and an
+                   unterminated ``` fence auto-closes at end of document, so what it swallows is the HEAD's own
+                   remainder — never the card. `MarkdownText` renders only this string inside its own `<div>`, so no
+                   sibling UI can be pulled into the code block; the swallowed text is still on screen, just on the
+                   fenced-code surface (`.sv-markdown pre` in `styles/story.css`). The one residue is a LATER
+                   group title that falls inside a dangling fence, which prints its `## ` as code text — the first
+                   `## Premise` can never be affected, because the slice starts at the seed's start and a fence can
+                   only open after it. Making the slice markdown-safe (trimming to the last block boundary) would
+                   change a projection field every receipt consumer reads back for a cosmetic edge, so the minimal
+                   defensible option is to render and to pin the behaviour in tests. */}
                 {head === undefined || head === '' ? null : (
-                    <p className="sv-summary-text" data-testid="plotlines-handoff-seed-head">
+                    <MarkdownText className="sv-summary-text" testId="plotlines-handoff-seed-head">
                         {head}
-                    </p>
+                    </MarkdownText>
                 )}
                 <div className="sv-summary-actions">
                     <button

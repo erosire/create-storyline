@@ -50,7 +50,7 @@ import type {
     Template,
     Verdict
 } from '../../shared/types';
-import type { CommitEvent } from '../store';
+import type { Attribution, CommitEvent } from '../store';
 import type { Store } from '../store';
 // H1: the round's screening evidence becomes numbers in ONE place, and `./sample-select` owns that
 // rule. The direction matters — `sample-select` imports only `shared/types`, so this import cannot
@@ -385,17 +385,25 @@ export function summaryRoundTasks(store: Store, storyId: string, unitRef: string
  * L-36/U-1b's "clear pending": decline every queued job without touching the findings behind it.
  * `wontfix` is §4.7's word for a task that will not be done, and the finding stays where the Author
  * left it, so the queue can be emptied without silently discarding a defect.
+ *
+ * T12/R3 GAVE IT A SECOND CALLER, and the only thing that differs is the JOURNAL SENTENCE: the Summary
+ * accept closes the same queue for the same reason (the phrase is complete, so the jobs standing there
+ * will not be done). The attribution stays optional so the L-36 caller keeps its exact sentence — a
+ * default, not an overload, because the audit line is what tells a reader which act emptied the queue.
+ *
+ * OPEN MEANS `records.ts:OPEN_TASK_STATES` (`open` and `claimed`; `blocked` is an Author question and
+ * `done`/`wontfix` are closed), and the ids come back in queue order so a caller can report the count it
+ * acted on rather than a count it hopes for.
  */
-export function wontfixTasks(store: Store, storyId: string): string[] {
+export function wontfixTasks(
+    store: Store,
+    storyId: string,
+    attribution: Attribution = loopAttr(`cleared the pending queue for ${storyId} (L-36, U-1b)`)
+): string[] {
     const ids: string[] = [];
 
     for (const task of openTasks(store, storyId)) {
-        store.tasks.update(
-            task.id,
-            { state: 'wontfix' },
-            loopAttr(`cleared the pending queue for ${storyId} (L-36, U-1b)`),
-            [{ id: task.id, rev: task.rev }]
-        );
+        store.tasks.update(task.id, { state: 'wontfix' }, attribution, [{ id: task.id, rev: task.rev }]);
         ids.push(task.id);
     }
 

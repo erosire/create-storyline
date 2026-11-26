@@ -133,7 +133,7 @@ which book is which; every guard in the loop reads it from there.
 | The group lock (R-lock / D-69) — the prompt and the copy | `src/server/run/phase1-prompt.ts`: `GROUP_LOCK_TEMPLATE_SLUG = 'editor-group-lock'` (1191) is the slug whose `editor` role prompt is the system turn, resolved through `rolePromptOf` off the **catalogue** (not the Story's assignment), which since this pass falls back to `fallbackRolePrompt` no longer — the built-in row exists (`src/server/templates/templates.ts:builtIn('editor-group-lock')`, and it is also in `DEFAULT_ASSIGNMENT` — later in the list than `editor-general`, which stays FIRST so every unbound Editor job still binds the general crew; the lock row's own position is free because the seat binds its own slug and `rolePromptOf` reads the catalogue, not the assignment); `GROUP_LOCK_INSTRUCTION` (1214) is the engine-owned contract — the two quotable halves of `lock: true`, "the number is not the decision" in both directions, and `false` as the ordinary unquotaed answer; `compileGroupLockPrompt` (1317) prints the ONE section at its clean revision, the Reader's number with its rationale and quoted line, the open claims (capped at `editor-lock.ts:GROUP_LOCK_CLAIM_RENDER_CAP = 12`, id ASC), the closed claims, the locked peers (`lockedPeerLines`) and the unlocked peers; `renderLockedPeerBlock` + `LOCKED_PEER_NOTE` (1232-1241) is the ONE renderer behind the LOCKED marker every brief shows, so the Writer, the reviewer and the Reader cannot disagree about what the badge means. The catalogue row's copy is pinned **digit-free** (`templates.test.ts`) — no ASCII digit anywhere in the seat's prompt, `selection_rules`, `done_definition` or `description` — because a number in the copy of the seat that decides a lock is the score cutoff the Author refused, creeping back in through prose an Author edits |
 | The group lock (R-lock / D-69) — what the desk shows | the Setting is a Story **settings** row (the Settings sheet, not the crew rail): `src/dashboard/components/story-folders.tsx` renders `EDITOR_GROUP_LOCKING_LABEL` = "Editor may lock phrase groups" (`story-contract.ts:1528`, the checkbox `setting-editor-group-locking` / `editor-group-locking`, its on/off tooltips pinned verbatim by `story-folders.locks.test.tsx`) → `src/dashboard/state.ts` (624) `patchStory({editor_group_locking})`. The lock badge, the two-step Author confirm (**Lock this group in** → **Lock it in** / **Leave it open**), the Unlock button and the "who else may lock this group" line live in `components/SummaryGroupPane.tsx` (680-775), and the enable/refusal derivations are `story-contract.ts:groupLockRefusal` / `groupUnlockRefusal` / `canAuthorLockGroup` / `canAuthorUnlockGroup` / `groupLockStatement` / `groupLockError` (1455-1510) — shut when the group is unwritten, already locked, Writer-held, or the shell has no verb; there is NO "voided group" case, because the void lives on findings, not on group rows. Tests: `StoryOutline.locks.test.tsx` / `SummaryGroupPane.locks.test.tsx` / `state.locks.test.ts` / `api.locks.test.ts` / `shell-binding.locks.test.ts`. Transport `src/dashboard/api.ts` (`lockPhraseGroup` / `unlockPhraseGroup` / `setEditorGroupLocking`, and the same-actor rule restated at 460/1124: the Author always may, the Editor only through its seat when the Setting is on, and the crew never unlocks) |
 | The Reader's section scores (D-65, display-only) | answer contract `src/shared/schemas/section-scores.ts` (`SectionScoresSchema`, `SECTION_SCORES_SCHEMA_NAME`); validation `src/server/phrase/section-scores.ts` (`parseSectionScoreAnswer` — refuses a partial/invented answer WHOLE; since D-67 also `scoredVectorHashes` and `SECTION_SCORE_ATTEMPT_CAP = 2`, the seat's ledger: scored hashes are never re-offered, closed refusals count to the cap and then stop); claim key `src/server/phrase/exclusion.ts:sectionScoreClaimKey` / `sectionScoreVectorHashOf` and its place in `GROUP_PIPELINE_RUN_PREFIXES` (in flight, never owed) — since D-67 the hash in the key is the CLEAN SELECTION's, not the live vector's; the seat `src/server/loop/work.ts:phase1GroupCandidates` candidate 2b (`priority: 2`, `rank: -1`), armed on `phrase/reviewed.ts:cleanSelectionOf(...).complete`; the prompt `src/run/phase1-prompt.ts:compileSectionScorePrompt` + `SECTION_SCORE_INSTRUCTION` (it composes the REVIEWED Overview and throws if the selection moved under the job, so shown text == scored text == recorded `vector_hash`); the dispatch `src/server/run/executor.ts` (`score_sections` branch, passing `sectionScoreVectorHashOf(item.id)`) and the settle `src/server/loop/engine.ts` (parse before the commit, five `summary_scores` rows in ONE commit); the read `api/projections.ts:sectionScoresByGroup` / `PhraseGroupScoreRow`, joined a second time per reviewed section (`reviewed.groups[].scores`, `reviewed.chosen.scores`); the rows `src/server/store/store.ts:summaryScores` |
-| The desk | `src/dashboard/components/SummaryOverviewPane.tsx` (the Overview — and since D-67 the REVIEWED Overview is the only Summary it prints) + `SummaryGroupPane.tsx` (one per group, with the Revise control); rail items in `story-nav.ts` (`STORY_PHRASES`); the sign-off gate in `story-contract.ts:groupSignOffBlockers`; the reviewed derivations in `story-contract.ts` (`phraseReviewed` / `reviewedState` / `reviewedSummaryText` / `reviewedGroupRows` / `reviewedGaps` / `reviewedChooseRefusal` / `chosenGroupScores`); transport `src/dashboard/api.ts:getPhrase`/`revisePhraseGroup`/`choosePhraseReviewed`; store slices `state.phrases` + `state.phraseErrors` + `state.reviewedErrors` (the choose's cached 409, threaded to the pane by `shell-binding.ts:storyViewData`) |
+| The desk | `src/dashboard/components/SummaryOverviewPane.tsx` (the Overview — and since D-67 the REVIEWED Overview is the only Summary it prints) + `SummaryGroupPane.tsx` (one per group, with the Revise control); rail items in `story-nav.ts` (`STORY_PHRASES`); the sign-off gate in `story-contract.ts:lockCheck` (its group clauses in `:groupSignOffBlockers`, and `story-nav.ts:summaryReadyForReview` calls the same `lockCheck` for the rail's tick); the Summary card's heading rule in `summary-heading.ts:decorateSummaryOverview`; the reviewed derivations in `story-contract.ts` (`phraseReviewed` / `reviewedState` / `reviewedSummaryText` / `reviewedGroupRows` / `reviewedGaps` / `reviewedChooseRefusal` / `chosenGroupScores`); transport `src/dashboard/api.ts:getPhrase`/`revisePhraseGroup`/`choosePhraseReviewed`; store slices `state.phrases` + `state.phraseErrors` + `state.reviewedErrors` (the choose's cached 409, threaded to the pane by `shell-binding.ts:storyViewData`) |
 
 ### The grouped loop (R2, R3, R4, R5)
 
@@ -295,13 +295,21 @@ counts the structured seats of the NEW vector first and reports the deep-review 
 every seat has closed — so an accepted draft means `summary_critics` more `review_groups` passes and
 then that many `check_unit` passes before the Story may read `drained`, and `decideStory` holds the
 `pending / phase_signoff` offer over the same owed passes (`status.ts:650-657`; the gate got TIGHTER to
-match the rail, never looser). The HTTP lock route is unchanged (`routes.ts`'s tray gate L-7a, then the
-Goal U-16): what changed is that the sweep no longer OFFERS the sign-off while the current vector is
-unread. The desk's own blocker sentences are a different read
+match the rail, never looser). The HTTP lock route's two GATES are unchanged (`routes.ts`'s tray gate
+L-7a, then the Goal U-16): what changed is that the sweep no longer OFFERS the sign-off while the current
+vector is unread — and, since 2026-11-26 (D-78, §6.3a), what the act DOES once those gates open: the
+Summary phrase's open findings are voided to `discarded` and its open tasks go `wontfix` inside the lock
+commit, and Phrase ② is started from the compiled Summary in a SECOND commit at the route, with the
+counts reported on `lock_receipt`. The desk's own blocker sentences are a different read
 (`src/dashboard/components/story-contract.ts:groupSignOffBlockers`: the phrase read not landed or
-failed, unwritten groups, open blocking findings, open Story tasks, a live Writer on a group) — the
-owed-seat obligation is deliberately NOT one of its sentences, so it surfaces as the Story staying
-`ready` plus the drain line above. (b) **A live hold blocks an authoring write, never a reading seat.**
+failed, unwritten groups, no clean Summary to accept, a live Writer on a group). Open blocking findings
+and open queue tasks left that list the same day, because the click clears them — holding the button shut
+over them was L-36's "a pending decision, not a blocked Story" dressed up as a gate, and they are counted
+into the confirm line instead (L-25b) — and the rail's ready tick calls `lockCheck` itself now
+(`story-nav.ts:summaryReadyForReview`), so the tick and the Accept button cannot drift apart the way
+two hand-written clause lists did. The owed-seat obligation is deliberately NOT one of its
+sentences, so it surfaces as the Story staying `ready` plus the drain line above. (b) **A live hold
+blocks an authoring write, never a reading seat.**
 A `draft_groups` run holds its batch from dispatch until it closes; that hold is what makes "who last
 edited this group?" answerable (R4), what makes the Revise refusal honest, and what makes a restart
 re-claim the same batch instead of re-billing it. Two corollaries the code enforces: if ANY group of a
@@ -397,7 +405,33 @@ pane diffs the current text against).
 
 Inside the Summary pane: `SummaryOverviewPane` and one `SummaryGroupPane` per group (its text,
 `Revision N` / "No revision yet", its findings, its Writer-busy sentence, and the Revise control that
-calls `revisePhraseGroup`).
+calls `revisePhraseGroup`). That prose is RENDERED, not printed: the Overview text and each group's whole
+text go through `components/MarkdownText.tsx` (§10.2's U-23) — `react-markdown` + `remark-gfm` +
+`remark-breaks`, with no `rehype-raw`, so raw HTML in model text stays escaped — because the composed
+Overview is `## <title>` per group by contract (§4.19), and printing it hands the Author the source instead
+of the section. The plugin list is load-bearing in both directions: `remark-breaks` keeps every newline the
+writer installed as a real `<br>`, which is what the line-oriented text the producers store needs (a
+chapter entry is one `Label: value` line per contract field joined with a single `\n` —
+`server/phrase/plotpoints.ts:chapterEntryContent`), and a revision's §4.2 prose fields render through the
+same component (`SummaryPane.tsx`'s `RevisionFields`, the card and the opened revision) because their `<dd>`
+carries no `white-space` rule and a draft body there would otherwise print `## Premise` and run the field's
+lines together. The ONE exception inside that pane is U3's word diff (U-18): it keeps the source, with each
+changed run in `<del>/<ins>`, because the diff is prose, not a patch viewer.
+
+That same card DECORATES the headings it renders: `## Premise` displays as `## Premise (v7) 100%` — the clean
+revision the reviewed selection stands behind, and the percentage that judged exactly that text (§10.2's
+U-24). It is a RENDER step and never a write: `components/summary-heading.ts:decorateSummaryOverview` is
+called once, on the wire text, in `SummaryOverviewPane.tsx`, and the stored Overview, the wire's `overview`
+and Phrase ②'s copied-then-hashed Seed stay `## <title>` per group (§4.19). Writing the numbers into the
+document is what is forbidden, twice over: the compiled Overview is copied VERBATIM onto Phrase ②'s seed
+and hashed (D-72), so a number in the text would move that seed every time the Reader re-scored, and a
+Reader's number belongs to no artifact in the first place — a reader writes nothing (P6's one exception,
+D-65, §17.14). Absent data prints the part out — `Premise (v7)`, `Premise 100%`, or plain `Premise` — a
+real `0` prints in either slot, the match is by TITLE and never by position, only the first occurrence per
+group is touched, and every body byte, blank line and line ending comes back unchanged. The two numbers
+are the ones the reviewed rows under the card already print (`reviewedGroupRows` → `phraseScorePercent`),
+passed through rather than re-derived, and the pane's suite pins both sides of the promise — the wire
+undecorated, the rendered `h2` decorated.
 
 **The Summary tab prints the REVIEWED Summary, not the newest draft (D-67, 2026-11-25).** The pane's
 Summary text comes from `story-contract.ts:reviewedSummaryText`, which answers the reviewed Overview in
@@ -498,12 +532,23 @@ goal math, the drain bar or the sign-off gate.
 (`setSummaryReview` → `PATCH /stories/:id`) are the LEGACY `'sampling'` rendering; U3 removed the
 dials, the candidate cards and the pick/merge controls from the grouped surface. The sign-off gate
 reads the phrase view: `story-contract.ts:groupSignOffBlockers` refuses to call a Summary ready while
-the phrase read has not landed or failed, a group is unwritten, a blocking-cost finding is open on a
-group, the queue holds an open task (the sentence says "open Story task", because the read's task rows
-carry no group attribution), or a live Writer is rewriting a group — the text on screen is about to
-move. Two gates sit behind that list and neither is the desk's invention: the sweep withholds the
-`pending / phase_signoff` OFFER while the current vector's Critic seats or deep passes are still owed
-(`loop/status.ts:decideStory` → `phrase/exclusion.ts:groupPipelineOwed`), and the HTTP lock keeps its
+the phrase read has not landed or failed, a group is unwritten, there is no clean Summary to accept
+(`:cleanSummaryGateReason` names each group the reviewed Overview is missing, with the wire's own gap
+token), or a live Writer is rewriting a group — the text on screen is about to move. What LEFT that
+list on 2026-11-26 is the pair the accept itself clears: an open blocking-cost finding on a group and an
+open task in the queue (D-78, L-36, L-25b). They are counted into the confirm line instead —
+`:summaryAcceptLeftovers` → `:summaryAcceptStatement`, which also states the void, the `wontfix` sweep
+over the queue's `open`/`claimed` rows only — exactly `lock_receipt.wontfixed_tasks` — the `leaves N
+blocked task(s) for you` clause naming what the sweep skips (a blocked row is an Author question, and the
+accept is not an answer to it), and the Phrase ② start the click performs. The Overview's `· N open tasks`
+review line is the three-state QUEUE — the wire's `review.open_tasks` (`projections.ts:OPEN_TASK_STATES`,
+mirrored at `story-contract.ts:OPEN_TASK_STATES`) — so it is the queue, not what the click closes, and it
+can read higher than the `closes` clause by exactly the blocked rows — and the rail's ready tick is
+the SAME call as the button
+(`story-nav.ts:summaryReadyForReview` → `lockCheck`), which adds only "the read has landed" and "a signed
+Summary stays ticked" (L-30). Two gates sit behind that list and neither is the desk's invention: the sweep
+withholds the `pending / phase_signoff` OFFER while the current vector's Critic seats or deep passes are still
+owed (`loop/status.ts:decideStory` → `phrase/exclusion.ts:groupPipelineOwed`), and the HTTP lock keeps its
 own, unchanged gate (the Ideas tray, then the phase Goal). What the desk does NOT do is print the
 owed-seat count as a blocker sentence: that obligation surfaces as the Story staying `ready` and as the
 drain line naming the passes still owed, which is why the rail, the drain and the Accept button all
@@ -870,6 +915,25 @@ Story answers `status: "completed"`, and completing it discards whatever the tra
 the number U-14's prompt states, counted from the same `DISCARDABLE_IDEA_STATES` set
 (`loop/status.ts:leftovers`, `api/projections.ts:completionPreview`).
 
+**Since 2026-11-26 the same verb is the ACCEPT of the final Summary, and those two gates are still the
+whole gate** (D-78, §6.3a). What the summary leg's commit ADDS, after the flags and the tray delete
+(D-36): every finding still open **on the Summary phrase** goes to `discarded` through
+`phrase/locks.ts:voidFindingsOnLock` — the group lock's own void path, so a claim's row survives as
+provenance (P11) and `fixed`/`discarded` stay terminal while `disputed` moves (D-33c) — and the queue's
+`open`/`claimed` jobs go to `wontfix` through `loop/records.ts:wontfixTasks` (L-36's path; a `blocked`
+row is an Author question and is left alone). The scope is the phrase, never the Story: a claim naming
+a Plotlines entry keeps its Phrase ② half, and only an unscoped claim — the legacy "the whole Overview"
+meaning, read through `phrase/findings.ts:findingGroupScope` — is swept as the Summary's own. Then the
+route runs a SECOND commit, `api/routes.ts:startPlotlinesFromAcceptedSummary`, that starts Phrase ②
+from `api/projections.ts:compiledSummaryOf` with `source: compiled`: idempotent on a started phrase,
+SKIPPED when `plotlines_mode` is not `'groups'` or when the build's catalog has no Phrase ② (R1), and
+REPORTED rather than thrown when there is nothing compiled to copy — never a `409` over a lock that
+committed. `loop/engine.ts:lockPhase` is still the single-commit lock and now answers a
+`PhaseLockReceipt`; the response is the Story row, byte-stable, plus the additive `lock_receipt`
+(`phase`, `deleted_ideas`, `next_phase`, and on the summary leg `voided_findings`, `wontfixed_tasks`,
+`phrase_started`, `phrase_start_reason`), so a client that ignores the key is unaffected. Pinned by
+`loop/lock-accept.test.ts` and `api/lock-accept-routes.test.ts`.
+
 ## Holes and honest deviations
 
 - **`engine.deleteStory`'s purge list NOW includes the Summary Phrase collections** — the deviation
@@ -1073,7 +1137,9 @@ Eight spec gaps the review found, each pinned by a test that names the spec id:
    *(That was 2026-11-23, and it is why the tests carry those replacements permanently. The ids
    `U-18`/`U-19` were free to re-adopt, and the grouped Summary took them on 2026-11-24: they are now
    the real UI requirements for the phrase rail and the group panes — `specifications.md` §10.2 and
-   §17.12. Nothing in `src/` cites them, so no test comment is pointing at a retired id.)*
+   §17.12. Nothing in `src/` cites them, so no test comment is pointing at a retired id. The same
+   re-adoption has since happened to `U-23` (2026-11-26): it is now §10.2's rule for how the desk RENDERS
+   agent prose, so the `U-23`→`U-10` mapping above names the retired id, not that requirement.)*
 
 ## Where to start reading
 
@@ -1213,19 +1279,30 @@ carries the employee roster. The three columns stay in place on every view. The 
   is printed nowhere on this tab), one reviewed row per group with the revision it stands behind and the
   score that judged the clean vector, the five LIVE group rows with their revision number and archived
   COUNT, the review's own counts, the Author's whole-Summary choose (D-68), and the sign-off state from
-  `story-contract.ts:groupSignOffBlockers`; each group pane
+  `story-contract.ts:groupSignOffBlockers`; the rail's ready tick for this phrase is the SAME read as the
+  Accept button (`story-nav.ts:summaryReadyForReview` → `lockCheck`, 2026-11-26), and the Overview's
+  section headings render decorated — `## Premise` shows as `## Premise (v7) 100%`, the clean revision and
+  the Reader's number, from `components/summary-heading.ts` and nowhere written into the text (§10.2's
+  U-24); each group pane
   shows ITS OWN revision number, its text, its open findings, its Writer-busy state (`writer_busy` →
   the Revise control is disabled, because a live pass is rewriting that text — R4/F8) and a
   `POST …/phrases/groups/:groupId/revise` control. There is no Select, no merge, no whole-Summary
   Revise and no sampling dial on this surface (U3 removed them): those routes answer 409 on a group
   book, and the dials stay on the legacy `SummaryPane`. Archived revisions are counted, not
-  listed — the grouped wire carries latest text, not the archived bodies.
+  listed — the grouped wire carries latest text, not the archived bodies. Each row's WHOLE text is rendered
+  as Markdown by `components/MarkdownText.tsx` (§10.2's U-23 — headings render as headings, every newline
+  the writer installed stays a real line break, raw HTML
+  escaped); the `sv-group-diff` reading of that same text stays plain source, and so do the Digest's
+  `sv-digest-body`, the Seed's `sv-seed-body` and the editable `ProseEditor` — all four on purpose.
 - **Summary (the LEGACY `'sampling'` book)** — `SummaryPane`. It marks the phrase with a tick when
   `story-nav.ts:summaryReadyForReview` is true (the Summary is signed, or the Summary phase's
   Goal passes with prose present, no competing draft and no `confirmed`/`approved`
   `critical`/`major` finding on the selected draft). That tick is NOT the server's sign-off gate:
   it does not consult the owed deep-review passes or the unconfirmed findings `loop/status.ts`
-  requires, so the rail can tick a phase the sweep would still hold.
+  requires, so the rail can tick a phase the sweep would still hold. (The GROUPED branch of that
+  predicate is a different case since 2026-11-26: it calls `story-contract.ts:lockCheck` itself, so
+  there the tick IS the Accept button's gate, plus only "the read has landed" and "a signed Summary
+  stays ticked" (L-30); the clauses above are this `'sampling'` branch's own and did not move.)
   Phase ①'s history is a FLAT `Revision 1 … N` list: `api/projections.ts`
   returns the live revisions plus the losers it recovers from the journal's delete payloads
   (marked `discarded`), and `story-nav.ts:summaryRevisions` labels them in creation order. The RAIL
@@ -2225,6 +2302,14 @@ injected (T-W4).
   borrowed `P9` and the mis-used `D-30` were re-cited to `D-71`/`D-72`/`D-76`/`D-77`, `V-2`/`D-38a`, `D-49`
   and the new `U-21`/`U-22` — the map is §18.10. One residue the pass missed: `dashboard/state.ts:763` still
   cites the Start verb as `R5 / D-30`, where `routes.ts:1048` answers the same route as `R5 / D-76`.
+- **The ids the 2026-11-26 accept wave minted, and where they live.** `D-78` is §6.3a's rule for the
+  accept — the leftovers voided and closed inside the lock commit, Phrase ② started in a second commit at
+  the route, and the counts reported on `lock_receipt` — and it lives in §6.3a rather than in
+  §17.12/§18.10 because it is a fact about the PHASE LOCK, which every book runs, and not about one
+  pipeline. `U-24` (§10.2) is the Summary card's decorated heading. Both are cited where the behaviour
+  lives, in the same shape as `U-21`/`U-22` above; §18.10's list stays §18's own record and does not
+  carry them, and both ids were checked free across the whole package before use (highest existing:
+  `D-77`, `U-23`).
 - **The desk leg is pinned (T-W6), with one honest exception.** `dashboard/api.plotlines.test.ts`,
   `state.plotlines.test.ts`, `StorylineApp.plotlines.test.tsx`, `StoryView.plotlines.test.tsx`,
   `PlotlinesPhrasePane.test.tsx`, `PlotlinesHandoff.test.tsx`, `story-folders.plotlines.test.tsx` and the added

@@ -227,9 +227,7 @@ describe('SummaryGroupPane — a group that is already locked in (R1)', () => {
                 String(row.getAttribute('data-testid'))
             )
         ).toEqual(['finding-f-wide']);
-        expect(screen.getByTestId('group-findings-count').textContent).toBe(
-            '1 open · 1 holds the sign-off'
-        );
+        expect(screen.getByTestId('group-findings-count').textContent).toBe('1 open · 1 critical/major');
     });
 
     it('keeps the same finding on the matching UNLOCKED pane, so the lock is not what prints it', () => {

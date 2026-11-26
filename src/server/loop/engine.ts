@@ -205,6 +205,7 @@ import {
     type LoopCeiling,
     type LoopEngineDeps,
     type LoopStory,
+    type PhaseLockReceipt,
     type ProbeState,
     type ResolvedEngineConfig,
     type StorySweepReport,
@@ -3162,12 +3163,23 @@ export class LoopEngine implements EngineApi {
     }
 
     /**
-     * L-6a/L-7/L-7a: the sign-off, in one commit — the flag, its mirrors, the emptied tray (D-36), and
-     * the phase movement. L-7a's precondition is enforced here because the lock is the gate the rule
-     * protects: an artifact cannot be signed off with unjudged alternatives still in the tray.
+     * L-6a/L-7/L-7a: the sign-off, in one commit — the flag, its mirrors, the emptied tray (D-36), the
+     * accept's voided findings and wontfixed tasks (T12/R3), and the phase movement. L-7a's precondition is
+     * enforced here because the lock is the gate the rule protects: an artifact cannot be signed off with
+     * unjudged alternatives still in the tray.
+     *
+     * IT ANSWERS WHAT THE COMMIT WROTE (T12): `lockWrites`' {@link PhaseLockReceipt} travels back to the
+     * route, which is where L-25b's "the count is recorded and shown" gets its `shown` half. The receipt is
+     * captured INSIDE the commit closure because it is an accounting of those writes, not a later read — a
+     * rollback throws before the caller ever sees it.
+     *
+     * THE AUTO-START OF PHRASE ② (R4) IS NOT HERE, and that is load-bearing: it is a second commit, it may
+     * be refused (no compiled Summary, a phrase already started, a `classic` book), and none of those may
+     * undo the lock. The phase machine stays the phase machine, and the Author's verb composes the two.
      */
-    async lockPhase(storyId: string, phase: StoryPhase): Promise<void> {
+    async lockPhase(storyId: string, phase: StoryPhase): Promise<PhaseLockReceipt> {
         const store = this.store;
+        let receipt: PhaseLockReceipt = { deleted_ideas: 0, next_phase: null };
 
         await store.commit('lock_phase', () => {
             const story = requireStory(store, storyId);
@@ -3198,6 +3210,10 @@ export class LoopEngine implements EngineApi {
             const at = new Date().toISOString();
             const result = lockWrites(store, story, phase, at);
 
+            // The commit's own accounting, captured here rather than re-derived after it: the numbers are
+            // what THESE writes did, and the route reports them as the accept's leftovers (L-25b).
+            receipt = result;
+
             if (result.next_phase !== null) {
                 const fresh = requireStory(store, storyId);
 
@@ -3219,6 +3235,10 @@ export class LoopEngine implements EngineApi {
                 );
             }
         });
+
+        // T12 — the route answers the accept with what the lock moved. A refusal threw inside the commit,
+        // so a caller that reaches this line has a lock, and a receipt that matches it.
+        return receipt;
     }
 
     /**

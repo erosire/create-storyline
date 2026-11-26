@@ -105,7 +105,13 @@ import type { WorkItem } from '../run/types';
 import type { RunExecutor } from '../run/executor';
 import type { DigestBuilder } from '../digest/digest';
 import type { CriteriaEngine } from '../criteria/engine';
-import type { EngineApi, GoalPatch as EngineGoalPatch, ResolvedEngineConfig } from '../loop/types';
+import type {
+    EngineApi,
+    GoalPatch as EngineGoalPatch,
+    // T12 — the lock's receipt, the shape the `/lock` response's `lock_receipt` is built from.
+    PhaseLockReceipt,
+    ResolvedEngineConfig
+} from '../loop/types';
 import type { StoryRuntimeContext, StoryRuntimes } from '../runtime';
 import type { ServerConfig } from '../runtime/server-config';
 import {
@@ -262,6 +268,133 @@ async function readBody<T>(c: Context): Promise<{ ok: true; body: T } | { ok: fa
 /** The `why` every Author-initiated write carries (D-8, P11, T-5: the store refuses a blank one). */
 const authorWhy = (route: string, storyId: string, detail = '') =>
     `the Author used ${route} on ${storyId}${detail ? ` — ${detail}` : ''} (§10 dashboard write)`;
+
+// ---------------------------------------------------------------------------
+// T12 / R4 — the Summary accept's second move: Phrase ② starts from the text just locked
+// ---------------------------------------------------------------------------
+
+/** What the auto-start reports — the two fields the lock response carries about Phrase ②. */
+interface PhraseAcceptStart {
+    /** True ONLY when THIS accept created the Phrase ② row; a no-op says so rather than claiming a start. */
+    phrase_started: boolean;
+    /** `''` when it started. Otherwise the sentence the rail shows under a successful accept. */
+    phrase_start_reason: string;
+}
+
+/**
+ * R4 — "Phrase ② can start automatically, using the compiled Phrase ① as seed. This means Phrase ① is
+ * complete." The lock has already committed when this runs, and it runs in its OWN commit:
+ *
+ * WHY NOT INSIDE `lockWrites`: the lock's one-commit contract is pinned (`loop/engine.ts:lockPhase`,
+ * `integration/slice-phases.test.ts`, `loop/d36-tray.test.ts`), and a start that can be refused must not
+ * be able to roll the accept back. Two commits, in the order the Author experienced them: the Summary is
+ * final, and THEN the next phrase begins. A start that fails leaves a locked Summary and an honest receipt.
+ *
+ * WHY HERE AND NOT IN THE ENGINE: the seed is `projections.ts:compiledSummaryOf` — the same read the
+ * handoff button previews — and the start is the same controller the manual verb calls
+ * (`phrase/controller.ts:PhraseController.start`, i.e. `phrase/controllers/plotlines.ts:startPlotlinesPhrase`
+ * under the idempotent wrapper). Neither belongs in the phase machine, which has no reason to know what a
+ * compiled Overview is. Reaching for the projection and the controller from HERE is what keeps the seed the
+ * button showed and the seed the row copies one function's answer (D-72).
+ *
+ * THE THREE WAYS IT DOES NOT START, each reported rather than thrown:
+ *   - this Story runs Phrase ② on the classic §4.3 tools (`phrase/catalog.ts:isPhraseGroupManaged` reads
+ *     an absent `plotlines_mode` as `'classic'`) — there is no Phrase ② row on that lane, and starting one
+ *     would freeze the dial under P4 on a legacy book that never asked for it;
+ *   - the phrase is ALREADY started (R4's idempotence): the row is the identity its entries, revisions and
+ *     claim keys name, so the accept touches nothing (D-72); and
+ *   - there is no compiled Summary to copy — the WEAKER question the rail asks too
+ *     (`projections.ts:summaryIsCompiled`). The lock stays; the manual Start verb keeps its one-time 409.
+ *
+ * THE LLM NEVER RUNS HERE: a start creates a `phrases` row and copies text, which is why one more commit
+ * is cheap and why a failure is a sentence rather than a rewind.
+ */
+async function startPlotlinesFromAcceptedSummary(store: Store, storyId: string): Promise<PhraseAcceptStart> {
+    const controller = phraseController(PHRASE_PLOTLINES_KEY);
+
+    // R1: `starts_on_demand` is catalog data. A build without Phrase ② has nothing to start, and the
+    // Summary the Author just accepted is still locked.
+    if (controller === undefined) {
+        return {
+            phrase_started: false,
+            phrase_start_reason:
+                'the Plotlines Phrase is not an enabled catalog kind in this build (R1), so the accept had nothing to start.'
+        };
+    }
+
+    const story = requireStory(store, storyId);
+
+    if (!isPhraseGroupManaged(story, PHRASE_PLOTLINES_KEY)) {
+        return {
+            phrase_started: false,
+            phrase_start_reason: `this Story writes its chapter contracts with the classic plotline tools (\`plotlines_mode\` is not 'groups', R11), so there is no Phrase ② to start; PATCH /stories/${storyId} moves the dial and POST /stories/${storyId}/phrases/plotlines/start starts the phrase whenever the Author chooses (R5).`
+        };
+    }
+
+    // IDEMPOTENT, R4. Read BEFORE the commit so an already-started phrase performs no write at all, and so
+    // the reason can name the row the accept left alone — the same fact the manual verb's 409 carries, told
+    // here as a no-op because the accept is not a request to re-seed anything.
+    const existing = controller.phraseOf(store, storyId);
+
+    if (existing !== undefined) {
+        return {
+            phrase_started: false,
+            phrase_start_reason: `the ${controller.definition.key} Phrase is already started on this Story (${existing.id}); its copied seed is the text every entry, revision and claim key was written against, so the accept left it alone (D-72).`
+        };
+    }
+
+    // THE SEED, from the projection the rail previews — `source: compiled`, exactly the manual verb's
+    // default. Trimmed for the same reason the Start route trims: a blank seed would be hashed by every
+    // Phrase ② gate as though the Author had handed over something.
+    const seed = compiledSummaryOf(store, story).trim();
+
+    if (seed === '') {
+        return {
+            phrase_started: false,
+            phrase_start_reason: `this Story has no compiled Summary to start the ${controller.definition.key} Phrase from, so the Summary is locked and Phrase ② is unchanged; POST /stories/${storyId}/phrases/import turns the flat Summary into groups, and a written Overview is what gets copied (R5, D-76).`
+        };
+    }
+
+    // ONE COMMIT, the same label the manual Start writes, so the journal shows one kind of act either way.
+    // `started` is the CONTROLLER's flag — false means something started it in the same moment, which is a
+    // successful no-op rather than a failure, and the reason says which.
+    let started = false;
+
+    try {
+        await store.commit('phrase_start', () => {
+            const result = controller.start(
+                store,
+                requireStory(store, storyId),
+                authorAttr(
+                    authorWhy(
+                        'POST /stories/:id/lock',
+                        storyId,
+                        `the ${controller.definition.title} was started from the compiled Summary the Author accepted (D-72, R4)`
+                    )
+                ),
+                { seedText: seed }
+            );
+
+            started = result.started;
+        });
+    } catch (error) {
+        // R4's tolerance, stated rather than swallowed: the accept happened, and the sentence names the
+        // one move that finishes the job by hand.
+        return {
+            phrase_started: false,
+            phrase_start_reason: `the Summary stayed locked; the ${controller.definition.title} did not start: ${
+                error instanceof Error ? error.message : String(error)
+            }`
+        };
+    }
+
+    return started
+        ? { phrase_started: true, phrase_start_reason: '' }
+        : {
+              phrase_started: false,
+              phrase_start_reason: `the ${controller.definition.key} Phrase was already started by the time the accept reached it, so its seed is the text that row was written against (D-72).`
+          };
+}
 
 // ---------------------------------------------------------------------------
 // T-W3 — the PER-PHRASE gate the group verbs share
@@ -2031,8 +2164,23 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      *   2. the phase's Goal (U-16: "appears only when that phase's Goal passes") — the engine checks
      *      phase ORDER (L-33) and the tray, but not the Goal, so this layer refuses it here, naming the
      *      failing criteria the Goal panel already shows (G-2).
+     *
+     * NEITHER GATE MENTIONS FINDINGS OR TASKS, and T12 left that alone on purpose: accepting a Summary was
+     * never gated on a clean queue (L-25b — "completion does not require an empty findings list"). What the
+     * accept DOES about the queue is the engine's, in the lock commit: the Summary phrase's open findings
+     * are voided and its open tasks go `wontfix` (R3), and the counts ride back on `lock_receipt` because
+     * L-25b asks for the count to be "recorded and shown", not for a gate that hides the work.
+     *
+     * THE RESPONSE IS THE STORY ROW PLUS `lock_receipt` (additive — every row field is byte-stable, so
+     * `dashboard/api.ts:lockPhase`'s `StoryRow` keeps working): the accept has leftovers to declare, and a
+     * client that has to re-read the rail to find out what the button did is a client that shows the Author
+     * a queue that just emptied without saying why.
+     *
+     * PHASE ① ALSO STARTS PHRASE ② (R4) — see `startPlotlinesFromAcceptedSummary`: a second commit, after
+     * the lock, seeded from `projections.ts:compiledSummaryOf`, reported rather than thrown. A
+     * `plotlines`/`chapters` lock starts nothing and says nothing about Phrase ②.
      */
-    app.post('/stories/:id/lock', (c) => {
+    app.post('/stories/:id/lock', async (c) => {
         // S-RUNTIME: the book this Story lives in, shadowing the deps store for the rest of the handler.
         const store = bookOf(c);
         const story = storyOf(store, c.req.param('id'));
@@ -2040,8 +2188,10 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
         if (story === undefined) return missing(c, 'story', c.req.param('id'));
 
         const phase = story.phase;
+        let lock: PhaseLockReceipt = { deleted_ideas: 0, next_phase: null };
+        let accepted: PhraseAcceptStart | undefined;
 
-        return verb(c, story.id, async () => {
+        try {
             // L-7a's tray gate reads the UNDECIDED tray (`records.ts:undecidedIdeas`): a `verified`,
             // `refuted` or `unverifiable` row is still the Author's call (T-3b), so it holds the lock
             // exactly as a `proposed` one does. Same reader the engine's own `lockPhase` gate uses.
@@ -2057,8 +2207,37 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 }
             }
 
-            await engine.lockPhase(story.id, phase);
-        });
+            lock = await engine.lockPhase(story.id, phase);
+
+            // R4, strictly AFTER the lock: a start that is refused leaves a locked Summary and an honest
+            // receipt, so it runs outside the lock's commit and its throw is caught, not re-thrown.
+            accepted = phase === 'summary' ? await startPlotlinesFromAcceptedSummary(store, story.id) : undefined;
+        } catch (error) {
+            return refusal(c, error);
+        }
+
+        // The same row `verb` answers with, read from the Story's own book after both commits.
+        const book = bookOfId(story.id);
+
+        return c.json(
+            {
+                ...storyRow(projections(book), book.stories.require(story.id)),
+                // WHAT THE ACCEPT DID, as one object so a legacy client that ignores it is unaffected and a
+                // new one reads the counts and the Phrase ② answer from a single place. `voided_findings`
+                // and `wontfixed_tasks` are ABSENT on a plotlines/chapters lock (that leg voids nothing);
+                // `phrase_started`/`phrase_start_reason` likewise, and `phrase_started: false` on the
+                // summary leg means a no-op with the reason beside it — never a failed lock.
+                lock_receipt: {
+                    phase,
+                    deleted_ideas: lock.deleted_ideas,
+                    next_phase: lock.next_phase,
+                    ...(lock.voided_findings === undefined ? {} : { voided_findings: lock.voided_findings }),
+                    ...(lock.wontfixed_tasks === undefined ? {} : { wontfixed_tasks: lock.wontfixed_tasks }),
+                    ...(accepted === undefined ? {} : accepted)
+                }
+            },
+            200
+        );
     });
 
     /** L-31/L-32 — the only way a lock opens; the client confirms first and the engine does the scrap. */

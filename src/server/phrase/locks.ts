@@ -40,10 +40,17 @@
 // decision on a different record), and never resurrects a discarded finding on unlock — a discard is
 // terminal in §4.10, and an unlock that un-discarded one would be inventing work the Author already
 // watched close.
-import type { FindingState, PhraseGroup, PhraseGroupLockActor, Story } from '../../shared/types';
+import type {
+    Finding,
+    FindingState,
+    PhraseGroup,
+    PhraseGroupLockActor,
+    Story
+} from '../../shared/types';
 import { nowIso } from '../tools/utilities';
 import type { Attribution, Store } from '../store';
 import { isPhraseGroupLocked, phraseGroupsOf } from './catalog';
+import type { FindingGroupScope } from './findings';
 import { findingGroupScope } from './findings';
 
 // ---------------------------------------------------------------------------
@@ -121,7 +128,7 @@ export interface PhraseLockResult {
      * left to rewrite it. `previous_state` is what the row was before it became `discarded`, which is
      * the audit an Author needs when the rail's queue shortens.
      */
-    voided_findings: Array<{ finding_id: string; previous_state: FindingState; scope: string[] }>;
+    voided_findings: VoidedFinding[];
 }
 
 /** What one {@link unlockPhraseGroup} call wrote. */
@@ -141,6 +148,75 @@ export interface PhraseUnlockResult {
  * about text that just stopped being writable.
  */
 const VOIDABLE_FINDING_STATES: readonly FindingState[] = ['unconfirmed', 'confirmed', 'approved', 'disputed'];
+
+/**
+ * One finding the void moved, as a lock's receipt reports it.
+ *
+ * `previous_state` is the audit an Author needs when the queue shortens without an explanation (the
+ * shape the group-lock route already answers with, `api/routes.ts`'s `voided_findings`), and `scope` is
+ * the attribution the claim carried at the moment it was voided — read through
+ * `findings.ts:findingGroupScope`, so an UNSCOPED finding reports every group the Story has rather than
+ * an empty list, which is what "the whole Overview" means (R3).
+ */
+export interface VoidedFinding {
+    finding_id: string;
+    previous_state: FindingState;
+    scope: string[];
+}
+
+/**
+ * THE VOID PATH — the ONE place a finding becomes `discarded` because the text it was raised against has
+ * stopped being answerable. Two callers, one rule:
+ *
+ *   1. {@link lockPhraseGroup} — a group lock, whose selection test is "every group this claim names is
+ *      now locked"; and
+ *   2. `loop/invalidation.ts:lockWrites` — the Author's Summary ACCEPT (T12/R3), whose selection test is
+ *      "this claim belongs to the Summary phrase being completed".
+ *
+ * THE SPLIT IS DELIBERATE: the caller picks WHICH findings the act swallows (only a caller knows what it
+ * just made unanswerable), and THIS function owns the two facts that must not be re-invented per call —
+ * the state filter ({@link VOIDABLE_FINDING_STATES}: `fixed` and `discarded` are terminal, `disputed` is
+ * an open claim per D-33c) and the terminal state it writes (`discarded`, never a row delete, because
+ * D-36/P11 pin that a lock keeps its findings as provenance while only the Ideas TRAY is deleted).
+ *
+ * The scope is re-read here rather than passed in, so every caller gets the same catalog-ordered
+ * attribution in its receipt. It is a pure read over rows the caller has already selected, so computing
+ * it twice on a candidate list costs nothing and keeps the SELECTION tests free of the write's shape.
+ *
+ * NO COMMIT OF ITS OWN: like every phrase writer, it runs in the caller's `store.commit`, and a throw
+ * after it rolls the voids back with everything else.
+ */
+export function voidFindingsOnLock(
+    store: Store,
+    story: Story,
+    findings: readonly Finding[],
+    attribution: Attribution,
+    /** The journal sentence for one row. It gets the finding and its scope, because the sentence that
+     *  teaches ("every group it names is locked") is a different claim per caller. */
+    whyOf: (finding: Finding, scope: FindingGroupScope) => string
+): VoidedFinding[] {
+    const voided: VoidedFinding[] = [];
+
+    for (const finding of findings) {
+        if (!VOIDABLE_FINDING_STATES.includes(finding.state)) continue;
+
+        const scope = findingGroupScope(store, story, finding);
+
+        store.findings.update(
+            finding.id,
+            { state: 'discarded' },
+            // The caller's `why` plus THIS void's claim: "the lock discarded it" is not the fact — the
+            // fact is that the text the defect named can no longer be rewritten. That is the sentence an
+            // Author reads a week later, when the rail is quiet (P11).
+            { ...attribution, why: whyOf(finding, scope) },
+            [{ id: finding.id, rev: finding.rev }]
+        );
+
+        voided.push({ finding_id: finding.id, previous_state: finding.state, scope: [...scope.refs] });
+    }
+
+    return voided;
+}
 
 /**
  * Locks one phrase group at its CURRENT revision (R-lock): the text stops being writable, the findings
@@ -231,39 +307,32 @@ export function lockPhraseGroup(
     // 2. The findings the lock voids. Read the rows back rather than reusing `groups`: the scope read
     //    below asks `isPhraseGroupLocked` of every group, so it has to see THIS lock.
     const lockedIds = new Set(phraseGroupsOf(store, story.id).filter(isPhraseGroupLocked).map((row) => row.id));
-    const voidedFindings: PhraseLockResult['voided_findings'] = [];
 
-    for (const finding of store.findings.list().filter((row) => row.story_id === story.id)) {
-        if (!VOIDABLE_FINDING_STATES.includes(finding.state)) continue;
+    // THE SELECTION, which belongs to THIS caller and not to the void path: a group lock swallows a claim
+    // only when EVERY group it names is now frozen. THE SCOPE READ IS NOT RE-FILTERED HERE (see
+    // `findings.ts:findingGroupScope`): an unscoped finding's scope IS every group the Story has, which is
+    // the legacy whole-Overview meaning. Filtering the finding's `group_refs` directly would silently turn
+    // "the whole Overview" into "nothing" on the fourth of five locks, and the finding would read void
+    // while one group was still writable. `refs.length > 0` is the other half: a Story with no groups at
+    // all has an EMPTY scope, and an empty scope is not a scope the lock swallowed.
+    const doomed = store.findings
+        .list()
+        .filter((row) => row.story_id === story.id)
+        .filter((finding) => {
+            const scope = findingGroupScope(store, story, finding);
 
-        // THE SCOPE READ IS NOT RE-FILTERED HERE (see `findings.ts:findingGroupScope`): an unscoped
-        // finding's scope IS every group the Story has, which is the legacy whole-Overview meaning.
-        // Filtering the finding's `group_refs` directly would silently turn "the whole Overview" into
-        // "nothing" on the fourth of five locks, and the finding would read void while one group was
-        // still writable. `refs.length > 0` is the other half: a Story with no groups at all has an
-        // EMPTY scope, and an empty scope is not a scope the lock swallowed.
-        const scope = findingGroupScope(store, story, finding);
-        const open = scope.refs.filter((id) => !lockedIds.has(id));
+            return scope.refs.length > 0 && scope.refs.every((id) => lockedIds.has(id));
+        });
 
-        if (scope.refs.length === 0 || open.length > 0) continue;
-
-        store.findings.update(
-            finding.id,
-            { state: 'discarded' },
-            {
-                ...attribution,
-                // The `why` names the groups, because "the lock discarded it" is not the claim — the
-                // claim is that every group the defect named is now fixed text with nothing left to
-                // rewrite. That is the sentence an Author reads a week later, when the rail is quiet.
-                why: `${attribution.why}; discarded ${finding.id} because every group it names (${scope.refs
-                    .map((id) => store.phraseGroups.get(id)?.key ?? id)
-                    .join(', ')}) is locked, so the claim has no text left to answer it (group lock)`
-            },
-            [{ id: finding.id, rev: finding.rev }]
-        );
-
-        voidedFindings.push({ finding_id: finding.id, previous_state: finding.state, scope: [...scope.refs] });
-    }
+    // THE VOID ITSELF lives in `voidFindingsOnLock` (the state filter, the `discarded` write, the receipt)
+    // so a group lock and the Summary accept can never disagree about what "void" means. The `why` names
+    // the groups, because "the lock discarded it" is not the claim — the claim is that every group the
+    // defect named is now fixed text with nothing left to rewrite.
+    const voidedFindings = voidFindingsOnLock(store, story, doomed, attribution, (finding, scope) =>
+        `${attribution.why}; discarded ${finding.id} because every group it names (${scope.refs
+            .map((id) => store.phraseGroups.get(id)?.key ?? id)
+            .join(', ')}) is locked, so the claim has no text left to answer it (group lock)`
+    );
 
     return { group: locked, locked_revision: locked.revision, locked_by: actor, locked_at: at, voided_findings: voidedFindings };
 }

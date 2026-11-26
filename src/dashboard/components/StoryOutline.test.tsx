@@ -1257,14 +1257,15 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         ).toEqual(['SPAN', 'SPAN', 'SPAN', 'SPAN']);
     });
 
-    it('badges a group only with the findings that hold the sign-off (U6)', () => {
+    it('badges a group only with its critical/major findings (U6)', () => {
         const { container } = render(
             <StoryOutline view={groupView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
         );
 
         // Promise carries three OPEN findings and badges two: `f-minor` is a note at a cost the Story's dial
-        // tolerates, so it is filed rather than raised — and the rail counts exactly what the Accept gate counts
-        // (`groupBlockingFindings` → `summaryBlockingCost`, dial included).
+        // tolerates, so it is filed rather than raised — and the rail counts the SAME band the Overview row and
+        // the pane badge print (`groupBlockingFindings` → `summaryBlockingCost`, dial included). D-78 — that
+        // band is a severity reading, not a door: the Accept gate waits for none of these rows.
         const promise = rowsOfSummary(container)[1];
 
         expect(promise[2]).toBe('2');

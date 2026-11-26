@@ -45,6 +45,11 @@
 import { useState } from 'react';
 import type { PhraseChosenSummary } from '../api';
 import type { StorySelection } from './story-nav';
+// The reviewed Overview is the text `shared/phrase.ts:composePhraseContent` compiled — `## <group>` + prose,
+// joined by blank lines — so it is printed as Markdown. `className`/`testId` keep this pane's two existing
+// hooks on the ONE wrapper element: `.sv-summary-text` is the pane's sizing rule and `summary-text` is the
+// id its tests read through.
+import { MarkdownText } from './MarkdownText';
 // T-W4 — the phrase-generic pieces. `groupStateLabel` and the group rows are this pane's, but they are ALSO
 // Phrase ②'s row vocabulary, so they live in `PhraseEntries.tsx` and are re-exported here for the readers that
 // already address them by this module (the rail's group rows).
@@ -75,6 +80,9 @@ import {
     unwrittenGroups
 } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
+// T14 — the Summary card's section-heading rule: `## Premise` → `## Premise (v7) 100%`. Pure, and applied to the
+// WIRE text at render, so the stored Overview, the copied Phrase ② Seed and the hash of both stay `## Premise`.
+import { decorateSummaryOverview } from './summary-heading';
 
 /** Re-exported under the name the rail and the acceptance tests already use (the rule itself is phrase-generic). */
 export const groupStateLabel = entryStateLabel;
@@ -270,6 +278,13 @@ export function SummaryOverviewPane({
     const gaps = reviewedGaps(view);
     const issues = reviewedBlockingIssues(view);
 
+    // T14 — THE CARD'S HEADINGS, and the only line in this pane that touches the Summary's TEXT. `summaryText`
+    // stays the wire's undecorated Overview (`reviewedSummaryText`, D-67) and the numbers are added here, at
+    // render, from the rows above — so the decoration is presentation, exactly as D-65 requires of a Reader's
+    // score, and the compiled Overview that Phrase ② copies onto its Seed and hashes is still `## Premise`.
+    // The two numbers are the ones the provenance strip under the card already prints, passed through untouched.
+    const decoratedSummaryText = decorateSummaryOverview(summaryText, reviewedRows);
+
     // The Author's whole-Summary verb (D-68), and U-16's rule that a disabled control states its reason: the
     // reason is the wire's `writer_busy` or the shell's missing binding, never a guess from run rows.
     const refusal = reviewedChooseRefusal(view, actions.chooseReviewedSummary !== undefined);
@@ -392,9 +407,16 @@ export function SummaryOverviewPane({
                             No reviewed Overview yet — the selection has no composed text to show.
                         </p>
                     ) : (
-                        <p className="sv-summary-text" data-testid="summary-text">
-                            {summaryText}
-                        </p>
+                        /* The compiled Overview, and as Markdown: `composePhraseContent` (and the reviewed
+                           Overview built from it) writes one `## <group>` heading per group, and an Author
+                           reading `## Premise` on the card is reading the source. T14 decorates ONLY those
+                           section headings — `## Premise (v7) 100%`, the clean revision and the Reader's number
+                           the rows below already print — and it does it here, on the wire text, so nothing about
+                           the stored or copied Overview changes. The empty branch above is untouched, so
+                           `summary-text` still appears only when there IS a Summary (D-67). */
+                        <MarkdownText className="sv-summary-text" testId="summary-text">
+                            {decoratedSummaryText}
+                        </MarkdownText>
                     )}
                     {reviewed.state === 'chosen' ? (
                         <p className="sv-group-quiet sv-reviewed-dropped" data-testid="reviewed-dropped">
@@ -510,10 +532,18 @@ export function SummaryOverviewPane({
             ) : null}
 
             {/* The review's own counts — what the last pass left open. No sampling state, no selection, no critic
-                seats, and no request-another-round verb (U3). */}
+                seats, and no request-another-round verb (U3).
+                R2/T15 — THE MIDDLE NUMBER NO LONGER "HOLDS THE SIGN-OFF". `review.blocking_findings` is §6.8's
+                critical/major subset of the open pile (D-34's desk), and the accept gate stopped reading it: a
+                clean Summary signs off over these rows and the click VOIDS them (T12's server leg, L-25b), so a
+                wait promised here contradicted the confirm line above it, which names the same rows as what the
+                accept clears. The words now state the cost band the number counts, and nothing else. The task
+                count is the read's open queue (`projections.ts:OPEN_TASK_STATES`, so a `wontfix` row is settled
+                work, not a third number the Author still owes) — the same count the statement's "closes N open
+                tasks … as wontfix" clause carries. */}
             <p className="sv-group-review" data-testid="summary-review">
                 {`${review.open_findings} open finding${review.open_findings === 1 ? '' : 's'}` +
-                    ` · ${review.blocking_findings} holding the sign-off` +
+                    ` · ${review.blocking_findings} critical/major` +
                     ` · ${review.open_tasks} open task${review.open_tasks === 1 ? '' : 's'}`}
             </p>
         </div>

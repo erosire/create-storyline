@@ -67,6 +67,9 @@ import type {
     EngineApi,
     GoalPatch,
     LoopEngineConfig,
+    // T12 — the lock's receipt, forwarded verbatim: the per-Story runtime owns no part of the answer, and
+    // the Author's accept reads the same fields whichever topology the server runs under.
+    PhaseLockReceipt,
     SweepReport
 } from '../loop/types';
 import type { StoryHarnessManager } from '../run/story-engine';
@@ -969,7 +972,8 @@ export class StoryRuntimes implements EngineApi {
         return this.verb(storyId).requestSummaryRevision(storyId, note);
     }
 
-    lockPhase(storyId: string, phase: StoryPhase): Promise<void> {
+    /** T12: the lock's receipt passes through — see `EngineApi.lockPhase` in `loop/types.ts`. */
+    lockPhase(storyId: string, phase: StoryPhase): Promise<PhaseLockReceipt> {
         return this.verb(storyId).lockPhase(storyId, phase);
     }
 

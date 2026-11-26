@@ -29,6 +29,7 @@
 // unit's rows and SAYS SO, because "this draft was not read" and "no verdict names this draft" are
 // different claims.
 import { draftVerdicts, revisionBodyText } from './story-contract';
+import { MarkdownText } from './MarkdownText';
 import type { RevisionUnit } from './story-contract';
 import type { Revision, Verdict } from '../../shared/types';
 
@@ -138,7 +139,37 @@ export function RevisionsCompare({ units, onSelectRevision, note }: RevisionsCom
                                     unit's rows, labelled — the two conventions §8.3 produces. */}
                                 <DraftVerdicts unit={unit} revision={revision} />
 
-                                <pre className="sv-revision-body">{revisionBodyText(revision.body)}</pre>
+                                {/* The body IS phrase prose (`group_revisions.content`, D-7), so it is rendered as
+                                    Markdown rather than printed — the same renderer the Summary card uses
+                                    (`SummaryOverviewPane.tsx:404`, `MarkdownText.tsx`). This is a read-only
+                                    comparison: there is no editor to disturb, and nothing in THIS component is a
+                                    diff or patch that must stay character-verbatim (the U3 word diff is
+                                    `PhraseEntries.tsx:981`, not here). The metadata around the body deliberately
+                                    stays plain — the state badge, the verdict rows and `sv-revision-note`.
+
+                                    WHY NO CSS EDIT WAS NEEDED FOR THE SWAP ITSELF — the paragraphing rule that
+                                    goes with it is already in the file. `.sv-revision-body` (`styles/story.css`)
+                                    is already a PROSE box: `font-family: Inter…`, `line-height: 1.6`, `margin: 0`,
+                                    so the `<pre>` it sat on contributed only UA defaults the class already
+                                    overrode. Swapping the element for `MarkdownText`'s `<div>` keeps the box, the
+                                    padding, the surface and the type unchanged, and a body with no Markdown in it
+                                    stays one paragraph with the same text (`RevisionsCompare.test.tsx:106-125`).
+
+                                    The one declaration that interacts with rendering is `white-space: pre-wrap`:
+                                    react-markdown writes a newline TEXT NODE between sibling blocks
+                                    (`MarkdownText.test.tsx`'s exact-text assertion), and under `pre-wrap` each
+                                    prints as a line break, so blocks stay separated by a break plus the
+                                    renderer's own block margins instead of the source's blank line. Nothing hides
+                                    and nothing reflows off the box — the pane gains real headings, lists, bold and
+                                    tables over the paragraphing it already had. The markdown-correct paragraphing
+                                    is ONE RULE, already in `styles/story.css`: `.sv-revision-body.sv-markdown`
+                                    sets `white-space: normal` and `min-width: 0`, mirroring
+                                    `.sv-summary-text.sv-markdown` (`styles/story.css:513-517`). The `min-width` is
+                                    the COLUMN's, so a long fenced block or GFM table shrinks inside
+                                    `.sv-revision-cols`'s `minmax(16rem, 1fr)` instead of widening the track. */}
+                                <MarkdownText className="sv-revision-body">
+                                    {revisionBodyText(revision.body)}
+                                </MarkdownText>
 
                                 {revision.selection_note ? (
                                     // T-2a / L-17: the note names the rule applied and what each draft was
