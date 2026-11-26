@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { StoryOutline } from './StoryOutline';
-import { DEFAULT_STORY_SELECTION } from './story-nav';
+import { DEFAULT_STORY_SELECTION, phraseSeedRef } from './story-nav';
 import type { StorySelection } from './story-nav';
 import { fixturePhrase, fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
 // R-T2/F1 + F2: the rail's ready tick and its phrase-read line are driven by the same frame the gate reads,
@@ -89,7 +89,9 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
     // phrases") — so the phrase count and the phrase names below are the assertion: an extra header would be an
     // unreachable row, and a wrong name would be a rail pointing at the wrong pane.
     it('lists the Summary phrase and the supporting folders, and nothing the content column cannot open (U1)', () => {
-        render(<StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />);
+        const { container } = render(
+            <StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
+        );
 
         expect(screen.getByText('Phrase 1')).toBeTruthy();
         expect(screen.getByText('Phrase 2')).toBeTruthy();
@@ -119,8 +121,19 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
             expect(screen.getAllByText(folder).length).toBeGreaterThan(0);
         }
 
-        // Seed stays, exactly as it was (U1: folders and Seed are unchanged by the redesign).
-        expect(screen.getByText("The Author's idea")).toBeTruthy();
+        // U-25 — the Seed is a PHRASE CHILD now, one row under each phrase, and the row the rail used to pin above
+        // `Phrases` is gone: no "The Author's idea" row, and exactly one `.outline-item--seed` per phrase list.
+        const seedRows = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="outline-seed"]'));
+
+        expect(seedRows).toHaveLength(2);
+        expect(
+            seedRows.map((row) => row.querySelector('.outline-name')?.textContent)
+        ).toEqual(['Seed', 'Seed']);
+        expect(container.querySelector('#outline-children-summary [data-testid="outline-seed"]')).toBeTruthy();
+        expect(container.querySelector('#outline-children-plotlines [data-testid="outline-seed"]')).toBeTruthy();
+        // The old top-level row, and the sentence it printed, are nowhere in the rail.
+        expect(screen.queryByText("The Author's idea")).toBeNull();
+        expect(container.querySelector('.outline-group > .outline-item--seed')).toBeNull();
 
         // The removed clutter: a harness-memory subtitle, a note count and the per-folder sentence.
         expect(screen.queryByText(/its own harness memory/)).toBeNull();
@@ -353,8 +366,14 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
             element.textContent?.includes('Summary')
         )!;
 
-        // No rows, and no row-shaped lie about the five groups.
-        expect(phrase.querySelectorAll('.outline-child')).toHaveLength(0);
+        // U-25 — exactly ONE child row while the groups are on their way: the phrase's Seed. It is not a row-shaped
+        // claim about the five groups (it says nothing about what the loop has written), and it is the one child a
+        // phrase always has. The group rows still arrive with the read, and nothing else appears before them.
+        const rows = Array.from(phrase.querySelectorAll<HTMLElement>('.outline-child'));
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.getAttribute('data-testid')).toBe('outline-seed');
+        expect(rows[0]?.querySelector('.outline-name')?.textContent).toBe('Seed');
         expect(phrase.querySelector('[data-testid="outline-phrase-pending"]')?.textContent).toBe(
             'reading the Summary groups…'
         );
@@ -362,9 +381,9 @@ describe('StoryOutline — the phrase rail (U-4 / the phrase redesign)', () => {
         const header = phrase.querySelector<HTMLButtonElement>('.outline-item--phrase')!;
 
         expect(header.disabled).toBe(false);
-        // Nothing is in the list, so no IDREF is carried (a pointer at an id that was never rendered is the
-        // dangling-IDREF case this suite already pins for a folded phrase).
-        expect(header.getAttribute('aria-controls')).toBeNull();
+        // U-25 — the IDREF IS carried here, where the old rail had none: the Seed row makes the list real, so the
+        // header points at a list that is in the DOM. It is still the header's own click that opens the Overview.
+        expect(header.getAttribute('aria-controls')).toBe('outline-children-summary');
 
         fireEvent.click(header);
 
@@ -666,7 +685,10 @@ describe('StoryOutline — the phrase header is a disclosure control (U-21)', ()
         expect(summary.getAttribute('aria-expanded')).toBe('true');
         expect(summary.getAttribute('aria-controls')).toBe('outline-children-summary');
         expect(container.querySelector('#outline-children-summary')?.id).toBe('outline-children-summary');
+        // U-25 — the phrase's Seed is its FIRST row, ahead of the parked drafts, and it takes none of their marks
+        // (`data-state` is absent, so it never wears the struck-out `discarded` styling).
         expect(rowsOf(group)).toEqual([
+            ['Seed', undefined],
             ['Revision 1', 'discarded'],
             ['Revision 2', 'discarded'],
             ['Revision 3', 'selected']
@@ -682,6 +704,10 @@ describe('StoryOutline — the phrase header is a disclosure control (U-21)', ()
         expect(container.querySelector('#outline-children-summary')).toBeNull();
         expect(rowsOf(group)).toEqual([]);
         expect(screen.queryByText('Revision 1')).toBeNull();
+        // U-25 + U-21 — the Seed row folds WITH the phrase: it lives inside the same `<ul>`, so a folded Phrase 1
+        // has no Seed row in the DOM or the tab order either. It is unmounted, not deleted (the next click puts it
+        // back, first, with the same marks).
+        expect(group.querySelector('[data-testid="outline-seed"]')).toBeNull();
         // The click navigated as well, even though Phrase 1 was ALREADY the selection — the shell reads every
         // rail click as navigation and clears the selected-agent thread view, so a toggle-only header (or an
         // early return for the selected phrase) would strand the content area on a child of a folded phrase.
@@ -699,14 +725,17 @@ describe('StoryOutline — the phrase header is a disclosure control (U-21)', ()
         expect(container.querySelector('#outline-children-summary')?.id).toBe('outline-children-summary');
         // The IDREF names the list that HOLDS the rows, not some other element with that id.
         expect(container.querySelector('#outline-children-summary')?.querySelectorAll('.outline-child')).toHaveLength(
-            3
+            4
         );
+        // And the rows came back exactly as they were — the Seed first, then the parked drafts with their strikes
+        // and their order untouched by the fold.
         expect(rowsOf(group)).toEqual([
+            ['Seed', undefined],
             ['Revision 1', 'discarded'],
             ['Revision 2', 'discarded'],
             ['Revision 3', 'selected']
         ]);
-        expect(group.querySelectorAll<HTMLElement>('.outline-child')[0]?.getAttribute('title')).toBe(
+        expect(group.querySelectorAll<HTMLElement>('.outline-child')[1]?.getAttribute('title')).toBe(
             'Revision 1 · discarded · Discard reason: the kept draft states the change on the page sooner'
         );
         expect(screen.getByRole('button', { name: 'Revision 1 Discarded' })).toBeTruthy();
@@ -714,12 +743,14 @@ describe('StoryOutline — the phrase header is a disclosure control (U-21)', ()
         expect(selections).toEqual([{ panel: 'summary' }, { panel: 'summary' }]);
     });
 
-    // R6 retitles this test rather than weakening it. The rail no longer holds four phrases, so "the others" are
-    // the rows that ARE still there — Seed and the folder rows — and U1 says explicitly they are unchanged. T-W4
-    // moves Characters into a Supplements section that reuses the folder row's class, so the folder-class count
-    // below is seven (six folders + Characters); what the fold may still not do is leak: it removes the Summary's
-    // rows and nothing else, and it is not undone by navigating to a folder.
-    it('folds the Summary phrase without touching the Seed or the folders, and keeps its own state', () => {
+    // R6 retitles this test rather than weakening it, and U-25 restates the SEED half of its name: the rail no
+    // longer pins a top-level Seed row, so the Seed a fold may not disturb is the OTHER phrase's. Folding Summary
+    // removes that phrase's own rows — its Seed row included, because U-25 put the Seed INSIDE the fold — and it
+    // leaves Phrase ②'s Seed, the supplements and the folders exactly where they were. T-W4 moves Characters into
+    // a Supplements section that reuses the folder row's class, so the folder-class count below is seven (six
+    // folders + Characters); what the fold may still not do is leak: it removes one phrase's rows and nothing else,
+    // and it is not undone by navigating to a folder.
+    it('folds the Summary phrase with its own Seed row and leaves the other phrase and the folders alone (U-25)', () => {
         const { container } = render(
             <StoryOutline view={fixtureView()} selection={DEFAULT_STORY_SELECTION} onSelect={() => undefined} />
         );
@@ -734,18 +765,26 @@ describe('StoryOutline — the phrase header is a disclosure control (U-21)', ()
         );
         const foldersBefore = folderRows();
 
+        // U-25 — every `.outline-item--seed` sits inside a phrase: which phrase owns each row is read off the DOM,
+        // so an orphaned top-level Seed row would show up here as a `null` owner.
+        const seedOwners = () =>
+            Array.from(container.querySelectorAll<HTMLElement>('.outline-item--seed')).map(
+                (element) => element.closest('li.outline-phase')?.querySelector('.outline-name')?.textContent ?? null
+            );
+
         expect(container.querySelectorAll('.outline-item--folder')).toHaveLength(7);
-        expect(container.querySelector('.outline-item--seed')).toBeTruthy();
+        expect(seedOwners()).toEqual(['Summary', 'Plotlines']);
 
         fireEvent.click(summary);
 
-        // The Summary's list is gone, and it took its rows with it — while every row the rail still offers is
-        // untouched: same seven folders, same order, same names, and Seed still in place.
+        // The Summary's list is gone, and it took its rows with it — the Seed row of THAT phrase included, since it
+        // lives in the folded `<ul>` (U-25 + U-21). Every row the rail still offers is untouched: same seven
+        // folders, same order, same names, and Phrase ②'s Seed still in place.
         expect(summary.getAttribute('aria-expanded')).toBe('false');
         expect(summary.hasAttribute('aria-controls')).toBe(false);
         expect(container.querySelector('#outline-children-summary')).toBeNull();
         expect(folderRows()).toEqual(foldersBefore);
-        expect(container.querySelector('.outline-item--seed')).toBeTruthy();
+        expect(seedOwners()).toEqual(['Plotlines']);
 
         // Navigating to a folder does not unfold the phrase: the fold is the rail's own view state, and the
         // selection is a separate one (the same separation `aria-current` is pinned behind in the test above).
@@ -916,8 +955,17 @@ describe('StoryOutline — the Plotlines phrase (T-W4)', () => {
         expect(container.querySelector('[data-testid="outline-plotlines-state"]')?.getAttribute('title')).toBe(
             'Phrase 2 is running on the classic plotline tools: the pane shows the §4.3 records, not chapter entries.'
         );
-        // And with the dial off, the phrase has no entry rows: its records belong to the pane, not the rail.
-        expect(container.querySelector('#outline-children-plotlines')).toBeNull();
+        // And with the dial off, the phrase has no ENTRY rows: its records belong to the pane, not the rail. U-25
+        // changes what "no rows" means — the phrase's own list exists, and it holds exactly the Seed row, because a
+        // classic Phrase ② still has a Seed to read (its copied text, once started) and the rail must reach it.
+        const classicChildren = container.querySelectorAll('#outline-children-plotlines .outline-child');
+
+        expect(container.querySelector('#outline-children-plotlines')).toBeTruthy();
+        expect(classicChildren).toHaveLength(1);
+        expect(classicChildren[0]?.getAttribute('data-testid')).toBe('outline-seed');
+        expect(classicChildren[0]?.querySelector('.outline-name')?.textContent).toBe('Seed');
+        // …and the header's IDREF points at that list, which is the dangling-IDREF rule holding on a new frame.
+        expect(plotlinesRow(container).getAttribute('aria-controls')).toBe('outline-children-plotlines');
     });
 
     // The entry rows are the pane's addresses, and the address is the row's id — the same rule U2 pins for a
@@ -935,10 +983,11 @@ describe('StoryOutline — the Plotlines phrase (T-W4)', () => {
             Array.from(container.querySelectorAll('#outline-children-plotlines .outline-child .outline-name')).map(
                 (row) => row.textContent
             )
-        ).toEqual(['Chapter 1 — The Salt Road', 'Chapter 2 — The Salt Road', 'Chapter 3 — The Salt Road']);
+            // U-25 — the Seed is Phrase ②'s first child, then the server's chapter entries in composition order.
+        ).toEqual(['Seed', 'Chapter 1 — The Salt Road', 'Chapter 2 — The Salt Road', 'Chapter 3 — The Salt Road']);
 
         // The rail's children are under Phrase ②, never under the Summary's list: two entry lists, two parents.
-        expect(container.querySelectorAll('#outline-children-plotlines .outline-child')).toHaveLength(3);
+        expect(container.querySelectorAll('#outline-children-plotlines .outline-child')).toHaveLength(4);
         expect(container.querySelector('#outline-plotlines-start')).toBeNull();
         expect(plotlinesRow(container).getAttribute('aria-controls')).toBe('outline-children-plotlines');
     });
@@ -953,18 +1002,25 @@ describe('StoryOutline — the Plotlines phrase (T-W4)', () => {
             />
         );
 
-        // The row IS the button (`StoryOutline.tsx:594`), so the rows are selected by the button's own class.
+        // The row IS the button (`StoryOutline.tsx`'s child row), so the rows are selected by the button's own class.
         const rows = Array.from(
             container.querySelectorAll<HTMLButtonElement>('#outline-children-plotlines button.outline-child')
         );
 
-        expect(rows).toHaveLength(3);
+        // U-25 — row 0 is the phrase's Seed, so the entries start at 1.
+        expect(rows).toHaveLength(4);
 
-        fireEvent.click(rows[1]!);
+        // U-25 — the Seed row navigates as a child of ITS phrase: the phrase panel plus the synthetic seed ref, which
+        // is the pair `StoryView` routes to that phrase's own Seed pane.
+        fireEvent.click(rows[0]!);
+        expect(selections[selections.length - 1]).toEqual({ panel: 'plotlines', ref: phraseSeedRef() });
+
+        fireEvent.click(rows[2]!);
         // The header still drops the ref and opens the Overview, exactly as the Summary's does (U-21).
         fireEvent.click(plotlinesRow(container));
 
         expect(selections).toEqual([
+            { panel: 'plotlines', ref: phraseSeedRef() },
             { panel: 'plotlines', ref: 'plotlines-group:entry-chapter_2' },
             { panel: 'plotlines' }
         ]);
@@ -1097,6 +1153,9 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         );
 
         expect(rowsOfSummary(container)).toEqual([
+            // U-25 — the phrase's own Seed sits above its groups, and it wears none of a group row's marks: no
+            // state word, no findings badge, no score. The row is the phrase's input, not a piece of its output.
+            ['Seed', null, null, null],
             ['Premise', null, '1', '84%'],
             ['Promise', null, '2', '62%'],
             ['Theme', 'writer', '2', '71%'],
@@ -1111,13 +1170,17 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         expect(container.querySelectorAll('[data-state]')).toHaveLength(0);
         // U1 — five children, under the phrase headers the rail offers (Summary ① and Plotlines ② since T-W4; the
         // Plotlines row adds no child of the Summary's, and its own list is empty until Phrase ② is started).
+        // U-25 adds one row to each list — the phrase's Seed — so the Summary's list is six deep.
         expect(container.querySelectorAll('.outline-item--phrase')).toHaveLength(2);
-        expect(container.querySelectorAll('#outline-children-summary .outline-child')).toHaveLength(5);
+        expect(container.querySelectorAll('#outline-children-summary .outline-child')).toHaveLength(6);
         // The catalog's own order (premise → promise → theme → tone → ending), not a client-side sort: the row
-        // order is what the Overview composes in.
+        // order is what the Overview composes in — and the Seed comes before all five, because it is what the
+        // Overview was written FROM.
         expect(
-            Array.from(container.querySelectorAll('.outline-child .outline-name')).map((row) => row.textContent)
-        ).toEqual(['Premise', 'Promise', 'Theme', 'Tone', 'Ending']);
+            Array.from(container.querySelectorAll('#outline-children-summary .outline-child .outline-name')).map(
+                (row) => row.textContent
+            )
+        ).toEqual(['Seed', 'Premise', 'Promise', 'Theme', 'Tone', 'Ending']);
     });
 
     it('names each group row by its title plus only the state the wire reports (U6)', () => {
@@ -1242,15 +1305,24 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
 
         const rows = Array.from(container.querySelectorAll<HTMLElement>('#outline-children-summary .outline-child'));
 
-        expect(rows).toHaveLength(5);
-        expect(rows.map((row) => row.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON']);
-        // Nothing interactive hides inside any row — the four scored rows and the unscored one alike.
+        // U-25 — six rows: the Seed first, then the five groups. The promise of the test is unchanged for every row,
+        // and the Seed row is held to it too (a leaf, one BUTTON, nothing interactive inside it).
+        expect(rows).toHaveLength(6);
+        expect(rows.map((row) => row.tagName)).toEqual([
+            'BUTTON',
+            'BUTTON',
+            'BUTTON',
+            'BUTTON',
+            'BUTTON',
+            'BUTTON'
+        ]);
+        // Nothing interactive hides inside any row — the four scored rows, the unscored one and the Seed alike.
         expect(
             rows.map((row) =>
                 Array.from(row.querySelectorAll('button, a[href], input, select, textarea, summary, [role="button"]'))
                     .map((element) => element.tagName)
             )
-        ).toEqual([[], [], [], [], []]);
+        ).toEqual([[], [], [], [], [], []]);
         // …and the score itself is a span, so its `aria-label` adds to the row's name rather than splitting it.
         expect(
             Array.from(container.querySelectorAll('[data-testid="outline-group-score"]')).map((score) => score.tagName)
@@ -1266,16 +1338,20 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         // tolerates, so it is filed rather than raised — and the rail counts the SAME band the Overview row and
         // the pane badge print (`groupBlockingFindings` → `summaryBlockingCost`, dial included). D-78 — that
         // band is a severity reading, not a door: the Accept gate waits for none of these rows.
-        const promise = rowsOfSummary(container)[1];
+        // U-25 — the rows list starts with the phrase's Seed, so the groups are at 1…5.
+        const promise = rowsOfSummary(container)[2];
 
         expect(promise[2]).toBe('2');
 
         // A `fixed` finding is archived out of every active list: it is in no badge and no row. The count is the
         // proof (a group with one finding that is fixed shows no badge at all), so a rendering that leaked it
         // would move Premise's badge from 1 to 2.
-        const premise = rowsOfSummary(container)[0];
+        const premise = rowsOfSummary(container)[1];
 
         expect(premise[2]).toBe('1');
+        // …and the Seed row that opens this phrase's pane carries no badge of its own: a Seed has no findings to
+        // answer, and a dot or a number on it would be a claim about a pinned text.
+        expect(rowsOfSummary(container)[0]).toEqual(['Seed', null, null, null]);
     });
 
     it('keeps the group rows inside the disclosure the phrase header governs (U-21 + U1)', () => {
@@ -1296,17 +1372,71 @@ describe('StoryOutline — the Summary phrase’s five groups (R6)', () => {
         expect(container.querySelector('#outline-children-summary')).toBeNull();
         expect(rowsOfSummary(container)).toEqual([]);
 
-        // Re-expanding restores the same five rows, in the same order, with the same marks, badges and
-        // percentages: folding a phrase hides the groups, it never recomputes or drops them.
+        // Re-expanding restores the same rows, in the same order, with the same marks, badges and
+        // percentages: folding a phrase hides the groups, it never recomputes or drops them. U-25 — the Seed row is
+        // part of that list, so it folded with them (nothing else on the rail could hold it) and it comes back first.
         fireEvent.click(summary);
 
         expect(summary.getAttribute('aria-expanded')).toBe('true');
         expect(rowsOfSummary(container)).toEqual([
+            ['Seed', null, null, null],
             ['Premise', null, '1', '84%'],
             ['Promise', null, '2', '62%'],
             ['Theme', 'writer', '2', '71%'],
             ['Tone', null, '1', '58%'],
             ['Ending', 'to write', '1', null]
         ]);
+    });
+
+    // U-25 — THE SEED ROWS THEMSELVES. Each Phrase gets exactly one, first, named `Seed`, addressed by the synthetic
+    // seed ref on its OWN panel: that pair is what `StoryView` routes to the phrase's Seed pane, so a rail row that
+    // emitted `panel:'seed'` (the retired selection) or a shared ref for both phrases would open the wrong text.
+    it('gives every phrase its own Seed row, first, and navigates it as a child of that phrase', () => {
+        const selections: StorySelection[] = [];
+        const { container } = render(
+            <StoryOutline
+                view={groupView()}
+                selection={{ panel: 'plotlines', ref: phraseSeedRef() }}
+                onSelect={(next) => selections.push(next)}
+            />
+        );
+
+        // Two phrases, two Seed rows, one per list — and each row still wears the rail's Seed class, so the
+        // stylesheet's rule for a Seed row is the rule for this row (`app.css`'s `.outline-item--seed`).
+        const summarySeed = container.querySelector<HTMLElement>('#outline-children-summary [data-testid="outline-seed"]')!;
+        const plotlinesSeed = container.querySelector<HTMLElement>('#outline-children-plotlines [data-testid="outline-seed"]')!;
+
+        expect(summarySeed.querySelector('.outline-name')?.textContent).toBe('Seed');
+        expect(plotlinesSeed.querySelector('.outline-name')?.textContent).toBe('Seed');
+        expect(summarySeed.className).toContain('outline-child');
+        expect(summarySeed.className).toContain('outline-item--seed');
+
+        // FIRST in its list, ahead of the groups (the phrase reads top-down: input, then what was written from it).
+        expect(
+            container.querySelectorAll('#outline-children-summary .outline-child')[0]?.getAttribute('data-testid')
+        ).toBe('outline-seed');
+
+        // The lit row is the one the selection addresses — and only that one, because the ref is per phrase.
+        expect(plotlinesSeed.className).toContain('outline-child--active');
+        expect(summarySeed.className).not.toContain('outline-child--active');
+
+        // A bare click navigates to that phrase's Seed, and the row is a leaf: no tooltip, no state, no badge.
+        fireEvent.click(summarySeed);
+
+        expect(selections).toEqual([{ panel: 'summary', ref: phraseSeedRef() }]);
+        expect(summarySeed.hasAttribute('title')).toBe(false);
+        expect(summarySeed.hasAttribute('data-state')).toBe(false);
+        expect(summarySeed.querySelector('.outline-badge')).toBeNull();
+        expect(summarySeed.querySelector('[data-testid="outline-group-score"]')).toBeNull();
+        // U-25 — and no attention mark: `storyAttention` never names the seed ref, so the row inherits neither the
+        // phrase header's dot nor one of its own (`attentionFor` answers `undefined`, and `data-attention` is absent).
+        expect(summarySeed.className).not.toContain('outline-item--attention');
+        expect(summarySeed.hasAttribute('data-attention')).toBe(false);
+        // The accessible name is the word and nothing else: the row is one BUTTON labelled `Seed`, with no phrase
+        // number and no mark text glued onto it.
+        expect(summarySeed.tagName).toBe('BUTTON');
+        expect(summarySeed.textContent).toBe('Seed');
+        expect(plotlinesSeed.textContent).toBe('Seed');
+        expect(screen.getAllByRole('button', { name: 'Seed' })).toHaveLength(2);
     });
 });

@@ -1,7 +1,11 @@
-// U-4 / C-14 — the Seed card. It is pinned and read-only on every Story view for every viewer,
-// because it is the thing the book is measured against: C-14 asks whether the Summary delivers
-// the Seed, so the Seed has to be on screen while the Summary is being judged. It never scrolls
-// away (the pane is `position: sticky` in `styles/story.css`).
+// U-4 / C-14 — the Seed card, and it is a KEPT SURFACE RATHER THAN A MOUNTED ONE. Nothing renders it today: the
+// content area shows one pane at a time (U-4), and the Seed reaches the Author through the rail — U-25 put a Seed
+// row under EVERY phrase, opening `story-folders.tsx`'s `SeedPane` for Phrase ① and `PhraseSeedPane` for Phrase ②.
+// The card stays in the tree, and pinned by its own suite, because it is the one component that states the C-14
+// promise in markup: the Seed is the thing the book is measured against, so the Summary being judged and the Seed
+// it is judged by belong on the same screen. If a later surface wants a Seed that sits beside the artifact instead
+// of opening as a pane, this is it — and the `position: sticky` rule that made it "never scroll away" is still in
+// `styles/story.css` (`.sv-seed`), which is the styling a remount would get for free.
 //
 // D-3b: `chapter_count` rides on this card because it is the same kind of Author truth —
 // declared, never chosen by the Writer, and a hard fact (a deviation is a failing C-0).

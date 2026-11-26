@@ -2044,8 +2044,11 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                 });
             }
 
-            // D-25a: editing the Seed is not an edit, it is a full backtrack to phase ① — the confirm is
-            // already granted because the dashboard's Seed card asks the Author first.
+            // D-25a: editing the Seed is not an edit, it is a full backtrack to phase ① — and this route
+            // grants the confirm because the desk has no confirm to ask for: U-25 left the Seed pane
+            // read-only (no Author edit control exists on it today), so no UI gate can precede the call.
+            // Same shape as `changeChapterCount` below — D-3c's confirm is a UI gate, never a server one —
+            // and the engine's refusal path stays reachable for a caller that does ask (the §11 MCP surface).
             if (body.idea !== undefined) await engine.editSeed(story.id, body.idea as string, { confirm: true });
 
             // D-3c: growing creates `outlined` chapters; shrinking removes them, and the engine only does

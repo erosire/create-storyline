@@ -19,6 +19,8 @@ import { groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
 import { NOW } from './story-fixtures';
 import type { PhraseView } from '../api';
 import type { StoryViewData } from './story-contract';
+// U-25 — the Seed row's ref, imported rather than spelled, so the test pins the SAME token the rail emits.
+import { phraseSeedRef } from './story-nav';
 
 /**
  * A grouped book in phase ①, Goal passing, Ideas tray empty: the frame in which the phase gate is allowed
@@ -526,7 +528,7 @@ describe('StoryView — the rail’s group ref opens that group and closes the O
     });
 });
 
-describe('StoryView — the folders and the Seed still route as they did (U1)', () => {
+describe('StoryView — the folders still route as they did (U1), and the Seed routes as a phrase child (U-25)', () => {
     it('routes a folder selection to its own pane, with no Summary surface beside it', () => {
         const { container } = renderView({ selection: { panel: 'ideas' } });
 
@@ -535,11 +537,22 @@ describe('StoryView — the folders and the Seed still route as they did (U1)', 
         expect(container.querySelector('.sv-summary-revisions')).toBeNull();
     });
 
-    it('routes the Seed to its own pane, grouped book or not', () => {
-        const { container } = renderView({ selection: { panel: 'seed' } });
+    it('routes the Seed to its own pane, grouped book or not (U-25)', () => {
+        // U-25 — the Seed is a Phrase ① child: `{panel:'summary', ref: phraseSeedRef()}`. The routing promise is the
+        // one this file has always pinned: opening the Seed leaves NO Summary surface in the column — not the
+        // compiled Overview, not a group pane, not a group row — because the Author is reading the phrase's input.
+        const { container } = renderView({ selection: { panel: 'summary', ref: phraseSeedRef() } });
 
+        expect(container.querySelector('.sv-seed-pane')).toBeTruthy();
         expect(screen.queryByTestId('summary-overview')).toBeNull();
         expect(screen.queryByTestId('group-pane-promise')).toBeNull();
         expect(container.querySelector('.sv-group-row')).toBeNull();
+
+        // The same route on a book that is NOT group-managed: a sampling Story's Seed row opens the same pane, and
+        // the sampler's round goes with the Summary surface.
+        const classic = renderView({ selection: { panel: 'summary', ref: phraseSeedRef() } }, samplingView());
+
+        expect(classic.container.querySelector('.sv-seed-pane')).toBeTruthy();
+        expect(classic.container.querySelector('.sv-summary')).toBeNull();
     });
 });

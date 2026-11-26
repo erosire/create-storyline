@@ -133,7 +133,7 @@ which book is which; every guard in the loop reads it from there.
 | The group lock (R-lock / D-69) — the prompt and the copy | `src/server/run/phase1-prompt.ts`: `GROUP_LOCK_TEMPLATE_SLUG = 'editor-group-lock'` (1191) is the slug whose `editor` role prompt is the system turn, resolved through `rolePromptOf` off the **catalogue** (not the Story's assignment), which since this pass falls back to `fallbackRolePrompt` no longer — the built-in row exists (`src/server/templates/templates.ts:builtIn('editor-group-lock')`, and it is also in `DEFAULT_ASSIGNMENT` — later in the list than `editor-general`, which stays FIRST so every unbound Editor job still binds the general crew; the lock row's own position is free because the seat binds its own slug and `rolePromptOf` reads the catalogue, not the assignment); `GROUP_LOCK_INSTRUCTION` (1214) is the engine-owned contract — the two quotable halves of `lock: true`, "the number is not the decision" in both directions, and `false` as the ordinary unquotaed answer; `compileGroupLockPrompt` (1317) prints the ONE section at its clean revision, the Reader's number with its rationale and quoted line, the open claims (capped at `editor-lock.ts:GROUP_LOCK_CLAIM_RENDER_CAP = 12`, id ASC), the closed claims, the locked peers (`lockedPeerLines`) and the unlocked peers; `renderLockedPeerBlock` + `LOCKED_PEER_NOTE` (1232-1241) is the ONE renderer behind the LOCKED marker every brief shows, so the Writer, the reviewer and the Reader cannot disagree about what the badge means. The catalogue row's copy is pinned **digit-free** (`templates.test.ts`) — no ASCII digit anywhere in the seat's prompt, `selection_rules`, `done_definition` or `description` — because a number in the copy of the seat that decides a lock is the score cutoff the Author refused, creeping back in through prose an Author edits |
 | The group lock (R-lock / D-69) — what the desk shows | the Setting is a Story **settings** row (the Settings sheet, not the crew rail): `src/dashboard/components/story-folders.tsx` renders `EDITOR_GROUP_LOCKING_LABEL` = "Editor may lock phrase groups" (`story-contract.ts:1528`, the checkbox `setting-editor-group-locking` / `editor-group-locking`, its on/off tooltips pinned verbatim by `story-folders.locks.test.tsx`) → `src/dashboard/state.ts` (624) `patchStory({editor_group_locking})`. The lock badge, the two-step Author confirm (**Lock this group in** → **Lock it in** / **Leave it open**), the Unlock button and the "who else may lock this group" line live in `components/SummaryGroupPane.tsx` (680-775), and the enable/refusal derivations are `story-contract.ts:groupLockRefusal` / `groupUnlockRefusal` / `canAuthorLockGroup` / `canAuthorUnlockGroup` / `groupLockStatement` / `groupLockError` (1455-1510) — shut when the group is unwritten, already locked, Writer-held, or the shell has no verb; there is NO "voided group" case, because the void lives on findings, not on group rows. Tests: `StoryOutline.locks.test.tsx` / `SummaryGroupPane.locks.test.tsx` / `state.locks.test.ts` / `api.locks.test.ts` / `shell-binding.locks.test.ts`. Transport `src/dashboard/api.ts` (`lockPhraseGroup` / `unlockPhraseGroup` / `setEditorGroupLocking`, and the same-actor rule restated at 460/1124: the Author always may, the Editor only through its seat when the Setting is on, and the crew never unlocks) |
 | The Reader's section scores (D-65, display-only) | answer contract `src/shared/schemas/section-scores.ts` (`SectionScoresSchema`, `SECTION_SCORES_SCHEMA_NAME`); validation `src/server/phrase/section-scores.ts` (`parseSectionScoreAnswer` — refuses a partial/invented answer WHOLE; since D-67 also `scoredVectorHashes` and `SECTION_SCORE_ATTEMPT_CAP = 2`, the seat's ledger: scored hashes are never re-offered, closed refusals count to the cap and then stop); claim key `src/server/phrase/exclusion.ts:sectionScoreClaimKey` / `sectionScoreVectorHashOf` and its place in `GROUP_PIPELINE_RUN_PREFIXES` (in flight, never owed) — since D-67 the hash in the key is the CLEAN SELECTION's, not the live vector's; the seat `src/server/loop/work.ts:phase1GroupCandidates` candidate 2b (`priority: 2`, `rank: -1`), armed on `phrase/reviewed.ts:cleanSelectionOf(...).complete`; the prompt `src/run/phase1-prompt.ts:compileSectionScorePrompt` + `SECTION_SCORE_INSTRUCTION` (it composes the REVIEWED Overview and throws if the selection moved under the job, so shown text == scored text == recorded `vector_hash`); the dispatch `src/server/run/executor.ts` (`score_sections` branch, passing `sectionScoreVectorHashOf(item.id)`) and the settle `src/server/loop/engine.ts` (parse before the commit, five `summary_scores` rows in ONE commit); the read `api/projections.ts:sectionScoresByGroup` / `PhraseGroupScoreRow`, joined a second time per reviewed section (`reviewed.groups[].scores`, `reviewed.chosen.scores`); the rows `src/server/store/store.ts:summaryScores` |
-| The desk | `src/dashboard/components/SummaryOverviewPane.tsx` (the Overview — and since D-67 the REVIEWED Overview is the only Summary it prints) + `SummaryGroupPane.tsx` (one per group, with the Revise control); rail items in `story-nav.ts` (`STORY_PHRASES`); the sign-off gate in `story-contract.ts:lockCheck` (its group clauses in `:groupSignOffBlockers`, and `story-nav.ts:summaryReadyForReview` calls the same `lockCheck` for the rail's tick); the Summary card's heading rule in `summary-heading.ts:decorateSummaryOverview`; the reviewed derivations in `story-contract.ts` (`phraseReviewed` / `reviewedState` / `reviewedSummaryText` / `reviewedGroupRows` / `reviewedGaps` / `reviewedChooseRefusal` / `chosenGroupScores`); transport `src/dashboard/api.ts:getPhrase`/`revisePhraseGroup`/`choosePhraseReviewed`; store slices `state.phrases` + `state.phraseErrors` + `state.reviewedErrors` (the choose's cached 409, threaded to the pane by `shell-binding.ts:storyViewData`) |
+| The desk | `src/dashboard/components/SummaryOverviewPane.tsx` (the Overview — and since D-67 the REVIEWED Overview is the only Summary it prints) + `SummaryGroupPane.tsx` (one per group, with the Revise control); rail items in `story-nav.ts` (`STORY_PHRASES`); the sign-off gate in `story-contract.ts:lockCheck` (its group clauses in `:groupSignOffBlockers`, and `story-nav.ts:summaryReadyForReview` calls the same `lockCheck` for the rail's tick); the Summary card's heading rule in `summary-heading.ts:decorateSummaryOverview`; the reviewed derivations in `story-contract.ts` (`phraseReviewed` / `reviewedState` / `reviewedSummaryText` / `reviewedGroupRows` / `reviewedGaps` / `reviewedChooseRefusal` / `chosenGroupScores`); transport `src/dashboard/api.ts:getPhrase`/`revisePhraseGroup`/`choosePhraseReviewed`; store slices `state.phrases` + `state.phraseErrors` + `state.reviewedErrors` (the choose's cached 409, threaded to the pane by `shell-binding.ts:storyViewData`). **The Seed row (2026-11-26, `U-25` / spec §18.13): every phrase header carries its own `Seed` child, first in the fold, and the rail has no story-level Seed row** — ①'s row opens `components/story-folders.tsx:SeedPane` over `view.story.idea` (P5: read-only forever, and the bytes are still §4.1's `stories.idea`, not a copy of it), ②'s row opens that phrase's OWN copy through the per-phrase read's `seed_head`/`seed_chars` window (`D-72`/`D-76`) — that pane is `components/PhraseSeedPane.tsx`, which never reads `story.idea`, and asks for that read only on the grouped dial (`state.ts:phraseDetailWanted`'s rule), so on a `'classic'` Story the pane states that no read is coming instead of opening a copy it never fetched, and the row navigates by the synthetic child ref `story-nav.ts:phraseSeedRef()` (`'phrase-seed'`), `StoryPanelKey` having no `'seed'` member any more. `components/SeedCard.tsx` is **unmounted dead code** — its only importer is `SeedCard.test.tsx` — so the "pinned card" §10.2's U-4 named before its 2026-11-26 amendment never reached the screen; the pane, not the card, is the Seed surface |
 
 ### The grouped loop (R2, R3, R4, R5)
 
@@ -390,9 +390,19 @@ the attempt baseline, and every open finding's `group_refs` at once.
 
 ### What the desk shows (T2)
 
-The rail carries ONE phrase — `story-nav.ts:STORY_PHRASES` is `[{key: 'summary', number: 1, title:
-'Summary'}]`; `ALL_STORY_PHRASES` keeps the four-phrase vocabulary for panes that still address a
-phrase directly, and the rail renders no row for Characters, Plotlines or Chapters. Under the
+The rail is the pipeline's phrase list, and since T-W4 it renders TWO numbered rows — **Summary ① → Plotlines ②**
+(`story-nav.ts:STORY_PHRASES`) — while the **→ Chapters ③** number belongs to the desk's phrase vocabulary
+(`ALL_STORY_PHRASES`, which is what `selectionTitle` prints a pane heading from): Chapters has no rail row, pinned
+by `components/StoryOutline.test.tsx` (exactly two `.outline-item--phrase` rows, and no "Chapters" text in the rail
+at all), and the rail reaches a chapter from a pane's own link. Characters stays OUTSIDE the numbering as a
+supplement (`STORY_SUPPLEMENTS`; §18.8, spec U-20), which replaces the one-phrase sentence this paragraph carried
+before the Plotlines Phrase landed; `StoryPhraseKey` remains the four-key PANEL vocabulary for panes
+that address a phrase directly. **And since 2026-11-26 (`U-25`, spec §18.13) every phrase header carries
+its own `Seed` child row — its FIRST child, folded with the header under `U-21` — and the rail offers no
+story-level Seed row:** ①'s Seed opens `SeedPane` over `view.story.idea` (P5, and the bytes are still
+`stories.idea`), ②'s Seed opens the phrase's own copy through the per-phrase read's
+`seed_head`/`seed_chars` window (`D-72`, `D-76`); `components/SeedCard.tsx` is unmounted dead code, so the
+"pinned card" U-4 named was never on screen. Under the
 Summary row the rail lists the FIVE GROUP ROWS in composition order
 (`StoryOutline.tsx:groupChildren` ← `story-nav.ts:summaryGroupEntries`), each named by its own title
 and badged: `writer` while a live Writer pass is replacing it, `to write` while it has no revision,
@@ -1251,10 +1261,15 @@ global employee roster. Both are projections, and neither is a second source of 
 
 ### The phrase rail and the focused content area (2026-11-22, partly superseded 2026-11-24)
 
-> **SUPERSEDED IN PART.** The four-phrase rail and the flat `Revision 1 … N` Summary history
-> described below are the 2026-11-22 shape. The rail today offers ONE phrase —
-> `story-nav.ts:STORY_PHRASES` is `[{key: 'summary', number: 1, title: 'Summary'}]` — plus the Seed
-> leaf and the folders, and the Summary pane is `SummaryOverviewPane` + one `SummaryGroupPane` per
+> **SUPERSEDED IN PART — twice.** The four-phrase rail and the flat `Revision 1 … N` Summary history
+> described below are the 2026-11-22 shape. The 2026-11-24 note that replaced it — "the rail today offers
+> ONE phrase … plus the Seed leaf and the folders" — is itself superseded: since T-W4 the rail carries the
+> pipeline's numbering — **Summary ① → Plotlines ②** as its two rows, with **Chapters ③** numbered in
+> `ALL_STORY_PHRASES` for the pane titles rather than on the rail (it has no Chapters row) — and Characters
+> outside the numbering as a supplement (§18.8, spec U-20). Since 2026-11-26 (`U-25`, spec §18.13) the Seed
+> is NOT one story-level leaf: **each phrase header carries its own `Seed` child, first in the fold**, and the
+> rail prints no Seed
+> anywhere else. The Summary pane is `SummaryOverviewPane` + one `SummaryGroupPane` per
 > group (`SummaryPane.tsx` and the Select/merge chrome are the LEGACY `'sampling'` rendering). The
 > full four-phrase vocabulary survives as `ALL_STORY_PHRASES` because `StoryView` still routes a
 > `panel` prop to the panes that address a phrase directly. Read the rest of this section as the
@@ -1264,7 +1279,9 @@ The left rail is the Story's navigator, not its knowledge listing. `StoryOutline
 the four reading phrases in order — **Phrase 1 Summary**, **Phrase 2 Characters**, **Phrase 3
 Plotlines**, **Phrase 4 Chapters** — each with the entries under it (the Summary's `Overview`;
 one child per cast member, plotline and chapter), then the **Seed** leaf and the supporting
-folders: **Continuity**, **Goal**, **Ideas**, **Findings**, **Digest** and **Settings**. The old
+folders: **Continuity**, **Goal**, **Ideas**, **Findings**, **Digest** and **Settings**. (That leaf is
+part of the shape being described: since 2026-11-26 the Seed is a child of EVERY phrase header and the
+rail has no story-level Seed row at all — `U-25`, spec §18.13.) The old
 knowledge header's subtitle, note count and "one article per folder" sentence are gone: the
 rail makes one decision (which pane is open), so it carries no commentary.
 
@@ -1330,7 +1347,8 @@ carries the employee roster. The three columns stay in place on every view. The 
 - **Plotlines** — `PlotlinesPane`, the contracts only; **Chapters** — `PlotlineChapters` with
   `onlyChapterRef`, the prose (and its contract) under one chapter or the whole grouped set.
 - The folders render `GoalPanel`, `IdeasTray`, the new `FindingsPane` / `ContinuityPane` /
-  `DigestPane` / `SettingsPane` (the D-35 dial and the cost distribution), and `SeedPane`.
+  `DigestPane` / `SettingsPane` (the D-35 dial and the cost distribution), and `SeedPane` — the last one
+  opened by a phrase's OWN `Seed` row since 2026-11-26, never by a story-level leaf (`U-25`, spec §18.13).
 
 `GET /stories/:id` now also projects `cast` and `ledger` (both ordinary §4 collections) so the
 Characters and Continuity panes never re-derive a record client-side. `PHASE_LABELS` no longer
@@ -2185,6 +2203,10 @@ amends — it does not delete — the phrase-① statements above.
   brief's `seed_hash`, the structuring claim key, the law text in the prompt, the rail's `seed_head` — goes
   through `phrase/catalog.ts:phraseSeedOf` (245), which falls back to `stories.idea` only for a row written
   before the field existed. Editing the Story's Seed moves Phrase ①'s hashes and leaves Phrase ②'s alone.
+  **The rail says the same thing out loud since 2026-11-26 (`U-25`, spec §18.13): Phrase ②'s own `Seed` row
+  shows THIS copy — never `stories.idea` — and only the per-phrase read's `seed_head`/`seed_chars` window of
+  it (`D-76`); Phrase ①'s `Seed` row is the pane over `stories.idea`, which `phraseSeedOf` answers through
+  the same fallback rather than through a copy.**
 - **The chapter set is DECLARED once, by a structuring pass, in one commit.**
   `tools/plotlines.ts:structurePlotlines` (the 53rd tool, its own catalogue group) creates the brief AND
   accepts it: `phrase/controllers/plotlines.ts:acceptPlotlineBrief` writes the `chapter_1…chapter_N` entries
@@ -2220,8 +2242,8 @@ amends — it does not delete — the phrase-① statements above.
 | The prompts | `src/server/run/phase1-prompt.ts:promptLaneOf` (446) picks the lane from the JOB's group rows, never from `stories.phase`; all four group compilers then render the controller's law text. `src/server/run/phase1-prompt-plotlines.test.ts` pins both halves: the chapter crew briefed about a CHAPTER, and the Summary lane's bytes UNCHANGED (including the lock seat's `## CANDIDATE SECTION` / `## LOCKED PEERS` wording) |
 | The crew's structuring call | `src/server/tools/plotlines.ts` — refusals in this order: no phrase to structure (`T-11`, naming the Author as the starter), `plotlines_locked` (`L-7`), a `seed_hash` that does not match (`P5`, printing received/expected), then the count and the seeds disagreeing (`T-11`); every value validated BEFORE the idempotence read, then prior accepted briefs for the phrase demoted to `draft` and the new one created + accepted in one commit |
 | The templates | `src/server/templates/templates.ts` — `writer-plotlines-sampler` (798) and `editor-plotlines-structure` (841), `serves_phase: ['plotlines']`, assigned LAST in `DEFAULT_ASSIGNMENT` (947-948) so no unbound Editor/Writer job binds a phrase prompt |
-| The wires | `src/server/api/routes.ts` — `GET /stories/:id/phrases/:key` (1034, 404 only for a key the catalog does not enable; an unstarted phrase is an EMPTY view), `POST /stories/:id/phrases/:key/start` (1080, `{source: 'compiled' \| 'custom', text?}`, 409 read off `definition.starts_on_demand` rather than a name, 409 for an already-started phrase, 400 for `custom` without text, 409 for an empty compiled Summary), revise (1223) taking `plotpoints` for a chapter entry, and `plotlines_mode` checked by the same two-words rule on both Story routes (POST 799/864-871, PATCH 1721/1814-1822) with the dial frozen by a 409 (1834-1844) once the phrase row exists. `src/server/api/projections.ts` — `compiledSummaryOf` (1499: the complete CLEAN selection, else the composed content) and `summaryIsCompiled`, `SEED_HEAD_CHARS = 400` (1485), the Story view's `phrase_started: {summary, plotlines}` (612/680) and `summary_compiled` (620/684) |
-| The desk (written, unpinned) | `src/dashboard/api.ts` — `getPhraseDetail`, `startPhrase`, `revisePhraseEntry`, and the widened Story view (`plotlines_mode`, `phrase_started: {summary, plotlines}`, `summary_compiled`). `src/dashboard/state.ts` — `refreshPhraseDetail` fetches Phrase ②'s read LAZILY (`phraseDetailWanted`: the dial says the entries are the surface, or that surface is already open) into its own slot AND its own error slot, so the Plotlines pane can never print the Summary read's sentence. `components/story-contract.ts` — `plotlinesEntries`, `plotlinesBrief`, `plotlinesStarted`, `plotlinesHandoffRefusal`, `plotlinesSurfaceView`, `isPlotlinesGroups`; `shell-binding.ts` binds the verbs (the dial, `startPhrase`, `revisePhraseEntry`) with the usual "no id, no POST" guard. The shared pair `components/PhraseEntries.tsx` (`PhraseEntryRow` / `PhraseEntryRows` / `PhraseReadState` / `PhraseEntryDetail`, one `PhraseSurface` per phrase: `SUMMARY_SURFACE`, `PLOTLINE_SURFACE`), Phrase ②'s surface `components/PlotlinesPhrasePane.tsx` (the brief card, the chapter entries, the contract editor) and its Start card `components/PlotlinesHandoff.tsx` (enabled by `summary_compiled` — the same projection the start verb copies its seed from), reached through `StoryView`'s `isPlotlinesGroups` route so a classic book keeps `PlotlinesPane`'s §4.3 records untouched. The rail: `story-nav.ts` numbers Summary ① → Plotlines ② → Chapters ③ and lists Characters as a supplement. **No dashboard test touches any of it** — so this row cites the desk by file, not by line number |
+| The wires | `src/server/api/routes.ts` — `GET /stories/:id/phrases/:key` (1167, doc comment 1152; 404 only for a key the catalog does not enable; an unstarted phrase is an EMPTY view), `POST /stories/:id/phrases/:key/start` (1213, doc comment 1181; `{source: 'compiled' \| 'custom', text?}`, 409 read off `definition.starts_on_demand` rather than a name, 409 for an already-started phrase, 400 for `custom` without text, 409 for an empty compiled Summary), revise (1223) taking `plotpoints` for a chapter entry, and `plotlines_mode` checked by the same two-words rule on both Story routes (POST 799/864-871, PATCH 1721/1814-1822) with the dial frozen by a 409 (1834-1844) once the phrase row exists. `src/server/api/projections.ts` — `compiledSummaryOf` (1499: the complete CLEAN selection, else the composed content) and `summaryIsCompiled`, `SEED_HEAD_CHARS = 400` (1485), the Story view's `phrase_started: {summary, plotlines}` (612/680) and `summary_compiled` (620/684) |
+| The desk (written, and pinned since T-W4/T-W6) | `src/dashboard/api.ts` — `getPhraseDetail`, `startPhrase`, `revisePhraseEntry`, and the widened Story view (`plotlines_mode`, `phrase_started: {summary, plotlines}`, `summary_compiled`). `src/dashboard/state.ts` — `refreshPhraseDetail` fetches Phrase ②'s read LAZILY (`phraseDetailWanted`: the dial says the entries are the surface, or that surface is already open) into its own slot AND its own error slot, so the Plotlines pane can never print the Summary read's sentence. `components/story-contract.ts` — `plotlinesEntries`, `plotlinesBrief`, `plotlinesStarted`, `plotlinesHandoffRefusal`, `plotlinesSurfaceView`, `isPlotlinesGroups`; `shell-binding.ts` binds the verbs (the dial, `startPhrase`, `revisePhraseEntry`) with the usual "no id, no POST" guard. The shared pair `components/PhraseEntries.tsx` (`PhraseEntryRow` / `PhraseEntryRows` / `PhraseReadState` / `PhraseEntryDetail`, one `PhraseSurface` per phrase: `SUMMARY_SURFACE`, `PLOTLINE_SURFACE`), Phrase ②'s surface `components/PlotlinesPhrasePane.tsx` (the brief card, the chapter entries, the contract editor) and its Start card `components/PlotlinesHandoff.tsx` (enabled by `summary_compiled` — the same projection the start verb copies its seed from), reached through `StoryView`'s `isPlotlinesGroups` route so a classic book keeps `PlotlinesPane`'s §4.3 records untouched. The rail: `story-nav.ts` numbers the pipeline Summary ① → Plotlines ② → Chapters ③ in `ALL_STORY_PHRASES` and renders the first TWO as rows (`STORY_PHRASES` — Chapters has no rail row of its own), and lists Characters as a supplement (`STORY_SUPPLEMENTS`), and since 2026-11-26 (`U-25`, spec §18.13) **each phrase header carries its own `Seed` child row** — ①'s opens `SeedPane` over `view.story.idea`, ②'s opens the copy through the phrase read's `seed_head`/`seed_chars` and asks for that read only on the grouped dial (`state.ts:phraseDetailWanted`'s rule — on a classic book its pane says no read is coming, it is not waiting on one) — with no story-level Seed row left on the rail. **The desk half is pinned now** (verified 2026-11-26): this row's own nouns match THIRTEEN dashboard test files — `api.plotlines`, `state.plotlines`, `StorylineApp.plotlines`, `StoryView.plotlines`, `StoryOutline`, `PlotlinesPhrasePane`, `PlotlinesHandoff`, `story-folders.plotlines`, `story-nav.groups`, `story-nav.seed`, `PhraseSeedPane`, plus the U-25 correction pass's `real-server-seed` (the rail-click integration file) and `DirectiveBar` (the bar on a grouped dial) — so the row cites the desk by file, and the §18.8 desk grep below answers THIRTEEN test files rather than nothing |
 
 ### Things that are easy to get wrong here
 
@@ -2240,12 +2262,18 @@ amends — it does not delete — the phrase-① statements above.
   research leg (the Seed's pass ran before the phrase was started). `shared/types.ts`'s comment still claims
   the Seed Brief's semantics for the field; `tools/plotlines.ts` and the spec are the authority.
 - **The desk's phrase words are PANEL keys, and only two of them are catalog kinds.**
-  `src/dashboard/components/story-nav.ts:57` (`'summary' | 'characters' | 'plotlines' | 'chapters'`) predates
-  the backend catalog, and since T-W4 the RAIL numbers Summary ① → Plotlines ② → Chapters ③ (`STORY_PHRASES`
-  96, `ALL_STORY_PHRASES` 111) with Characters moved OUT of the numbering into `STORY_SUPPLEMENTS` (134) — a
+  `src/dashboard/components/story-nav.ts:58` (`'summary' | 'characters' | 'plotlines' | 'chapters'`) predates
+  the backend catalog, and since T-W4 the DESK numbers Summary ① → Plotlines ② → Chapters ③ (`ALL_STORY_PHRASES`
+  119) while the RAIL renders only the two rows `STORY_PHRASES` (104) carries — Chapters has no rail row — and
+  Characters moved OUT of the numbering into `STORY_SUPPLEMENTS` (142) — a
   sheet the crew builds from the Summary, not a phase the loop signs off. Chapters have no phrase kind either:
-  the pane reads the phase-③ records. And `phraseStarted(view, phrase)` (755) means "the artifact behind the
+  the pane reads the phase-③ records. And `phraseStarted(view, phrase)` (791) means "the artifact behind the
   panel exists", which is NOT the API's `phrase_started` — that means "this book has a `phrases` row".
+  **The one legacy leaf is gone (2026-11-26, `U-25` / spec §18.13):** the `seed` panel key and the sentence that
+  justified it — "the Seed is pinned truth, not a phrase", the comment at `story-nav.ts:63` before this wave
+  replaced it — are what the per-phrase `Seed` CHILD replaces: every phrase header carries its own Seed row,
+  addressed by the synthetic child ref `phraseSeedRef()` rather than a panel key, and folding that phrase folds
+  its Seed row with it (`U-21`, amended 2026-11-26).
 - **Two answer contracts, one job kind.** `draft_groups` means `GroupDraft` on the Summary lane and
   `ChapterDraft` on the chapter lane; the discriminator is the JOB's `responseSchema.name` and the phrase the
   job's `groupRefs` belong to — at settle time `loop/engine.ts` resolves the owning phrase from those refs
@@ -2269,7 +2297,7 @@ yarn vitest run packages/erosire/create-storyline/src/server/templates/templates
 grep -rn "plotlineBriefs" packages/erosire/create-storyline/src/server/loop/engine.ts               # empty → the delete purge that is missing
 grep -rn "if (phrase === 'summary')" packages/erosire/create-storyline/src/server/loop \
      packages/erosire/create-storyline/src/server/run                                              # empty → the R11 rule holds
-grep -rln "plotlines_mode\|startPhrase\|PlotlinesPhrasePane\|PlotlinesHandoff" packages/erosire/create-storyline/src/dashboard --include='*.test.*'   # empty → the Phrase ② desk is written and untested (the open half)
+grep -rln "plotlines_mode\|startPhrase\|PlotlinesPhrasePane\|PlotlinesHandoff" packages/erosire/create-storyline/src/dashboard --include='*.test.*'   # THIRTEEN files match (verified 2026-11-26): the Phrase ② desk is written AND pinned — the "open half" is closed, and the U-25 correction pass added `real-server-seed.test.tsx` and `DirectiveBar.test.tsx`
 ```
 
 The rig answers a chapter batch with `loop/mock.ts`'s `chapterDraft` knob (the same `draft_groups` kind,
@@ -2280,17 +2308,17 @@ injected (T-W4).
 ### Holes this wave left open
 
 - **CLOSED (T-W6): `plotline_briefs` no longer survives `deleteStory`.** The purge is now FOUR deletes in
-  one commit — `engine.ts:3043-3045` for `phrases`/`phrase_groups`/`group_revisions` and `3051` for
+  one commit — `engine.ts:3044-3046` for `phrases`/`phrase_groups`/`group_revisions` and `3051` for
   `plotlineBriefs` — and `api/story-delete.test.ts` names every collection and counts the neighbouring Story's
   rows, so the leak cannot reopen quietly. `scrapPhasesAfter` reaches the briefs too, through
-  `invalidation.ts:scrapPlotlinesPhrase` (325).
-- **CLOSED (T-W6): a Story-Seed edit removes Phrase ② outright (D-77).** `editSeed` (3424) and
+  `invalidation.ts:scrapPlotlinesPhrase` (340).
+- **CLOSED (T-W6): a Story-Seed edit removes Phrase ② outright (D-77).** `engine.ts:editSeed` (3444) and
   `backtrack('summary')` both run `scrapPhasesAfter(…, 'summary')`, and at rank < `plotlines` that calls
   `scrapPlotlinesPhrase`, which deletes the brief, the chapter entries, their history and the phrase row —
   gated on the PHRASE ROW, not on the Summary dial, so the mixed-dial case that left a whole ② standing is
   gone. A reset would have dead-ended the book: `startPlotlinesPhrase` refuses a second start (D-71), so a
   surviving row over a scrapped round has no verb that can re-seed it. `backtrack('plotlines')` is the narrow
-  cut — the row, its entries and the accepted brief (`loop/records.ts:currentPlotlineBrief` 1405 still matches
+  cut — the row, its entries and the accepted brief (`loop/records.ts:currentPlotlineBrief` 1413 still matches
   the hash) stay, and only the locks naming a scrapped revision come off. Pinned by
   `loop/phase2-blast-radius.test.ts` (both dial combinations, a sibling Story, and the Summary's own reset
   unchanged). The old defence — "the phrase's own seed governs it, so the brief stays current" — is withdrawn,
@@ -2298,10 +2326,22 @@ injected (T-W4).
 - **The Summary controller's instruction slots duplicate the compiler's constants**, so the "one owner for
   the binding sentences" rule (R7) is closed for Phrase ② and not yet for Phrase ①. The controller is where
   they are supposed to live.
+- **RECORDED, NOT FIXED (2026-11-26, `U-25` / spec §18.13): the Seed's two pre-existing desk gaps.** (1)
+  `src/dashboard/components/SeedCard.tsx` is **unmounted dead code** — `grep -rn "SeedCard" src` answers its
+  own file plus `SeedCard.test.tsx` — so the "pinned, read-only card at the top of every Story" §10.2's U-4
+  named never reached the screen; the Seed surface the Author used was the rail's row plus `SeedPane`. U-4 is
+  amended to say that, and the component stays: deleting it is another wave's call, not this map's. (2) The
+  Author has **no edit affordance** for the Seed's text — `components/NewStoryForm.tsx` captures it at create
+  and `loop/engine.ts:editSeed` is reachable only as `PATCH /stories/:id`'s `idea` (the `PATCH /stories/:id` handler in `api/routes.ts`) —
+  which is a gap the per-phrase Seed row neither adds nor closes; the ONE recording of it is spec §10.2's U-25
+  follow-through (with why it leaves U-12's permission standing), and this map's copy points there.
 - **CLOSED (T-W6): the ids this wave cited are now ids the spec owns.** The loose `R8`/`R9`/`R15`, the
   borrowed `P9` and the mis-used `D-30` were re-cited to `D-71`/`D-72`/`D-76`/`D-77`, `V-2`/`D-38a`, `D-49`
-  and the new `U-21`/`U-22` — the map is §18.10. One residue the pass missed: `dashboard/state.ts:763` still
-  cites the Start verb as `R5 / D-30`, where `routes.ts:1048` answers the same route as `R5 / D-76`.
+  and the new `U-21`/`U-22` — the map is §18.10. The residue that pass left is CLOSED (verified 2026-11-26):
+  `dashboard/state.ts:763` now cites the Start verb as `R5 / D-76`, the same id `api/routes.ts`'s
+  `POST /stories/:id/phrases/:key/start` handler answers it with, and `D-30` survives in the desk only at its
+  real home — the two costs that can hold a sign-off whatever the dial says (`story-contract.ts`'s blocking-cost
+  clause, D-30/D-34).
 - **The ids the 2026-11-26 accept wave minted, and where they live.** `D-78` is §6.3a's rule for the
   accept — the leftovers voided and closed inside the lock commit, Phrase ② started in a second commit at
   the route, and the counts reported on `lock_receipt` — and it lives in §6.3a rather than in
@@ -2315,8 +2355,62 @@ injected (T-W4).
   `PlotlinesPhrasePane.test.tsx`, `PlotlinesHandoff.test.tsx`, `story-folders.plotlines.test.tsx` and the added
   `StoryOutline.test.tsx` cases exercise the transport, the lazy phrase read, the rail numbering, the Start card
   and the refusal sentences. `components/PhraseEntries.tsx` — the shared row/detail pair both surfaces run on —
-  still has NO test file of its own: it is pinned only through `SummaryGroupPane.test.tsx` /
-  `SummaryGroupPane.locks.test.tsx` (Phrase ①) and `PlotlinesPhrasePane.test.tsx` (Phrase ②), so a change that
-  breaks a state neither surface renders goes uncaught. And no vitest run stands in for the LIVE browser: the
-  rail's behaviour there is still unproven. This wave is still moving while the map is written — re-run §18.8's
-  greps and `yarn typecheck` before quoting a desk line number.
+  still has NO test file of its own (`ls src/dashboard/components | grep -i phraseentries` answers the component
+  and nothing else): it is pinned only through the suites of the components that render it — `grep -rln PhraseEntries src`
+  names `SummaryGroupPane.tsx`, `SummaryOverviewPane.tsx`, `PlotlinesPhrasePane.tsx` and `RevisionsCompare.tsx`, whose
+  suites are `SummaryGroupPane.test.tsx` / `SummaryGroupPane.locks.test.tsx` (Phrase ①), `SummaryOverviewPane.test.tsx`,
+  `PlotlinesPhrasePane.test.tsx` (Phrase ②) and `RevisionsCompare.test.tsx` — so a change that breaks a state none of
+  those four components renders goes uncaught. And no vitest run stands in for the LIVE browser: the
+  rail's behaviour there is still unproven. That "still moving" caveat is RETIRED (re-verified 2026-11-26, from
+  the package directory): `yarn vitest run src/dashboard` answers `736 passed` across 59 files and
+  `yarn typecheck` answers clean, so a desk line number quoted here is checkable against the tree instead of
+  waiting on the wave — and §18.8's desk grep now matches, THIRTEEN test files carrying the Phrase ② nouns (the
+U-25 correction pass added `src/dashboard/real-server-seed.test.tsx`, the rail-click integration file that clicks
+both Seed rows on the real rail, and `components/DirectiveBar.test.tsx`, which now also runs on the grouped dial).
+- **The Seed row is this wave's desk half (`U-25`, spec §18.13, 2026-11-26).** The rail's one story-level Seed
+  leaf is replaced by one `Seed` CHILD per phrase header, and the row is GENERIC rather than per phrase:
+  `StoryOutline.tsx:seedChild()` is PREPENDED to the children of every entry in `story-nav.ts:STORY_PHRASES`, so
+  it is the FIRST child of each and no phrase name is hardcoded. ①'s opens `components/story-folders.tsx:SeedPane`
+  over `view.story.idea` — the whole retitling is the new optional `SeedPane({ phrase })` prop, and the heading it
+  prints is `Phrase 1 — Summary · Seed — the Author's idea`, built on the same `Phrase 1 — Summary · Seed` string
+  `story-nav.ts:phraseSeedTitle` composes for `{panel:'summary', ref: phraseSeedRef()}` — the U-25 correction pass
+  pulled that composition out of `selectionTitle`, which now calls it, and the folder's own title and `SeedPane`'s
+  heading call it too, so the rail's row and the content area's heading cannot drift apart; the strings the desk
+  prints are byte-for-byte what they were before the helper existed (`PHRASE_SEED_REF`, whose
+  value is `'phrase-seed'`; `StoryPanelKey` is `StoryPhraseKey | StoryFolderKey` and carries no `'seed'` member);
+  ②'s opens the new `components/PhraseSeedPane.tsx`, which reads ONLY the phrase's own `phrases.seed` copy through
+  the read's `seed_head`/`seed_chars` window (`D-72`/`D-76`, `SEED_HEAD_CHARS` = 400) and stays read-only once the
+  phrase has started. **And the pane asks for that read on the dial's own rule** (the U-25 correction pass): its
+  gate is `copyable && (view.plotlines_mode === 'groups' || isPlotlinesGroups(view))` — the same two fields
+  `state.ts:phraseDetailWanted` reads — so on a `'classic'` Story a started ② is told in one sentence that NO read
+  is coming and nothing here is waiting, rather than sounding like a request that stalled, and the started mark it
+  prints stays the Story row's, not a read's. Nothing else under it moved: no route (the wave's only `api/routes.ts` change is the comment
+  above its `engine.editSeed` call), no wire field, no tool (nothing under `src/server/tools` changed), no hash, no
+  `phrases.seed` read, no `D-71`/`D-72`/`D-76`/`D-77` rule, and `SNAPSHOT_VERSION` is still 4. **The pins, and the
+  desk half is CLOSED (verified 2026-11-26 against the finished tree).** The suites that already owned the rail and
+  the content area cite `U-25` — `components/StoryOutline.test.tsx` (the Seed child, its first row, the fold, no
+  attention mark) and `components/StoryView.test.tsx` (the phrase-child selection opens Phrase ①'s Seed by the
+  synthetic ref, the heading naming the phrase) — and the pane is no longer the unpinned exception:
+  `components/PhraseSeedPane.test.tsx` is its OWN suite, and `components/story-nav.seed.test.ts` pins the token,
+  the retired `seed` panel key, the per-phrase title, the absence of an attention mark and what
+  `story-nav.ts:directiveFocus` hands the directive bar for each phrase's Seed. **The correction pass added the
+  proof this bullet could only claim** (2026-11-26): `src/dashboard/real-server-seed.test.tsx` boots a REAL server
+  and clicks ①'s and ②'s `Seed` row on the REAL rail inside the real `StoryView`, asserting the content area that
+  answers each click — so routing is pinned without stubs while `StoryView.plotlines.test.tsx`'s Summary and
+  Plotlines panes stay stubs, which is that file's subject; the same file pins the classic dial's honest state (②
+  says no read is coming and the spy — `getPhraseDetail`, which is Phrase ②'s read — is never called on that dial;
+  that classic-dial test never opens ①'s row, so ①'s own text is pinned on the grouped book, where the same spy
+  proves the grouped dial asked for ②'s read exactly once); the desk's
+  directive bar — `components/DirectiveBar.test.tsx` — now also runs on a GROUPED dial, pinning that the bar
+  focuses Phrase ②'s real ref there; and
+  `components/StoryView.test.tsx` prints ①'s P5 badge verbatim, so the pane's promise about every agent is a pinned
+  string rather than a sentence here. Observed, this tree: a focused run
+  of the three rail/seed files answers `52 passed` (3 files — `StoryOutline.test.tsx` 32,
+  `PhraseSeedPane.test.tsx` 12, `story-nav.seed.test.ts` 8), the desk suite answers `736 passed` (59 files), and
+  `yarn typecheck` answers clean. The `8 failed | 23 passed` this bullet recorded mid-wave was the rail file
+  against source that was still moving, and it is superseded — the same file answers `32 passed` now. **Run the
+  desk tests from the package directory** (`packages/erosire/create-storyline/`): the same suite scoped from the
+  repo root picks up the root vitest config and answers `44 failed | 692 passed` tests over `6 failed | 53 passed
+  (59 files)` on a missing `__APP_VERSION__` define in `components/TopBar.tsx:155`, which says nothing about this
+  wave. What no vitest run can close is still
+  open: the LIVE-browser probe U-20 owes.

@@ -4179,6 +4179,14 @@
     border-left: 3px solid var(--accent);
 }
 
+/* U-25 — Phrase ②'s Seed pane, the sibling of the one above: same accent edge, because both panes answer the same
+   question ("what is this phrase written from?") for different phrases. Everything else it prints reuses the pane
+   conventions it shares with the handoff card (`sv-pane-*`, `sv-group-notice`, `sv-reviewed-*`), so this rule only
+   carries the family resemblance, and the copied text itself is markdown (`sv-markdown sv-summary-text`, U-23). */
+.sv-phrase-seed-pane {
+    border-left: 3px solid var(--accent);
+}
+
 /* The settings pane owns the page; the dial and cost block are sections inside it, not cards. */
 .sv-settings .sv-dial {
     margin-top: 0.65rem;

@@ -406,21 +406,27 @@ describe('StorylineApp — the rail lists two phrases and keeps the two addresse
         );
 
         // The row's NAME is the entry's title (`StoryOutline.tsx`'s child row), and its address is the uuid — the
-        // two things a rail must not get wrong about a chapter.
+        // two things a rail must not get wrong about a chapter. U-25 puts the phrase's Seed row FIRST, so the
+        // entries start at 1 — and the Seed's own address is the synthetic seed ref on the SAME panel, which is the
+        // pair `StoryView` routes to that phrase's Seed pane.
         expect(
             entries.map((row) => row.querySelector('.outline-name')?.textContent)
-        ).toEqual(['Chapter 1 — The Salt Road', 'Chapter 2 — The Salt Road', 'Chapter 3 — The Salt Road']);
+        ).toEqual(['Seed', 'Chapter 1 — The Salt Road', 'Chapter 2 — The Salt Road', 'Chapter 3 — The Salt Road']);
 
-        await click(entries[1]!);
+        await click(entries[0]!);
+        expect(desk()).toContain('ref:phrase-seed');
+
+        await click(entries[2]!);
         expect(desk()).toContain('ref:plotlines-group:entry-chapter_2');
 
         const groups = Array.from(
             outline.querySelectorAll<HTMLButtonElement>('#outline-children-summary button.outline-child')
         );
 
-        expect(groups).toHaveLength(5);
+        // U-25 — six: the Summary's Seed row, then the five groups.
+        expect(groups).toHaveLength(6);
 
-        await click(groups[3]!);
+        await click(groups[4]!);
         expect(desk()).toContain('ref:summary-group:grp-tone');
 
         // The phrase header still drops the ref and opens that phrase's Overview (U-21).

@@ -102,7 +102,10 @@ describe('StoryOutline — a locked group says so in its row (R1)', () => {
         // The whole rail, in composition order: the lock word is `null` exactly where the wire says the group is
         // open, and the badge/score columns are byte-identical to the unlocked rail this fixture is pinned on
         // elsewhere in the suite (`['Premise', null, '1', '84%']`, …). A lock that hid either number fails here.
+        // U-25 — the phrase's Seed row leads the list and carries no lock, no state, no badge and no score: a Seed
+        // is settled text by construction (P5), so a lock mark on it would say nothing the row does not already say.
         expect(rowsOfSummary(container)).toEqual([
+            ['Seed', null, null, null, null],
             ['Premise', 'Locked', null, '1', '84%'],
             ['Promise', null, null, '2', '62%'],
             ['Theme', 'Locked', 'writer', '2', '71%'],

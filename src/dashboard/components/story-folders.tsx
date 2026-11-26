@@ -1,10 +1,14 @@
-// The supporting folders under the phrases: Seed, Continuity, Goal, Ideas, Findings, Digest, Settings.
+// The supporting folders under the phrases: Continuity, Goal, Ideas, Findings, Digest, Settings — plus the Seed
+// pane, which the rail no longer lists as a folder (U-25 moved the Seed under its phrase); `StoryView` routes it
+// for `{panel:'summary', ref: phraseSeedRef()}` and nothing else.
 //
 // WHY THEY ARE PANES AND NOT A STACK: each one answers a different question (what the book is
 // measured against, what facts it must respect, what the bar is, what decisions are owed, what is
 // broken, what the engine sees, how the machine is allowed to act). Putting them in the rail keeps
 // the content area to the one question the Author is asking.
 import { CostDistributionPanel } from './story-cost-distribution';
+import { phraseSeedTitle } from './story-nav';
+import type { StoryPhraseSpec } from './story-nav';
 import {
     EDITOR_GROUP_LOCKING_LABEL,
     EDITOR_GROUP_LOCKING_NOTE,
@@ -24,11 +28,31 @@ import { FINDING_COSTS } from '../../shared/types';
 import type { Cost, LedgerEntry } from '../../shared/types';
 import type { StoryActions, StoryViewData } from './story-contract';
 
-export function SeedPane({ view }: { view: StoryViewData }) {
+/**
+ * U-25 — Phrase ①'s Seed: the Author's own idea, shown read-only.
+ *
+ * WHY IT IS STILL THIS PANE. The Seed the rail used to pin above the phrases IS `story.idea` — the text
+ * `server/phrase/catalog.ts:phraseSeedOf` hands Phrase ① as its Seed — so moving the row under Phrase ① needed no
+ * new pane, only a route. What did change is the READING: the row now sits under a phrase, so the heading names
+ * which phrase's Seed is open — `story-nav.phraseSeedTitle` plus this pane's `— the Author's idea`, byte-for-byte the
+ * title `selectionTitle` composes for the same selection. With no `phrase` passed the pane keeps the heading it always
+ * had.
+ *
+ * WHY THERE IS NO EDIT CONTROL. The Author's idea has no write verb on this desk today — no route, no action in the
+ * pinned `StoryActions` — so the pane stays a reading surface with its P5 badge rather than inventing one. (Known
+ * gap: the Author who wants to change the idea has nowhere to type it here.)
+ */
+export function SeedPane({ view, phrase }: { view: StoryViewData; phrase?: StoryPhraseSpec }) {
     return (
         <section className="sv-pane sv-seed-pane" aria-label="Seed">
             <header className="sv-pane-head">
-                <h3 className="sv-pane-title">Seed — the Author&apos;s idea</h3>
+                {/* U-25 — the phrase prefix is the whole retitling: the desk has no story-level Seed, and the
+                    Author opening this row from under a phrase has to be told WHICH phrase's text follows. */}
+                <h3 className="sv-pane-title">
+                    {phrase === undefined
+                        ? 'Seed — the Author\'s idea'
+                        : `${phraseSeedTitle(phrase)} — the Author's idea`}
+                </h3>
                 <span className="sv-pane-badge">
                     Author-written · read-only for every agent, every phrase, forever (P5)
                 </span>

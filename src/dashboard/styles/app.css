@@ -1621,6 +1621,11 @@
     font-weight: 600;
 }
 
+/* U-25 — the rail's Seed-row hook, kept for what it NAMES rather than for what it paints: every phrase's first child
+   row wears this class beside `.outline-child` (`StoryOutline.tsx`), and the "no top-level Seed row" check reads it.
+   Its `gap` loses to `.outline-child`'s 5px below — same specificity, later in this file, so source order decides,
+   and the Seed row renders 5px like every other leaf. Nothing here may be reordered to change that: to override
+   `.outline-child` from this seat a rule has to out-specify it (e.g. `.outline-child.outline-item--seed`). */
 .outline-item--seed {
     gap: 8px;
 }

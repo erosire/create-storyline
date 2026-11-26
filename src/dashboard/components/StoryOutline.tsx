@@ -22,6 +22,14 @@
 // clicking it again unfolds them, which is how the Author gets the rail back to four lines. It changes
 // what the rail SHOWS and nothing else — the collapsed phrase's rows are unmounted, never deleted, so
 // re-expanding restores every row, its strike-through, its badge and its tooltip, in the same order.
+//
+// U-25 — THE SEED IS A PHRASE CHILD, NOT A RAIL ROW OF ITS OWN. The rail used to pin one `Seed → "The Author's
+// idea"` row above `Phrases`, which claimed one Seed for the whole Story. Each Phrase has its own: Phrase ①'s is the
+// Author's idea, Phrase ②'s is the text its Start copied (the compiled Overview, or the Author's own words). So the
+// row moved INSIDE every phrase's children list, first, and it folds with them — collapsed means it leaves the DOM
+// like any other leaf — and it navigates as `{panel:<phrase>, ref: phraseSeedRef()}`, the same ref-on-a-panel shape
+// a Summary group and a chapter entry use. Nothing in the rail offers a `panel:'seed'` selection any more.
+//
 import { useState } from 'react';
 import {
     STORY_FOLDERS,
@@ -31,6 +39,9 @@ import {
     castMembers,
     chaptersInOrder,
     phraseLoaded,
+    // U-25 — the Seed row's synthetic ref: the rail builds the row from it and the pane routes on it, so neither
+    // side ever writes the bare string.
+    phraseSeedRef,
     // T-W4 — Phrase ②'s rail vocabulary: the chapter-entry rows, and the predicate that decides whether the
     // header offers a `start` tick.
     plotlineRailEntries,
@@ -82,6 +93,14 @@ function isActive(selection: StorySelection, panel: StorySelection['panel'], ref
 interface OutlineChildSpec {
     ref: string;
     title: string;
+    /**
+     * U-25 — this row is a phrase's OWN Seed, the synthetic child every phrase carries. It is the only child row
+     * that is not a record off the wire, and the flag is what keeps it addressable: the row keeps the
+     * `.outline-item--seed` class the rail has always carried (so the stylesheet's rule for a Seed row is still the
+     * rule for THIS row), it carries `data-testid="outline-seed"`, and it takes none of the record marks below —
+     * no findings badge, no state word, no score, no attention dot, because a Seed is pinned truth, not work.
+     */
+    seed?: boolean;
     /**
      * Open Critical/Major findings filed against this revision — the badge. Minor findings are
      * filed, not raised: a revision that only has those has nothing for the Author to answer, so
@@ -138,6 +157,25 @@ interface OutlineChildSpec {
 
 /** The engine's word for a draft a round parked as history (§4.17, P13/D-22). */
 const DISCARDED_STATE = 'discarded';
+
+/**
+ * U-25 — the Seed child every phrase carries, and the rail's FIRST row under every phrase header.
+ *
+ * WHY EVERY PHRASE HAS ONE. The Author's words are the whole request: "The Seed (The Author's Idea) belongs to the
+ * Phrase 1, so it should be under Phrase 1 as seed. Phrase 2 have different seed". Each phrase is a discrete
+ * surface with its own Seed — Phrase ①'s is `story.idea` (`server/phrase/catalog.ts:phraseSeedOf`), Phrase ②'s is the
+ * text its Start copied — and the desk has no third, story-level Seed. So the row the rail used to pin ABOVE the
+ * phrases moved INSIDE each one, and the two Seeds are now two rows that open two different panes.
+ *
+ * WHY IT IS BUILT FROM THE PHRASE LIST, NOT HARDCODED. The row is prepended to whatever `STORY_PHRASES` renders
+ * (see the map below), so Phrase ③ inherits its Seed row the day the rail gains the phrase — the rule lives once,
+ * on the phrase list, rather than in a branch per phrase key.
+ *
+ * WHY IT IS NOT MERGED WITH THE RECORD ROWS' MARKS. A Seed cannot hold an open finding, a Writer, a score or a
+ * discard: nothing answers to it, so it renders as a bare named row. Its class hook (`.outline-item--seed`) stays
+ * so the stylesheet keeps one rule for "a Seed row" wherever the rail shows one.
+ */
+const seedChild = (): OutlineChildSpec => ({ ref: phraseSeedRef(), title: 'Seed', seed: true });
 
 /** Phase ① is a flat Revision 1…N list — no Overview/sub-tree. */
 function summaryChildren(revisions: SummaryRevisionEntry[]): OutlineChildSpec[] {
@@ -432,22 +470,15 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
 
     return (
         <nav className="outline" aria-label="Story phrases" data-testid="story-outline">
-            <div className="outline-group">
-                <button
-                    type="button"
-                    className={`outline-item outline-item--seed${isActive(selection, 'seed') ? ' outline-item--active' : ''}`}
-                    onClick={() => onSelect({ panel: 'seed' })}
-                >
-                    <span className="outline-index">Seed</span>
-                    <span className="outline-name">The Author&apos;s idea</span>
-                </button>
-            </div>
-
+            {/* U-25 — THE TOP-LEVEL SEED ROW IS GONE. It sat above `Phrases` naming one Seed for the whole Story,
+                which is the claim the request retires: the Seed belongs to a phrase, and each phrase has its own.
+                The row moved DOWN into every phrase's own children list (`seedChild`), where its pane can answer
+                about THAT phrase's text — `story.idea` under Phrase ①, the copied Seed under Phrase ②. */}
             <div className="outline-group">
                 <h2 className="outline-heading">Phrases</h2>
                 <ol className="outline-phases">
                     {STORY_PHRASES.map((phrase) => {
-                        const children: OutlineChildSpec[] =
+                        const recordChildren: OutlineChildSpec[] =
                             phrase.key === 'summary'
                                 ? grouped
                                   ? groupChildren(view)
@@ -467,12 +498,24 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                           title: `Chapter ${chapter.order} — ${chapter.title}`
                                       }));
 
+                        // U-25 — the Seed is EVERY phrase's first child, whatever the phrase's record rows happen
+                        // to be (grouped, sampled, or none at all). It is prepended rather than appended because the
+                        // Seed is the phrase's input: reading the list top-down reads the pipeline in order. This is
+                        // also what makes a classic-pipeline Phrase ② gain a children list — it had no rows before,
+                        // and its Seed is now a row the Author can open without leaving the rail.
+                        const children: OutlineChildSpec[] = [seedChild(), ...recordChildren];
+
                         const phraseAttention = attentionFor(view, phrase.key);
                         // U-21: fold state is per phrase, so folding Summary leaves Characters open.
                         const isCollapsed = collapsed.has(phrase.key);
                         // The ONE condition that decides whether the rows exist: expanded AND non-empty. It
                         // drives both the `<ul>` below and the header's `aria-controls`, so the IDREF can never
                         // point at a list that is not in the DOM (folded phrase, or a phrase with no children).
+                        //
+                        // U-25 — SINCE EVERY PHRASE CARRIES ITS SEED ROW, `children` is never empty: the only state
+                        // that hides a phrase's list is the fold. A classic-pipeline Phrase ②, which had no rows at
+                        // all before, now has exactly one (its Seed), so its header gains `aria-controls` and its
+                        // `<ul>` exists — which is the point: the phrase's Seed was unreachable from the rail.
                         const showsChildren = !isCollapsed && children.length > 0;
 
                         return (
@@ -593,9 +636,27 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                 <li key={child.ref}>
                                                     <button
                                                         type="button"
-                                                        className={`outline-child${isActive(selection, phrase.key, child.ref) ? ' outline-child--active' : ''}${attentionClass(childAttention)}`}
+                                                        // U-25 — the Seed row is a child row (`.outline-child`, so it
+                                                        // folds, indents and navigates like every other leaf) that
+                                                        // KEEPS the rail's `.outline-item--seed` hook: the stylesheet's
+                                                        // one rule for "a Seed row" (`app.css:1624`) and the class the
+                                                        // acceptance check for "no top-level Seed row" reads, beside
+                                                        // the `data-testid="outline-seed"` the rail puts on it.
+                                                        // The order of the two class names in this attribute changes
+                                                        // NOTHING in ink: at equal specificity (one class each) the
+                                                        // gap comes out `.outline-child`'s 5px because that rule sits
+                                                        // LATER IN THE STYLESHEET (`app.css:1689`, after the seed
+                                                        // rule at 1624) — cascade source order, not attribute order.
+                                                        // The seed rule's own `gap: 8px` is therefore always
+                                                        // overridden today; it stays as the hook, and a rule meant to
+                                                        // win from here has to out-specify `.outline-child`.
+                                                        className={`outline-child${child.seed === true ? ' outline-item--seed' : ''}${isActive(selection, phrase.key, child.ref) ? ' outline-child--active' : ''}${attentionClass(childAttention)}`}
                                                         data-attention={childAttention?.tone}
                                                         data-state={child.state}
+                                                        // U-25 — the one hook the Seed row adds: a phrase's Seed is the
+                                                        // only child row a test needs to name without its title
+                                                        // (every phrase's row is literally titled `Seed`).
+                                                        data-testid={child.seed === true ? 'outline-seed' : undefined}
                                                         title={childTooltip(child, childAttention)}
                                                         onClick={() => onSelect({ panel: phrase.key, ref: child.ref })}
                                                     >
@@ -756,7 +817,7 @@ export function StoryOutline({ view, selection, onSelect }: StoryOutlineProps) {
                                                 {`Chapter entries unread: ${phraseDetailReadError(view)}`}
                                             </p>
                                         )
-                                    ) : plotlinesStartedNow && children.length === 0 ? (
+                                    ) : plotlinesStartedNow && recordChildren.length === 0 ? (
                                         /* The phrase started on the grouped pipeline and the read answered with NO
                                            entries — the brief has not been accepted yet, so the chapter entries have
                                            not been materialized. This is a real state, not a loading one, and it

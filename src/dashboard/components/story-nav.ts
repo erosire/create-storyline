@@ -60,11 +60,18 @@ export type StoryPhraseKey = 'summary' | 'characters' | 'plotlines' | 'chapters'
 /** The supporting folders under the phrases. */
 export type StoryFolderKey = 'continuity' | 'goal' | 'ideas' | 'findings' | 'digest' | 'settings';
 
-/** The one legacy leaf the rail still offers: the Seed is pinned truth, not a phrase. */
-export type StoryPanelKey = StoryPhraseKey | StoryFolderKey | 'seed';
+/**
+ * U-25 — every panel the content area can open: the phrases, and the folders that support them.
+ *
+ * THE SEED IS NO LONGER A PANEL OF ITS OWN. It used to be a legacy leaf (`'seed'`) pinned above the phrases, which
+ * was the rail claiming one Seed for the whole Story. Each Phrase has its own Seed — Phrase ①'s is `story.idea`,
+ * Phrase ②'s is the text it was started from — so the Seed is a CHILD of a phrase, addressed by the synthetic ref
+ * in {@link phraseSeedRef} on the phrase's own panel. A panel is therefore a phrase or a folder, and nothing else.
+ */
+export type StoryPanelKey = StoryPhraseKey | StoryFolderKey;
 
 /**
- * What the content area is showing. `ref` names one entry inside a phrase (a cast member, a
+ * What the content area is showing. `ref` names one entry inside a phrase (the phrase's Seed, a cast member, a
  * plotline, a chapter); absent means the phrase's own overview. A folder never carries a ref.
  */
 export interface StorySelection {
@@ -153,6 +160,47 @@ export const STORY_FOLDERS: readonly StoryFolderSpec[] = [
 /** The rail's heading for a phrase: "Phrase 1 — Summary". */
 export function phraseLabel(spec: StoryPhraseSpec): string {
     return `Phrase ${spec.number} — ${spec.title}`;
+}
+
+// ---------------------------------------------------------------------------
+// THE SEED — a phrase's first child, addressed by a SYNTHETIC ref (U-25)
+//
+// WHY A REF RATHER THAN A PANEL. Every Phrase has its own Seed: Phrase ①'s is the Author's idea (`story.idea`,
+// `server/phrase/catalog.ts:phraseSeedOf`), Phrase ②'s is the text its Start copied — the compiled Overview, or the
+// Author's own words. The desk has no third, story-level Seed surface, so the Seed is a leaf UNDER a phrase and the
+// selection is `{panel:<phrase>, ref: phraseSeedRef()}` — the same shape the Summary group and the Phrase ② chapter
+// entry already use (`summary-group:<uuid>`, `plotlines-group:<uuid>`), which is what lets one rail row, one title
+// and one directive focus resolve it through the existing selection plumbing rather than beside it.
+//
+// WHY ONE FIXED TOKEN WITH NO ID BEHIND IT. A group ref carries a uuid because a group is a deletable record. A
+// Seed is not: it is either the Story's own `idea` or the phrase row's copied text, and neither can be deleted while
+// the phrase exists — so the row always exists and `selectionExists` accepts the token for any phrase (an unstarted
+// Phrase ② is a real state its pane explains, not a missing record). The token also cannot collide: every other ref
+// on these panels is a prefixed phrase (`summary-group:`/`revision:`/`plotlines-group:`) or a bare uuid, and the
+// guard below is an exact match.
+// ---------------------------------------------------------------------------
+
+/** The one synthetic ref every phrase's Seed row navigates by. */
+export const PHRASE_SEED_REF = 'phrase-seed';
+
+/** The rail ref for a phrase's Seed child. */
+export const phraseSeedRef = (): string => PHRASE_SEED_REF;
+
+/** True when a rail ref is the phrase Seed row's (and not a group, an entry, or a record id). */
+export const isPhraseSeedRef = (ref: string | undefined): boolean => ref === PHRASE_SEED_REF;
+
+/**
+ * THE ONE TITLE A PHRASE'S SEED CARRIES: `Phrase 1 — Summary · Seed`, the phrase label and the row's own name.
+ *
+ * U-25 — WHY IT IS EXPORTED. Three surfaces used to compose this string by hand: `selectionTitle` below (the content
+ * area's title), `story-folders.tsx`'s Phrase ① Seed pane, and `PhraseSeedPane.tsx`'s heading for every other
+ * phrase. Three constructions of one name is how a rail row, a pane heading and a title bar start saying three
+ * different things about the same click, so the composition lives here and the panes call it — with the literal
+ * pinned in `story-nav.seed.test.ts`. `SeedPane` still adds its own `— the Author's idea` suffix, which is Phrase ①'s
+ * copy and not part of the shared title.
+ */
+export function phraseSeedTitle(phrase: StoryPhraseSpec): string {
+    return `${phraseLabel(phrase)} · Seed`;
 }
 
 // ---------------------------------------------------------------------------
@@ -769,15 +817,16 @@ export function phraseStarted(view: StoryViewData, phrase: StoryPhraseKey): bool
 
 /** U-4's title for the content area, resolved from the selection and the records. */
 export function selectionTitle(view: StoryViewData, selection: StorySelection): string {
-    if (selection.panel === 'seed') {
-        return 'Seed';
-    }
-
     // `ALL_STORY_PHRASES`, not the rail's phrase list: a later phase can hand this selection in
     // directly, and a title that fell through to "The story" would be a lie about what is on screen.
     const phrase = ALL_STORY_PHRASES.find((candidate) => candidate.key === selection.panel);
 
     if (phrase) {
+        // U-25 — the Seed leaf titles through the one helper every surface uses for it, so the rail's row, the pane's
+        // heading and this title are literally one call. Byte-identical to the composition below (`entry` was `Seed`),
+        // and pinned as such in `story-nav.seed.test.ts`.
+        if (isPhraseSeedRef(selection.ref)) return phraseSeedTitle(phrase);
+
         const entry = selection.ref ? phraseEntryTitle(view, phrase.key, selection.ref) : undefined;
         return entry ? `${phraseLabel(phrase)} · ${entry}` : phraseLabel(phrase);
     }
@@ -801,6 +850,12 @@ function phraseEntryTitle(
     phrase: StoryPhraseKey | StoryPanelKey,
     ref: string
 ): string | undefined {
+    // U-25 — a Seed ref names itself and nothing else: no phrase number, no `#`, nothing the rail invented. A PHRASE
+    // panel titles through `phraseSeedTitle` BEFORE this function is consulted (see `selectionTitle` above), so the
+    // caller that still reaches this line is the supplementary sheet: Characters has no Seed row on the rail, and a
+    // ref handed in from elsewhere reads as the row's own word rather than as an unresolved cast member.
+    if (isPhraseSeedRef(ref)) return 'Seed';
+
     if (phrase === 'summary') {
         // R6 — the rail's Summary children are GROUPS, so the opened entry is named by its own title
         // ("Premise"), never by a revision number and never by a label this file invented (U2/U7).
@@ -839,6 +894,15 @@ function phraseEntryTitle(
 /** Whether the small entry point named by the selection still exists (a deletion falls back). */
 export function selectionExists(view: StoryViewData, selection: StorySelection): boolean {
     if (selection.ref === undefined) {
+        return true;
+    }
+
+    // U-25 — the Seed row is SYNTHETIC, and it is the one rail child that is never a deletable record: Phrase ①'s
+    // Seed is the Story's `idea` field and Phrase ②'s is its phrase row, so there is no list to resolve it against
+    // and no state (not yet started, read in flight, read failed) in which the row would be a lie. It has to be
+    // accepted here or `StoryView.tsx`'s stale-ref guard replaces the selection and the Seed row silently opens the
+    // Overview instead of its own pane.
+    if (isPhraseSeedRef(selection.ref)) {
         return true;
     }
 
@@ -1040,7 +1104,14 @@ export function storyAttention(view: StoryViewData): StoryAttention[] {
     return items;
 }
 
-/** The attention item, if any, that belongs to one rail entry. */
+/**
+ * The attention item, if any, that belongs to one rail entry.
+ *
+ * U-25 — A SEED ROW IS NEVER MARKED. `storyAttention` only ever names records a person owes work on (a group with
+ * open findings, a chapter a finding points at), and a Seed is pinned truth nobody can answer, so no item carries
+ * `phraseSeedRef()` and this lookup answers `undefined` for it — the rail renders the row with no dot and no
+ * tooltip rather than falling through to the phrase's own mark.
+ */
 export function attentionFor(
     view: StoryViewData,
     panel: StorySelection['panel'],
@@ -1078,12 +1149,37 @@ export type DirectiveFocusView = Pick<
 
 /** The focus the directive bar should show for the rail's current selection. */
 export function directiveFocus(view: DirectiveFocusView, selection: StorySelection): DirectiveFocus {
-    if (selection.panel === 'seed') {
+    // U-25 — THE SEED IS A PHRASE CHILD, AND THE SENTENCE DEPENDS ON WHICH PHRASE. Checked BEFORE the phrase
+    // branches below, because a Seed ref rides a phrase panel: left to them, a Phrase ① Seed would read as "the
+    // Summary" (the group-fallback clause at the end of that branch) and a Phrase ② Seed as "the plotline set".
+    if (isPhraseSeedRef(selection.ref)) {
+        // Phrase ①'s Seed IS `story.idea`, the text the desk has always called the Seed, so its focus object is
+        // byte-for-byte the one this function printed while the Seed was still its own panel — same label, same
+        // sentence, same placeholder, no refs (no artifact row is being addressed; the loop reads the Seed as input).
+        if (selection.panel === 'summary') {
+            return {
+                label: 'Seed → Editor',
+                target: 'the Seed (read-only for every agent — P5)',
+                placeholder: 'what should the Editor do with this Seed?',
+                refs: []
+            };
+        }
+
+        // Any other phrase's Seed is the text THAT phrase was started from — the compiled Phrase ① Overview, or the
+        // Author's own words — and never `story.idea`. The address is the phrase row itself (`phraseDetail.phrase_id`,
+        // the only phrase read the desk fetches today, U-20), the same id the Summary branch hands when no group is
+        // open; with no read in the frame the bar addresses the sentence and no rows.
+        const phrase = ALL_STORY_PHRASES.find((candidate) => candidate.key === selection.panel);
+        const title = phrase?.title ?? 'phrase';
+        // `phrase_id` is nullable on the wire (a phrase row that has not been written yet), and the bar's refs are
+        // strings, so the check is a typeof rather than a truthiness guess.
+        const phraseId = selection.panel === 'plotlines' ? view.phraseDetail?.phrase_id : undefined;
+
         return {
-            label: 'Seed → Editor',
-            target: 'the Seed (read-only for every agent — P5)',
-            placeholder: 'what should the Editor do with this Seed?',
-            refs: []
+            label: `${title} → Seed → Editor`,
+            target: `the ${title} phrase’s own Seed (read-only for every agent — P5)`,
+            placeholder: 'what should the Editor do with this phrase’s Seed?',
+            refs: typeof phraseId === 'string' ? [phraseId] : []
         };
     }
 

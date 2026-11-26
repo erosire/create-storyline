@@ -75,13 +75,20 @@ that drives it, from one origin.
   `summary_mode: 'sampling'` shape) keeps the older sampling-round pane instead, including its two
   counts and its revision list; nothing has to be migrated for that book to read correctly. Since
   2026-11-26 the server enables a second phrase kind, **Plotlines** (`plotlines_mode`), whose entries are
-  one per chapter rather than five fixed groups, and the rail numbers the pipeline Summary ① → Plotlines ②
-  → Chapters ③ with Characters listed outside the numbering. Under its rail row a grouped book now gets that
+  one per chapter rather than five fixed groups, and the desk numbers the pipeline Summary ① → Plotlines ②
+  → Chapters ③ (`src/dashboard/components/story-nav.ts:ALL_STORY_PHRASES` — the numbering the pane titles print),
+  while the rail itself renders the two rows `STORY_PHRASES` carries, Summary ① and Plotlines ②, with Characters
+  listed outside the numbering. Each numbered row carries one child the rail did not have before: that phrase's own
+  `Seed`, first in the fold — ①'s row opening the Author's idea and ②'s row the text that phrase was actually
+  started from (specifications.md §10.2's U-25, §18.13). Under its rail row a grouped book now gets that
   phrase's own surface — the chapter entries with their revisions, findings, locks and per-entry scores, the
   Editor's brief card, and a **Handoff** card that starts the phrase — by default from the compiled Summary, or
   from the Author's own words — while a classic
-  book keeps the §4.3 records view. What that leg still lacks is proof: no dashboard test exercises the Start verb
-  or the phrase's panes (specifications.md §18.8, §10.2's U-20). All of that prose renders as Markdown
+  book keeps the §4.3 records view. That leg is pinned, not promised: the Start verb and the phrase's panes are
+  exercised by thirteen dashboard test files, and `yarn vitest run src/dashboard` answers `736 passed` across 59
+  files (both run from this package's directory). What still has no proof is the LIVE-browser probe §18.8 names —
+  the real browser's focus rings, scroll behaviour and the rendered look of the phrase panes — which no vitest run
+  substitutes for (specifications.md §18.8, §10.2's U-20). All of that prose renders as Markdown
   through `src/dashboard/components/MarkdownText.tsx` (raw HTML in agent text stays escaped), so the compiled
   Overview's `## <title>` reads as a heading and not as source (specifications.md §10.2's U-23) — and on the
   Summary card each section heading also carries the reviewed numbers, `Premise (v2) 100%`: the
@@ -276,8 +283,9 @@ server (`src/server/api/server.ts`) is the only server and owns every Story deci
 - **A phase is a session.** The engine has no session object, so Storyline owns that level: the
   Story's `summary` / `plotlines` / `chapters` phase is a session record (the UI calls it a
   "phrase", P1/P2/P3) holding the threads that phase caused. Note the two uses of the word: the
-  rail's "phrase" is this SESSION/reading surface — today exactly one, Summary — while the
-  **Summary Phrase**'s *groups* are the five writable parts inside it (`shared/phrase.ts`). They are
+  rail's "phrase" is this SESSION/reading surface — today the two rows the rail numbers, Summary ① and Plotlines ②
+  (`src/dashboard/components/story-nav.ts:STORY_PHRASES`) — while the **Summary Phrase**'s *groups* are the five
+  writable parts inside it (`shared/phrase.ts`). They are
   different levels, and nothing in the store branches on the rail's word.
 - **A Run is a thread.** Each dispatched Work Item (and each panel agent or delegated
   sub-context) opens a host thread in its Story's harness with the assembled brief as the system

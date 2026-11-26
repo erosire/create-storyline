@@ -8,6 +8,8 @@ import { render, screen, within } from '@testing-library/react';
 import { StoryView } from './StoryView';
 import { click } from '../testing/shell-fakes';
 import { buildRevisionUnits } from './story-contract';
+// U-25 — the Seed row's ref, imported rather than spelled, so the test pins the SAME token the rail emits.
+import { phraseSeedRef } from './story-nav';
 import type { Finding, Revision, Verdict } from '../../shared/types';
 import { NOW, fixtureActions, fixtureCompletion, fixtureReviewRuns, fixtureStory, fixtureView } from './story-fixtures';
 
@@ -1033,7 +1035,7 @@ describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', ()
         expect(container.querySelector('.sv-story-sampling')).toBeNull();
     });
 
-    it('shows the Editor’s accepted brief on the Seed folder without replacing the Seed (P5)', () => {
+    it('shows the Editor’s accepted brief on Phrase ①’s Seed without replacing the Seed (P5, U-25)', () => {
         const view = summaryPhaseView();
         const { container } = render(
             <StoryView
@@ -1054,16 +1056,34 @@ describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', ()
                 }}
                 actions={fixtureActions().actions}
                 now={NOW}
-                selection={{ panel: 'seed' }}
+                // U-25 — the Seed is a Phrase ① CHILD, addressed by the synthetic ref on the phrase's own panel.
+                // There is no `panel:'seed'` selection any more, and a ref `selectionExists` did not accept would be
+                // dropped by `StoryView`'s stale-ref guard, landing this render on the Summary instead of the Seed.
+                selection={{ panel: 'summary', ref: phraseSeedRef() }}
             />
         );
 
+        // U-25 — the heading names WHICH phrase's Seed is open, in the same composition the rail's row and
+        // `selectionTitle` use.
+        expect(container.querySelector('.sv-pane-title')?.textContent).toBe(
+            "Phrase 1 — Summary · Seed — the Author's idea"
+        );
+        // P5 — THE BADGE IS THE REQUIREMENT, not decoration: it is the desk's only standing statement that no agent
+        // may write this text, on the one pane an agent could be thought to own. Pinned as the literal the pane
+        // prints (`story-folders.tsx:55-57`), so rewording it is a decision with a failing test in front of it.
+        expect(container.querySelector('.sv-pane-badge')?.textContent).toBe(
+            'Author-written · read-only for every agent, every phrase, forever (P5)'
+        );
+        // The Summary's own surface is gone: the Seed row opens its pane, not the phrase's overview.
+        expect(container.querySelector('.sv-summary')).toBeNull();
         // The Seed is still the Author's text, verbatim and first (P5)…
         expect(container.querySelector('.sv-seed-body')?.textContent).toBe(view.story.idea);
         // …and the brief is a labelled, derived line under it.
         expect(container.querySelector('.sv-seed-brief')?.textContent).toBe(
             "The Editor's brief: A cartographer maps a sea that remembers her fleet."
         );
+        // The D-3b measure rides the pane the rail's row opened (the number the book is measured against).
+        expect(container.querySelector('.sv-seed-measure')?.textContent).toBe('The book\'s measure: 7 chapters (D-3b).');
     });
 });
 

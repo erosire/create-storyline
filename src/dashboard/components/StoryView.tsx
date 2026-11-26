@@ -1,10 +1,14 @@
 // U-4 … U-17 — the Story view: the centre region for the selected Story.
 //
 // THE CONTENT AREA SHOWS ONE THING. The rail's selection names a phrase (Summary, Characters,
-// Plotlines, Chapters) or a folder (Seed, Continuity, Goal, Ideas, Findings, Digest, Settings),
-// and this component renders exactly that pane. The old stacked view — Seed + strip + status +
+// Plotlines, Chapters) or a folder (Continuity, Goal, Ideas, Findings, Digest, Settings), and this
+// component renders exactly that pane. The old stacked view — Seed + strip + status +
 // dial + controls + Summary + tray + contracts + Goal + costs + Digest all at once — is gone on
 // purpose: the Author is reading one artifact, not scrolling a dashboard.
+//
+// U-25 — AND A PHRASE'S SEED IS ONE OF ITS ENTRIES. The Seed is no longer a panel key: `{panel:<phrase>,
+// ref: phraseSeedRef()}` opens that phrase's Seed pane, Phrase ① showing the Author's idea and Phrase ② showing the
+// text its own Start copied. The two are different artifacts and neither one borrows the other's words.
 //
 // THE RAIL IS THE SHELL'S. `StorylineApp` owns the selection (it renders the rail and this view
 // from one state) and passes it down. A view whose selected entry disappeared — a cast member the
@@ -23,6 +27,8 @@ import { PlotlinesPane } from './PlotlinesPane';
 // T-W4 — Phrase ②'s surface (the brief, the chapter entries and the entry pane) and the Summary column's handoff card.
 import { PlotlinesEntryPane, PlotlinesOverviewPane } from './PlotlinesPhrasePane';
 import { PlotlinesHandoff } from './PlotlinesHandoff';
+// U-25 — a phrase's OWN Seed pane (the text it was copied from), for the rail's Seed child.
+import { PhraseSeedPane } from './PhraseSeedPane';
 import { StalledReview } from './story-stalled-review';
 import { SummaryGroupPane } from './SummaryGroupPane';
 import { SummaryOverviewPane } from './SummaryOverviewPane';
@@ -30,7 +36,9 @@ import { SummaryPane } from './SummaryPane';
 import { PhaseControls } from './story-phase-controls';
 import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
 import {
+    ALL_STORY_PHRASES,
     DEFAULT_STORY_SELECTION,
+    isPhraseSeedRef,
     plotlineGroupFocus,
     recommendedRevisionId,
     selectionExists,
@@ -147,6 +155,20 @@ export function StoryView({
     // pane itself keeps looking rows up by id (U2).
     const groupedPlotlines = isPlotlinesGroups(view);
     const plotlinesFocus = groupedPlotlines ? plotlineGroupFocus(view, active) : undefined;
+    // U-25 — THE SEED IS A PHRASE CHILD: `{panel:<phrase>, ref: phraseSeedRef()}`. `story-nav.selectionExists`
+    // accepts that ref for every phrase, so it survives the stale-ref guard above (which would otherwise replace the
+    // selection and silently land the Author on the Overview), and while it is open the Seed's own pane is the WHOLE
+    // content area: a phrase's overview, its entry rows and the phase-level controls all describe the phrase's
+    // OUTPUT, and the Author is reading its input.
+    const seedOpen = isPhraseSeedRef(active.ref);
+    // WHICH phrase's Seed is open. Phrase ①'s Seed IS `story.idea` (`server/phrase/catalog.ts:phraseSeedOf`), so its
+    // row opens the existing read-only Seed pane; every other phrase's Seed is the text its Start copied, which is
+    // what `PhraseSeedPane` prints from that phrase's own read. Characters is a supplementary sheet the rail never
+    // offers a Seed row for, and `CharactersPane` already falls back to the sheet for a ref it cannot resolve, so
+    // leaving it ungated is the honest fallback rather than a blank content area.
+    const seedPhrase = seedOpen
+        ? ALL_STORY_PHRASES.find((candidate) => candidate.key === active.panel)
+        : undefined;
 
     return (
         <div className="sv-story">
@@ -165,9 +187,18 @@ export function StoryView({
                     ) : null}
                 </p>
 
-                {active.panel === 'seed' ? <SeedPane view={view} /> : null}
+                {/* U-25 — THE SEED PANES, ONE PER PHRASE. `panel:'seed'` is gone from the nav model, so the Seed opens
+                    through its phrase: Phrase ①'s row shows the Author's idea (the P5 badge, the Editor's accepted
+                    brief, the D-3b measure), Phrase ②'s row shows the text THAT phrase was started from — never the
+                    Author's idea, which is the defect the request named. Both are read-only: the desk has no Seed
+                    write verb for Phrase ①, and D-72 forbids re-seeding a started phrase. */}
+                {seedPhrase === undefined ? null : seedPhrase.key === 'summary' ? (
+                    <SeedPane view={view} phrase={seedPhrase} />
+                ) : (
+                    <PhraseSeedPane view={view} actions={actions} phrase={seedPhrase} />
+                )}
 
-                {active.panel === 'summary' ? (
+                {active.panel === 'summary' && !seedOpen ? (
                     // U1 — the MAIN Summary item's own column: the stalled screen, the Summary surface, and the
                     // phase-level controls that belong to that surface. The wrapper is what makes "on the
                     // main Summary item" a DOM fact rather than a reading: `.sv-summary-column` is the scope
@@ -283,7 +314,7 @@ export function StoryView({
                     <CharactersPane view={view} actions={actions} selectedRef={active.ref} />
                 ) : null}
 
-                {active.panel === 'plotlines' ? (
+                {active.panel === 'plotlines' && !seedOpen ? (
                     // T-W4 — TWO PLOTLINES SURFACES, ONE ROUTE. A book on the grouped pipeline gets the phrase's
                     // own surface: the brief, the chapter entries, and the ONE entry the rail's ref addresses
                     // (rendered through `plotlinesSurfaceView`, which puts Phrase ②'s read in the slot the shared
@@ -322,7 +353,7 @@ export function StoryView({
                     </>
                 ) : null}
 
-                {active.panel === 'chapters' ? (
+                {active.panel === 'chapters' && !seedOpen ? (
                     <>
                         <PlotlineChapters
                             view={view}
