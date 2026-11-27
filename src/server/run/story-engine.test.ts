@@ -780,10 +780,13 @@ const reportTools = (): Record<string, MockToolHandler> => ({
 });
 
 /** One employee thread, with everything this file repeats; only the kind and the script vary. */
-function rig(kind: 'critic' | 'writer', options: { criticTurnCap?: number } = {}) {
+function rig(kind: 'critic' | 'writer' | 'editor', options: { criticTurnCap?: number; tools?: Record<string, MockToolHandler> } = {}) {
     const store = Store.empty();
     const story = storyOf(store, 'Hollow Sea');
-    const runtime = new MockToolRuntime(store, story.id, reportTools());
+    // D-a: an `editor` seat needs a tool the mock catalogue does not carry (`structurePlotlines` lives
+    // in ./tools, and ./mock is shared with other workers), so the rig takes per-test handlers. Every
+    // existing call site passes none and gets the two report tools, byte-identically to before.
+    const runtime = new MockToolRuntime(store, story.id, { ...reportTools(), ...(options.tools ?? {}) });
     const replies: ChatResponse[] = [];
     const chat = new MockChatClient((request, state) => {
         const reply = replies[state.callIndex];
@@ -1045,5 +1048,73 @@ describe('StoryHarnessManager — the Critic pass ends at its report (C2-AD3)', 
         expect([...manager.forStory(story.id).pluginNames]).toContain('critic-termination');
 
         manager.dispose();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// D-a / T-W2 — a structuring run is NOT ended by its write, on the shipped engine
+//
+// `run/catalogue.ts:REPORT_TOOLS` gained `structurePlotlines`, the Phrase ② structuring write, so that
+// a run whose whole product is that one write stops reading as an S-4 no-op turn. The risk the change
+// had to answer is the other direction: does a name in the report list now END a run the way
+// `submitVerdict` ends a Critic pass (C2-AD3)? The critic rig above answers that at the provider for a
+// Critic — TWO calls, third scripted reply never consumed (lines 855-925). This is the same boundary
+// measured on the run that actually holds the tool: an `editor` seat.
+//
+// THE RIG'S `criticTurnCap: 1` IS THE TRAP. The plugin is installed on the harness that runs EVERY
+// employee (`forStory(...).pluginNames`, pinned above), so if termination keyed off the report list
+// alone instead of the ROLE — `loop.ts:236 isCriticPass`, and the plugin's own `payload.agent ===
+// 'critic'` guards — this editor run would have been stopped at turn 1 and the provider would have been
+// asked exactly once. Two asks is therefore the measurement, not an assumption; the editor also has no
+// cap of its own (E-0), so nothing else in the loop can cut it short.
+// ---------------------------------------------------------------------------
+
+describe('StoryHarnessManager — a structuring run keeps its turns after the write (D-a, T-W2)', () => {
+    it('runs to its natural end after `structurePlotlines`, at a one-turn Critic bound, with the write counted as a report', async () => {
+        const h = rig('editor', {
+            criticTurnCap: 1,
+            tools: {
+                structurePlotlines: async (_ctx, args) => ({
+                    ok: true,
+                    rev: 1,
+                    summary: `the chapter set is accepted under seed ${String(args.seed_hash)}`,
+                    data: { chapter_count: args.chapter_count, status: 'accepted' }
+                })
+            }
+        });
+
+        h.script(
+            turnOf('structured', [{ name: 'structurePlotlines', args: { seed_hash: 'h', chapter_count: 3 } }]),
+            // Scripted so it WOULD answer. D-a's claim is that it IS asked: the write files its report
+            // and the run still gets the turn that closes it.
+            turnOf('the book is bounded')
+        );
+
+        const outcome = await h.run();
+
+        // The natural end, exactly — and NOTE the absence of `endCause`. A run the plugin ended carries
+        // the `{ kind: 'reported', terminal_tool, … }` cause the Critic rig above asserts (lines 871-881);
+        // this one has no cause at all, because the model stopped asking and no policy stopped it.
+        expect(outcome).toEqual({ text: 'the book is bounded', turns: 2 });
+        expect(h.chat.callCount).toBe(2);
+        expect(h.chat.calls).toHaveLength(2);
+
+        // The retained thread is an ordinary completed pass: `torn_down`, its prose kept, and no cap
+        // sentence on `error` — the bound of 1 that would have ended a Critic pass here says nothing
+        // about an editor run, which is exactly what E-0 requires of a structuring seat.
+        const threads = h.manager.threads('editor');
+
+        expect(threads).toHaveLength(1);
+        expect(threads[0]).toMatchObject({
+            run_id: 'run_0',
+            role: 'editor',
+            state: 'torn_down',
+            answer: 'the book is bounded',
+            tokens: 240, // 120 (turn 1) + 120 (turn 2) — the two scripted usages
+            retained: true
+        });
+        expect(threads[0]?.error).toBeUndefined();
+
+        h.manager.dispose();
     });
 });

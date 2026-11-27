@@ -221,6 +221,39 @@
     letter-spacing: 0.02em;
 }
 
+/* R10 (symptom 3) — WHICH PHRASE the crew is on, on the same line. The badge tones are deliberately
+ * NOT the status tones: awaiting/stalled/done already own those colours, and this is a statement about
+ * the work, not about the Story. Phrase ① and Phrase ② read apart at a glance (`--calm` vs `--urgent`
+ * would both be claims about readiness), so they take the two neutral accents the desk already uses for
+ * the rail's numbered rows, and "phrase not named" stays dim — visible, and never dressed up as the
+ * Summary's default. The status row already flex-wraps, so chips cost no new layout. */
+.sv-story-crew {
+    padding: 0.18rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.sv-story-crew-summary {
+    border-color: var(--calm);
+    color: var(--calm);
+}
+
+.sv-story-crew-plotlines {
+    border-color: var(--finished);
+    color: var(--finished);
+}
+
+.sv-story-crew-unknown {
+    border-style: dashed;
+    color: var(--dim);
+    font-weight: 400;
+}
+
 .sv-story-reason {
     flex: 1 1 18rem;
     color: var(--text);

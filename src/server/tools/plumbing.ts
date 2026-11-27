@@ -17,6 +17,13 @@ import { BUILT_IN_CRITERIA } from '../../shared/criteria';
 // `readSeed` reports the Seed's change-detector hash so the Editor can send it to `structureSeed`
 // (P5, documents/phase-1-research-pipeline.md §3.3). Same function the tool compares against.
 import { seedHashOf } from '../../shared/seed-hash';
+// THE PHRASE SEEDS ride the same read now (see `readSeed`'s header). `phraseSeedOf` is the one read
+// that interprets `Phrase.seed` (seam S2, `phrase/catalog.ts:245`). It is taken from `phrase/catalog`
+// rather than the `../phrase` barrel for the reason `loop/records.ts:1373-1377` states: the barrel
+// reaches `exclusion.ts` and `reviewed.ts`, and this module is loaded by the tool registry on every
+// session. `tools/plotlines.ts` is the sibling that can afford the barrel — it is a write surface, not
+// part of the read plumbing every run stands on.
+import { phraseSeedOf } from '../phrase/catalog';
 import type {
     CastMember,
     Chapter,
@@ -89,17 +96,56 @@ import type { ToolDefinition, ToolExecutionContext, ToolResult } from './types';
  * §8.4 `readSeed`: the Author's Seed — read-only for every agent at every phase, forever (P5).
  * It is a read of the `stories` row and has no write partner in this file, because the only
  * entity that edits the Seed is the Author (D-3b).
+ *
+ * IT ALSO PRINTS THE PHRASE SEEDS, and that is not a second job bolted on: the tool that refuses a
+ * stale hash is `tools/plotlines.ts:structurePlotlines`, and its gate is the hash of the PLOTLINES
+ * PHRASE's own copied text (`phraseSeedOf`, `plotlines.ts:187`), not of `stories.idea`. Before this,
+ * the seat's only read printed one hash — the Story Seed's — while its job told it to "send the seed's
+ * hash", and the refusal it then got named a seed change that had not happened (executed in
+ * `Temp/create-storyline-probe/probe-3-hash-divergence.ts`: received `1d7ea510`, expected `fac9695f`).
+ * One read now shows both truths side by side, each labeled with the phrase row it belongs to, so the
+ * Editor cannot guess a hash and a P5 refusal stops being a round-trip the crew has to discover.
+ * `seed` and `seed_hash` at the top level keep meaning the Story's Seed, exactly as §8.4 says.
  */
 const readSeed: ToolDefinition = {
     name: 'readSeed',
     description:
-        "Read the Author's Seed: the idea the Story exists to realise, plus what is already locked. Read-only for every agent at every phase — a change to it is the Author's, never an edit (P5, D-3b).",
+        "Read the Author's Seed: the idea the Story exists to realise, plus what is already locked. Read-only for every agent at every phase — a change to it is the Author's, never an edit (P5, D-3b). On a Story whose Phrases have been started, `phrases[]` also prints each Phrase's OWN copied seed and its hash: `structurePlotlines` requires the Plotlines entry's `seed_hash`, which is a DIFFERENT value from this row's `seed_hash` (P5, one phrase down).",
     inputSchema: { type: 'object', properties: {}, required: [] },
     writes: 'stories',
     level: 'read',
     mutating: false,
     execute: (ctx): ToolResult => {
         const summary = summaryRow(ctx.store, ctx.storyId);
+
+        // THE PHRASE ROWS, in composition order (the same order `phrase/controller.ts:startedPhraseControllers`
+        // walks), each with the text its gates hash. `phraseSeedOf` is the ONE read that interprets
+        // `Phrase.seed` (seam S2), so a phrase created before the field exists reports `stories.idea` —
+        // the only text it could have been written from — and its hash equals `seed_hash` above, which is
+        // the honest answer rather than a migration.
+        const phrases = ctx.store.phrases
+            .list()
+            .filter((phrase) => phrase.story_id === ctx.storyId)
+            .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+            .map((phrase) => {
+                const seed = phraseSeedOf(phrase, ctx.story);
+
+                return {
+                    phrase_id: phrase.id,
+                    phrase_key: phrase.key,
+                    phrase_order: phrase.order,
+                    // T-7: a copied seed is Author prose and can run long; the dashboard holds the rest.
+                    seed: clip(seed),
+                    // THE VALUE `structurePlotlines` compares — `seedHashOf(phraseSeedOf(...))`, the same
+                    // expression the tool computes at `tools/plotlines.ts:187` and the brief's
+                    // `PHRASE SEED` section prints. `structureSeed` still takes the top-level `seed_hash`.
+                    seed_hash: seedHashOf(seed),
+                    // True for Phrase ①, whose seed IS `stories.idea`. It says, in data, which of the two
+                    // hashes a structuring job has to answer with.
+                    seed_is_story_idea: seed === ctx.story.idea
+                };
+            });
+
         return okValue(
             {
                 story_id: ctx.storyId,
@@ -110,6 +156,8 @@ const readSeed: ToolDefinition = {
                 // (P5), so the value has to be readable from the one tool that reads the Seed —
                 // otherwise the Editor would have to guess a hash it was told to send back.
                 seed_hash: seedHashOf(ctx.story.idea),
+                // THE OTHER SEEDS, each with its own hash (see the note below and the tool's header).
+                phrases,
                 phase: ctx.story.phase,
                 status: ctx.story.status,
                 status_reason: ctx.story.status_reason,
@@ -117,13 +165,27 @@ const readSeed: ToolDefinition = {
                 summary_locked: ctx.story.summary_locked,
                 plotlines_locked: ctx.story.plotlines_locked,
                 author_stop: ctx.story.author_stop,
-                // D-3b: chapter_count is Author truth; a run reads it, it never sets it.
+                // D-3b: chapter_count is Author truth; a run reads it, it never sets it. The ONE seat
+                // that declares it is a phrase's structuring Editor, and it does so by accepting a brief,
+                // not by editing this row (`phrase/controllers/plotlines.ts:acceptPlotlineBrief`).
                 chapter_count: summary?.chapter_count ?? 0,
                 progress: ctx.story.progress,
                 blocked_on: ctx.story.blocked_on,
                 current_rev: ctx.story.rev
             },
-            { rev: ctx.story.rev }
+            {
+                rev: ctx.story.rev,
+                // Stated only when a started phrase's seed is NOT the Story Seed — i.e. only where the
+                // two hashes can actually be confused. A book with no Plotlines Phrase answers with
+                // `phrases: []` and the note would be noise.
+                ...(phrases.some((phrase) => !phrase.seed_is_story_idea)
+                    ? {
+                          notes: [
+                              'Two seeds, two hashes: `seed_hash` above is the Story’s Seed (`stories.idea`), and it is what `structureSeed` requires. The hash `structurePlotlines` requires is the PLOTLINES entry of `phrases[]`, which is that phrase’s own copied text — a Phrase ① Seed edit never changes it, and its own P5 refusal never means the Story Seed moved.'
+                          ]
+                      }
+                    : {})
+            }
         );
     }
 };

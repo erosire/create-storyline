@@ -191,6 +191,14 @@ describe('the terminal report set (C2-AD3, objective 1)', () => {
         expect(isTerminalCriticReport('raiseFinding')).toBe(false);
         expect(isTerminalCriticReport('proposeIdea')).toBe(false);
         expect(isTerminalCriticReport('readChapter')).toBe(false);
+        // T-W2 (D-a): a structuring write joined S-4's union (`catalogue.ts:REPORT_TOOLS`) and it DID
+        // raise the question "does a run now end the moment it writes?". Two answers, both pinned here:
+        // it is not in this narrow terminal set, so no Critic pass ends on it; and the plugin's own hooks
+        // are gated on `payload.agent === 'critic'` / `isCriticPass` (`plugins/critic-termination.ts:356`,
+        // `run/loop.ts:236`), so an EDITOR run — the only kind that holds a structuring job — never
+        // reaches this policy at all and still loops to its natural end (E-0: no cap).
+        expect(isTerminalCriticReport('structurePlotlines')).toBe(false);
+        expect((CRITIC_TERMINAL_REPORT_TOOLS as readonly string[]).includes('structurePlotlines')).toBe(false);
     });
 
     it('narrows S-4’s report list rather than inventing a parallel one', () => {

@@ -107,13 +107,9 @@ describe('the dashboard over the real server', () => {
 
         const rows = (await fixture.api<StoryRow[]>('GET', '/stories')).body;
         const runs = (await fixture.api<Array<Record<string, unknown>>>('GET', `/runs?story_id=${storyId}`)).body;
+        const view = (await storyView(fixture, storyId)) as StoryView;
 
-        await mountRealServer(
-            rows,
-            (await queue(fixture)) as QueueItem[],
-            (await storyView(fixture, storyId)) as StoryView,
-            runs
-        );
+        await mountRealServer(rows, (await queue(fixture)) as QueueItem[], view, runs);
 
         const text = String(document.body.textContent);
 
@@ -121,6 +117,42 @@ describe('the dashboard over the real server', () => {
             screen.getAllByText('A nobody inherits a lighthouse that chooses its own keepe...').length
         ).toBeGreaterThan(0);
         expect(text).toContain('Summary — Phrase 1');
+
+        // ---------------------------------------------------------------------
+        // C7 / R10 — the phrase attribution over the REAL wire, on the surface the Author is handed.
+        //
+        // Everything else in this file mounts the shell and reads its prose; these lines pin the two halves of the
+        // fix that a fixture suite cannot prove: that `GET /stories/:id` LABELS its crew slice exactly like
+        // `GET /runs` (the gap that made the mark invisible on the path the desk reads first), and that the
+        // mounted status line renders those labels rather than defaulting to Phrase ①. The rows here are the
+        // phase-① opener's real rows: the Seed structuring pass is Phrase ①'s by claim-key family, the research
+        // job and the sampler are keyed on refs the projection cannot resolve to a phrase, and they are ALL closed
+        // by now, which is why the line itself stays silent — the desk says nothing about a crew that is not
+        // working, and invents no phrase for a row it cannot attribute.
+        // ---------------------------------------------------------------------
+        const structuringKey = `wi_structure_seed_${seedHashOf(SLICE_SEED)}`;
+        const labelOf = (run: Record<string, unknown>): unknown => run.phrase_key;
+
+        // ONE RULE, ONE ANSWER on both routes — every row of the Story payload labelled, alike with the crew listing.
+        expect((view.runs as unknown as Array<Record<string, unknown>>).map(labelOf)).toEqual(
+            runs.map(labelOf)
+        );
+        expect((view.runs as unknown as Array<Record<string, unknown>>).map(labelOf)).toContain('summary');
+        expect(runs.map(labelOf)).not.toContain(undefined);
+
+        // THE ROWS THE PANEL LABELS, as the shipped projection answers them for this book.
+        const labelsByKey = new Map(
+            runs.map((run) => [String(run.work_item_ref), String(run.phrase_key)])
+        );
+
+        expect(labelsByKey.get(structuringKey)).toBe('summary');
+        expect(labelsByKey.get('wi_research_1')).toBe('unknown');
+
+        // AND THE MOUNTED SURFACE: the status line the shell renders above the pane, read off the real payload.
+        const statusLine = document.querySelector('.sv-story-status')?.textContent ?? '';
+
+        expect(statusLine).not.toContain('Phrase 1');
+        expect(statusLine).not.toContain('phrase not named');
 
         // The crew is the server's run rows: the templates that actually ran, not a fixture list —
         // phase ①'s opener in dispatch order (templates.ts:DEFAULT_ASSIGNMENT). `writer-summary` no

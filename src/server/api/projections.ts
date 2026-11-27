@@ -26,6 +26,10 @@ import {
     // (`isOpenIssueFinding` behind it), so the sentence on the rail and the gate in the stamp can never
     // disagree about which states still hold a group open.
     openIssueFindings,
+    // R4 (crew attribution) — the Phrase ② structuring family (`wi_structure_plotlines_<seed hash>`,
+    // records.ts:1420). The attribution reads a phrase out of a PERSISTED claim key, so it borrows the
+    // builder's own constant rather than re-spelling the family (`loop/records.ts` owns the string).
+    PLOTLINES_STRUCTURE_ITEM_PREFIX,
     loopStory,
     samplingRoundOf,
     screeningSizeOf,
@@ -49,6 +53,11 @@ import {
     composeReviewedContentFrom,
     findingGroupScope,
     findingResolution,
+    // R4 (crew attribution) — `wi_draft_groups_<claim ref>_<group-set hash>_<attempt>`, the one Writer family
+    // whose claim ref NAMES the phrase it works on (the `summaries` row id for Phrase ①, the plotlines phrase
+    // row id for Phrase ② — `phrase/exclusion.ts:groupDraftClaimRef`). The attribution has to recognise the
+    // family to read that ref, so it borrows the constant the key builder uses.
+    GROUP_DRAFT_ITEM_PREFIX,
     groupRevisionHistory,
     groupRevisionVector,
     groupVectorHash,
@@ -99,7 +108,11 @@ import type {
     CostDistribution,
     FailingCriterion,
     GoalSurface,
+    // R4 — the run row's PHRASE ATTRIBUTION rides the wire contract, so the shape the crew panel reads and the
+    // shape this file emits are one declaration (`dashboard/api.ts:ProjectedRun`), not two that can drift.
+    ProjectedRun,
     QueueItem,
+    RunPhraseKey,
     SamplingHistoryRow,
     SamplingView,
     SeedBriefView,
@@ -657,7 +670,13 @@ export function storyView(deps: ProjectionDeps, story: Story): StorylineStoryVie
         verdicts: verdictsFor(store, story.id),
         findings: storyFindings(store, story.id),
         proposals: store.proposals.list().filter((proposal) => proposal.story_id === story.id),
-        runs: store.runs.list().filter((run) => run.story_id === story.id),
+        // R10 — THE CREW LABEL RIDES THIS SLICE TOO, with the one rule `runsAcross` already uses. Until now only
+        // `GET /runs` attributed a phrase, while the desk's own Story payload — the read `state.ts:refreshStory`
+        // ALSO parks in the crew slot — sent plain §4.13 rows, so any surface fed by the Story frame could only
+        // print "phrase not named". Same rows, same book, same answer: `projectRunRow` (declared lower in this
+        // file, hoisted at runtime) adds the additive `phrase_key` and nothing else, so every existing consumer
+        // sees exactly the row it saw before.
+        runs: store.runs.list().filter((run) => run.story_id === story.id).map((run) => projectRunRow(store, run)),
         templates: [...story.template_refs],
         cost_distribution: costDistribution(store, story.id),
         completion_preview: completionPreview(store, story),
@@ -1018,17 +1037,148 @@ export const queueItemsAcross = (books: Store[]): QueueItem[] =>
     books.flatMap((store) => queueItems(store)).sort(queueOrder);
 
 /**
+ * R4 (symptom 3) — the phrase a crew row belongs to, in the rail's key vocabulary.
+ *
+ * WHY THIS IS PROJECTED AND NOT STORED: §4.13's `Run` has no phrase field and needs none. The book already
+ * answers the question — the group rows the run holds, and the phrase the run's claim key is keyed on — and a
+ * stored copy of that answer is a field a restart, a back-track or a hand-armed row would leave out of step
+ * with the rows it describes (P1: the store is the memory). The rule lives here, next to the projection that
+ * uses it, and `dashboard/api.ts:RunPhraseKey` is the wire's vocabulary for it.
+ *
+ * WHAT `'unknown'` BUYS: the crew panel prints it as its own honest line. Before this, the desk had no phrase
+ * words on a crew row at all, so a Phrase-② Writer sitting under a rail lit on Phrase ① read as Phrase-① work
+ * — the shape symptom 3 is observed in, independent of which phrase the loop actually dispatched.
+ */
+
+/**
+ * Phrase ①'s structuring family. `loop/work.ts:1935` builds the key from this literal (it has no exported
+ * constant, and `loop/work.ts` is another wave's file), so the string is pinned here beside its sibling,
+ * `PLOTLINES_STRUCTURE_ITEM_PREFIX`, which `loop/records.ts` does export.
+ */
+const SUMMARY_STRUCTURE_ITEM_PREFIX = 'wi_structure_seed';
+
+/**
+ * A phrase ROW's rail key: one of the two phrases the desk numbers, or `undefined` for a kind the rail has no
+ * row (and therefore no words) for. The rail's numbering itself is `dashboard/components/story-nav.ts`'s, and
+ * the crew panel renders the label from the KEY — this projection never spells "Phrase 2", so a rail that
+ * renumbers cannot leave the crew panel behind.
+ */
+const numberedPhraseKeyOf = (store: Store, phraseId: string): RunPhraseKey | undefined => {
+    const key = store.phrases.get(phraseId)?.key;
+
+    if (key === PHRASE_SUMMARY_KEY || key === PHRASE_PLOTLINES_KEY) return key;
+
+    return undefined;
+};
+
+const phraseKeyOfHeldGroups = (store: Store, run: Run): RunPhraseKey | undefined => {
+    const refs = run.group_refs ?? [];
+
+    if (refs.length === 0) return undefined;
+
+    let answer: RunPhraseKey | undefined;
+
+    for (const ref of refs) {
+        const group = store.phraseGroups.get(ref);
+
+        // A group id is local to one BOOK, and one book holds several Stories (S-RUNTIME above), so the row
+        // has to belong to the run's own Story before it may say anything about that run. A ref that resolves
+        // nowhere (a deleted group, a row from another book) answers "not attributable" rather than guessing:
+        // the claim key below is the only other witness, and a partial group set must not outvote it.
+        if (group === undefined || group.story_id !== run.story_id) return undefined;
+
+        const key = numberedPhraseKeyOf(store, group.phrase_id);
+
+        // A group the desk cannot name (a kind with no rail row) makes the whole run unattributable: the crew
+        // panel has no words for it, and inventing a phrase number is the lie R4 is here to stop.
+        if (key === undefined) return undefined;
+        if (answer === undefined) answer = key;
+        // A batch that spans two phrases says nothing about either one.
+        else if (answer !== key) return 'unknown';
+    }
+
+    return answer;
+};
+
+/**
+ * The phrase a claim KEY identifies, `undefined` when the family is one both phrases mint.
+ *
+ * THREE FAMILIES CARRY A PHRASE IN THEIR STRING, and they are exactly the ones the loop keeps disjoint on
+ * purpose (`loop/work.ts:1543-1552` spells the rule out for the restart, and this read is the same rule read
+ * back):
+ *   * `wi_structure_seed_<seed hash>`      — Phrase ①'s structuring pass (`loop/work.ts:1935`);
+ *   * `wi_structure_plotlines_<seed hash>` — Phrase ②'s, a DIFFERENT family precisely because the two phrases
+ *     can hold identical text and hash to the same string;
+ *   * `wi_draft_groups_<claim ref>_<vector hash>` — the Writer batch, whose ref is the `summaries` row id on
+ *     Phrase ① and the plotlines PHRASE ROW id on Phrase ② (seam S8), so the ref is resolved against this
+ *     book's rows rather than guessed from a shape: ids are not `summary_0`-shaped on a story-bound store.
+ *
+ * What stays `undefined` (and therefore `'unknown'`) is every family keyed on the group VECTOR ALONE —
+ * `wi_review_groups_*`, `wi_summary_score_*`, `wi_group_check_*`, `wi_group_lock_*` — because a vector hash is
+ * a number this build cannot reverse into a phrase, and those runs are attributed by their `group_refs` above.
+ * The classic jobs (`wi_write_*`, `wi_fix_*`, `wi_check_unit_*`, `wi_research_*`) are not phrase-scoped work
+ * at all, and an assistant run is the Author's, so they answer the same way.
+ */
+const phraseKeyOfClaimKey = (store: Store, run: Run): RunPhraseKey | undefined => {
+    const key = run.work_item_ref;
+
+    if (typeof key !== 'string' || key.length === 0) return undefined;
+
+    if (key.startsWith(`${PLOTLINES_STRUCTURE_ITEM_PREFIX}_`)) return 'plotlines';
+    if (key.startsWith(`${SUMMARY_STRUCTURE_ITEM_PREFIX}_`)) return 'summary';
+
+    if (key.startsWith(`${GROUP_DRAFT_ITEM_PREFIX}_`)) {
+        const rest = key.slice(GROUP_DRAFT_ITEM_PREFIX.length + 1);
+
+        // The anchored `_` matters twice over: the claim ref is followed by the group-set hash, and a family
+        // whose ref merely STARTS with another ref (`summary_0` vs `summary_0x`) must not read as that family.
+        const summaryId = storySummary(store, run.story_id)?.id;
+
+        if (summaryId !== undefined && (rest === summaryId || rest.startsWith(`${summaryId}_`))) return 'summary';
+
+        for (const phrase of store.phrases.list()) {
+            if (phrase.story_id !== run.story_id) continue;
+            if (rest !== phrase.id && !rest.startsWith(`${phrase.id}_`)) continue;
+
+            return numberedPhraseKeyOf(store, phrase.id);
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The ONE attribution a crew row gets: the group set it holds decides when there is one (the row's own
+ * persisted state, copied off the Work Item by `run/executor.ts`), the claim key decides otherwise, and
+ * neither → `'unknown'`. Never a silent default to Phrase ①.
+ */
+export const runPhraseKeyOf = (store: Store, run: Run): RunPhraseKey =>
+    phraseKeyOfHeldGroups(store, run) ?? phraseKeyOfClaimKey(store, run) ?? 'unknown';
+
+/** One row of the crew listing: the §4.13 record, plus the phrase the Author is entitled to see beside it. */
+export const projectRunRow = (store: Store, run: Run): ProjectedRun => ({
+    ...run,
+    phrase_key: runPhraseKeyOf(store, run)
+});
+
+/**
  * S-RUNTIME: the crew panel (U-7) across several books, newest first.
  *
  * A run id is local to its book, so the rows are NOT de-duplicated by id — two Stories' `run_7` are two
  * runs, and the panel needs to show both. Callers pass `story_id` when they want one Story's panel, which
  * is the single-book read again.
+ *
+ * R4 — each row also carries its PHRASE ATTRIBUTION, computed against the BOOK the row came from (a group
+ * id, a phrase id and a `summaries` id are all local to one book, so attributing across books would be a
+ * guess). The rows are copies rather than the collection's own objects: the listing is JSON on its way to
+ * the desk, and mutating a stored row to add a display field would be a write wearing a read's clothes.
  */
-export const runsAcross = (books: Store[], storyId?: string): Run[] =>
+export const runsAcross = (books: Store[], storyId?: string): ProjectedRun[] =>
     books
-        .flatMap((store) => store.runs.list())
-        // The filter is on the ROW's Story, not on the book: a single-store workspace holds several Stories in
-        // one book, and `?story_id=` has always answered that Story's panel, not the book's whole ledger.
+        // The attribution runs per BOOK (each row is labelled by the rows of its own book), then the Story
+        // filter narrows the labelled listing — the filter is on the ROW's Story, not on the book: a single
+        // store holds several Stories, and `?story_id=` has always answered that Story's panel.
+        .flatMap((store) => store.runs.list().map((run) => projectRunRow(store, run)))
         .filter((run) => storyId === undefined || run.story_id === storyId)
         .sort((left, right) => left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id));
 
@@ -1481,6 +1631,25 @@ export interface PhraseDetailView extends Omit<PhraseView, 'mode' | 'review'> {
     seed_head: string;
     /** The seed's true length, so a truncated head still says how much text it stands for. */
     seed_chars: number;
+    /**
+     * R12 — WHERE the copied Seed came from: `'custom'` (the Author typed it and their own press confirmed
+     * it) or `'compiled'` (this Story's compiled Summary, whether the Author pressed the handoff button or
+     * the Summary Accept started the phrase for them).
+     *
+     * WHY THE PROVENANCE IS ON THE READ. The desk and the rail show a Seed, and the one question the
+     * Author's own model asks about it is "is this my text, or the crew's?" — an Author-typed Seed is the
+     * only one the Editor's grammar pass ever runs on (`run/seed-cleanup.ts`, R7), and the phrase read is
+     * where the Seed itself is rendered. The answer cannot be derived: both arms copy plain prose, so once
+     * the text is on the row the two origins look identical. It is recorded once, at the start
+     * (`api/routes.ts:recordSeedSource`).
+     *
+     * ABSENT MEANS LEGACY, and it is NOT a third word for either arm. A phrase started before this field
+     * existed has a Seed whose origin nobody wrote down, and nothing can recover it; guessing `compiled`
+     * would tell an Author their own typed brief was the crew's Overview. So the key is carried only when
+     * the row actually says, exactly as `review.mirror` is carried only when there is a mirror to report —
+     * the R6 no-migration rule, and the same shape `summary_mode`/`plotlines_mode` absent-defaults take.
+     */
+    seed_source?: 'compiled' | 'custom';
     /** The Plotlines structure brief, or `null` for any other phrase and for a phrase nobody structured. */
     brief: PhraseBriefView | null;
 }
@@ -1503,12 +1672,37 @@ type PhraseProjection = Omit<PhraseView, 'mode' | 'review'> & {
 const SEED_HEAD_CHARS = 400;
 
 /**
- * THE compiled Summary — the one text Phrase ② copies when the Author presses the handoff button (T-W3).
+ * THE compiled Summary — the one text Phrase ② copies when the Author presses the handoff button (T-W3),
+ * and the text the Accept copies in its second commit (D-78, §18.4).
  *
- * THE PREFERENCE IS THE SAME ONE the reviewed block reports, in the same order the D-68 choose uses:
- * a COMPLETE clean selection wins (that is the text the crew stands behind, and it is byte-identical to
- * the reviewed Overview the rail shows), and until then the phrase's composed Overview is what the
- * Author has. Answering "compiled" from the live groups alone would copy an Overview some section's open
+ * THE INVARIANT (R6): whatever this returns is BYTE-EQUAL to the Summary the rail is printing at that
+ * moment, so the Seed Phrase ② grows from is the text the Author looked at and accepted — never a fourth
+ * text only the copy can see. The three arms below are the reviewed block's three states, in the order
+ * `phraseReviewedSummary` decides them (`:1920`), and each is composed by the SAME helper the block
+ * composes its `overview`/`chosen.overview` with (`phrase/reviewed.ts:composeReviewedOverview` →
+ * `phrase/catalog.ts:composeReviewedContentFrom`), which is what makes the equality structural rather than
+ * a coincidence of fixtures:
+ *
+ *   1. `reviewed.state: 'ready'` (and the `complete` half of `'chosen'`) — a COMPLETE clean selection. It
+ *      wins, exactly as the rail's Summary card prints it: the newest CLEAN row per group, an EARLIER one
+ *      whenever the newest text carries an open defect (§4.19's `latest_revision: 5` /
+ *      `selected_revision: 4` pair). §17.16 is why the live groups are NOT the fallback here: "a helper
+ *      that quietly preferred the current text would put an unreviewed sentence inside the Summary".
+ *   2. `reviewed.state: 'chosen'` with the selection no longer complete — the ordinary state right after
+ *      the D-68 choose (the installed rows are deliberately not clean-stamped, so `cleanSelectionOf`
+ *      reads partial). The rail then prints `reviewed.chosen.overview` and KEEPS printing it after the
+ *      live pipeline moves on (`reviewed.ts:484-486`), so the copy takes the AUTHOR'S CHOSEN TEXT.
+ *      Before this arm, the copy fell through to arm 3, i.e. the live composed Overview — which is the
+ *      same text only until the next install; after one, the Author accepts the chosen Summary and the
+ *      phrase is seeded with a newer one, silently. A persisted choice re-validated by
+ *      `chosenSelectionOf` is a stronger claim than a live vector: it is the one text the Author named.
+ *   3. `reviewed.state: 'pending'` — no complete selection and no valid choice, the one state where the
+ *      rail prints NO Summary text at all (`story-contract.ts:reviewedSummaryText` answers `''`). The
+ *      composed Overview is what there is to hand on; the desk's gate keeps the Accept out of this state
+ *      (`:cleanSummaryGateReason`), and the residual difference is said out loud in the phrase's own Seed
+ *      pane (`components/PhraseSeedPane.tsx`) rather than left for the Author to discover in Phrase ②.
+ *
+ * Answering "compiled" from the live groups alone (arm 3 first) would copy an Overview some section's open
  * defect is still holding, and answering from the selection alone would say a half-written book has
  * nothing to hand on.
  *
@@ -1521,7 +1715,19 @@ export function compiledSummaryOf(store: Store, story: Story): string {
 
     const selection = cleanSelectionOf(store, story, phrase.id);
 
-    return selection.complete ? composeReviewedContentFrom(selection.entries) : phrase.content;
+    // ARM 1 — the rail's `ready` Summary: the complete clean selection, byte-identical to
+    // `reviewed.overview` because both call `composeReviewedContentFrom` with the same entries.
+    if (selection.complete) return composeReviewedContentFrom(selection.entries);
+
+    // ARM 2 (R6) — the rail's `chosen` Summary: the vector the Author recorded, re-validated row by row
+    // so a scrap or a Seed reset that took the named rows away falls through to arm 3 instead of handing
+    // on a text the book no longer holds (`chosenSelectionOf`'s own guard, §17.17).
+    const chosen = chosenSelectionOf(store, story, phrase.id);
+
+    if (chosen !== undefined) return composeReviewedContentFrom(chosen.entries);
+
+    // ARM 3 — the rail prints no Summary in this state, so the composed Overview is the whole answer.
+    return phrase.content;
 }
 
 /**
@@ -2097,6 +2303,13 @@ export function phraseView(store: Store, story: Story): PhraseView {
  *     text this phrase is written from, and it is exactly the fact the rail has to show next to a
  *     handoff button so the Author can see WHICH text got copied (and see that it did not change when
  *     Phrase ① was edited later). The full text stays on the row;
+ *   - `seed_source` (R12) names the ARM that text came from — `custom` (the Author's own, confirmed by
+ *     their own press) or `compiled` (this Story's compiled Summary) — which is the question the Editor's
+ *     two different jobs turn on: only an Author's own Seed is ever offered the one-time grammar pass
+ *     (`run/seed-cleanup.ts`, R7), and a compiled one was written by the crew and owes nothing. It is a read
+ *     of the row's own record (`api/routes.ts:recordSeedSource` writes it in the start commit), and it is
+ *     ABSENT on a phrase whose row predates the field: there the honest answer is that nobody wrote the
+ *     origin down, which is neither arm (R6's no-migration rule, the same shape `review.mirror` below takes);
  *   - `brief` is the Plotlines structure decision — the Editor's chapter count and whether the Author has
  *     accepted it, which is what tells the rail the chapter entries exist yet. Every other phrase answers
  *     `null`, so the key is always there and no client has to feature-detect it;
@@ -2115,6 +2328,10 @@ export function phraseDetailView(store: Store, story: Story, phraseKey: string):
     // phrase could have been written from. Never the whole text on the wire — see the field note.
     const seed = phraseSeedOf(phrase, story);
     const { mirror, ...reviewRest } = base.review;
+    // R12 — the row's own statement of WHERE that Seed came from. `undefined` is a row written before the
+    // field existed (or no row at all), and a stray value written by hand into a JSON book is treated the
+    // same way: this read reports only what the row actually says, and never invents an arm.
+    const origin = phrase?.seed_source;
 
     return {
         key: phraseKey,
@@ -2124,6 +2341,9 @@ export function phraseDetailView(store: Store, story: Story, phraseKey: string):
         ...(mirror === undefined || phraseKey === PHRASE_SUMMARY_KEY ? { review: base.review } : { review: reviewRest }),
         seed_head: seed.slice(0, SEED_HEAD_CHARS),
         seed_chars: seed.length,
+        // The same absent-means-absent rule as `review.mirror` above: a legacy phrase's provenance is
+        // UNKNOWN, and the key being off the payload is how the desk says so rather than picking `compiled`.
+        ...(origin === 'compiled' || origin === 'custom' ? { seed_source: origin } : {}),
         brief: phrase === undefined || phraseKey !== PHRASE_PLOTLINES_KEY ? null : plotlineBriefView(store, phrase.id)
     };
 }

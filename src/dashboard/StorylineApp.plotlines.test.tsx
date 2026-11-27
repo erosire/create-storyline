@@ -169,6 +169,10 @@ function plotlinesHarness(
                             ? String(input.text ?? '')
                             : 'A smuggler pays the tide to cross the salt road, and the road collects.',
                     started: { phrase_id: 'phrase_plotlines_1', key, started_at: '2026-11-09T10:00:00.000Z' },
+                    // R11 — the two pointer fields every Start receipt carries. This fake's book has an unsigned
+                    // Summary, so the crew does not move, and the reason is the route's own sentence.
+                    phase_opened: false,
+                    phase_open_reason: `the Summary is not signed off, so the crew stays on Phrase ①: POST /stories/${storyId}/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)`,
                     // The receipt's own view is `groups`: the mode the start created is immutable, so the read the
                     // desk commits cannot disagree with the receipt about which pipeline this book is on.
                     view: phraseDetailView(storyId)

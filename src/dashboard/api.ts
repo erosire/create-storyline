@@ -329,6 +329,12 @@ export interface StoryView {
     verdicts?: Verdict[];
     findings: Finding[];
     proposals: Proposal[];
+    /**
+     * §4.13's rows for this Story. R10 — each row also carries the additive `phrase_key` the crew listing
+     * sends (`ProjectedRun`), derived by the same `server/api/projections.ts:projectRunRow`; the field stays out
+     * of this interface's row type because the slice has always been typed as the plain record, and a surface
+     * reading it must treat an absent key as "not attributed", never as Phrase ①.
+     */
     runs: Run[];
     /** The §4.12 template ids assigned to this Story (D-17b: a list, the count is the Author's call). */
     templates: string[];
@@ -885,6 +891,16 @@ export interface PhraseDetailView extends Omit<PhraseView, 'mode' | 'review'> {
     seed_chars: number;
     /** The Plotlines structure brief, or `null` for any other phrase and for a phrase nobody structured. */
     brief: PhraseBriefView | null;
+    /**
+     * R12 — WHERE THE COPIED SEED CAME FROM, recorded once at the start and never rewritten: `'custom'` is text
+     * the Author pressed (with or without a cleanup they confirmed), `'compiled'` is the Overview Phrase ① wrote.
+     *
+     * ABSENT IS NOT A THIRD VALUE: a phrase row written before the field existed carries no word about its
+     * origin, and the projection OMITS the key rather than sending `null` or guessing `'compiled'` — guessing
+     * would tell an Author their own typed brief was the crew's Overview. So `undefined` means "legacy, unknown",
+     * and the desk must not render a provenance line it cannot stand behind.
+     */
+    seed_source?: 'custom' | 'compiled';
 }
 
 /**
@@ -917,8 +933,57 @@ export interface PhraseStartResult {
     seed_head: string;
     /** The domain's own start record (the journal line), so the rail's tick has a source row. */
     started: unknown;
+    /**
+     * R11 — TRUE ONLY WHEN THIS PRESS MOVED THE CREW, i.e. the Story entered phase `plotlines` because of it
+     * (L-33). The pointer follows a Phrase ② start only once the Summary is signed off, so `false` is the
+     * ORDINARY answer on a book whose Summary is not accepted yet, and it is not a failure: the phrase started,
+     * the crew stays on Phrase ①, and `phase_open_reason` says so. Documented in
+     * `storyline-server.swagger.yaml:StartPhraseResult` and pinned field-for-field by `server/api/contract.test.ts`.
+     */
+    phase_opened: boolean;
+    /**
+     * R11 — `''` when `phase_opened` is true; otherwise the sentence to print UNDER A SUCCESSFUL START, naming
+     * which no-move state this is (Summary not signed off, another phase already current, or the phrase owns no
+     * phase). The start succeeded in every case: a pointer the start could not move is reported, never rewound,
+     * so the desk must not turn this into an error strip.
+     */
+    phase_open_reason: string;
     view: PhraseDetailView;
 }
+
+/**
+ * R7 — THE CODE the cleanup pass answers with when it has no proposal: the model replied and a guard decided the
+ * rewrite was not still the Author's brief. Each one is a RULE, not a mood (`run/seed-cleanup.ts`):
+ *
+ * - `empty_answer` — the provider returned nothing usable;
+ * - `numbers_lost` — a digit the Author wrote is missing from the rewrite, so a chapter count or a deadline would
+ *   have been proofread away;
+ * - `too_short` / `too_long` — the rewrite left the length envelope of the draft, i.e. it summarised or expanded
+ *   instead of correcting.
+ *
+ * All four are 200 answers with NO `text`, which is what makes AC3's "silently confirmed" unreachable: the desk
+ * has no proposal to carry into the Start press.
+ */
+export type SeedCleanupRefusal = 'empty_answer' | 'numbers_lost' | 'too_short' | 'too_long';
+
+/**
+ * R7 — the Editor's one-shot proofread of the Author's pending Seed (`GET …/seed/cleanup`), field-for-field the
+ * server's (`storyline-server.swagger.yaml:SeedCleanupProposal`).
+ *
+ * THE TWO ARMS ARE TOLD APART BY `ok`, and only `ok` and `source_hash` are ever both present:
+ *
+ * - `ok: true` → `text` (the proposal) + `changed` (whether it differs from the draft). `changed: false` is the
+ *   honest "nothing to fix" answer, not a failure, and not a reason to hide the Start button;
+ * - `ok: false` → `refusal`, and NO `text`. The desk says which rule fired and keeps the Author's own draft.
+ *
+ * NOTHING HERE IS WRITTEN ANYWHERE. `source_hash` is `shared/seed-hash.ts` over the TRIMMED draft the pass read —
+ * the same 8 hex digits the Start commit journals beside the copied length — so the desk can prove WHICH draft a
+ * proposal belongs to and refuse to confirm a proposal onto text it was never computed over. The Seed's text is
+ * deliberately not echoed back on the refusal arm: the desk is holding it.
+ */
+export type SeedCleanupProposal =
+    | { ok: true; source_hash: string; text: string; changed: boolean }
+    | { ok: false; source_hash: string; refusal: SeedCleanupRefusal };
 
 /**
  * The Author's contract fields for ONE chapter entry (`routes.ts:plotpointsFromBody`).
@@ -952,6 +1017,50 @@ export interface PhraseEntryReviseInput {
 export interface PhraseEntryReviseResult extends Omit<PhraseGroupReviseResult, 'view'> {
     view: PhraseDetailView;
 }
+
+// ---------------------------------------------------------------------------
+// R4 (symptom 3) — WHICH PHRASE a crew row is working on
+//
+// THE WORD "PHRASE" HAS MEANT TWO THINGS ON THIS DESK (V-3, specifications.md:106): the rail uses it for a
+// pipeline stage (Phrase ① Summary, Phrase ② Plotlines) and the crew panel has used it for one dispatched
+// run ("No phrase is running"). The rail's numbering is the one the Author navigates, so a thread that says
+// "working" while the rail is lit on Phrase ① reads as Phrase-① work even when the loop dispatched it against
+// Phrase ②'s chapter rows. `GET /runs` therefore ATTRIBUTES each row to a phrase, in the rail's own key
+// vocabulary, and `CrewPanel` prints that attribution beside the claim key.
+//
+// WHY IT IS PROJECTED RATHER THAN STORED: `Run` (§4.13) has no phrase field and needs none. The attribution
+// is a READ of rows the book already holds — the group rows the run holds (`Run.group_refs`, the
+// authoritative answer when present), then the claim key's family (`work_item_ref`) — and a stored field
+// would be a second answer that a restart, a back-track or a hand-armed row could leave out of step (P1).
+// The derivation lives in `server/api/projections.ts:runPhraseKeyOf`; the type lives HERE because this file
+// is the wire contract the server imports its return types from (the file's own preamble rule).
+// ---------------------------------------------------------------------------
+
+/**
+ * The phrase a crew row belongs to, in the rail's key vocabulary (`shared/phrase.ts` keys).
+ *
+ * `'unknown'` is AN ANSWER, not a shrug: it means the row carries neither a group set nor a key the desk can
+ * read a phrase out of — every shared-family pass (`wi_review_groups_*`, `wi_summary_score_*`,
+ * `wi_group_check_*`) whose claim key is a group VECTOR hash that both phrases can mint. A surface that got
+ * `'unknown'` says so; it may not fall back to Phrase ①, which is the defect R4 names.
+ */
+export type RunPhraseKey = 'summary' | 'plotlines' | 'unknown';
+
+/**
+ * One `GET /runs` row: the §4.13 record plus the phrase attribution.
+ *
+ * The field is OPTIONAL on the client because not every route that answers a `Run` is the crew listing —
+ * `POST /runs/:id/kill` and `POST …/assistant` answer the plain row, and a desk that read `phrase_key` as
+ * always-present would print "Phrase undefined" over a row it killed a second ago. Absent means "this route
+ * never attributed it", which the crew panel renders with the same honest line as `'unknown'`.
+ *
+ * R10 — the two routes that DO attribute are `GET /runs` and `GET /stories/:id`: the Story payload's `runs`
+ * slice (declared as `Run[]` on `StoryView` below, because the §4.13 record is what that slice has always
+ * carried) ships the same additive `phrase_key` on every row, from the same projection function
+ * (`server/api/projections.ts:projectRunRow`). One rule, one answer on both paths — pinned by
+ * `server/api/run-phrase-attribution-story-view.test.ts`.
+ */
+export type ProjectedRun = Run & { phrase_key?: RunPhraseKey };
 
 /**
  * One round of the loop as the stalled screen reads it (U-1a). Field-for-field the server's
@@ -1403,6 +1512,30 @@ export interface ApiClient {
      */
     startPhrase(storyId: string, key: string, input?: PhraseStartInput): Promise<PhraseStartResult>;
     /**
+     * R7 — the ONE-TIME Seed cleanup, asked BEFORE the start: `GET /stories/:id/phrases/:key/seed/cleanup`.
+     *
+     * THE VERB IS A READ, AND THAT IS THE WHOLE DESIGN. The pending Seed has no row to read it from (the Start
+     * copies it, D-72), so the Author's draft travels in `?seed=` and the answer is a PROPOSAL: text the desk
+     * can show, and nothing else. Nothing is written — no Seed, no revision, no journal line — so a cleanup the
+     * Author ignores costs one tool-less model turn and no record, which is what keeps it out of the run layer
+     * (P10) and out of the Seed's lifecycle (D-76 / §18.13).
+     *
+     * THE CONFIRM IS THE NEXT START PRESS, NOT A FLAG ON THIS RESPONSE. The desk puts `text` in the Seed box and
+     * the Author's next `source:'custom'` press carries it; `StartPhraseRequest` grew nothing, so there is no
+     * path by which a cleanup lands on the phrase without a press.
+     *
+     * `refusal` IS NOT AN ERROR AND COMES BACK 200: `empty_answer` / `numbers_lost` / `too_short` / `too_long`
+     * mean the model answered and a guard threw the rewrite away. Such an answer carries NO `text`, so the desk
+     * has nothing to confirm and the Author's own draft stands. The refusals that ARE errors (400 no `seed`,
+     * 404 no such story or phrase, 409 a phrase that is not Author-seeded / already started / has no transport)
+     * arrive as `ApiError` from `request`, and the desk prints the server's sentence (L-13).
+     *
+     * THE ONE COST OF A GET: the draft rides in the request line, so a brief longer than the server's request-line
+     * ceiling (Node's 16 KiB by default) fails at the transport rather than at a rule. The Seed box holds a brief,
+     * not a manuscript, and the ceiling is documented on the yaml operation.
+     */
+    getPhraseSeedCleanup(storyId: string, key: string, seed: string): Promise<SeedCleanupProposal>;
+    /**
      * T-W4 — the Author rewrites ONE CHAPTER ENTRY (`POST …/phrases/groups/:groupId/revise`, the entry leg).
      *
      * Same route as the Summary group's revise, different body: an entry's text is composed from its contract
@@ -1495,8 +1628,14 @@ export interface ApiClient {
     listTemplates(): Promise<Template[]>;
     createTemplate(input: CreateTemplateInput): Promise<Template>;
     patchTemplate(templateId: string, patch: Partial<Template>): Promise<Template>;
-    /** §4.13 — `storyId` omitted lists every Story's runs. */
-    listRuns(storyId?: string): Promise<Run[]>;
+    /**
+     * §4.13 — `storyId` omitted lists every Story's runs.
+     *
+     * R4 — every row arrives with its PHRASE ATTRIBUTION (`phrase_key`), which the server derives from the
+     * run's own `group_refs` and `work_item_ref`. The desk renders no phrase words of its own, so a crew row
+     * standing under a Phrase-① rail cannot silently be Phrase-② work.
+     */
+    listRuns(storyId?: string): Promise<ProjectedRun[]>;
     /**
      * S-3 — teardown with a recorded reason; the Author's kill (U-7). S-RUNTIME: a run id is LOCAL to one
      * Story's book, so `storyId` names which book's executor aborts the thread. Omit it only when the id is
@@ -1720,6 +1859,16 @@ export const api: ApiClient = {
                   ? { source: 'custom', text: input.text ?? '' }
                   : { source: 'compiled' }
         ),
+    // R7 — THE SEED CLEANUP, and the reason the draft rides in the QUERY rather than a body: the verb is a GET, so
+    // the one-time proofread stays a read the desk can retry, cancel or ignore without a write to undo (P10). The
+    // text is `encodeURIComponent`-escaped because a brief is prose: an `&`, a `#` or a `+` in the Author's
+    // sentence is ordinary, and a client that interpolated it raw would silently ask about a different draft.
+    // `refusal` comes back 200 (see `SeedCleanupProposal`), so the desk reads the arm off `ok` and never off a
+    // status code; the 400/404/409 arms arrive as `ApiError`, whose `message` is the server's own sentence.
+    getPhraseSeedCleanup: (storyId, key, seed) =>
+        request<SeedCleanupProposal>(
+            storyPath(storyId, `/phrases/${encodeURIComponent(key)}/seed/cleanup?seed=${encodeURIComponent(seed)}`)
+        ),
     // T-W4 — ONE CHAPTER ENTRY's hand revision. The body carries `plotpoints`, never `content`: the entry's prose
     // is composed from the contract fields server-side, and a `content` key beside them is not read (P4). The group
     // is addressed by its UUID, exactly as the Summary group's revise does, so a refetch that reorders the entries
@@ -1794,7 +1943,8 @@ export const api: ApiClient = {
     listTemplates: () => request<Template[]>('/templates'),
     createTemplate: (input) => post<Template>('/templates', input),
     patchTemplate: (templateId, body) => patch<Template>(`/templates/${encodeURIComponent(templateId)}`, body),
-    listRuns: (storyId) => request<Run[]>(`/runs${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
+    listRuns: (storyId) =>
+        request<ProjectedRun[]>(`/runs${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
     killRun: (runId, storyId) =>
         post<Run>(`/runs/${encodeURIComponent(runId)}/kill${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
     getQueue: () => request<QueueItem[]>('/queue'),

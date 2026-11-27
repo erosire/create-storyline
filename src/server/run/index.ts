@@ -9,6 +9,10 @@
 //   ./loop       the one turn engine, shared by the run, its panel agents, and its delegates
 //   ./panel      D-38: N agents of one role, aggregated to a single answer inside one run
 //   ./executor   the run row's life, the unconditional teardown (S-3), kill (P8), delegation (D-17e)
+//   ./seed-cleanup  R7's ONE-SHOT SEED CLEANUP — a tool-less turn over the Author's Seed that answers a
+//                   PROPOSAL and writes nothing (it takes no `Store`, so it cannot). It is exported here
+//                   because the route table (`api/routes.ts`) is its only caller: the desk asks for the
+//                   cleanup before the phrase exists, so it is not a Work Item and never enters the loop.
 //   ./mock       the test double for T3's runtime plus the §4 fixtures the layer's tests build on
 //
 // `src/index.ts` deliberately does NOT re-export this directory: the package barrel is
@@ -20,4 +24,5 @@ export * from './brief';
 export * from './loop';
 export * from './panel';
 export * from './executor';
+export * from './seed-cleanup';
 export * from './mock';

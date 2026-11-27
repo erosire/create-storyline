@@ -39,9 +39,15 @@ import {
 import { MockChatClient, calls, msg } from '../llm/mock';
 import { Store } from '../store/store';
 import { LoopEngine } from './engine';
-import { LIVE_RUN_STATES, researchKeyOf } from './records';
+import { LIVE_RUN_STATES, PLOTLINES_STRUCTURE_ITEM_PREFIX, researchKeyOf } from './records';
 import { DEFAULT_GLOBAL_MAX_CONCURRENT } from './types';
 import { seedHashOf } from '../../shared/seed-hash';
+// F2 — the Phrase-② structuring seat's own write. The rig used to answer that seat with the phase-① tool;
+// these are the domain calls the product's `tools/plotlines.ts:structurePlotlines` makes, and the reads its
+// P5 hash is computed from (`phrase/catalog.ts:phraseSeedOf` — never `stories.idea`).
+import { phraseSeedOf, storyPhraseByKey } from '../phrase/catalog';
+import { acceptPlotlineBrief, createPlotlineBrief } from '../phrase/controllers/plotlines';
+import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
 import type { ChatRequest, ChatResponse, MockHandler } from '../llm';
 import type { ToolResult } from '../run/types';
 import type { WorkItem } from '../run/types';
@@ -768,7 +774,45 @@ function crewCalls(store: Store, item: WorkItem, text: string, crew: CrewBehavio
         // §6.4 step 1: the Editor derives the brief from the Seed and writes it ONCE. `structureSeed`
         // (the W5 double) refuses a `seed_hash` that does not match the Seed, so the answer sends the
         // hash the record holds — the same guard the real tool applies (P5).
+        //
+        // F2 — THE WRITE BELONGS TO THE PHRASE THAT OWNS THE SEAT. Both structuring passes share the
+        // `structure_seed` KIND (`loop/work.ts:1618` arms Phrase ②'s chapter pass with it), and the seat is
+        // the CLAIM-KEY FAMILY (`loop/records.ts:PLOTLINES_STRUCTURE_ITEM_PREFIX`). Answering Phrase ②'s
+        // seat with `structureSeed` was not a cosmetic slip: it SUCCEEDS, writing a `seed_briefs` row for
+        // the OTHER phrase, so a probe run of the lane spent 40 runs and produced ZERO Plotline Briefs
+        // (`Temp/c4`'s report), the chapter set never existed, no-op accounting saw no reason to complain,
+        // and no mock-driven test ever exercised the path the lane was built on. `structurePlotlines` (the
+        // handler is below, in `crewTools`) is the write this seat owes: it declares `chapter_count` and
+        // materializes `chapter_1..chapter_N` in the same commit (D-3b).
         case 'structure_seed': {
+            if (item.id.startsWith(PLOTLINES_STRUCTURE_ITEM_PREFIX)) {
+                const phraseStory = store.stories.get(item.storyId);
+                const phrase =
+                    phraseStory === undefined
+                        ? undefined
+                        : storyPhraseByKey(store, item.storyId, PHRASE_PLOTLINES_KEY);
+                // THE COUNT IS THE AUTHOR'S (D-3b, and the seat's own job sentence): the mock honours the
+                // number on the Summary row rather than inventing one, so a rig that declared 3 chapters
+                // gets a 3-entry chapter set out of this call.
+                const declared =
+                    phraseStory === undefined
+                        ? undefined
+                        : store.summaries.list().find((row) => row.story_id === phraseStory.id)?.chapter_count;
+
+                return [
+                    {
+                        name: 'structurePlotlines',
+                        args: {
+                            seed_hash: seedHashOf(phraseSeedOf(phrase, phraseStory)),
+                            chapter_count:
+                                typeof declared === 'number' && declared > 0 ? Math.trunc(declared) : 1,
+                            notes: 'one chapter per commitment the phrase seed states (the scripted Editor)',
+                            why: 'the chapter set is what this phrase seed resolves into (P5 one phrase down, D-3b)'
+                        }
+                    }
+                ];
+            }
+
             const seed = store.stories.get(item.storyId)?.idea ?? '';
 
             return [
@@ -1515,6 +1559,72 @@ function crewTools(crew: CrewBehaviour): Record<string, MockToolHandler> {
     void crew;
 
     return {
+        // F2 — PHRASE ②'s structuring write, on the loop rig's tool runtime. The run layer's default
+        // double (`run/mock.ts:defaultTools`) implements `structureSeed` and never learned this one, so the
+        // rig supplies it here: without a handler the executor answers T-6c ("no tool named
+        // `structurePlotlines`"), which is how the lane's structuring seat could only ever call the
+        // phase-① write and pretend it had worked.
+        //
+        // It is the SAME pair of domain calls the real tool makes in one commit
+        // (`tools/plotlines.ts:structurePlotlines` → `createPlotlineBrief` + `acceptPlotlineBrief`), so the
+        // accept still writes `summaries.chapter_count` and materializes `chapter_1..chapter_N` (D-3b)
+        // exactly as the product does. The `seed_hash` guard is the product's P5 guard: a seat that answers
+        // with a hash the record does not hold is refused, not silently accepted.
+        structurePlotlines: (ctx, args, runtime) => {
+            const story = runtime.store.stories.get(ctx.storyId);
+            const phrase =
+                story === undefined ? undefined : storyPhraseByKey(runtime.store, ctx.storyId, PHRASE_PLOTLINES_KEY);
+
+            if (story === undefined || phrase === undefined)
+                return {
+                    ok: false,
+                    refused: 'T-11',
+                    message: `story ${ctx.storyId} has no Plotlines Phrase — the Author starts Phrase ②, the loop never invents its seed (P5, one phrase down)`
+                };
+
+            // P5: the hash the seat was shown is the hash of THIS phrase's copied seed, never the Story's
+            // Seed — `phraseSeedOf` is the domain's own read, so the check cannot drift from the hash every
+            // Phrase-② gate uses.
+            const seedHash = seedHashOf(phraseSeedOf(phrase, story));
+
+            if (args.seed_hash !== seedHash)
+                return {
+                    ok: false,
+                    refused: 'P5',
+                    message: `structurePlotlines refuses seed_hash ${String(args.seed_hash)} — this phrase's seed hashes ${seedHash} (P5)`
+                };
+
+            const chapterCount = Math.trunc(Number(args.chapter_count));
+
+            if (!Number.isInteger(chapterCount) || chapterCount < 1)
+                return {
+                    ok: false,
+                    refused: 'T-11',
+                    message: `chapter_count ${String(args.chapter_count)} is not a positive whole number (D-3b)`
+                };
+
+            // IDEMPOTENT like the real tool: a seat re-armed on the same hash reports the brief it already
+            // accepted instead of minting a second one (the accept is what makes the entry set, so a second
+            // accept would re-run `ensureChapterGroups` on a set that already exists).
+            const accepted = runtime.store.plotlineBriefs
+                .list()
+                .find((brief) => brief.phrase_id === phrase.id && brief.seed_hash === seedHash);
+
+            if (accepted !== undefined) return { ok: true, rev: accepted.rev };
+
+            const attribution = { run_ref: ctx.runRef, why: `the Editor structured Phrase ② (D-3b)` };
+            const brief = createPlotlineBrief(
+                runtime.store,
+                story,
+                phrase,
+                { chapter_count: chapterCount },
+                attribution
+            );
+            const result = acceptPlotlineBrief(runtime.store, story, brief, attribution);
+
+            return { ok: true, rev: result.brief.rev };
+        },
+
         editChapter: (ctx, args, runtime) => {
             const chapterId = typeof args.chapter_id === 'string' ? args.chapter_id : '';
             const chapter = runtime.store.chapters.get(chapterId);

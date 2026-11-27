@@ -40,6 +40,17 @@ export const REPORT_TOOLS = [
     // Their write IS the report — appending the two names is what keeps those runs out of loop
     // detection without widening the set to every mutating tool.
     'structureSeed',
+    // PHRASE ②'S STRUCTURING WRITE (T-W2) — the same argument as `structureSeed`, one phrase down.
+    // `templates.ts:editor-plotlines-structure` states it twice: "Your only write is
+    // structurePlotlines" and "End the run as soon as structurePlotlines reports". A run that ends on
+    // that one write has produced the whole product of its job (the accepted Plotline Brief plus the
+    // chapter set it materializes, `tools/plotlines.ts`), so with the name MISSING the run is a no-op
+    // turn: `isReportTool` says false, `tally.reports` stays empty, `runs.no_op` is set
+    // (`run/executor.ts:712`), the row never moves to `reporting` (§9's report step), and the loop's
+    // seat-owed decision re-dispatches the seat that already answered. The name is NOT in `READ_TOOLS`
+    // (unlike D-51's `reportNoResearch`): this write really does touch the store, so it stays
+    // classifiable as a mutating call and stays a D-38 proposal inside a panel.
+    'structurePlotlines',
     'writeKnowledge',
     // D-51: the Researcher's ZERO-WRITE report. A pass that was dispatched and concluded "nothing
     // needs research" has no `writeKnowledge` to end with, and a run that reports nothing is a no-op
@@ -99,6 +110,39 @@ export const isMutatingTool = (name: string): boolean => name !== DELEGATE_TOOL 
 
 /** S-4: did this call report? A run that never called one of these is a no-op turn. */
 export const isReportTool = (name: string): boolean => (REPORT_TOOLS as readonly string[]).includes(name);
+
+/**
+ * The TWO structuring writes, one per phrase: phase ①'s Seed Brief (`tools/knowledge.ts:structureSeed`)
+ * and Phrase ②'s chapter decision (`tools/plotlines.ts:structurePlotlines`). They are the only pair in
+ * the catalogue where one name is a dead end for the run holding the other.
+ */
+const SEED_STRUCTURE_REPORT_TOOL = 'structureSeed';
+const PLOTLINES_STRUCTURE_REPORT_TOOL = 'structurePlotlines';
+
+/**
+ * S-4's closed list AS ONE STRUCTURING SEAT IS TOLD IT: the union minus the OTHER phrase's
+ * structuring write.
+ *
+ * WHY A SECOND LIST IS NEEDED AT ALL: `REPORT_TOOLS` is the ACCOUNTING answer — "did this call do work
+ * the loop must not re-dispatch" — and for accounting the set is the union, because a run that landed
+ * EITHER structuring write really did produce its product. The instruction sentence is a different
+ * question, and the union answers it wrongly in both directions: told "end the run only after one of:
+ * … structureSeed …", Phrase ②'s Editor can close its run on a `structureSeed` call that writes the
+ * OTHER phrase's Seed Brief and leaves the chapter set unaccepted (the call SUCCEEDS — `structureSeed`
+ * checks the Story Seed's hash, not the phrase's), and Phrase ①'s Editor is offered
+ * `structurePlotlines`, which refuses outright when the book has no Plotlines Phrase
+ * (`tools/plotlines.ts:159`).
+ *
+ * WHY THE CALLER SUPPLIES `declaresChapterCount`: `run/brief.ts` must not name a phrase or a tool
+ * (R7 — the phrase owns its instruction law, `phrase/controller.ts:PhraseStructureInstructionSet`), and
+ * the seat's capability bit is the one field that already says which structuring write is its own:
+ * exactly ONE seat declares the chapter count, and the documented writer of that count is
+ * `structurePlotlines` (`phrase/controller.ts:120-132`, `controllers/plotlines.ts:acceptPlotlineBrief`).
+ * A third phrase adds its write to the pair and its capability to this mapping — not another branch in
+ * the brief builder. Every NON-seat crew still gets the full union.
+ */
+export const reportToolsForStructureSeat = (declaresChapterCount: boolean): readonly string[] =>
+    REPORT_TOOLS.filter((name) => name !== (declaresChapterCount ? SEED_STRUCTURE_REPORT_TOOL : PLOTLINES_STRUCTURE_REPORT_TOOL));
 
 /** §8.5's two web tools — the only ones that reach outside the book (§7's last column). */
 export const RUN_WEB_TOOLS = ['searchWeb', 'fetchPage'] as const;

@@ -300,6 +300,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
             engine: runtimes,
             baseUrl,
             apiKey,
+            chat,
             defaultModel,
             options
         });
@@ -363,6 +364,7 @@ export function buildStorylineRuntime(options: StorylineRuntimeOptions = {}): St
         engine: runtimes,
         baseUrl,
         apiKey,
+        chat,
         defaultModel,
         options
     });
@@ -382,6 +384,16 @@ function wire(input: {
     engine: StoryLoop;
     baseUrl: string;
     apiKey?: string;
+    /**
+     * R7 — the provider transport and the model name, handed to the ROUTE TABLE as well as to the run layer.
+     * The routes need one client for exactly one verb: `GET …/phrases/:key/seed/cleanup`, the Editor's
+     * one-shot proofread of the Author's pending Seed (`run/seed-cleanup.ts`), which answers a proposal and
+     * writes nothing. Passing the SAME instance `RunExecutor` and `StoryRuntimes` were built with is what
+     * keeps "the model the desk asked for" and "the model the crew runs on" one decision by the operator
+     * (`STORYLINE_PROVIDER_*`), and passing the model name beside it is what keeps the cleanup from dialling
+     * a name the host never resolved.
+     */
+    chat: ChatClient;
     defaultModel: string;
     options: StorylineRuntimeOptions;
 }): StorylineRuntime {
@@ -401,6 +413,12 @@ function wire(input: {
             threadLog: input.threadLog,
             // U-8 — the roster's dropdown reads the SAME provider root the transport dials.
             providerBaseUrl: input.baseUrl,
+            // R7 — the transport the desk's Seed cleanup asks, the same client the runs spawn with. It is
+            // passed unconditionally (not spread-if-present like the bearer) because in BOTH shapes this file
+            // resolves a client: `resolveProvider` defaults it from the provider triple, so an absent `chat`
+            // on the deps is a hand-wired embed, never a server booted by `./server`.
+            chat: input.chat,
+            defaultModel: input.defaultModel,
             ...(input.apiKey === undefined ? {} : { providerApiKey: input.apiKey }),
             ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
             ...(options.streamDebounceMs === undefined ? {} : { streamDebounceMs: options.streamDebounceMs })
@@ -475,6 +493,12 @@ export async function openStorylineRuntime(options: StorylineOpenOptions = {}): 
 
     return buildStorylineRuntime({
         ...options,
+        // R7 — the ONE client this boot resolved, forwarded to the route wiring. Without it,
+        // `buildStorylineRuntime` would call `resolveProvider` a second time and mint a second client over
+        // the same env triple: equivalent, but two transports for one process, and the desk's cleanup pass
+        // would then dial a client nobody else in the boot can name. The run layer already adopts this one
+        // (it is what `StoryRuntimes.open` above was handed).
+        chat,
         store: appConfig.book,
         runtimes,
         config: appConfig,

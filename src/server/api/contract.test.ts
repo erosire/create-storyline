@@ -1,15 +1,18 @@
 // The OpenAPI contract against the route table it documents.
 //
 // The file is the server's published contract (`src/storyline-server.swagger.yaml`), and this
-// suite keeps it honest two ways: the mounted Hono routes and the documented operations must
-// be the SAME set, and every `$ref` must resolve. A route added without a swagger entry (or a
-// stale entry left behind) fails here instead of drifting until a client notices.
+// suite keeps it honest three ways: the mounted Hono routes and the documented operations must
+// be the SAME set, every `$ref` must resolve, and — since R11 — the documented FIELD SET of the
+// receipts the desk reads must be the field set a live response actually answers with. A route
+// added without a swagger entry (or a stale entry left behind) fails here instead of drifting
+// until a client notices, and so does a wire field the document never learned about.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { buildStorylineRuntime } from './server';
+import { MockChatClient, msg } from '../llm/mock';
 import { Store } from '../store/store';
 
 interface OpenApiDocument {
@@ -142,5 +145,115 @@ describe('the Storyline OpenAPI contract', () => {
 
     it('resolves every component reference', () => {
         expect(unresolvedRefs(DOCUMENT)).toEqual([]);
+    });
+
+    // R11 — THE FIELDS THE SERVER ALREADY SENDS ARE THE FIELDS THE CONTRACT NAMES. `phase_opened` and
+    // `phase_open_reason` have been on the Start receipt since the phase pointer existed, and every one of the
+    // other eight keys is read by the desk's rail; until this round the document named none of the pair, so a
+    // generated client could not see that a start that opened no phase is a SUCCESS with a reason attached.
+    // Pinning the key set against a live response is the only form this check can take: a prose contract
+    // cannot drift from itself, but it can quietly fall behind a route, which is what happened.
+    it('answers the Start receipt with exactly the fields `StartPhraseResult` documents (R11)', async () => {
+        const runtime = buildStorylineRuntime({
+            store: Store.empty(),
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: {}
+        });
+
+        const created = await runtime.app.request('http://localhost/v1/storyline/stories', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ title: 'The Salt Cartographer', idea: 'A mapmaker redraws her own coastline.', chapter_count: 2 })
+        });
+        const story = (await created.json()) as { id: string };
+
+        const started = await runtime.app.request(`http://localhost/v1/storyline/stories/${story.id}/phrases/plotlines/start`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ source: 'custom', text: 'Six chapters, alternating timeline, no frame story.' })
+        });
+        const receipt = (await started.json()) as Record<string, unknown>;
+
+        expect(started.status).toBe(200);
+
+        const schema = DOCUMENT.components.schemas.StartPhraseResult as {
+            required: string[];
+            properties: Record<string, unknown>;
+        };
+
+        // THE SAME KEYS, BOTH WAYS. `additionalProperties: false` is in the document, so an undocumented wire
+        // field is a failure here just as a documented one the route stopped sending would be — and the pair
+        // this round added can no longer be re-dropped by accident.
+        expect(Object.keys(receipt).sort()).toEqual(Object.keys(schema.properties).sort());
+        expect(schema.required.sort()).toEqual(Object.keys(schema.properties).sort());
+        expect(Object.keys(receipt).sort()).toEqual(
+            [
+                'key',
+                'phrase_id',
+                'phase_open_reason',
+                'phase_opened',
+                'seed_chars',
+                'seed_head',
+                'source',
+                'started',
+                'story_id',
+                'view'
+            ].sort()
+        );
+
+        // THE PAIR ITSELF, as the document describes it: a boolean that is false on an ordinary start (the
+        // Summary is not signed off, so the pointer does not move), and the sentence naming that state.
+        expect(receipt.phase_opened).toBe(false);
+        expect(typeof receipt.phase_open_reason).toBe('string');
+        expect(receipt.phase_open_reason).toContain('lock');
+    });
+
+    // R11 — THE CLEANUP PROPOSAL, SAME RULE. The desk's confirm control reads `ok` to decide whether it has
+    // anything to carry into the Start press, so a field set that drifts here is a desk offering "confirm"
+    // over a proposal that is not there. The pass is scripted, so this reads the LIVE wire shape without
+    // dialing a provider — the arm pinned is the PASSING one; the four guard refusals are pinned, key for
+    // key, in `phrase-seed-cleanup-routes.test.ts`, whose subject is the refusal arm.
+    it('answers the Seed cleanup with exactly the fields `SeedCleanupProposal` documents (R11)', async () => {
+        const seed = 'A mapmaker she redraws her own coastline.';
+        const runtime = buildStorylineRuntime({
+            store: Store.empty(),
+            engineConfig: { autoSweep: false },
+            noAssistantSeed: true,
+            env: {},
+            // The provider answers the brief back UNCHANGED, which is the one answer every guard accepts by
+            // construction: nothing was dropped and nothing was added, so `ok` cannot hinge on the fixture.
+            chat: new MockChatClient(() => ({ message: msg({ content: seed }) }))
+        });
+
+        const created = await runtime.app.request('http://localhost/v1/storyline/stories', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ title: 'The Salt Cartographer', idea: 'A mapmaker redraws her own coastline.', chapter_count: 2 })
+        });
+        const story = (await created.json()) as { id: string };
+
+        const reply = await runtime.app.request(
+            `http://localhost/v1/storyline/stories/${story.id}/phrases/plotlines/seed/cleanup?seed=${encodeURIComponent(seed)}`
+        );
+        const proposal = (await reply.json()) as Record<string, unknown>;
+
+        expect(reply.status).toBe(200);
+
+        const schema = DOCUMENT.components.schemas.SeedCleanupProposal as { required: string[]; properties: Record<string, unknown> };
+
+        // THE DOCUMENT: five named fields, of which only the two every answer carries are required — the
+        // `ok`/`refusal` split is what `additionalProperties: false` still allows because BOTH are listed here.
+        expect(Object.keys(schema.properties).sort()).toEqual(['changed', 'ok', 'refusal', 'source_hash', 'text']);
+        expect(schema.required).toEqual(['ok', 'source_hash']);
+
+        // THE RESPONSE, one for one against the `ok: true` arm: no `refusal`, and no field the document does
+        // not name. `source_hash` is the 8-hex-digit FNV-1a digest of the trimmed draft, which is the whole
+        // of the binding between a proposal and the text it was computed over.
+        expect(Object.keys(proposal).sort()).toEqual(['changed', 'ok', 'source_hash', 'text']);
+        expect(proposal.ok).toBe(true);
+        expect(proposal.changed).toBe(false);
+        expect(proposal.text).toBe(seed);
+        expect(proposal.source_hash).toMatch(/^[0-9a-f]{8}$/);
     });
 });

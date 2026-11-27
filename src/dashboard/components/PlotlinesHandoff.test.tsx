@@ -9,14 +9,25 @@
 //   4. once the phrase has started the card is a RECEIPT — the start is one-way (D-72), so a live button here
 //      would promise a write the route refuses with a 409.
 // The verb's arguments are asserted as recorded argument lists (`calls.startPhrase`), never as "was called".
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PlotlinesHandoff } from './PlotlinesHandoff';
 import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
 import type { StorySelection } from './story-nav';
+// R7 — the notice the card prints beside a shut compiled arm is the contract module's derivation, and this file
+// asserts the pane renders THAT string, not a copy of it the pane could reword. The cleanup's four sentences are
+// asserted the same way: the card chooses which one to show, and this file proves it showed that one.
+import {
+    plotlinesCustomStartNotice,
+    SEED_CLEANUP_APPLIED_NOTE,
+    SEED_CLEANUP_NOTHING_TO_FIX,
+    SEED_CLEANUP_PROPOSAL_NOTE,
+    seedCleanupAskRefusal,
+    seedCleanupRefusalNotice
+} from './story-contract';
 import type { StoryViewData } from './story-contract';
-import { phraseDetailView } from '../testing/shell-fakes';
-import type { PhraseDetailView } from '../api';
+import { click, phraseDetailView, type } from '../testing/shell-fakes';
+import type { PhraseDetailView, SeedCleanupProposal } from '../api';
 
 /**
  * The grouped book, with the two facts the card reads set by the caller. They live on the STORY VIEW
@@ -57,9 +68,18 @@ function blocksOf(root: ParentNode): string[] {
  * (`projections.ts:2016`, `seed_head: seed.slice(0, SEED_HEAD_CHARS)`), so a caller passes the exact
  * characters the Author would be shown — whole or cut. Queries stay container-scoped, because the
  * `not.toThrow` assertion mounts the same receipt a second time.
+ *
+ * R12 — THE PROVENANCE TRAVELS WITH IT. The receipt's sentence names where the Seed came from, and that is a
+ * field of the same read (`PhraseDetailView.seed_source`), so this helper passes one — `'compiled'` by default,
+ * because every existing pin here is a compiled-arm receipt. `'legacy'` sends NO key at all, which is what the
+ * projection does to a row written before the field existed: it omits it rather than guessing.
  */
-function mountReceipt(seedHead: string) {
-    const detail = phraseDetailView('s1', { seed_head: seedHead, seed_chars: seedHead.length });
+function mountReceipt(seedHead: string, seedSource: 'custom' | 'compiled' | 'legacy' = 'compiled') {
+    const detail = phraseDetailView('s1', {
+        seed_head: seedHead,
+        seed_chars: seedHead.length,
+        ...(seedSource === 'legacy' ? {} : { seed_source: seedSource })
+    });
 
     return render(
         <PlotlinesHandoff
@@ -224,7 +244,13 @@ describe('PlotlinesHandoff — the started state is a receipt, not a dead button
     it('reports the copied Seed the read carries, and offers the surface that opened', () => {
         const selections: StorySelection[] = [];
         const { actions, calls } = fixtureActions();
-        const detail = phraseDetailView('s1', { seed_head: 'Premise: a flooded city.', seed_chars: 1_284 });
+        const detail = phraseDetailView('s1', {
+            seed_head: 'Premise: a flooded city.',
+            seed_chars: 1_284,
+            // R12 — the receipt names the arm, and the arm is a field of THIS read; the sentence below is only
+            // true because the read says so.
+            seed_source: 'compiled'
+        });
 
         render(
             <PlotlinesHandoff
@@ -248,6 +274,45 @@ describe('PlotlinesHandoff — the started state is a receipt, not a dead button
         // Nothing here can start the phrase again: no live button, and no press.
         expect(screen.queryByTestId('plotlines-handoff-compiled')).toBeNull();
         expect(calls.startPhrase).toBeUndefined();
+    });
+
+    // R12 — THE RECEIPT CREDITS THE RIGHT HAND. The sentence used to say "of the Summary the crew compiled" for
+    // every started phrase, which the custom arm (R5) made false an Author could see: they had typed the Seed, and
+    // the desk told them the crew had written it. `seed_source` is on the row and on the read now, so the receipt
+    // reads it — and a row that predates the field gets the third wording, because a projection that OMITS the key
+    // must not be answered with a guess about who wrote the text.
+    it('credits the Author with a Seed the custom arm supplied (R12)', () => {
+        const detail = phraseDetailView('s1', {
+            seed_head: 'Six chapters, alternating timeline, no frame story.',
+            seed_chars: 47,
+            seed_source: 'custom'
+        });
+
+        render(<PlotlinesHandoff view={handoffView({ started: true, detail })} actions={fixtureActions().actions} />);
+
+        expect(screen.getByTestId('plotlines-handoff-seed').textContent).toBe(
+            'Phrase 2 has started on this Story. Its Seed is 47 characters of the brief you wrote and started on, and every chapter entry, revision and claim key is written against it (D-72).'
+        );
+    });
+
+    it('says the origin is unrecorded when the row predates the field — absent is never guessed as `compiled` (R12)', () => {
+        const detail = phraseDetailView('s1', { seed_head: 'A keeper refuses the relief boat.', seed_chars: 32 });
+
+        // THE FIXTURE ITSELF IS THE ASSERTION: `phraseDetailView` carries no `seed_source` key, exactly as
+        // `projections.ts:phraseDetailView` answers a legacy row (omitted, not `null`).
+        expect('seed_source' in detail).toBe(false);
+
+        render(<PlotlinesHandoff view={handoffView({ started: true, detail })} actions={fixtureActions().actions} />);
+
+        const sentence = screen.getByTestId('plotlines-handoff-seed').textContent ?? '';
+
+        expect(sentence).toBe(
+            'Phrase 2 has started on this Story. Its Seed is 32 characters of text whose origin this desk never recorded — the phrase started before the Seed’s provenance was kept, and every chapter entry, revision and claim key is written against it (D-72).'
+        );
+        // THE SENTENCE STILL DOES NOT PICK A SIDE. Reading "the crew compiled" into an absent field would tell an
+        // Author their own typed brief was the Overview, which is the failure mode AC5 names.
+        expect(sentence).not.toContain('the Summary the crew compiled');
+        expect(sentence).not.toContain('the brief you wrote');
     });
 
     it('keeps to the flag it has when the phrase read is not in the frame', () => {
@@ -399,5 +464,338 @@ describe('PlotlinesHandoff — the copied Seed head renders as Markdown, cut or 
         // `<h2>`, so no case leaves the receipt showing the marker the user reported for the group it names.
         expect(head.querySelector('h2')?.textContent).toBe('Premise');
         expect(head.textContent).toContain('## Promise');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R7 (this wave) — THE CUSTOM ARM IS NOT GATED ON THE COMPILED SUMMARY.
+//
+// What this block owns is the DESK half of a fact the server already had: `routes.ts` validates a `custom` start's
+// `text` (400) before it asks whether anything is compiled (the 409), so an Author with a brief of their own could
+// start Phrase ② on a book whose Summary was never written — while the card held the button shut on
+// `summary_compiled`, the COMPILED arm's problem. The card now answers each arm to its own gate
+// (`story-contract.ts:plotlinesHandoffRefusal` / `plotlinesCustomStartRefusal`), and prints the half of the fact
+// the Author was missing (`plotlinesCustomStartNotice`): the arm is open, and the crew does not follow the start
+// until phase ① is signed off (L-33).
+// ---------------------------------------------------------------------------
+describe('PlotlinesHandoff — the custom arm on a book with no compiled Summary (R7)', () => {
+    it('opens the skip arm while the compiled arm stays shut, and says which is which', () => {
+        const { actions, calls } = fixtureActions();
+        const view = handoffView({ compiled: false });
+
+        render(<PlotlinesHandoff view={view} actions={actions} />);
+
+        // THE ARM IS OPEN — the button the fix is about. Enabled, and its `title` says what it does rather than
+        // borrowing the compiled arm's refusal.
+        const custom = screen.getByTestId('plotlines-handoff-custom-open');
+
+        expect(custom.hasAttribute('disabled')).toBe(false);
+        expect(custom.getAttribute('title')).toBe(
+            'Start Phrase 2 on a Seed you write here, instead of the compiled Summary — no compiled Summary is needed for this arm.'
+        );
+
+        // THE COMPILED ARM IS STILL SHUT, with its own sentence in both places U-16 requires (the `title`, and the
+        // line under the card that names WHERE the wait is). The fix moved a gate; it did not soften a refusal.
+        const compiled = screen.getByTestId('plotlines-handoff-compiled');
+
+        expect(compiled.hasAttribute('disabled')).toBe(true);
+        expect(compiled.getAttribute('title')).toBe(
+            'There is no compiled Summary to start Phrase 2 from yet — the Overview (or the reviewed Summary) is the text the phrase copies, so the gate is above this control (R5).'
+        );
+        expect(screen.getByTestId('plotlines-handoff-refusal').textContent).toBe(
+            'There is no compiled Summary to start Phrase 2 from yet — the Overview (or the reviewed Summary) is the text the phrase copies, so the gate is above this control (R5).'
+        );
+
+        // THE OTHER HALF OF THE FACT, printed beside the shut button: the card is not blocked, and the text the
+        // Author writes here IS the Seed. Asserted as the contract module's own derivation too, so the pane cannot
+        // quietly reword what `story-contract.test.ts` pins verbatim.
+        const notice = screen.getByTestId('plotlines-handoff-custom-notice');
+
+        expect(notice.textContent).toBe(
+            'There is no compiled Summary to copy yet, so the compiled arm stays shut — “Start from your own brief” is open, ' +
+                'and the text you write there is the Seed the phrase copies (the Start verb takes `source: custom` without a compiled Summary, R5 / D-76). ' +
+                'This Summary is signed off, so starting Phrase 2 also moves the crew into Phase 2 (the pointer follows a start only when phase ① is locked, L-33).'
+        );
+        expect(notice.textContent).toBe(plotlinesCustomStartNotice(view, true));
+
+        // A press on the open arm arms the form: the path the compiled gate used to block starts here.
+        fireEvent.click(custom);
+
+        expect(screen.getByTestId('plotlines-handoff-custom')).toBeTruthy();
+        expect(calls.startPhrase).toBeUndefined();
+    });
+
+    it('starts Phrase 2 on the Author’s own text with nothing compiled, and the body names only that arm', () => {
+        const { actions, calls } = fixtureActions();
+
+        render(<PlotlinesHandoff view={handoffView({ compiled: false })} actions={actions} />);
+
+        fireEvent.click(screen.getByTestId('plotlines-handoff-custom-open'));
+        fireEvent.change(screen.getByTestId('plotlines-handoff-custom-text'), {
+            target: { value: '  six chapters, alternating timeline, no frame story  ' }
+        });
+
+        const submit = screen.getByTestId('plotlines-handoff-custom-submit');
+
+        expect(submit.hasAttribute('disabled')).toBe(false);
+
+        fireEvent.click(submit);
+
+        // THE BODY, EXACTLY as the route reads it: one arm, trimmed text, and no `source:'compiled'` — the request
+        // that used to be unreachable from this card, and the one `phrase-start-routes.test.ts` accepts with a 200
+        // on a book that has no compiled Summary at all.
+        expect(calls.startPhrase).toEqual([
+            ['s1', 'plotlines', { source: 'custom', text: 'six chapters, alternating timeline, no frame story' }]
+        ]);
+    });
+
+    it('prints neither sentence when the shell has no verb to open the form with (U-16)', () => {
+        const { container } = render(<PlotlinesHandoff view={handoffView({ compiled: false })} />);
+
+        // The card says WHICH route is missing, and renders no field whose only verb is that missing one.
+        expect(screen.getByTestId('plotlines-handoff-refusal').textContent).toBe(
+            'The phrase start route is not available in this shell.'
+        );
+        expect(container.querySelector('[data-testid="plotlines-handoff-custom-open"]')).toBeNull();
+        // And the "the arm is open" notice is absent, because above this card it would be false: an explanation
+        // that contradicts the screen is worse than the one sentence the Author does need.
+        expect(container.querySelector('[data-testid="plotlines-handoff-custom-notice"]')).toBeNull();
+    });
+
+    it('stays shut on a started phrase, where both arms are refused with the D-72 sentence', () => {
+        const { actions, calls } = fixtureActions();
+        const { container } = render(<PlotlinesHandoff view={handoffView({ compiled: false, started: true })} actions={actions} />);
+
+        // The receipt replaced the controls entirely — a live button here would promise a write the route refuses.
+        expect(screen.getByTestId('plotlines-handoff-started').textContent).toBe('started');
+        expect(container.querySelector('[data-testid="plotlines-handoff-custom-open"]')).toBeNull();
+        expect(container.querySelector('[data-testid="plotlines-handoff-custom-notice"]')).toBeNull();
+
+        fireEvent.click(screen.getByTestId('plotlines-handoff-open'));
+
+        // The receipt's only verb is the navigation; nothing on a started book may send a start body.
+        expect(calls.startPhrase).toBeUndefined();
+    });
+});
+
+// R7 — THE PROOFREAD ARM, AT THE DESK. The route's own suite pins the proposal and its guards; what only THIS file
+// can pin is the confirm's shape, which is the whole of AC2 and AC3:
+//
+//   · the ask carries the draft in the box, trimmed — the same bytes the Start would copy, so a proposal cannot be
+//     about a text the desk never sends (the hash the answer carries is computed over exactly those bytes);
+//   · a proposal changes NOTHING until the Author takes it, and taking it is not a write: the box holds the new
+//     text and the next `source:'custom'` press is what records it (`StartPhraseRequest` grew no flag, so there is
+//     no path by which the pass reaches the phrase on its own — D-72, D-76/§18.13);
+//   · a guard refusal carries no `text`, so the card renders no proposal and no confirm control, and the Start
+//     press goes out over the Author's own words — AC3's "silently confirmed" has no affordance to happen through;
+//   · the proposal dies when the box changes, because it is a claim about the text the pass read.
+describe('PlotlinesHandoff — the one-time Seed proofread (R7)', () => {
+    // THE DRAFT, with the grammar still in it, and the answer the pass hands back: same sentences, the 6 intact,
+    // nothing added. The two differ ONLY in inflection, so nothing in these tests hinges on a length guard.
+    const BROKEN = 'A mapmaker she find her own coastline, and she need 6 charts.';
+    const CLEAN = 'A mapmaker finds her own coastline, and she needs 6 charts.';
+
+    /**
+     * The ask, recorded. `fixtureActions`'s recorder is built into ITS stub, so replacing the member with a plain
+     * `vi.fn` would leave `calls.requestSeedCleanup` empty no matter what the card did — the assertion below needs
+     * the arguments the card actually sent, so the stand-in does the recording itself.
+     */
+    function recording(answer: SeedCleanupProposal | null) {
+        const asked: unknown[][] = [];
+
+        // Typed as the action itself, so the double cannot drift out of the proposal union, and so the ASSIGNMENT
+        // below is provably the same three-argument shape the card's type names.
+        const requestSeedCleanup = vi.fn(
+            async (storyId: string, phraseKey: string, seed: string): Promise<SeedCleanupProposal | null> => {
+                asked.push([storyId, phraseKey, seed]);
+
+                return answer;
+            }
+        );
+
+        return { asked, requestSeedCleanup };
+    }
+
+    /**
+     * The card, armed, with the draft typed — and the cleanup verb answering whatever the test asks. `null` is the
+     * route's failure arm (400/404/409), which `state.ts` turns into the shell's line and the card turns into
+     * nothing at all.
+     */
+    async function mountArmed(answer: SeedCleanupProposal | null) {
+        const { actions, calls } = fixtureActions();
+        const cleanup = recording(answer);
+
+        actions.requestSeedCleanup = cleanup.requestSeedCleanup;
+
+        const { container } = render(<PlotlinesHandoff view={handoffView({ compiled: true })} actions={actions} />);
+
+        await click(screen.getByTestId('plotlines-handoff-custom-open'));
+        await type(screen.getByTestId('plotlines-handoff-custom-text'), BROKEN);
+
+        return { actions, calls, container, asked: cleanup.asked };
+    }
+
+    /** The Seed box, read back as the value the next Start press would send. */
+    function seedBox(): HTMLTextAreaElement {
+        return screen.getByTestId('plotlines-handoff-custom-text') as HTMLTextAreaElement;
+    }
+
+    it('asks about the draft in the box, and about nothing else (AC2)', async () => {
+        const { asked } = await mountArmed({ ok: true, source_hash: '9b8387ee', text: CLEAN, changed: true });
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        // THE ARGUMENT LIST IS THE CLAIM: one read, Phrase ②, and the trimmed text from the box. A card that sent
+        // the untrimmed draft would get a proofread of bytes the Start never copies.
+        expect(asked).toEqual([['s1', 'plotlines', BROKEN]]);
+        expect(screen.getByTestId('plotlines-handoff-cleanup-text').textContent).toBe(CLEAN);
+        // THE SENTENCE THAT SAYS NOTHING HAS HAPPENED. Without it a highlighted suggestion reads as applied.
+        expect(screen.getByTestId('plotlines-handoff-cleanup-note').textContent).toBe(SEED_CLEANUP_PROPOSAL_NOTE);
+        // AND THE BOX IS UNTOUCHED until the Author says otherwise — the pass cannot rewrite a draft behind them.
+        expect(seedBox().value).toBe(BROKEN);
+    });
+
+    it('takes the proposal into the box, and the next Start press carries exactly those bytes (AC2)', async () => {
+        const { calls } = await mountArmed({ ok: true, source_hash: '9b8387ee', text: CLEAN, changed: true });
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+        await click(screen.getByTestId('plotlines-handoff-cleanup-confirm'));
+
+        expect(seedBox().value).toBe(CLEAN);
+        // TAKEN, NOT RECORDED — the line that stops "the box changed" from being read as "the desk wrote it".
+        expect(screen.getByTestId('plotlines-handoff-cleanup-applied').textContent).toBe(SEED_CLEANUP_APPLIED_NOTE);
+        // One confirm control, and it is gone now: the proposal cannot be taken twice, and a second press would
+        // suggest there was still a write pending.
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-confirm')).toBeNull();
+
+        await click(screen.getByTestId('plotlines-handoff-custom-submit'));
+
+        // THE CONFIRM IS THE PRESS. One start, the custom arm, and the PROPOSAL's text — the Author's broken draft
+        // is gone from the body because the Author moved the box, not because the pass reached the phrase.
+        expect(calls.startPhrase).toEqual([['s1', 'plotlines', { source: 'custom', text: CLEAN }]]);
+    });
+
+    it('shows a guard refusal with no proposal and no confirm control, and starts on the Author’s words (AC3)', async () => {
+        const { calls } = await mountArmed({ ok: false, source_hash: '9b8387ee', refusal: 'numbers_lost' });
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        expect(screen.getByTestId('plotlines-handoff-cleanup-refusal').textContent).toBe(
+            seedCleanupRefusalNotice('numbers_lost')
+        );
+        // NOTHING TO CONFIRM. A refusal that carried the source text in `text` would hand the Author their own
+        // prose back as a suggestion, and the confirm below would "improve" the brief the guard just rejected.
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-text')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-confirm')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-note')).toBeNull();
+        expect(seedBox().value).toBe(BROKEN);
+
+        await click(screen.getByTestId('plotlines-handoff-custom-submit'));
+
+        // THE SEED IS THE AUTHOR'S TEXT, guards and all — the refused cleanup changed nothing on the way out.
+        expect(calls.startPhrase).toEqual([['s1', 'plotlines', { source: 'custom', text: BROKEN }]]);
+    });
+
+    it('says “nothing to fix” as the answer it is, with no suggestion to take', async () => {
+        const { calls } = await mountArmed({ ok: true, source_hash: '9b8387ee', text: BROKEN, changed: false });
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        expect(screen.getByTestId('plotlines-handoff-cleanup-clean').textContent).toBe(SEED_CLEANUP_NOTHING_TO_FIX);
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-confirm')).toBeNull();
+        expect(seedBox().value).toBe(BROKEN);
+
+        await click(screen.getByTestId('plotlines-handoff-custom-submit'));
+
+        expect(calls.startPhrase).toEqual([['s1', 'plotlines', { source: 'custom', text: BROKEN }]]);
+    });
+
+    it('retires the proposal the moment the draft changes — it is a claim about the text the pass read', async () => {
+        const { asked } = await mountArmed({ ok: true, source_hash: '9b8387ee', text: CLEAN, changed: true });
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        expect(screen.getByTestId('plotlines-handoff-cleanup-text').textContent).toBe(CLEAN);
+
+        await type(seedBox(), `${BROKEN} The harbour master keeps a lighthouse.`);
+
+        // GONE, not greyed: `source_hash` hashes the draft the pass read, so it cannot bind this proposal to the
+        // edited bytes, and a confirm here would paste a correction of a sentence nobody sent.
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-text')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-note')).toBeNull();
+        // AND THE ASK IS LIVE AGAIN, which is the recovery: one press and the Editor is reading what is in the box.
+        expect((screen.getByTestId('plotlines-handoff-cleanup-ask') as HTMLButtonElement).disabled).toBe(false);
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        expect(asked).toEqual([
+            ['s1', 'plotlines', BROKEN],
+            ['s1', 'plotlines', `${BROKEN} The harbour master keeps a lighthouse.`]
+        ]);
+    });
+
+    it('shuts the ask while the box is empty, and names the reason (U-16)', async () => {
+        const { actions, calls } = fixtureActions();
+
+        // A SPY, not `fixtureActions`' stub: the claim is that the verb was never DIALED, and a recorder the card
+        // replaced cannot answer that.
+        const asked = vi.fn(async (): Promise<SeedCleanupProposal> => ({
+            ok: true,
+            source_hash: '9b8387ee',
+            text: CLEAN,
+            changed: true
+        }));
+
+        actions.requestSeedCleanup = asked;
+
+        render(<PlotlinesHandoff view={handoffView({ compiled: true })} actions={actions} />);
+        await click(screen.getByTestId('plotlines-handoff-custom-open'));
+
+        const ask = screen.getByTestId('plotlines-handoff-cleanup-ask') as HTMLButtonElement;
+
+        expect(ask.disabled).toBe(true);
+        expect(ask.title).toBe(seedCleanupAskRefusal('', true));
+
+        await click(ask);
+
+        // A blank draft never reaches the provider: the route 400s rather than spend a call on an answer it knows,
+        // and the card does not even dial. `calls.requestSeedCleanup` stays undefined for the same reason the spy
+        // stays empty — the recorder belongs to the stub the card is not using.
+        expect(asked).toHaveBeenCalledTimes(0);
+        expect(calls.requestSeedCleanup).toBeUndefined();
+    });
+
+    it('renders no proofread control at all in a shell that has no such route (U-16)', async () => {
+        const { actions, calls } = fixtureActions();
+
+        // THE VERB IS ABSENT, not merely failing: an optional action means the shell has no route to answer it.
+        delete (actions as Partial<typeof actions>).requestSeedCleanup;
+
+        const { container } = render(<PlotlinesHandoff view={handoffView({ compiled: true })} actions={actions} />);
+
+        await click(screen.getByTestId('plotlines-handoff-custom-open'));
+        await type(screen.getByTestId('plotlines-handoff-custom-text'), BROKEN);
+
+        expect(container.querySelector('[data-testid="plotlines-handoff-cleanup"]')).toBeNull();
+        // The Start path is untouched by the missing affordance: an Author with no Editor still starts.
+        await click(screen.getByTestId('plotlines-handoff-custom-submit'));
+        expect(calls.startPhrase).toEqual([['s1', 'plotlines', { source: 'custom', text: BROKEN }]]);
+    });
+
+    it('shows no proposal when the read itself failed — the sentence belongs to the shell’s line (L-13)', async () => {
+        const { asked } = await mountArmed(null);
+
+        await click(screen.getByTestId('plotlines-handoff-cleanup-ask'));
+
+        // NEITHER arm of a proposal, and no refusal either: the 409's sentence is the shell's to print, and a second
+        // copy inside the card would be the same failure described twice, differently worded.
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-text')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-refusal')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-clean')).toBeNull();
+        expect(screen.queryByTestId('plotlines-handoff-cleanup-note')).toBeNull();
+        // THE ASK DID GO OUT, once — and its arguments are the box's text, failure or not.
+        expect(asked).toEqual([['s1', 'plotlines', BROKEN]]);
+        // The Author can simply press it again — a failed read is not a spent one.
+        expect((screen.getByTestId('plotlines-handoff-cleanup-ask') as HTMLButtonElement).disabled).toBe(false);
     });
 });

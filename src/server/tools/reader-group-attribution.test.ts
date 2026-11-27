@@ -46,6 +46,9 @@ import { AUTHOR_ATTR, seedStory } from '../run/mock';
 import { Store } from '../store';
 import { recordUidAt } from '../store/persist';
 import { createToolRuntime } from './index';
+// R4: the hash `readSeed` prints and the hash `structurePlotlines` compares are the SAME function over
+// different texts, so the assertions below derive both from the fixture's own inputs.
+import { seedHashOf } from '../../shared/seed-hash';
 import type { Chapter, PhraseGroup, Plotline, Story } from '../../shared/types';
 import type { RunSession, RunToolContext, ToolRuntime } from './index';
 
@@ -556,5 +559,73 @@ describe('a phase-② finding on a contract is scoped to the chapter entry that 
 
         expect(result.ok).toBe(true);
         expect(book.store.findings.require('finding_0').group_refs).toBeUndefined();
+    });
+
+    // THE READ SURFACE CARRIES THE SAME VALUE THE GATE CHECKS (R4). `readSeed` used to print ONE hash — the
+    // Story Seed's — on a book whose Phrase ② gate hashes a different text, so a seat that put the brief down
+    // and read the book was handed the value this very gate refuses with P5, and had to guess the rest. The
+    // ids are this fixture's own `recordUidAt` sequence (Phrase ① from 0, Phrase ② from 20); the hashes are
+    // computed from the fixture's own inputs, never off a transcript.
+    it('prints each Phrase’s own seed and hash on readSeed, and the Plotlines entry is the hash this gate takes (R4, P5)', async () => {
+        const book = seedContractBook({ plotlinesMode: 'groups' });
+        const read = await book.runtime.execute(book.critic, 'readSeed', {});
+        const data = read.data as { seed_hash: string; phrases: unknown[] };
+
+        expect(data.phrases).toEqual([
+            {
+                // Phrase ①: the catalog's seed IS `stories.idea` (an unwritten Summary falls back to it), so
+                // its hash equals the row's — the case the note has to call out, not confuse.
+                phrase_id: '00000000-0000-4000-8000-000000000000',
+                phrase_key: 'summary',
+                phrase_order: 1,
+                seed: book.story.idea,
+                seed_hash: seedHashOf(book.story.idea),
+                seed_is_story_idea: true
+            },
+            {
+                // Phrase ②: the text the Author PUSHED IN, verbatim, and its own hash.
+                phrase_id: '00000000-0000-4000-8000-000000000014',
+                phrase_key: 'plotlines',
+                phrase_order: 2,
+                seed: PLOTLINES_SEED,
+                seed_hash: seedHashOf(PLOTLINES_SEED),
+                seed_is_story_idea: false
+            }
+        ]);
+
+        // TWO hashes on one result, and the top-level one is NOT what this gate wants — the trap, as data.
+        expect(data.seed_hash).toBe(seedHashOf(book.story.idea));
+        expect(data.seed_hash).not.toBe(seedHashOf(PLOTLINES_SEED));
+
+        // THE ROUND TRIP on the same book, through the tool that owns the gate.
+        const editor = book.runtime.createContext({
+            storyId: book.story.id,
+            roleKind: 'editor',
+            roleName: 'editor',
+            runId: 'run_editor'
+        });
+
+        const wrong = await book.runtime.execute(editor, 'structurePlotlines', {
+            seed_hash: data.seed_hash,
+            chapter_count: 4,
+            why: 'the Editor answers with the hash readSeed prints at the top of the same result'
+        });
+
+        expect({ ok: wrong.ok, refused: wrong.refused, received: wrong.received, expected: wrong.expected }).toEqual({
+            ok: false,
+            refused: 'P5',
+            received: seedHashOf(book.story.idea),
+            expected: seedHashOf(PLOTLINES_SEED)
+        });
+
+        const right = await book.runtime.execute(editor, 'structurePlotlines', {
+            seed_hash: seedHashOf(PLOTLINES_SEED),
+            chapter_count: 4,
+            why: 'the Editor answers with the Plotlines entry of readSeed.phrases[]'
+        });
+
+        // The hash is ACCEPTED. This fixture's brief already exists and is accepted, so the tool answers with
+        // that brief rather than a second one (idempotence) — the claim pinned here is "not refused".
+        expect({ ok: right.ok, refused: right.refused }).toEqual({ ok: true, refused: undefined });
     });
 });

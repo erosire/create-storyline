@@ -1631,6 +1631,15 @@ export function samplingArmed(store: Store, story: Story, round: number): boolea
     return (
         !revisionReviewPlateau(store, story) &&
         openWriterFixTasks(store, story.id).length > 0 &&
+        // F1 (L-37) — WHY THIS LEG IS NOT SCOPED BY `status.ts:findingClaimsSettledPhrase`, and stays right
+        // without it. This is the phase-① sampler's arming rule, and it is only ever REACHED from phase ①:
+        // `work.ts:2301` calls `phase1PipelineCandidates` (the only caller here) behind
+        // `story.phase === 'summary'`, `status.ts:276` calls `phase1Unmet`'s clause on the same condition, and
+        // `samplingLegClosed`'s caller `engine.ts:trySelectSample` returns at `engine.ts:1962` for any other
+        // phase. The predicate is definitionally FALSE for `phase === 'summary'` (`status.ts:185`), so wiring
+        // it in here would subtract nothing while suggesting a Phrase-② reading this leg never has. If a future
+        // caller reaches it from a later phase, THIS is the line that has to consult the predicate — the same
+        // queue-versus-gate split F1 closed at `status.ts:223`.
         unconfirmedBlockingFindings(store, story).length === 0 &&
         openResearchFixPrerequisites(store, story.id).length === 0
     );
@@ -2487,6 +2496,12 @@ export function pendingRevisionReviewEntry(
     if (selected === undefined) return undefined;
     if (!isDeepReviewSelection(story, selected)) return undefined;
     if (!deepReviewComplete(store, story, selected)) return undefined;
+    // F1 (L-37), the same verdict as `samplingArmed` above: this is the phase-① audit write, and its one
+    // caller `engine.ts:trackRevisionProgress` returns at `engine.ts:2430` for any phase other than
+    // `summary`. `findingClaimsSettledPhrase` is false by construction in phase ① (`status.ts:185`), so the
+    // scoping would subtract nothing here — and the question this gate asks is not "does the queue still
+    // service this claim" but "has the Editor's D-33 decision landed yet", which the settled-phrase scoping
+    // deliberately does not answer.
     if (unconfirmedBlockingFindings(store, story).length > 0) return undefined;
     if (summaryReviewHistoryOf(story).some((entry) => entry.revision_id === selected.id)) return undefined;
 

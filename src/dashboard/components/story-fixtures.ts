@@ -49,11 +49,17 @@ import type {
     PhraseGroupScore,
     PhraseRevisionRow,
     PhraseTaskRow,
-    PhraseView
+    PhraseView,
+    // R7 — the stub's cleanup answer is a wire value, so the fixture states it as one (see `fixtureActions`).
+    SeedCleanupProposal
 } from '../api';
 // R6 — the five Summary groups come from the catalog module, not from a copy: the rail, the panes and these
 // fixtures all read the same product data, so a test cannot pin a group set the server does not send (R1).
 import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
+// R7 — the stub's `source_hash` is the same 8 hex digits the server journals for these bytes
+// (`shared/seed-hash.ts`), so a card that compares a proposal against the draft it was computed over is testing
+// its real comparison here rather than one against an invented digest.
+import { seedHashOf } from '../../shared/seed-hash';
 import type { CompletionPreview, StoryActions, StoryViewData } from './story-contract';
 
 /** Frozen "now" — every relative figure in the story surface is measured against this instant. */
@@ -1385,7 +1391,19 @@ export function fixtureActions() {
         // `revisePhraseEntry: [['s1','grp-chapter-1',{plotpoints:{…}}]]`) rather than a "was called" boolean.
         setPlotlinesMode: record('setPlotlinesMode'),
         startPhrase: record('startPhrase'),
-        revisePhraseEntry: record('revisePhraseEntry')
+        revisePhraseEntry: record('revisePhraseEntry'),
+        // R7 — the Seed proofread, on the stub for the same reason every verb is: a click on "Ask the Editor to
+        // proofread this" has to land in `calls` with the exact `(storyId, key, seed)` the card sent, because the
+        // draft riding in the query IS the claim under test. Unlike the others it also has to RESOLVE — the card
+        // renders its proposal area from the returned value. The default answer is the neutral one, "nothing to
+        // fix": it cannot invent a rewrite nobody asked for, and `changed:false` leaves the Author's text as the
+        // one the next Start press would copy. A test that wants a proposal, a guard refusal, or a route failure
+        // replaces this member with its own function.
+        requestSeedCleanup: async (storyId: string, phraseKey: string, seed: string): Promise<SeedCleanupProposal> => {
+            (calls.requestSeedCleanup ??= []).push([storyId, phraseKey, seed]);
+
+            return { ok: true, source_hash: seedHashOf(seed), text: seed, changed: false };
+        }
     };
 
     return { actions, calls };

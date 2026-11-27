@@ -82,6 +82,27 @@ const SUMMARY_LOCK_INSTRUCTION =
     'what would still have to change elsewhere if it is locked. The Editor may not unlock, and on a Story that has not enabled ' +
     'editor locking it may not lock at all.';
 
+/**
+ * Phrase ①'s STRUCTURE SEAT law — the fifth instruction slot (R2, `../controller.ts`).
+ *
+ * THE SENTENCE IS THE ONE `run/brief.ts` has rendered for every `structure_seed` job since §6.4 gate
+ * 1, moved here VERBATIM: same bytes, same §3.3/§6.4/D-51/D-17c/P5/P7/C-14 citations, same
+ * `structureSeed` name it has always named. Phrase ② is a DIFFERENT seat — its seed is the phrase's
+ * copied text, its write is `structurePlotlines`, and its product is a chapter count — and the two
+ * seats have shared one sentence only because they share the `structure_seed` KIND. That is the
+ * "the Editor messed it up" report: the Phrase ② seat was told to call `structureSeed` on the Story's
+ * Seed, in the one brief whose role prompt told it the opposite.
+ *
+ * WHY IT LIVES HERE AND NOT IN `run/brief.ts`: `run/**` imports `phrase/**`, so importing back would
+ * cycle (the note above this section already names that rule), and the phrase controller is the
+ * single owner of phrase instruction law (documents/specifications.md:2044, R7). A third phrase adds
+ * one more `structure` slot; the brief builder never grows a phrase branch.
+ */
+const SUMMARY_STRUCTURE_JOB = 'Structure the Seed above BEFORE anything is sampled from it (the pipeline refuses sampling until an accepted brief exists). Read it once: it is Author truth and read-only forever (P5), and it is the only source of facts this run may use. Validate the structure a Summary needs — protagonist, want, obstacle, stakes, setting, world rules, and a promise — then call `structureSeed` ONCE with the derived brief, the Seed\u2019s current hash, and `research_questions`: the facts a draft could NOT get from the Seed alone, phrased as questions. `[]` is a complete answer, not a shortcut — a premise that is self-contained (a mood, a joke, a single character doing a thing) needs no Researcher, and sending an empty list starts sampling at once (D-51). Do not invent a research hook to fill the list: a question you cannot name a source for is not a question, and an unnecessary Researcher spends a run to write facts the Seed already implies. A field the Seed states, the brief restates; a field the Seed leaves silent goes to `open_questions`, never to an invented blank — record a silent required field as an empty string, which the prompts render as the Seed leaving the choice OPEN: the Writer fills it with any compatible detail, and a field the Seed never stated is not a promise the Summary owes (D-17c, P7, C-14). Never edit the Seed, never write a story artifact (P10, L-19), and stop as soon as `structureSeed` reports.';
+
+/** The `ARTIFACT UNDER REVIEW` heading for the pass that derives the Seed Brief and never edits the Seed (P5). */
+const SUMMARY_STRUCTURE_ARTIFACT_HEADING = 'the Seed (structure pass — you derive the brief, never edit the Seed, P5)';
+
 /** PHRASE ① as a controller: the dial, the rows, the answer contract, the install, the claim ref, the prompts. */
 export const summaryPhraseController: PhraseController = {
     key: PHRASE_SUMMARY_KEY,
@@ -144,6 +165,24 @@ export const summaryPhraseController: PhraseController = {
         draft: SUMMARY_DRAFT_INSTRUCTION,
         review: SUMMARY_REVIEW_INSTRUCTION,
         score: SUMMARY_SCORE_INSTRUCTION,
-        lock: SUMMARY_LOCK_INSTRUCTION
+        lock: SUMMARY_LOCK_INSTRUCTION,
+        // THE STRUCTURE SEAT (R2/R7) — the pass that derives the Seed Brief and states the research
+        // waiver (§3.3, §6.4 gate 1, D-51).
+        //
+        // `seedSection` returns UNDEFINED on purpose: Phrase ①'s seed IS `stories.idea`
+        // (`phrase/catalog.ts:phraseSeedOf` — "a row created before the field exists reads the Story's
+        // idea, the only text that phrase could have been written from"), so the brief's existing
+        // `SEED — Author truth…` section already carries the whole artifact unclipped. Returning a
+        // section here would duplicate it and push an already-over-budget brief further over (E-3).
+        structure: {
+            // The phase-① structuring claim family, `wi_structure_seed_<seed hash>`
+            // (`loop/work.ts:1935`). Tied to the planner's real key by `loop/phase2-groups.test.ts`.
+            seatKeyPrefix: 'wi_structure_seed',
+            // `structureSeed` writes the Seed Brief; the chapter count stays the Author's field (D-3b).
+            declaresChapterCount: false,
+            job: () => SUMMARY_STRUCTURE_JOB,
+            artifactHeading: () => SUMMARY_STRUCTURE_ARTIFACT_HEADING,
+            seedSection: () => undefined
+        }
     }
 };

@@ -37,6 +37,10 @@ import type {
     PhraseStartInput,
     PhraseTaskRow,
     PhraseView,
+    // R7 — the cleanup proposal and its refusal codes: the desk prints one sentence per state, so the states
+    // travel as wire types rather than as strings the card invents.
+    SeedCleanupProposal,
+    SeedCleanupRefusal,
     StoryView,
     UndoTarget
 } from '../api';
@@ -339,6 +343,29 @@ export interface StoryActions {
         phraseKey: string,
         input?: { source?: 'compiled' | 'custom'; text?: string }
     ) => Promise<unknown> | unknown;
+    /**
+     * R7 — the Author asks the Editor to PROOFREAD the Seed they are about to start on
+     * (`GET /stories/:id/phrases/:key/seed/cleanup?seed=…`), and gets a PROPOSAL.
+     *
+     * IT IS A READ, AND THE DESK HAS TO SAY SO. Nothing is written: no Seed, no revision, no journal line. The
+     * pending Seed has no row to read it from (the Start copies it, D-72), so the Author's draft rides in the
+     * query and the answer rides back as text the card can show. That is why the verb is a GET and why it is not
+     * a run (P10: one tool-less turn, no work item, nothing for the queue).
+     *
+     * THE CONFIRM IS THE NEXT START PRESS. The card puts the proposal in the Seed box and the Author's next
+     * `source:'custom'` press carries it; `PhraseStartInput` grew no flag, so there is no path by which a
+     * cleanup reaches the phrase without a press — which is the whole of AC3.
+     *
+     * THE RETURN IS THE PROPOSAL, NOT A RESULT WRAPPER. `ok: true` carries `text` (+ `changed`), `ok: false`
+     * carries `refusal` and NO `text`, and BOTH are 200s: a guard refusal is an answer, not a failure, and the
+     * card prints `seedCleanupRefusalNotice(refusal)` inline rather than raising an error strip. `null` is the
+     * one case that IS a failure — a 400/404/409 from the route, whose sentence `state.ts` has already committed
+     * to the shell's error line (L-13) — and the card renders nothing, because there is no proposal to show.
+     *
+     * OPTIONAL like every verb here (U-16): an absent member means the shell has no such route, and the card
+     * renders no cleanup control at all rather than a button that cannot be answered.
+     */
+    requestSeedCleanup?: (storyId: string, phraseKey: string, seed: string) => Promise<SeedCleanupProposal | null>;
     /**
      * T-W4 — the Author rewrites ONE CHAPTER ENTRY by hand. The route is the Summary group's revise; the BODY is
      * different, because a chapter entry's text is composed from its contract fields
@@ -1277,6 +1304,69 @@ export function plotlinesHandoffRefusal(
 }
 
 /**
+ * Why the "start Phrase ② from the Author's OWN text" control is shut, `''` when it is not.
+ *
+ * THIS IS NOT `plotlinesHandoffRefusal` WITHOUT ITS MIDDLE CLAUSE, and the difference is the whole point
+ * (R7, this wave). That function answers for the COMPILED arm, whose Seed is text this Story does not have
+ * yet; the custom arm's Seed is the paragraph in the Author's hand, and the route says so — `routes.ts`
+ * checks `custom` with no text (400) BEFORE it asks whether anything is compiled (the 409), so a non-empty
+ * `custom` start is accepted on a book whose Summary was never written. Pinning that arm to
+ * `summary_compiled` was the desk blocking a move the server allows: an Author with a summary ready of their
+ * own had to run Phrase ① to start Phrase ②. Only two facts gate it, and both are still projected rather
+ * than guessed: the shell must have the verb (U-16), and the phrase must not already have started (D-72 —
+ * the copied Seed is what every entry, revision and claim key was written against, so a second start is the
+ * 409 no control should offer).
+ */
+export function plotlinesCustomStartRefusal(
+    view: Pick<StoryViewData, 'phrase_started'>,
+    hasAction: boolean
+): string {
+    if (!hasAction) return 'The phrase start route is not available in this shell.';
+    if (plotlinesStarted(view))
+        return 'Phrase 2 has already started on this Story: its copied Seed is the text every chapter entry, revision and claim key was written against, so a new Seed means a new Story rather than a re-start (D-72).';
+
+    return '';
+}
+
+/**
+ * The sentence the card prints when the COMPILED arm is shut and the CUSTOM arm is open — `''` when there is
+ * nothing to explain because both arms are live.
+ *
+ * WHY A SEPARATE SENTENCE INSTEAD OF RELAXING THE REFUSAL. The compiled arm's refusal is still true and the
+ * Author still needs it (that button is genuinely shut, and U-16 says a shut control says why); what was
+ * missing is the other half of the fact — the card is not blocked, only that one arm is. Two sentences, each
+ * about the control it describes, is the honest shape; folding them would make the compiled arm look
+ * optional when it is the default.
+ *
+ * THE CREW CLAUSE IS THE ROUTE'S, NOT THIS FILE'S OPINION. Starting a phrase moves the phase pointer only
+ * when phase ① is already signed off (`routes.ts:openPlotlinesOnSignedOffSummary`, L-33), so the sentence
+ * reads off `story.summary_locked` and reuses the Start receipt's own wording. That is R7's recorded
+ * decision in one line: an Author may start Phrase ② on their own text at any time, and the crew does not
+ * retarget onto it until they sign Phrase ① off.
+ */
+export function plotlinesCustomStartNotice(
+    view: Pick<StoryViewData, 'story' | 'summary_compiled'>,
+    hasAction: boolean
+): string {
+    // TWO PRECONDITIONS, both about whether the sentence would be TRUE. A compiled Summary means the compiled arm
+    // is live and there is nothing to explain; no verb means NEITHER arm is live, and a line claiming
+    // "“Start from your own brief” is open" above a card that renders no such button is the lie U-16 refuses —
+    // that case already has its own sentence from `plotlinesHandoffRefusal`'s first clause.
+    if (!hasAction || summaryIsCompiled(view)) return '';
+
+    // THE CREW CLAUSE, capitalized because it stands as its own sentence here while the route states it mid-line.
+    const phaseClause =
+        view.story.summary_locked === false
+            ? `The Summary is not signed off, so the crew stays on Phrase ①: POST /stories/${view.story.id}/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)`
+            : `This Summary is signed off, so starting Phrase 2 also moves the crew into Phase 2 (the pointer follows a start only when phase ① is locked, L-33)`;
+
+    return (
+        'There is no compiled Summary to copy yet, so the compiled arm stays shut — “Start from your own brief” is open, ' +
+        `and the text you write there is the Seed the phrase copies (the Start verb takes \`source: custom\` without a compiled Summary, R5 / D-76). ${phaseClause}.`
+    );
+}
+
+/**
  * The custom-seed arm's own refusal: `''` when the Author has typed a Seed worth starting on.
  *
  * THE ROUTE'S 400 IS THE SHAPE OF THIS RULE (`routes.ts:PhraseStartBody`): a `'custom'` start with an empty (or
@@ -1288,6 +1378,136 @@ export const customSeedRefusal = (text: string): string =>
     text.trim().length === 0
         ? 'Write the Seed first — a custom start copies what you type into the phrase, and an empty Seed leaves Phrase 2 with nothing to write from (the route refuses it).'
         : '';
+
+// ---------------------------------------------------------------------------
+// R7 — the one-time Seed cleanup, in the desk's own words
+//
+// WHY THESE SENTENCES LIVE HERE AND NOT IN THE CARD: each one is a spec rule about a wire state
+// (`SeedCleanupProposal`'s two arms, `SeedCleanupRefusal`'s four codes), and a rule that is a function of the
+// wire can be pinned without a DOM — the same reason `plotlinesCustomStartRefusal` is here. The card decides
+// WHICH sentence to print; this file decides what each state SAYS, so the four refusals cannot quietly become
+// one shrug.
+//
+// WHY "YOUR OWN TEXT STANDS" APPEARS IN EVERY REFUSAL: a guard refusal is a 200 answer with no `text`, so the
+// desk has no proposal to carry into the Start press — the Author's draft is what the next press copies, and
+// the sentence has to say that rather than leave "the Editor declined" to be read as "your text was rejected"
+// (AC3). None of them is an error strip: the request succeeded.
+// ---------------------------------------------------------------------------
+
+/**
+ * The longest escaped `?seed=` this desk will dial (R7).
+ *
+ * WHY THE DESK HAS A TRANSPORT LIMIT AT ALL: the cleanup read carries the Author's draft IN THE ADDRESS
+ * (`dashboard/api.ts:1870` → `…/seed/cleanup?seed=${encodeURIComponent(seed)}`, and `routes.ts:1678` explains
+ * why a GET takes it there), so the draft is inside the request line the listener parses. Past that line the
+ * request dies before routing — no `SeedCleanupProposal`, no refusal code, no sentence the desk could print:
+ * just HTTP 431, which is not a fact an Author can act on.
+ *
+ * MEASURED, on the real listener (`Temp/c9/probe-f4.ts` / `probe-f4.out`, `startStorylineServer({ port: 0 })`):
+ * the route answers normally at an escaped seed of 12,056 and 16,200 characters and returns 431 at 16,300 and
+ * 18,080 — the refusal tracks the ESCAPED length, not the pasted one (a pasted space becomes `%20`, an em dash
+ * nine bytes), and the ceiling sits where Node's 16,384-byte request-header budget says it would.
+ *
+ * 12,000 IS THE ROUND NUMBER UNDER IT, and the margin is deliberate: ≈4,300 escaped characters of headroom
+ * (about 26 %) below the measured 16,300 failure point, which also covers the fixed 53-character path prefix
+ * and every other header the client sends. It is a refusal, not a truncation: the rule is the one the server
+ * already enforces by accident, stated where the Author can read it (U-16).
+ */
+export const SEED_CLEANUP_ASK_URL_LIMIT = 12_000;
+
+/**
+ * Why the "ask the Editor to proofread this" control is shut, `''` when it is live.
+ *
+ * THREE FACTS, and the first two are not gates the Start verb does not have: the shell must have the verb
+ * (U-16), the box must hold the draft the pass would read — the route 400s a blank `seed` rather than spend a
+ * model call on an answer it already knows (`routes.ts:GET …/seed/cleanup`) — and the draft has to FIT the
+ * address it travels in (`SEED_CLEANUP_ASK_URL_LIMIT`, F4). `summary_compiled` is NOT in this list, on
+ * purpose: the cleanup belongs to the custom arm, whose Seed is text this Story does not need to have.
+ */
+export function seedCleanupAskRefusal(text: string, hasAction: boolean): string {
+    if (!hasAction) return 'This shell has no Editor proofread route wired, so there is nothing to ask.';
+    if (text.trim().length === 0)
+        return 'Write your brief first — the proofread reads the text in this box, and there is nothing to correct yet.';
+
+    // F4 — the transport clause, measured on the ESCAPED form because that is the form the listener counts.
+    // A pasted 9,000-character prose draft is 12,008 characters on the wire, and a real compiled Overview
+    // (1,714 characters in the report that opened R1) escapes past the ceiling as well, so a guard on the
+    // pasted length would pass the requests the transport kills. The sentence keeps the section's rule: the
+    // ask is shut, the Author's text in the box is untouched, and the next act is theirs.
+    if (encodeURIComponent(text).length > SEED_CLEANUP_ASK_URL_LIMIT)
+        return (
+            'That draft is too long for this ask — the proofread sends it inside the request’s address, and an ' +
+            'address past about 12,000 escaped characters comes back refused (HTTP 431) before the Editor reads a ' +
+            'word. Paste the part you want proofread — a chapter or two at a time — and the ask opens again; your ' +
+            'text in this box stands.'
+        );
+
+    return '';
+}
+
+/**
+ * What the Editor's guard answered, in the desk's words: the rewrite came back and a rule threw it away, so
+ * there is no proposal and the Author's own draft stands. Each clause names WHICH rule, because "the Editor
+ * declined" is not a fact an Author can act on (L-13).
+ */
+export function seedCleanupRefusalNotice(refusal: SeedCleanupRefusal): string {
+    switch (refusal) {
+        // The provider returned nothing usable, so there is no text to weigh at all.
+        case 'empty_answer':
+            return 'The Editor answered with nothing usable, so there is no proposal — your own text stands, and nothing was written (R7).';
+        // THE ONE THE AUTHOR WOULD OTHERWISE NOT NOTICE: a rewrite that drops a digit has changed the brief's
+        // facts, not just its grammar, which is exactly why the guard runs before the Author is offered anything.
+        case 'numbers_lost':
+            return 'The rewrite dropped a number you wrote — a chapter count, a deadline, an age — so the Editor threw it away rather than proofread your facts away. Your own text stands (R7).';
+        // A shorter answer summarised; a longer one expanded. Neither is a proofread, and the Start copies a Seed,
+        // not a synopsis.
+        case 'too_short':
+            return 'The rewrite came back shorter than your brief, so it was summarising rather than correcting — there is no proposal, and your own text stands (R7).';
+        case 'too_long':
+            return 'The rewrite came back longer than your brief, so it was expanding rather than correcting — there is no proposal, and your own text stands (R7).';
+    }
+}
+
+/**
+ * The line under a PROPOSAL. It has to say out loud that nothing is written yet, because the card is showing the
+ * Author a better sentence than the one they typed, and the natural reading of a highlighted suggestion in every
+ * other editor is "this has been applied". Here it has not: the confirm is the Start press itself, and that press
+ * copies whatever is in the box (R7 / D-72).
+ */
+export const SEED_CLEANUP_PROPOSAL_NOTE =
+    'Nothing has changed yet. This is the Editor’s proofread of the brief above — grammar, spelling, punctuation and typos, nothing else — and the only act that records it is your next “Start Phrase 2 from this Seed” press, which copies the text now in the box (R7 / D-72).';
+
+/** The `changed: false` answer: the pass read the draft and had nothing to correct. Not a failure, and no confirm needed. */
+export const SEED_CLEANUP_NOTHING_TO_FIX =
+    'The Editor read your brief and found nothing to fix — its grammar is already clean. Nothing was written, and the Start press copies your text exactly as it stands.';
+
+/**
+ * The line after "Use this text". It has to exist, because the box changed and an Author who watched a box change
+ * reasonably assumes something was recorded: this says what did NOT happen (nothing) and which press does the
+ * recording (R7 / D-72).
+ */
+export const SEED_CLEANUP_APPLIED_NOTE =
+    'The box now holds the Editor’s version. Nothing has been recorded yet — the next “Start Phrase 2 from this Seed” press is the act that copies it into the phrase, and it copies exactly the text you can read here (R7 / D-72).';
+
+/**
+ * R12 — WHAT THE STARTED RECEIPT CALLS THE COPIED SEED, in the three words that are true for each provenance.
+ *
+ * THE SENTENCE USED TO CLAIM THE SUMMARY. "Its Seed is N characters of the Summary the crew compiled" was written
+ * when the compiled arm was the only arm, and it stayed after the custom arm landed — so an Author who started on
+ * their own brief was told the crew had written their Seed, which is the reverse of the fact. R12 put
+ * `seed_source` on the row and on the read, so the receipt can now say which of the two it is.
+ *
+ * ABSENT MEANS UNKNOWN, AND THE SENTENCE SAYS THAT RATHER THAN PICKING A SIDE. A phrase row written before the
+ * field existed carries a Seed and no word about its origin (`projections.ts` OMITS the key instead of sending
+ * `null`, and R6 forbids migrating the row to guess). Choosing `compiled` there would be the desk inventing a
+ * crew for text the Author may well have typed.
+ */
+export function plotlinesSeedOrigin(seedSource?: 'custom' | 'compiled'): string {
+    if (seedSource === 'compiled') return 'the Summary the crew compiled';
+    if (seedSource === 'custom') return 'the brief you wrote and started on';
+
+    return 'text whose origin this desk never recorded — the phrase started before the Seed’s provenance was kept';
+}
 
 /**
  * T-W4 — the phrase-swap view the SHARED panes render Phrase ② through.

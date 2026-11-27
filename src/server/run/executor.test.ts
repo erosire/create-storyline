@@ -2246,3 +2246,281 @@ describe('RunExecutor — the lease across a slow structured turn (S-4a, D-36)',
         }
     });
 });
+
+// ---------------------------------------------------------------------------
+// D-a / T-W2 — the Phrase ② structuring seat: its one write is a REPORT, and it is not a termination
+//
+// `run/catalogue.ts:REPORT_TOOLS` now carries `structurePlotlines`. Two things had to be true for that
+// to be the FIX rather than a new bug, and neither is visible from the catalogue itself:
+//
+//   1. THE RUN THAT LANDS THE WRITE IS NOT A NO-OP TURN (S-4). With the name missing, `isReportTool`
+//      answered false, `tally.reports` stayed empty, `runs.no_op` was set (`executor.ts:712`), the row
+//      never moved to `reporting` (§9's report step, `executor.ts:1313 markReporting` fires only for a
+//      name the catalogue counts), and the loop's seat-owed gate re-dispatched the seat that had
+//      already answered — a structuring run that wrote the chapter set read as a wasted turn.
+//   2. THE NAME DOES NOT END THE RUN the way `submitVerdict` ends a Critic pass (C2-AD3). Critic
+//      termination is role-gated three times over — `loop.ts:236` `isCriticPass`, the plugin's own
+//      `payload.agent === 'critic'` guard, and `CRITIC_TERMINAL_REPORT_TOOLS = ['submitVerdict']` — and
+//      an editor run has no turn cap (E-0). So the provider must be asked AGAIN after the write. The
+//      Critic test above proves the opposite shape at the same boundary (lines 1227-1229: TWO requests
+//      and a third scripted answer that is never consumed); here three requests would mean the loop
+//      stopped itself early and the seat never got its closing turn.
+//
+// The seat's kickoff line is asserted in the SAME test because D-a has a second half: the sentence that
+// tells the seat how to end has to name the seat's OWN write, not the other phrase's (`executor.ts:635`
+// now cuts the list with `catalogue.ts:reportToolsForStructureSeat`, the same cut `brief.ts` uses for
+// `TOOLS AND HOW TO END`). The line is fully deterministic — `harness.ts:125 kickoffLine` interpolates
+// only the list — so it is pinned with `toBe`, not a substring.
+// ---------------------------------------------------------------------------
+
+/** The claim family Phrase ②'s structure seat is dispatched under (`controllers/plotlines.ts:649`). */
+const STRUCTURE_SEAT_ITEM_ID = 'wi_structure_plotlines_fac9695f';
+
+/** The real tool's args: the phrase-seed hash it must echo and the count the seat declares. */
+const STRUCTURE_ARGS = { seed_hash: 'fac9695f', chapter_count: 3, chapters: [{ title: 'The flooded steeple' }] };
+
+/** §4.13's `end_reason` for a run that ended with nothing filed — pinned in ./executor:142. */
+const END_UNREPORTED = 'completed — the model returned no tool call and the run filed no report (S-4)';
+
+/**
+ * A Phrase ② STRUCTURE seat, dispatched the way the planner dispatches one: the claim family
+ * `wi_structure_plotlines_<phrase seed hash>` (`loop/work.ts`'s `PLOTLINES_STRUCTURE_ITEM_PREFIX`,
+ * matched by `phrase/controller.ts:304 phraseStructureSeatOf` through the controller's `seatKeyPrefix`),
+ * on a Story sitting in phase 'plotlines', in an `editor` role. The seat is the one that
+ * `declaresChapterCount: true` (`controllers/plotlines.ts:652`) — the capability bit that decides which
+ * of the two structuring writes is its own (`catalogue.ts:reportToolsForStructureSeat`).
+ *
+ * WHY THE TOOL IS AN OVERRIDE: `./mock` has no `structurePlotlines`, because the real tool needs a
+ * Plotlines Phrase row and the brief-accept machinery (`tools/plotlines.ts:acceptPlotlineBrief`), and
+ * `./mock` is shared with other workers. The override answers with the real tool's fields, which is all
+ * the run layer reads: `ok` decides whether the call counts (`loop.ts:320`), and nothing in the
+ * executor reads the payload. `refuse: true` is the T-1a case this seat hits hardest —
+ * `structurePlotlines` refuses a brief derived from a seed that has moved — where NOTHING was written,
+ * so the run must not be able to claim a report.
+ */
+function structureSeatRig(options: { refuse?: boolean } = {}) {
+    const store = Store.empty();
+    const story = seedStory(store, { phase: 'plotlines' });
+
+    seedGoal(store, story.id);
+    seedDigest(store, story.id, 'Maren reaches the ridge; the map is wrong; the town is under water.');
+
+    const template = seedTemplate(store, {
+        name: 'editor-plotlines-structure',
+        serves_phase: ['plotlines'],
+        roles: [
+            {
+                name: 'editor',
+                kind: 'editor',
+                prompt: 'You declare the chapter set from the phrase seed, and write no prose (T-W2).'
+            }
+        ],
+        selection_rules: 'The seat that turns the Phrase ② seed into the chapter set.'
+    });
+
+    /** Every argument set the seat actually sent, so the test can prove the call was REACHED. */
+    const sent: Array<Record<string, unknown>> = [];
+
+    const runtime = new MockToolRuntime(store, story.id, {
+        structurePlotlines: async (_ctx, args) => {
+            sent.push({ ...args });
+
+            if (options.refuse === true)
+                return { ok: false, refused: 'P5', error: 'seed_hash does not match the current phrase seed' };
+
+            return {
+                ok: true,
+                rev: 1,
+                summary: `the Plotline Brief is accepted and ${String(args.chapter_count)} chapter entries materialized under seed ${String(args.seed_hash)}`,
+                data: { seed_hash: args.seed_hash, chapter_count: args.chapter_count, status: 'accepted' }
+            };
+        }
+    });
+
+    const item: WorkItem = {
+        id: STRUCTURE_SEAT_ITEM_ID,
+        storyId: story.id,
+        kind: 'structure_seed',
+        templateRef: template.name,
+        roleName: 'editor',
+        unit: undefined
+    };
+
+    return { store, story, template, runtime, item, sent };
+}
+
+/** One scripted provider answer at an exact usage, so the row's token total stays arithmetic (S-6). */
+const seatTurn = (content: string, toolCalls: Array<{ name: string; args: Record<string, unknown> }>, usage: { input: number; output: number }) => ({
+    message: msg({ content, toolCalls: toolCalls.length === 0 ? undefined : calls(toolCalls) }),
+    usage: { ...usage, cached_input: 0 }
+});
+
+describe('RunExecutor — the Phrase ② structuring seat reports with its write, and the write ends nothing (D-a, T-W2)', () => {
+    it('lands the write as a report — no_op false, the row moves to reporting — and still runs its closing turn (D-a, E-0)', async () => {
+        const { store, runtime, item, sent } = structureSeatRig();
+        const brief = briefOf(store, item);
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            if (toolResults === 0) return seatTurn('the book takes three chapters', [{ name: 'structurePlotlines', args: STRUCTURE_ARGS }], { input: 150, output: 40 });
+
+            if (toolResults === 1) return seatTurn('the chapter set is declared', [], { input: 120, output: 60 });
+
+            throw new Error(`the seat asked for model turn ${String(toolResults + 1)} after its write was refused an answer`);
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        // The write reached the tool layer with the seat's own args, and the tool SAID yes — so the
+        // report is a fact about the book, not about a mock that was configured to be agreeable.
+        expect(sent).toEqual([STRUCTURE_ARGS]);
+
+        // D-a's assertion, the one that was FALSE before the catalogue changed: `no_op: false`, because
+        // `structurePlotlines` is a report tool and the run filed it. Tokens are the two scripted
+        // usages added (190 + 180), and exactly one tool executed.
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            no_op: false,
+            tokens: 370,
+            toolsCalled: ['structurePlotlines']
+        });
+
+        // AC1, measured where the waste would be: TWO provider requests — the write turn, and the turn
+        // AFTER the write. The second one is the whole point: had the new name bought C2-AD3-style
+        // termination, this would be ONE request and the seat would never have got its closing turn
+        // (contrast the Critic at lines 1227-1229, where the report ends the pass at the request that
+        // filed it and the third scripted answer is never consumed). The sentence on the row below is
+        // the other half of the same proof: S-4's natural-end sentence, not C2-AD3's termination
+        // sentence, so the engine stopped because the model stopped asking, not because a policy cut it.
+        expect(requests).toHaveLength(2);
+
+        // The row, exactly: `torn_down`, S-4's COMPLETED sentence rather than the unreported one, and
+        // `no_op: false` — the flag the loop's seat-owed gate reads before it re-dispatches a seat.
+        expect(rowOf(store, 'run_0')).toEqual({
+            id: 'run_0',
+            story_id: 'story_0',
+            work_item_ref: STRUCTURE_SEAT_ITEM_ID,
+            template_ref: 'editor-plotlines-structure',
+            role: 'editor',
+            kind: 'work',
+            session_ref: 'sess_run_0',
+            state: 'torn_down',
+            tokens: 370,
+            no_op: false,
+            end_reason: END_COMPLETED,
+            delegated: [],
+            brief_hash: brief.hash
+        });
+
+        // §9's report step is in the journal, between the write's lease beat and S-3's close. This is
+        // the state the pre-change run never entered, which is why its seat kept being re-dispatched.
+        expect(stateSteps(store)).toEqual([
+            'create:spawning',
+            'update:working',
+            'update:', // request beat, turn 1
+            'update:', // heartbeat after structurePlotlines
+            'update:reporting',
+            'update:', // request beat, turn 2
+            'update:torn_down' // S-3's unconditional close
+        ]);
+
+        // AC2 at the kickoff: the sentence that tells the seat how to END names the seat's OWN write and
+        // NOT Phrase ①'s. The line is fully deterministic (`harness.ts:125 kickoffLine` interpolates
+        // only the report list), so the whole line is pinned — Phrase ②'s Editor that is told it may end
+        // on `structureSeed` closes its run on the other phrase's Seed Brief and leaves the chapter set
+        // unaccepted, and the call SUCCEEDS doing it.
+        expect(requests[0].messages[1].content).toBe(
+            'Carry out THE JOB in the brief above, using the tools. Write only what your kind may write. ' +
+                'End the run by reporting with one of: submitVerdict, raiseFinding, createTask, requestAuthor, proposeIdea, ' +
+                'verifyIdea, verifyFinding, confirmFinding, reviewSeed, selectRevision, requestMerge, rejectAll, ' +
+                'structurePlotlines, writeKnowledge, reportNoResearch — a run that reports nothing is a no-op turn and ' +
+                'counts against the Story (S-4).'
+        );
+        // And the brief's own S-4 sentence was cut the same way (`brief.ts:renderEtiquette`), so the two
+        // places that tell the seat how to end cannot disagree — the section is long prose the brief
+        // assembles per seat, hence the exact SENTENCE TAIL rather than a whole-section value.
+        expect(brief.text).toContain('rejectAll, structurePlotlines, writeKnowledge, reportNoResearch (S-4).');
+        expect(brief.text).not.toContain('structureSeed');
+    });
+
+    it('leaves a REFUSED write with nothing to report: no_op true, no `reporting` step, and the unreported sentence (D-a, T-1a)', async () => {
+        const { store, runtime, item, sent } = structureSeatRig({ refuse: true });
+        const brief = briefOf(store, item);
+        const { client, requests } = record((request: ChatRequest): ChatResponse => {
+            const toolResults = request.messages.filter((message) => message.role === 'tool').length;
+
+            if (toolResults === 0) return seatTurn('declaring the set', [{ name: 'structurePlotlines', args: STRUCTURE_ARGS }], { input: 150, output: 40 });
+
+            // The refusal is a teaching message the run still has to answer (T-1a), so the loop owes the
+            // seat its correction turn even though the catalogue now counts the name.
+            if (toolResults === 1) return seatTurn('the seed moved; nothing filed', [], { input: 120, output: 60 });
+
+            throw new Error(`the seat asked for model turn ${String(toolResults + 1)} after its refusal`);
+        });
+
+        const result = await new RunExecutor({ store, runtime, chat: client, defaultModel: 'gpt-5' }).execute(item);
+
+        expect(sent).toEqual([STRUCTURE_ARGS]);
+        // A call the tool REFUSED files nothing (`loop.ts:320` requires `ok`), so S-4's flag stays TRUE:
+        // adding the name to the union bought the honest report, not a free pass for a run that wrote
+        // nothing. The tool still counts as called — it really executed and refused.
+        expect(result).toEqual({
+            runId: 'run_0',
+            ended: 'completed',
+            no_op: true,
+            tokens: 370,
+            toolsCalled: ['structurePlotlines']
+        });
+        expect(rowOf(store, 'run_0')).toEqual({
+            id: 'run_0',
+            story_id: 'story_0',
+            work_item_ref: STRUCTURE_SEAT_ITEM_ID,
+            template_ref: 'editor-plotlines-structure',
+            role: 'editor',
+            kind: 'work',
+            session_ref: 'sess_run_0',
+            state: 'torn_down',
+            tokens: 370,
+            no_op: true,
+            end_reason: END_UNREPORTED,
+            delegated: [],
+            brief_hash: brief.hash
+        });
+        // No `reporting` anywhere in the journal: `markReporting` runs only for a report that landed, so
+        // a refused write cannot pose as the seat's product (§9, S-4).
+        expect(stateSteps(store)).toEqual([
+            'create:spawning',
+            'update:working',
+            'update:', // request beat, turn 1
+            'update:', // heartbeat after the refused structurePlotlines
+            'update:', // request beat, turn 2
+            'update:torn_down'
+        ]);
+    });
+
+    it('tells a Phrase ① structure seat the same rule with the OTHER write cut, so the fix did not move the first phrase (D-a, R7)', async () => {
+        // The mirror seat: `wi_structure_seed_<summary ref>…` (`controllers/summary.ts:180`), whose seat
+        // does NOT declare the chapter count, so `reportToolsForStructureSeat(false)` cuts
+        // `structurePlotlines` — a call Phrase ①'s Editor would have made and the tool would refuse
+        // outright on a book with no Plotlines Phrase (`tools/plotlines.ts:159`).
+        const { store, runtime, item } = structureSeatRig();
+        const phraseOneItem: WorkItem = { ...item, id: 'wi_structure_seed_summary_0', templateRef: 'editor-plotlines-structure' };
+        const { client, requests } = record(() => seatTurn('the Seed Brief is filed', [], { input: 150, output: 40 }));
+
+        const result = await new RunExecutor({ store, runtime: runtime, chat: client, defaultModel: 'gpt-5' }).execute(phraseOneItem);
+
+        // One request only: the scripted answer carries no tool call, so the run ends at its first turn
+        // (S-4's unreported case) — nothing about the seat's shape changes the loop's arithmetic.
+        expect(result.no_op).toBe(true);
+        expect(requests).toHaveLength(1);
+        expect(requests[0].messages[1].content).toBe(
+            'Carry out THE JOB in the brief above, using the tools. Write only what your kind may write. ' +
+                'End the run by reporting with one of: submitVerdict, raiseFinding, createTask, requestAuthor, proposeIdea, ' +
+                'verifyIdea, verifyFinding, confirmFinding, reviewSeed, selectRevision, requestMerge, rejectAll, ' +
+                'structureSeed, writeKnowledge, reportNoResearch — a run that reports nothing is a no-op turn and ' +
+                'counts against the Story (S-4).'
+        );
+        expect(requests[0].messages[1].content).not.toContain('structurePlotlines');
+    });
+});

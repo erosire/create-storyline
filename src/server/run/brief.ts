@@ -39,14 +39,15 @@ import {
 } from '../../shared/types';
 import { chapterContent } from '../../shared/chapter';
 import type { CommitEvent, Store } from '../store';
-import { isGroupManagedStory, phraseGroupsOf } from '../phrase';
+import { isGroupManagedStory, phraseGroupsOf, phraseStructureSeatOf } from '../phrase';
+import type { PhraseStructureInstructionSet } from '../phrase';
 // D-33c/D-33d: the open-issue count the "Findings in front of you" bracket prints is the loop's OWN
 // answer (`loop/records.ts:openIssueFindings`), the same one the Critic's gate, the Editor's approval
 // gate, the dial sweep, `engine.approveFinding` and the approve-all route read — so the brief can
 // never tell the crew a different number from the one the tool refusal will quote. `loop/records.ts`
 // imports nothing from `run/`, so this adds no cycle.
 import { openIssueFindings } from '../loop/records';
-import { REPORT_TOOLS } from './catalogue';
+import { REPORT_TOOLS, reportToolsForStructureSeat } from './catalogue';
 import { permissionLine, type ResolvedHarness } from './harness';
 // The Seed Brief and Knowledge renderers are shared with the Phase-1 compiler (./phase1-prompt):
 // the same record must read the same way in a tool run's brief and in a sampling prefix, or the
@@ -86,6 +87,14 @@ const TRIM_LADDER = [
 
 /** The heading a select/merge brief carries its competing drafts under (D-21). */
 export const REVISIONS_HEADING = 'COMPETING REVISIONS (D-21 — you and the Author see these; no other run does)';
+
+/**
+ * The heading the phase-① Seed Brief rides under (§3.3). It is a named constant rather than an inline
+ * literal because the seat-aware trim rung ({@link renderWithinBudget}) addresses the section BY
+ * HEADING — the same way the deferred sections are filled in {@link renderAll} — and because
+ * `run/brief.test.ts` pins the section's placement against it.
+ */
+export const SEED_BRIEF_HEADING = "SEED BRIEF (structured from the Author's Seed — derived, the Seed itself stays law, P5)";
 
 /** Clips a stored field for the brief, counting what was cut so the agent knows it is partial. */
 function clip(value: string, max: number): string {
@@ -592,10 +601,17 @@ function jobStatement(store: Store, item: WorkItem): string {
     const story = store.stories.get(item.storyId);
     switch (item.kind) {
         case 'structure_seed':
-            // §3.3 / §6.4 gate 1: the Editor derives the brief; the Seed is never written (P5).
-            // D-51: the same call carries the RESEARCH DECISION, because "does this book need a
-            // Researcher?" is an editorial judgement about the Seed, not a heuristic the loop can run.
-            return 'Structure the Seed above BEFORE anything is sampled from it (the pipeline refuses sampling until an accepted brief exists). Read it once: it is Author truth and read-only forever (P5), and it is the only source of facts this run may use. Validate the structure a Summary needs — protagonist, want, obstacle, stakes, setting, world rules, and a promise — then call `structureSeed` ONCE with the derived brief, the Seed\u2019s current hash, and `research_questions`: the facts a draft could NOT get from the Seed alone, phrased as questions. `[]` is a complete answer, not a shortcut — a premise that is self-contained (a mood, a joke, a single character doing a thing) needs no Researcher, and sending an empty list starts sampling at once (D-51). Do not invent a research hook to fill the list: a question you cannot name a source for is not a question, and an unnecessary Researcher spends a run to write facts the Seed already implies. A field the Seed states, the brief restates; a field the Seed leaves silent goes to `open_questions`, never to an invented blank — record a silent required field as an empty string, which the prompts render as the Seed leaving the choice OPEN: the Writer fills it with any compatible detail, and a field the Seed never stated is not a promise the Summary owes (D-17c, P7, C-14). Never edit the Seed, never write a story artifact (P10, L-19), and stop as soon as `structureSeed` reports.';
+            // THE STRUCTURE SEAT IS THE PHRASE'S, NOT THE KIND'S (R2, R7). ONE kind serves both phrases:
+            // `loop/work.ts:1935` arms Phrase ①'s Seed pass and `loop/work.ts:1614` arms Phrase ②'s
+            // chapter pass, both as `structure_seed`, because the KIND is "an Editor derives a brief
+            // before anything is drafted" and that is true of both. The sentence therefore comes from the
+            // controller whose claim family the job id belongs to
+            // (`phrase/controller.ts:phraseStructureSeatOf`), not from the kind. Until that lookup
+            // existed, the Phrase ② seat was handed Phrase ①'s `structureSeed` / Seed-Brief /
+            // `research_questions` sentence — the brief the Owner read as "the Editor messed up the
+            // compiled Seed". Phrase ①'s copy now lives in `controllers/summary.ts` (unchanged bytes,
+            // §3.3 / §6.4 gate 1 / D-51) and the chapter seat's in `controllers/plotlines.ts`.
+            return phraseStructureSeatOf(item.id).job({ store, story });
         case 'research':
             // §3.2 / §6.4 gate 2: the Researcher's product is Knowledge, with sources. D-51: the job
             // names the Editor's questions, and "nothing needs research" is an answer the loop accepts —
@@ -848,7 +864,7 @@ function renderJob(store: Store, item: WorkItem, fieldClip: number): string {
 // Tool etiquette (short on purpose — T-13: a rule with a tool behind it needs one line)
 // ---------------------------------------------------------------------------
 
-function renderEtiquette(kind: RoleKind): string {
+function renderEtiquette(kind: RoleKind, structureSeat?: PhraseStructureInstructionSet): string {
     // §7.2's researcher row: its write is Knowledge, never the book. Stated as its own line
     // because the generic "every tool is registered" sentence would otherwise read as permission
     // to reach for a story artifact — P10 refuses that call, and a brief should teach the route
@@ -861,6 +877,15 @@ function renderEtiquette(kind: RoleKind): string {
                   'When this job\'s questions need no outside lookup — the Seed states every fact the story depends on, or `readKnowledge` already answers them — close the pass with `reportNoResearch` and one line saying why (D-51). That IS a report: it writes nothing, it ends the run, and the loop goes on to sample. Manufacturing a source to justify the run is the failure this rule exists to stop.'
               ]
             : [];
+
+    // THE CLOSING LIST IS PER-SEAT (S-4, R7) — see `catalogue.ts:reportToolsForStructureSeat`. Every
+    // crew that is not a phrase's structuring seat is handed S-4's whole union, exactly as before; a
+    // structuring seat is handed the union minus the OTHER phrase's structuring write, because that one
+    // call is the tool this seat must not end on. For Phrase ① the two lists are the same string — its
+    // seat keeps `structureSeed` and never saw `structurePlotlines` — so every phase-① brief renders
+    // byte-identically, and the only brief whose sentence changes is the Phrase ② seat's own.
+    const reportTools =
+        structureSeat === undefined ? REPORT_TOOLS : reportToolsForStructureSeat(structureSeat.declaresChapterCount);
 
     return [
         ...researcherLines,
@@ -876,9 +901,18 @@ function renderEtiquette(kind: RoleKind): string {
         // sentence now names them separately: the ledger counts the MISSING REPORT, and a pass that
         // files nothing and says so is a completed pass. The Writer clause is unchanged — for a Writer,
         // writing nothing AND escalating nothing is still a brief defect (S-4).
-        `End the run ONLY after reporting with one of: ${REPORT_TOOLS.join(', ')} (S-4). What costs the Story a turn is the missing REPORT, never an empty set of findings: a pass that files nothing and reports that the text holds has done its job, while a run that ends without one of these calls is a no-op turn counted against the Story — and a Writer run that wrote nothing and escalated nothing is a bug in its brief, not a cost.`,
+        `End the run ONLY after reporting with one of: ${reportTools.join(', ')} (S-4). What costs the Story a turn is the missing REPORT, never an empty set of findings: a pass that files nothing and reports that the text holds has done its job, while a run that ends without one of these calls is a no-op turn counted against the Story — and a Writer run that wrote nothing and escalated nothing is a bug in its brief, not a cost.`,
         'Before you end, put anything you learned into the store: if it is not in the store it was not produced (P1, P3).',
-        'Never `updateDigest` — the engine derives it (D-12a). Never lock, unlock or backtrack (D-1). Never touch `chapter_count` (D-3b).'
+        // THE CHAPTER-COUNT CLAUSE IS PER-SEAT (R3, D-3b). Every crew in the book is told "never touch
+        // `chapter_count`", and for every crew but one that is exactly right — the number is the Author's
+        // (D-3b) and an authoring crew that edits it is the bug the rule exists for. The ONE seat that
+        // declares it is a phrase's structuring Editor, whose single write accepts the brief and moves the
+        // count in the same commit, so for that seat the flat prohibition contradicts its own job sentence
+        // two sections above: it would be told to decide a number it may not write. The clause is chosen
+        // from the seat's `declaresChapterCount`, not from a phrase branch here.
+        structureSeat?.declaresChapterCount === true
+            ? 'Never `updateDigest` — the engine derives it (D-12a). Never lock, unlock or backtrack (D-1). `chapter_count` is the ONE count you declare, and you declare it by the single structuring call your job names — never by editing the Summary row, and never beside the count on the record without saying why (D-3b).'
+            : 'Never `updateDigest` — the engine derives it (D-12a). Never lock, unlock or backtrack (D-1). Never touch `chapter_count` (D-3b).'
     ].join('\n- ');
 }
 
@@ -1146,10 +1180,52 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
 
     if (seedBrief !== undefined) {
         parts.push({
-            heading: 'SEED BRIEF (structured from the Author\'s Seed — derived, the Seed itself stays law, P5)',
+            heading: SEED_BRIEF_HEADING,
             body: renderSeedBrief(seedBrief)
         });
     }
+
+    // 3b-ii. THE STRUCTURE SEAT'S ARTIFACT (R1). A `structure_seed` job is generated by the phrase that
+    //        owns the seed being structured, and Phrase ②'s seed is NOT `stories.idea`: it is the text
+    //        the Author pushed into the Plotlines Phrase (`phrase/catalog.ts:phraseSeedOf`), the one
+    //        every Phrase ② gate hashes. Until now it reached the brief only inside the sweep note, and
+    //        `renderJob` clips the note at 600 characters — of which this job's instruction took 535 — so a
+    //        whole 1,714-character compiled Overview arrived as a 65-character fragment plus a "read the
+    //        full record" tail naming `readSeed`, the one read that cannot return it (`phrase_id` is not a
+    //        `readSeed` field). Measured: `Temp/create-storyline-probe/probe-4-full-brief.ts`.
+    //
+    //        THE SEED IS NOT TRIMMABLE, and that is a decision, not an oversight: E-1/D-13 say the brief
+    //        IS the artifact under review, and E-0 forbids trading a rule for a character count. This
+    //        section is therefore rendered whole, outside the trim ladder, exactly as
+    //        `run/phase1-prompt.ts:phraseSeedSection` already renders it for Phrase ②'s no-tool seats
+    //        (the compiled-prompt path got this section in T-W2; the assembled-brief path never did).
+    //        The note is what shrinks instead — it now carries the instruction and the hash, and fits the
+    //        clip with room to spare (`loop/work.ts:1614`).
+    //
+    //        Phrase ① returns `undefined` here: its seed IS `stories.idea`, and the section above
+    //        already carries it, so every phase-① brief renders byte-identically.
+    const structureSeat = item.kind === 'structure_seed' ? phraseStructureSeatOf(item.id) : undefined;
+    const structureSeedSection = structureSeat?.seedSection({ store, story });
+
+    if (structureSeedSection !== undefined) parts.push(structureSeedSection);
+
+    // THE SEAT-AWARE RUNG, decided once here where the seat is known (D-b). A seat that mounts its OWN
+    // untrimmable artifact section has been handed the text it structures; the phase-① `SEED BRIEF`
+    // mounted above is then the derived projection of a DIFFERENT phrase's Seed, and the seat's own job
+    // sentence already says so — the wording is the controller's, reached through the seam this file
+    // already calls (`phrase/controller.ts:phraseStructureSeatOf(item.id)`, the controller's
+    // `instructions.structure.job`, implemented by `phrase/controllers/plotlines.ts:plotlinesStructureJob`):
+    // "Phrase ①’s `SEED` section above is context only, and so is the derived `SEED BRIEF` — and that second
+    // heading is NOT one this brief guarantees you" (F3: the copy states the TRADE rather than claiming the
+    // heading is present, because this rung decides the section's fate after the job text is written, and on
+    // the built-in template this seat's brief is over budget at every seed size — `Temp/c9/probe-f3.out`).
+    // It is therefore
+    // the one section this brief may lose without losing a rule — unlike the Seed, the Digest, the
+    // criteria, the artifact and the job, which E-0 refuses to trade for a character count. The flag is
+    // derived from the seat's own declaration (`seedSection` returned a section), never from a phrase
+    // name, so Phrase ① — whose `seedSection` is `undefined` because its `SEED` section already IS the
+    // artifact — keeps every section it has always kept, byte for byte.
+    const seatTrimHeading = structureSeedSection === undefined ? undefined : SEED_BRIEF_HEADING;
 
     // 3c. The Knowledge a tool run must not contradict (§3.2, §5). Same filter and order as the
     //     compiler (`critical` then `high`, by fingerprint); the brief omits `detail` so a long
@@ -1178,8 +1254,10 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
     // 8. The selected-but-unabsorbed Ideas for this unit (D-29).
     parts.push({ heading: 'SELECTED IDEAS THIS RUN MUST ABSORB (D-29 — selected, not yet written in)', body: '' });
 
-    // 9. Tool etiquette: T-4 CAS and re-read, T-5 why, S-4's closing obligation, D-13/T-12 gaps.
-    parts.push({ heading: 'TOOLS AND HOW TO END', body: renderEtiquette(harness.kind) });
+    // 9. Tool etiquette: T-4 CAS and re-read, T-5 why, S-4's closing obligation, D-13/T-12 gaps. The
+    //    chapter-count line follows the seat, because for ONE seat `chapter_count` is its product rather
+    //    than a forbidden field (D-3b, R3).
+    parts.push({ heading: 'TOOLS AND HOW TO END', body: renderEtiquette(harness.kind, structureSeat) });
 
     // 10. The competing drafts, for the two kinds only that may see them (D-21). Rendered last
     //     because it is the section the trim ladder exists for: N whole drafts is the only part
@@ -1188,15 +1266,18 @@ export function assembleBrief(store: Store, item: WorkItem, harness: ResolvedHar
         ((item.kind === 'select' || item.kind === 'merge') && !!item.unit?.ref) ||
         (item.kind === 'check_unit' && item.revisionRef !== undefined);
 
-    return renderWithinBudget(parts, store, item, story, showsRevisions);
+    return renderWithinBudget(parts, store, item, story, showsRevisions, seatTrimHeading);
 }
 
 /** The heading names the unit so an agent cannot mistake which record it is judging. */
 function artifactHeading(store: Store, item: WorkItem, story: Story): string {
     // §6.1's two new tool-carrying kinds. The Editor's structure pass reads the Seed and writes a
     // DERIVED brief (the Seed itself is never edited, P5); the Researcher's pass produces the
-    // Story's Knowledge, so its "artifact" is what the book's facts rest on (§3.2).
-    if (item.kind === 'structure_seed') return 'the Seed (structure pass — you derive the brief, never edit the Seed, P5)';
+    // Story's Knowledge, so its "artifact" is what the book's facts rest on (§3.2). The structure pass's
+    // heading is phrase-owned like its job sentence (R7): Phrase ①'s is the Seed, Phrase ②'s is its own
+    // copied seed, and a heading that named the wrong one is how the two seats got tellable apart in the
+    // integration harness (`integration/harness.ts:939`).
+    if (item.kind === 'structure_seed') return phraseStructureSeatOf(item.id).artifactHeading({ store, story });
     if (item.kind === 'research') return "the Story's knowledge (research pass)";
 
     if (item.unit === undefined) {
@@ -1361,8 +1442,41 @@ interface RenderInput {
  * artifact (D-13, E-1): when the brief still does not fit after the last step it goes over
  * budget rather than dropping the criteria or the prose — E-0 forbids gating on a count, and a
  * run that was never told the criteria cannot grade against them.
+ *
+ * THE ONE SECTION THAT MAY BE DROPPED, AND ONLY WHEN NOTHING ELSE WORKED: `seatTrimHeading` names the
+ * section this seat is not entitled to (see {@link assembleBrief}, D-b). It is tried as a SECOND pass,
+ * after the whole ladder has already run, and only while the brief is still over budget — so a seat
+ * brief that fits keeps the section, the ladder's order is untouched for every other run, and the
+ * section that goes is the one the seat's own job sentence already demotes to "context only". The
+ * untrimmable sections stay untrimmable whatever the count: E-0's "no rule for a number" (D-13, E-1).
  */
 function renderWithinBudget(
+    parts: Part[],
+    store: Store,
+    item: WorkItem,
+    story: Story,
+    showsRevisions: boolean,
+    seatTrimHeading?: string
+): AssembledBrief {
+    const rendered = renderTrimLadder(parts, store, item, story, showsRevisions);
+
+    if (rendered.text.length <= BRIEF_CHAR_BUDGET || seatTrimHeading === undefined) return rendered;
+
+    // The section is not mounted for this job at all, so the rung has nothing to take: over budget on
+    // purpose, exactly as every over-budget brief was before this rung existed.
+    if (!parts.some((part) => part.heading === seatTrimHeading)) return rendered;
+
+    return renderTrimLadder(
+        parts.filter((part) => part.heading !== seatTrimHeading),
+        store,
+        item,
+        story,
+        showsRevisions
+    );
+}
+
+/** One walk down {@link TRIM_LADDER}: the first render that fits, or the last step's over-budget text. */
+function renderTrimLadder(
     parts: Part[],
     store: Store,
     item: WorkItem,

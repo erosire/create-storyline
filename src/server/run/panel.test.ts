@@ -29,6 +29,7 @@ import {
     isReportTool,
     primaryActionOf,
     proposalKey,
+    reportToolsForStructureSeat,
     toolsForRunKind
 } from './catalogue';
 import type { RunDelegation, RoleAggregation } from '../../shared/types';
@@ -192,7 +193,74 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
         // is D-51's third: a dispatched research pass that concludes NOTHING needs an outside fact has
         // no write to report with, and a run that reports nothing is a no-op turn counted against the
         // Story — which would re-dispatch the same question forever.
+        //
+        // `structurePlotlines` is T-W2's, one phrase down: `templates.ts:editor-plotlines-structure`
+        // states "Your only write is structurePlotlines" and "End the run as soon as structurePlotlines
+        // reports", so a run that ends on that single write has delivered the whole product of its job.
+        // Missing from this list it would be a no-op turn (S-4), its row would never move to
+        // `reporting` (§9), and the loop would re-dispatch the seat that already answered.
         expect(REPORT_TOOLS).toEqual([
+            'submitVerdict',
+            'raiseFinding',
+            'createTask',
+            'requestAuthor',
+            'proposeIdea',
+            'verifyIdea',
+            'verifyFinding',
+            'confirmFinding',
+            'reviewSeed',
+            'selectRevision',
+            'requestMerge',
+            'rejectAll',
+            'structureSeed',
+            'structurePlotlines',
+            'writeKnowledge',
+            'reportNoResearch'
+        ]);
+
+        for (const name of REPORT_TOOLS) expect(isReportTool(name)).toBe(true);
+
+        expect(isReportTool('readChapter')).toBe(false);
+        expect(isReportTool('editChapter')).toBe(false);
+        expect(isReportTool('delegate')).toBe(false);
+    });
+
+    it('cuts the OTHER phrase’s structuring write out of a seat’s closing list, never out of the union (S-4, R7)', () => {
+        // THE TWO QUESTIONS, kept apart on purpose. ACCOUNTING (`isReportTool`) is the union: a run that
+        // landed EITHER structuring write produced its product, and `run/executor.ts:712` sets `no_op`
+        // from exactly that predicate. INSTRUCTION is per-seat: the Phrase ② Editor that ends its run on
+        // `structureSeed` has written the OTHER phrase's Seed Brief and left the chapter set unaccepted —
+        // and the call SUCCEEDS doing it, because `structureSeed` checks the Story Seed's hash, not the
+        // phrase's (`tools/knowledge.ts`); Phrase ①'s seat is offered a `structurePlotlines` the tool
+        // refuses outright when the book has no Plotlines Phrase (`tools/plotlines.ts:159`).
+        expect(isReportTool('structurePlotlines')).toBe(true);
+        expect(isReportTool('structureSeed')).toBe(true);
+
+        // The seat that DECLARES the chapter count is Phrase ②'s (`phrase/controller.ts:120-132`), so it
+        // ends on `structurePlotlines` and is never told about `structureSeed` …
+        expect(reportToolsForStructureSeat(true)).toEqual([
+            'submitVerdict',
+            'raiseFinding',
+            'createTask',
+            'requestAuthor',
+            'proposeIdea',
+            'verifyIdea',
+            'verifyFinding',
+            'confirmFinding',
+            'reviewSeed',
+            'selectRevision',
+            'requestMerge',
+            'rejectAll',
+            'structurePlotlines',
+            'writeKnowledge',
+            'reportNoResearch'
+        ]);
+
+        // … and every other structure seat — Phase ①'s, and any hand-armed `structure_seed` job — keeps
+        // `structureSeed` and is not offered the Phrase ② call. This list is also exactly what a
+        // phase-① brief named BEFORE `structurePlotlines` joined the catalogue, which is why every
+        // phase-① brief still renders byte-identically (`run/brief.test.ts`).
+        expect(reportToolsForStructureSeat(false)).toEqual([
             'submitVerdict',
             'raiseFinding',
             'createTask',
@@ -210,11 +278,11 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
             'reportNoResearch'
         ]);
 
-        for (const name of REPORT_TOOLS) expect(isReportTool(name)).toBe(true);
-
-        expect(isReportTool('readChapter')).toBe(false);
-        expect(isReportTool('editChapter')).toBe(false);
-        expect(isReportTool('delegate')).toBe(false);
+        // The cut removes ONE name and reorders nothing: both lists are the union minus one element.
+        expect(REPORT_TOOLS.filter((name) => name !== 'structureSeed')).toEqual(reportToolsForStructureSeat(true));
+        expect(REPORT_TOOLS.filter((name) => name !== 'structurePlotlines')).toEqual(
+            reportToolsForStructureSeat(false)
+        );
     });
 
     it('offers a `toolMode: none` run NO tool at all, whatever its kind (§2 decision 3)', () => {
@@ -256,6 +324,16 @@ describe('catalogue — S-4’s report set and D-38’s proposals', () => {
         expect(isReadOnlyTool('reportNoResearch')).toBe(true);
         expect(isMutatingTool('reportNoResearch')).toBe(false);
         expect(isReportTool('reportNoResearch')).toBe(true);
+
+        // T-W2's structuring write answers the SAME two questions, in the OPPOSITE pairing: it really
+        // does touch the store (one commit writes the brief, `summaries.chapter_count` and the chapter
+        // entries), so it stays a mutating call and stays a D-38 proposal inside a panel; it is also the
+        // report that clears the run's no-op flag (S-4). Adding it to `REPORT_TOOLS` had to leave the
+        // write classification alone — `isMutatingTool` is defined as `!isReadOnlyTool`, so a name joins
+        // the report set without leaving the write set, and that is what this pins.
+        expect(isReadOnlyTool('structurePlotlines')).toBe(false);
+        expect(isMutatingTool('structurePlotlines')).toBe(true);
+        expect(isReportTool('structurePlotlines')).toBe(true);
 
         // The panel's write set: every one of these becomes a proposal.
         for (const name of [

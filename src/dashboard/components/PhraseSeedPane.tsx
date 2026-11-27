@@ -16,6 +16,19 @@
 // so the pane says what it knows: the text was copied once at Start, from the compiled Overview or from the Author's
 // own words, and nothing re-seeds it afterwards (D-72).
 //
+// R6 (2026-11-27) — A PREFIX HAS TO SAY IT IS A PREFIX. Spec §18.13 pins the window ("never the full copied seed,
+// which is not on the wire and was not added to it"), and the pane honoured it by printing the head with NO
+// boundary: on a real book that is 400 of 3,602 characters, rendered as markdown and ending mid-word, under a
+// sentence that said "these 3,602 characters". A complete copy therefore LOOKED incomplete, which is exactly how
+// the Author's report reached the log ("it doesn't copy the complete compile Seed correctly (or maybe it did and
+// the Editor mess it up)"). Two additive lines close that, and neither touches `seed_head` for any other consumer:
+//   · `phrase-seed-preview` names the window the read carries, the residue it does not, and the fact that the cut
+//     belongs to the read (D-76) and never to the copy (D-72);
+//   · `phrase-seed-provenance` compares the copy against THE Summary the rail prints — `reviewedSummaryText`, the
+//     same one function the Summary tab reads its text from — and answers `match` / `pending` / `differs`, so the
+//     one difference the Author cannot compute at home (the full Seed is on no read) is never silent. A `differs`
+//     is D-72's normal case, not a fault, and the line says so rather than implying a broken copy.
+//
 // WHY THE START CHOICE IS HERE. For an unstarted Phrase ② there is no copied text yet, and the honest answer is the
 // choice itself: the compiled Phrase ① Overview, or the Author's paste. This is the SAME verb the Summary's handoff
 // card fires (`api.ts:startPhrase`, `{source:'compiled'}` / `{source:'custom', text}`) and the SAME sentences
@@ -45,8 +58,21 @@ import {
     // F1 — the dial question the store gates its Phrase ② fetch on (`state.ts:phraseDetailWanted`), read here from
     // the same wire fields so the pane never waits on a read this pipeline does not request.
     isPlotlinesGroups,
+    // R6 — "is the Phrase ① read in the frame?" is not the same question as "does this book have a reviewed
+    // Summary?", and the pane must not answer the second before the first is settled.
+    phraseReadLanded,
+    // R7 (AC6) — the two arms' two gates, and the sentence that explains a card whose compiled arm is shut while
+    // the arm the Author wants is open. Both are the handoff card's, word for word, so the two surfaces cannot
+    // describe one phrase differently.
+    plotlinesCustomStartNotice,
+    plotlinesCustomStartRefusal,
     plotlinesHandoffRefusal,
     plotlinesStarted,
+    // R6 — the two Summary texts: the one the tab prints as this book's Summary, and the live composed
+    // Overview the rail prints nothing of (D-67). Both are read here only to say, about a copied Seed,
+    // whether it is that text or not.
+    phraseOverview,
+    reviewedSummaryText,
     summaryIsCompiled,
     type StoryActions,
     type StoryViewData
@@ -96,8 +122,50 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
     const title = `${phraseLabel(phrase)} · Seed`;
     const refusal = copyable ? plotlinesHandoffRefusal(view, actions.startPhrase !== undefined) : '';
     const canStart = refusal === '';
+    // R7 (AC6) — THE PASTE ARM'S OWN GATE, and not the compiled arm's. `plotlinesHandoffRefusal` answers for the
+    // button whose Seed is text this Story does not have yet; the paste arm's Seed is the paragraph in the
+    // Author's hand, and the Start verb says so — it checks a `custom` body with no text (400) BEFORE it asks
+    // whether anything is compiled (the 409), so a non-empty paste starts the phrase on a book whose Summary was
+    // never written. Pinning this button to `canStart` was the desk blocking a move the server allows: the Author
+    // with a brief ready of their own had to run Phrase ① to write it down.
+    const customArmRefusal = copyable ? plotlinesCustomStartRefusal(view, actions.startPhrase !== undefined) : '';
+    const canOpenCustom = customArmRefusal === '';
+    // The other half of a partly-shut card: the compiled arm's refusal above stays true, and this sentence says
+    // the pane is NOT blocked — only that one arm is — and where the crew goes after this start (L-33).
+    const armNotice = copyable ? plotlinesCustomStartNotice(view, actions.startPhrase !== undefined) : '';
     const seedRefusal = customSeedRefusal(seed);
     const canStartCustom = actions.startPhrase !== undefined && seedRefusal === '';
+
+    // R6 / AC4 — HOW MUCH OF THE COPIED SEED THIS READ ACTUALLY CARRIES.
+    //
+    // `seed_head` is a 400-character PREFIX by contract (`projections.ts:SEED_HEAD_CHARS`, D-76 §18.8, and
+    // spec §18.13: "never the full copied seed, which is not on the wire and was not added to it"), so on a
+    // real book the rendered block below is 400 of a several-thousand-character text and its last token is
+    // cut in half. Before this, the pane printed that prefix with no boundary at all and the Author's report
+    // was "it doesn't copy the complete compiled Seed correctly" — a COMPLETE copy reading as a truncated
+    // one. The wire stays exactly as pinned (`seed_head`/`seed_chars`, additive nothing); the pane stops
+    // presenting a prefix as a whole document.
+    const seedShownChars = detail === undefined ? 0 : detail.seed_head.length;
+    const seedTruncated = detail !== undefined && seedShownChars < detail.seed_chars;
+
+    // R6 — THE TEXT THE AUTHOR ACCEPTED, read through the ONE function that decides which text the Summary
+    // tab prints (`story-contract.ts:reviewedSummaryText`: `chosen.overview` in `chosen`, `reviewed.overview`
+    // in `ready`, `''` in `pending`). `projections.ts:compiledSummaryOf` answers the same three arms in the
+    // same order server-side, so `summaryText` below is the Author's own Overview and `''` is the one state
+    // where the rail shows no Summary at all and the copy takes the composed Overview instead.
+    //
+    // An absent Phrase ① read is NOT the `pending` state: it is a read that has not landed (`R-T2/F1`'s
+    // distinction, the same one the rail's loading line draws), and a "there is no reviewed Summary here"
+    // sentence over it would be a claim this frame cannot support. So the comparison prints only once the
+    // Summary's own read is in the frame.
+    const summaryReadLanded = phraseReadLanded(view);
+    const acceptedSummary = reviewedSummaryText(view);
+    const pendingNoSummary = acceptedSummary === '';
+    const summaryText = pendingNoSummary ? phraseOverview(view) : acceptedSummary;
+    // Byte-equality the desk can actually prove from the wire: the copy's length, and the window the read
+    // carries matching the accepted Summary character for character.
+    const seedMatchesSummary =
+        detail !== undefined && detail.seed_chars === summaryText.length && summaryText.startsWith(detail.seed_head);
 
     /** The default arm: the route copies the compiled Summary (`{source:'compiled'}`). */
     const startCompiled = () => {
@@ -190,13 +258,57 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
                             </p>
                         )
                     ) : (
-                        // U-23 — the copied Seed IS markdown (it is the compiled Overview's bytes), so the reading
-                        // copy renders through the one markdown renderer rather than printing `## Premise`. It is a
-                        // 400-character prefix, so it can end mid-token; `PlotlinesHandoff.test.tsx` pins what each
-                        // truncation does, and the residue stays on screen either way.
-                        <MarkdownText className="sv-summary-text sv-phrase-seed-head" testId="phrase-seed-head">
-                            {detail.seed_head}
-                        </MarkdownText>
+                        <>
+                            {/* R6 / AC4 — THE PREVIEW SAYS WHERE IT STOPS. `seed_head` is a whole-character
+                                prefix cut at `SEED_HEAD_CHARS` (400), so on a compiled Overview it ends in the
+                                middle of a word, and the pane used to render that prefix with no boundary at
+                                all: a COMPLETE 3,602-character copy read as a truncated one, which is the
+                                shape of the Author's report ("it doesn't copy the complete compile Seed
+                                correctly"). The line names the window the read carries and the residue it does
+                                not, so the cut is attributed to the read (D-76) and never to the copy (D-72). */}
+                            <p
+                                className="sv-group-notice"
+                                data-testid="phrase-seed-preview"
+                                data-cut={seedTruncated ? 'true' : 'false'}
+                            >
+                                {seedTruncated
+                                    ? `A preview, not the whole Seed: this read carries the first ${seedShownChars} of ${detail.seed_chars} characters and stops mid-word (D-76). The other ${detail.seed_chars - seedShownChars} characters are on the phrase’s row and are part of the Seed — the copy is ${detail.seed_chars} characters long, and nothing about the preview shortens it.`
+                                    : `The whole Seed is on this read — all ${detail.seed_chars} characters, with nothing cut off (D-76) — and it is read-only, exactly as it was copied (D-72).`}
+                            </p>
+                            {/* U-23 — the copied Seed IS markdown (it is the compiled Overview's bytes), so the reading
+                                copy renders through the one markdown renderer rather than printing `## Premise`. It is a
+                                400-character prefix, so it can end mid-token; `PlotlinesHandoff.test.tsx` pins what each
+                                truncation does, and the residue stays on screen either way. */}
+                            <MarkdownText className="sv-summary-text sv-phrase-seed-head" testId="phrase-seed-head">
+                                {detail.seed_head}
+                            </MarkdownText>
+                            {/* R6 / AC3 — THE ONE COMPARISON THE AUTHOR CANNOT MAKE THEMSELVES, because the full
+                                copied Seed is on no read and the Summary's own text is on another one. Three
+                                honest answers, and none of them is silence:
+                                  · `match`   — the copy is the Summary this rail shows today (the recovered
+                                    book's `ready` state, where `compiledSummaryOf` and `reviewedSummaryText`
+                                    are byte-identical by construction);
+                                  · `pending` — the rail prints NO Summary (state `pending`), so what the Start
+                                    copied is the composed Overview the five groups held, which is the one arm
+                                    of `compiledSummaryOf` the Summary tab never shows;
+                                  · `differs` — the copy and today's Summary are different texts of known
+                                    lengths. D-72 makes that ORDINARY (the Seed is copied once and the Summary
+                                    keeps moving under it), so the line says which direction the difference
+                                    goes and what this read cannot tell — that it is not a truncated copy. */}
+                            {summaryReadLanded ? (
+                                <p
+                                    className="sv-group-notice"
+                                    data-testid="phrase-seed-provenance"
+                                    data-match={seedMatchesSummary ? 'match' : pendingNoSummary ? 'pending' : 'differs'}
+                                >
+                                    {seedMatchesSummary
+                                        ? `This Seed is the Summary this rail shows you today: the same ${detail.seed_chars} characters, the reviewed Overview the crew stands behind (D-67, D-78). Accepting the Summary copies THAT text whole.`
+                                        : pendingNoSummary
+                                          ? `This Seed is ${detail.seed_chars} characters, and this Story has no reviewed Summary to accept: the rail shows no Overview text, so what the Start copied is the Overview the five groups held as they stood (D-78). Its ${summaryText.length} characters are the live composed Overview, which the Summary tab prints nowhere (D-67).`
+                                          : `This Seed is ${detail.seed_chars} characters; the Summary this rail shows today is ${summaryText.length}. They are different texts, and that is expected, not a truncated copy: a Seed is copied ONCE and never re-seeded (D-72), so a Summary that moved after the Start leaves this Seed where it was — and this read carries no source field, so it cannot tell that apart from a Seed you typed yourself (D-76).`}
+                                </p>
+                            ) : null}
+                        </>
                     )}
                     {/* D-72 as a sentence, not a dead button: the phrase cannot be re-seeded, so the pane states the
                         rule where the Author would otherwise look for the control (U-16). */}
@@ -239,11 +351,13 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
                                 type="button"
                                 className="button button--ghost"
                                 data-testid="phrase-seed-custom-open"
-                                disabled={!canStart}
+                                // R7 (AC6) — the arm answers to ITS gate: the missing verb, and a phrase that already
+                                // started. Never to `summary_compiled`, which is the other arm's Seed problem.
+                                disabled={!canOpenCustom}
                                 title={
-                                    canStart
-                                        ? 'Start this phrase on a Seed you write here, instead of the compiled Summary.'
-                                        : refusal
+                                    canOpenCustom
+                                        ? 'Start this phrase on a Seed you write here, instead of the compiled Summary — no compiled Summary is needed for this arm.'
+                                        : customArmRefusal
                                 }
                                 onClick={() => setArmed(true)}
                             >
@@ -254,6 +368,15 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
                     {canStart || armed ? null : (
                         <p className="sv-group-notice sv-group-notice--warn" data-testid="phrase-seed-refusal">
                             {refusal}
+                        </p>
+                    )}
+                    {/* THE OTHER HALF OF A PARTLY-SHUT PANE (R7 / AC6), in the handoff card's own words: the
+                        compiled arm is genuinely shut and still says why, and this says the arm the Author wants is
+                        open, plus where the crew goes once the start lands (nowhere new until phase ① is signed
+                        off, L-33). */}
+                    {armNotice === '' ? null : (
+                        <p className="sv-group-notice" data-testid="phrase-seed-custom-notice">
+                            {armNotice}
                         </p>
                     )}
 

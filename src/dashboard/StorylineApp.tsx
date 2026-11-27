@@ -34,10 +34,10 @@ import { StoriesPanel } from './components/StoriesPanel';
 import { StoryOutline } from './components/StoryOutline';
 import { StoryView } from './components/StoryView';
 import { TopBar } from './components/TopBar';
-import { DEFAULT_STORY_SELECTION } from './components/story-nav';
-import type { StorySelection } from './components/story-nav';
+import { DEFAULT_STORY_SELECTION, phraseLandingSelection } from './components/story-nav';
+import type { StoryPhraseKey, StorySelection } from './components/story-nav';
 import { DashboardContext, defaultDashboardStore, useDashboard, useDashboardStore, type DashboardStore } from './state';
-import { shellActions, storyViewData } from './shell-binding';
+import { shellActions, storyFrame, storyViewData } from './shell-binding';
 import type { StoryViewData } from './components/story-contract';
 
 export function StorylineApp(props: { store?: DashboardStore }) {
@@ -140,6 +140,32 @@ function Shell() {
         setSelection(next);
     };
 
+    /**
+     * R4 (symptom 3) — the desk follows the book into the phrase the Author just opened.
+     *
+     * The rail used to be mute about this: it lists Summary ① and Plotlines ②, always opened on Phrase ①, and
+     * nothing moved the selection when the Accept or the Start succeeded. So the Author pressed "Accept final
+     * Summary → Phrase 2" or "Start Phrase 2 from the compiled Summary" and went on reading the phrase they had
+     * LEFT, while the crew's rows underneath said the opposite — which is how symptom 3 is observed.
+     *
+     * TWO THINGS MAKE THIS SAFE, and both are deliberate:
+     *   - the frame is re-read from the STORE (`shell-binding.storyFrame`), not from this render's `storyData`.
+     *     The verb's continuation runs after `state.ts:mutate`'s refetch chain, and a phrase-started flag read
+     *     off the closure would still be the pre-click one;
+     *   - `story-nav.phraseLandingSelection` returns `undefined` unless the server's projection
+     *     (`phrase_started.plotlines`, a read of the phrase ROW) proves Phrase ② exists. A refused start (the
+     *     route's 409), an Accept on a book nobody handed over, and a frame whose read never landed all answer
+     *     `undefined`, and the Author keeps the pane they were standing in. Nothing here moves the desk on a
+     *     guess, and nothing rewrites a deep ref — the landing is the phrase's own overview.
+     */
+    const enterPhrase = (phrase: StoryPhraseKey): void => {
+        if (!activeStoryId) return;
+
+        const landed = phraseLandingSelection(storyFrame(store, activeStoryId), phrase);
+
+        if (landed !== undefined) setSelection(landed);
+    };
+
     return (
         <div className="station" data-theme="ink" data-testid="station">
             <TopBar />
@@ -218,7 +244,11 @@ function Shell() {
                                     <StoryView
                                         view={storyData as StoryViewData}
                                         selection={selection}
-                                        actions={shellActions(store, activeStoryId)}
+                                        actions={shellActions(store, activeStoryId, {
+                                            // R4 — the shell owns the selection, so it supplies the landing the
+                                            // verb-only binding layer cannot: see `enterPhrase`.
+                                            onPhraseOpened: enterPhrase
+                                        })}
                                         // R6: the group rows in the Summary panes navigate, so the content column
                                         // gets the same verb the rail has. One handler means a row click clears the
                                         // selected employee exactly the way a rail click does.

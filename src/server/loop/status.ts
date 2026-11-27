@@ -85,10 +85,16 @@ import {
     // passes the Plotlines phrase id explicitly, because `phraseGroupsOf` without a phrase interleaves
     // BOTH phrases' rows by `order` (chapter_1 and premise are both order 1).
     isPhraseGroupManaged,
+    // R9 — the finding's phrase attribution comes from the domain's own scope read, so the drain's
+    // unconfirmed clause and `work.ts`'s verify queue ask one book's question with one answer.
+    findingGroupScope,
+    // The Summary phrase's own group rows: the set a claim has to fall INSIDE to count as Phrase ①'s.
+    // `phraseGroupsOf` without a phrase id would answer with BOTH phrases' rows.
+    phraseGroupsOf,
     storyPhraseByKey
 } from '../phrase';
 // The phrase KEY, so the lane's gate names the phrase rather than repeating a string (`shared/phrase.ts`).
-import { PHRASE_PLOTLINES_KEY } from '../../shared/phrase';
+import { PHRASE_PLOTLINES_KEY, PHRASE_SUMMARY_KEY } from '../../shared/phrase';
 import { pendingDirectives } from './directives';
 import { isStalled, renderPairs, stalledReason, type RoundDelta } from './trend';
 import type { CompletionProposal, LoopStory, ProbeState } from './types';
@@ -143,6 +149,83 @@ export const ideasAwaitingVerification = (store: Store, story: Story): Idea[] =>
     ideasToVerify(store, story.id, story.phase);
 
 /**
+ * R9 — is this claim about a phrase the Story's phase has ALREADY LEFT BEHIND?
+ *
+ * WHY THE DRAIN AND THE QUEUE BOTH READ IT (L-37, and the rule this file's neighbours call
+ * "generation and the drain probe cannot tell two stories"): `work.ts`'s `verify_findings` leg and the
+ * `N findings still unconfirmed (D-33)` clause below are the SAME question — "is this finding work the
+ * crew can do this phase?" — and they were answered from one list until the Phrase ② lane existed. With
+ * two phrases on one book, a claim about the signed-off Summary answers YES to the drain and NO to the
+ * queue at the same time: the phase sits on a debt nobody is servicing while the sweep buys Editor runs
+ * about settled text (the book the Author reported: an open `wi_verify_finding_*` pass every sweep, about
+ * Phrase ①, in Phase ②). One predicate, on the side of the dependency both can import — `work.ts` imports
+ * `status.ts`, never the way round, which is why the shared reads live OUTSIDE `work.ts` (the same reason
+ * `phrase/exclusion.ts` hosts the owed-work reads `status.ts` needs).
+ *
+ * THE THREE WAYS A CLAIM STAYS THE CREW'S WORK, and each is a book that must not change:
+ *   - the phase IS ① (`phase === 'summary'`): the Summary is live text, and every finding on it is work;
+ *   - the claim is UNSCOPED (`findingGroupScope`'s reading of an absent-or-unresolvable `group_refs`):
+ *     that is the legacy whole-Overview meaning, and it is what a `'classic'` book's phase-② findings all
+ *     look like — skipping those would delete the D-33 ladder the classic walk depends on; and
+ *   - the Summary has not been signed off (`story.summary_locked === false`), or has no Phrase ① row: the
+ *     flag is the SAME fact R8 reads on the Start verb, and it is L-33's precondition. A Story parked in a
+ *     later phase without it (a hand-edited book) keeps its findings live rather than quietly settling a
+ *     claim the Author never froze.
+ *
+ * WHAT IS NOT SKIPPED ON PURPOSE: a claim that names groups on BOTH phrases. `loop/invalidation.ts:742-756`
+ * keeps mixed-scope claims open through the accept for the same reason — the Phrase ② half is still
+ * writable — so the Editor still owes it a verdict.
+ */
+export function findingClaimsSettledPhrase(
+    store: Store,
+    story: Story,
+    phase: StoryPhase,
+    finding: Finding
+): boolean {
+    if (phase === 'summary' || !story.summary_locked) return false;
+
+    // THE DOMAIN'S OWN SCOPE READ, not the raw `group_refs` — the one place that interprets an absent or
+    // unresolvable list as "the whole Overview" (R3). Re-deciding that here is how a second, slightly
+    // different meaning of "whose claim is this" gets into the build.
+    const scope = findingGroupScope(store, story, finding);
+
+    if (scope.unscoped || scope.refs.length === 0) return false;
+
+    const summary = storyPhraseByKey(store, story.id, PHRASE_SUMMARY_KEY);
+
+    if (summary === undefined) return false;
+
+    const settled = new Set(phraseGroupsOf(store, story.id, summary.id).map((group) => group.id));
+
+    // Every group it names is Phrase ①'s: the claim is about text the accept signed off and the loop will
+    // not rewrite. One group outside that set and the claim is still the crew's.
+    return scope.refs.every((id) => settled.has(id));
+}
+
+/**
+ * F1 (L-37) — the ONE "how many unconfirmed claims does this phase still owe a verdict on" read, shared by
+ * every GATE in this file: the drain clause (`drainPreconditions`) and the phase sign-off
+ * (`decideStory`'s `findingsUnconfirmed`). Both used to answer from their own list — the drain subtracted
+ * the settled-phrase rows (`status.ts:219`) while the sign-off counted the whole unscoped set
+ * (`status.ts:820`) — and a Phase-② book holding one claim the Summary left behind then read as
+ * "nothing owed" to the probe and "1 finding still unconfirmed" to the lock at the same instant. The
+ * consequence is measured in `Temp/c9/probe-f1-before.out`: `work.ts:2404-2407` refuses to service that
+ * claim (no `verify_findings` candidate ever exists, so nobody can ever settle it), so the sign-off's
+ * `findingsUnconfirmed === 0` clause is unsatisfiable — the Phase-② lock is barred by a debt the queue
+ * will not pay, and the Story falls to `ready` and finally to `drained`, blaming "findings below the
+ * threshold" for a row the crew was never going to work on.
+ *
+ * THE NARROWNESS is the predicate's, not this helper's: `findingClaimsSettledPhrase` keeps a claim the
+ * crew still owes (phase ①, an unscoped/classic claim, a mixed-vector claim, or a book whose Summary was
+ * never signed off) in this set untouched — see its doc above for the three ways a claim stays the
+ * crew's work. Anything the queue DOES refuse to service is exactly what no gate may count as owed.
+ */
+export const unconfirmedFindingsOwed = (store: Store, story: Story): Finding[] =>
+    unconfirmedBlockingFindings(store, story).filter(
+        (finding) => !findingClaimsSettledPhrase(store, story, story.phase, finding)
+    );
+
+/**
  * L-37's conditions 1, 2 and 4 — everything except the fresh round, which is the probe's job.
  *
  * Condition 1 reads `open`/`claimed` tasks of a dispatchable kind ("no `approved` or `open` task
@@ -152,7 +235,13 @@ export const ideasAwaitingVerification = (store: Store, story: Story): Idea[] =>
  */
 export function drainPreconditions(store: Store, story: Story): { met: boolean; unmet: string[] } {
     const tasks = dispatchableTasks(store, story.id);
-    const unconfirmed = unconfirmedBlockingFindings(store, story);
+    // R9 — the clause below and `work.ts`'s `verify_findings` queue are one question, so they subtract the
+    // same rows: a claim about a phrase this Story signed off and left behind is provenance, not a debt
+    // the crew is waiting on. Phase ① books and unscoped (classic) claims are untouched by the filter —
+    // see `findingClaimsSettledPhrase` for the three ways a finding stays the crew's work. F1: this is the
+    // same `unconfirmedFindingsOwed` read the sign-off gate now uses, so the drain and the lock cannot
+    // disagree about what is owed on the same book.
+    const unconfirmed = unconfirmedFindingsOwed(store, story);
     const competing = unitsWithCompetingRevisions(store, story);
     const pendingDrafts = unitsWithPendingRevisions(store, story.id);
     const unverified = ideasAwaitingVerification(store, story);
@@ -750,8 +839,14 @@ export function decideStory(store: Store, story: Story, input: DecisionInput, ct
     // the fallback: they fire on the next sweep, over a tray the Editor has actually answered.
     const verificationOwed = ideasAwaitingVerification(store, story).length;
     // A suspicion nobody has confirmed or disputed is still work (D-33/L-37.2); a sign-off
-    // before the Editor has answered it would take the choice on an unread critique.
-    const findingsUnconfirmed = unconfirmedBlockingFindings(store, story).length;
+    // before the Editor has answered it would take the choice on an unread critique. F1 — and it has to be
+    // the SAME count the drain clause publishes: `work.ts:2404-2407` skips a claim about a phrase this
+    // Story signed off, so no Editor run can ever settle it, and an unscoped count here barred the
+    // Phase-② lock forever on a debt the queue refuses to service (L-37: the queue and the gates subtract
+    // exactly the same rows). `unconfirmedFindingsOwed` is that one read; a claim the crew still owes
+    // — phase ①, unscoped/classic, mixed-vector, or a Summary that was never locked — holds the lock
+    // exactly as it always did.
+    const findingsUnconfirmed = unconfirmedFindingsOwed(store, story).length;
 
     // Phase ①'s Editor sends a valid critique back to the Writer as a queued FIX task. Signing the
     // phase off while that task is still open would park the correction forever — the loop would

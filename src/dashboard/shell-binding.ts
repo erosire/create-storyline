@@ -47,6 +47,9 @@ import type {
     PhraseGroupReviseInput,
     PhraseStartInput,
     PhraseView,
+    // R7 — the cleanup binding is the one verb in this table that hands a VALUE to the caller (the proposal),
+    // so the proposal type is named here rather than erased into `unknown`.
+    SeedCleanupProposal,
     StoryView as ApiStoryView,
     UndoTarget
 } from './api';
@@ -55,9 +58,59 @@ import type {
 import { PHRASE_PLOTLINES_KEY } from './api';
 import type { DashboardStore } from './state';
 import type { StoryViewData } from './components/story-contract';
+// R4 — the landing hook speaks the rail's phrase vocabulary, so it borrows the rail's own key type rather than
+// inventing a parallel word for "the phrase the Author just opened".
+import type { StoryPhraseKey } from './components/story-nav';
 
 /** The view the panels render: the pinned payload with its assignment ids resolved (seam 1). */
 export type ShellStoryView = Omit<StoryViewData, 'templates'> & { templates: Template[] };
+
+/**
+ * R4 — the one verb-completion hook the shell needs, and why it is a hook rather than a store field.
+ *
+ * The shell owns the rail's selection (`StorylineApp.tsx`): a panel's pane, its title and the directive bar all
+ * resolve from that one value. A store cannot move it (the store has no notion of navigation), and a pane cannot
+ * either — the pane does not know what else is on screen. So the action bindings, which are the only place that
+ * knows a phrase verb just SUCCEEDED, hand the event up to the shell that owns the selection.
+ *
+ * IT FIRES ON SUCCESS ONLY. Every store verb answers `null` when the server refused (`mutate`'s contract), so a
+ * 409 saying "there is no compiled Summary to start Phrase 2 from" moves nothing; the Author stays on the pane
+ * that raised the sentence.
+ */
+export interface ShellVerbHooks {
+    /** A verb that can OPEN `phrase` has succeeded; the shell decides where the rail lands. */
+    onPhraseOpened?(phrase: StoryPhraseKey): void;
+}
+
+/**
+ * The desk's frame as the STORE holds it right now, in the same shape `storyViewData` gives the panes.
+ *
+ * WHY THIS IS NOT THE RENDER'S `storyData`: a verb's continuation runs after `mutate`'s refetch chain, and the
+ * frame the closure captured is the one from before the click. Reading `store.getSnapshot()` here is what lets a
+ * post-write decision — "did the phrase actually start?" — come from the rows the server just answered rather
+ * than from a stale prop (P1: the store is the memory, and the render is a copy of it).
+ *
+ * `undefined` means the Story's read has not landed, which every caller treats as "I cannot say".
+ */
+export function storyFrame(store: DashboardStore, storyId: string): ShellStoryView | undefined {
+    const snapshot = store.getSnapshot();
+    const view = snapshot.storyViews[storyId];
+
+    if (view === undefined) return undefined;
+
+    return storyViewData(
+        view,
+        snapshot.templates,
+        snapshot.phrases[storyId],
+        snapshot.phraseErrors[storyId],
+        snapshot.reviewedErrors[storyId],
+        snapshot.groupLockErrors,
+        // Phrase ②'s read and its failure ride the post-verb frame for the same reason they ride the render: a
+        // start commits its own read, and a decision about the started phrase has to see it.
+        snapshot.phraseDetails[storyId],
+        snapshot.phraseDetailErrors[storyId]
+    );
+}
 
 /** A write a panel could not address — named so the top bar can say it (L-13). */
 function unaddressed(verb: string): Promise<null> {
@@ -260,6 +313,18 @@ export interface ShellActions {
      */
     startPhrase?(storyIdOrKey?: string, keyOrInput?: string | PhraseStartInput, input?: PhraseStartInput): Promise<unknown>;
     /**
+     * R7 — the Author asks the Editor to PROOFREAD the pending Seed (`GET …/phrases/:key/seed/cleanup?seed=…`).
+     * Pinned `(storyId, key, seed)`; the local shape is the draft ALONE, because the Story is the shell's scope and
+     * the phrase is Phrase ② — the only one whose Seed an Author hands over (a phrase the loop writes has no brief
+     * of theirs to proofread, and the route 409s saying so, R1).
+     *
+     * THE ONE VERB HERE THAT MUST NOT SWALLOW ITS RESULT. Every write binding above returns `Promise<unknown>`
+     * because the caller's next frame comes from the store's refetch. This is a READ that writes nothing (P10): the
+     * card is waiting for the proposal itself — `ok`, `text`/`refusal` — and erasing it into `unknown` would leave
+     * the desk with a button that asked and an answer it cannot show.
+     */
+    requestSeedCleanup?(storyIdOrSeed?: string, keyOrSeed?: string, seed?: string): Promise<SeedCleanupProposal | null>;
+    /**
      * T-W4 — the Author's hand edit of ONE CHAPTER ENTRY. Two call shapes like `revisePhraseGroup` above: the pinned
      * `(storyId, entryId, {plotpoints, note})` and the local `(entryId, {plotpoints, note})`. The ENTRY is the
      * addressed thing in both — its UUID comes from the rail's selection ref — and a call that names none is a named
@@ -276,7 +341,7 @@ export interface ShellActions {
  * The bindings. `storyId` is the Story the shell is showing — the scope every local-shape call
  * leaves out, and the reason the shell rather than a panel has to own this mapping.
  */
-export function shellActions(store: DashboardStore, storyId: string): ShellActions {
+export function shellActions(store: DashboardStore, storyId: string, hooks: ShellVerbHooks = {}): ShellActions {
     /** The Story a call belongs to: its own id in the pinned shape, the shell's otherwise. */
     const scopeOf = (first?: string): string => {
         const view = store.selectedStory();
@@ -291,6 +356,24 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
             return view.story.id;
         }
         return storyId;
+    };
+
+    /**
+     * R4 — the landing signal, and the one rule that decides whether it fires.
+     *
+     * Every store verb answers `null` when the route refused (`state.ts:mutate`), so this is the single place
+     * that knows the difference between "the Author pressed Start" and "the phrase opened". A refusal returns
+     * the `null` untouched and the rail does not move; the pane that raised the refusal keeps the sentence.
+     *
+     * WHICH PHRASE IS PASSED is only ever a CANDIDATE: the shell decides where to land, and
+     * `story-nav.phraseLandingSelection` refuses to move the desk unless the refreshed frame proves that phrase
+     * has started. So a Summary lock on a book whose Plotlines nobody started — the state the handoff button
+     * exists to leave — changes the phase and leaves the Author on Phrase ①, which is the honest frame.
+     */
+    const phraseOpened = <T,>(result: T | null, phrase: StoryPhraseKey): T | null => {
+        if (result !== null) hooks.onPhraseOpened?.(phrase);
+
+        return result;
     };
 
     /** A bare artifact id that came where a Story id was expected (the one-arg local shapes). */
@@ -345,7 +428,12 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
         stop: (id) => store.stop(scopeOf(id)),
         resume: (id) => store.resume(scopeOf(id)),
         // §6.3a — the route locks the CURRENT phase, so a phase argument is advisory.
-        lockPhase: (id) => store.lockPhase(scopeOf(id)),
+        // R4 — in the Summary phase this control is labelled "Accept final Summary → Phrase 2"
+        // (`story-phase-controls.tsx:134`): pressing it is the Author handing the compiled Overview to the
+        // chapter pipeline, so it is one of the two verbs that can OPEN Phrase ②, and the desk follows the
+        // book. The candidate is always Phrase ② because that is the only phrase a lock can open; a book whose
+        // Plotlines nobody started stays on Phrase ① (see `phraseOpened`).
+        lockPhase: (id) => store.lockPhase(scopeOf(id)).then((result) => phraseOpened(result, 'plotlines')),
         backtrack: (id, phase) => {
             const target = phase as BacktrackPhase;
             if (!BACKTRACK_PHASES.includes(target)) {
@@ -602,7 +690,30 @@ export function shellActions(store: DashboardStore, storyId: string): ShellActio
                       ? first
                       : PHRASE_PLOTLINES_KEY;
 
-            return store.startPhrase(scopeOf(first), key, bodyOf(input) ?? bodyOf(second));
+            // R4 — a SUCCESSFUL start lands the desk on the phrase it opened. The key the binding resolved is
+            // the phrase that opened, and `state.ts:startPhrase` answers `null` for each of the three refusals
+            // (already started, no compiled Summary, empty custom Seed), so a refusal leaves the Author exactly
+            // where they pressed the button.
+            return store
+                .startPhrase(scopeOf(first), key, bodyOf(input) ?? bodyOf(second))
+                .then((result) => phraseOpened(result, key as StoryPhraseKey));
+        },
+        // R7 — the Seed proofread, passed straight through. Pinned `(storyId, key, seed)` when three strings are
+        // named; the LOCAL shape is the draft alone, with the shell's Story and Phrase ② implied (the desk's card is
+        // the only caller, and it is always about the phrase it is handing off). No `phraseOpened` hop and no
+        // refetch: the read writes no row, and the proposal is the caller's next frame (P10). A blank draft is not
+        // special-cased here — the card refuses the ask before dialing (`story-contract.seedCleanupAskRefusal`), and
+        // if a caller sends one anyway, the route's own 400 sentence is what the shell prints (L-13).
+        requestSeedCleanup: (first, second, third) => {
+            if (typeof third === 'string') {
+                return store.requestSeedCleanup(
+                    scopeOf(first),
+                    typeof second === 'string' ? second : PHRASE_PLOTLINES_KEY,
+                    third
+                );
+            }
+
+            return store.requestSeedCleanup(storyId, PHRASE_PLOTLINES_KEY, typeof first === 'string' ? first : '');
         },
         // T-W4 — ONE CHAPTER ENTRY's hand edit, in `revisePhraseGroup`'s two-shape pattern. The body must carry
         // `plotpoints`: that IS the entry's text (the route composes the prose from the contract fields and refuses

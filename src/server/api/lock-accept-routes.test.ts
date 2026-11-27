@@ -90,6 +90,19 @@ const journalWhy = (store: Store, label: string): string =>
     (store.journal.filter((event) => event.commit_label === label).slice(-1)[0].attribution as { why: string }).why;
 
 /**
+ * R12 — EVERY journal line a commit label wrote, in order.
+ *
+ * The Start commit now writes TWO rows-in-one-group: the phrase create that copies the Seed, and the update
+ * that records WHICH ARM wrote it (`Phrase.seed_source`). `journalWhy` alone lands on the provenance line, so
+ * a test that means "what did the copy say" has to name the create. Pinning the pair is also the honest
+ * shape: the audit of a start is two sentences, and both are Author-shaped.
+ */
+const journalWhys = (store: Store, label: string): string[] =>
+    store.journal
+        .filter((event) => event.commit_label === label)
+        .map((event) => (event.attribution as { why: string }).why);
+
+/**
  * A Story on the create route's defaults — BOTH dials on (R5/R11) — with phase ①'s two criteria removed by
  * the Author's own goal patch, which is the move U-16 describes: the Goal panel is what tells the Author
  * these two are the ones standing between them and the lock.
@@ -308,9 +321,16 @@ describe('POST /stories/:id/lock — the accept stops the Summary\u2019s outstan
 
         // The journal says the ACCEPT did it — the verb is the lock, not a Start the Author never pressed.
         expect(journalWhy(world.store, 'lock_phase')).toContain('phase summary signed off');
-        expect(journalWhy(world.store, 'phrase_start')).toBe(
-            'the Author used POST /stories/:id/lock on story_0 — the Plotlines Phrase was started from the compiled Summary the Author accepted (D-72, R4) (§10 dashboard write)'
-        );
+        // R12 — THE START COMMIT IS TWO LINES NOW, and both are pinned whole: the copy the Accept performed,
+        // and the provenance it recorded beside it. `compiled` is the accept's arm BY DEFINITION — the text is
+        // `compiledSummaryOf`, the Overview the Author just accepted — and it is the reason no grammar pass
+        // is ever owed on a phrase the accept started (R7).
+        expect(journalWhys(world.store, 'phrase_start')).toEqual([
+            'the Author used POST /stories/:id/lock on story_0 — the Plotlines Phrase was started from the compiled Summary the Author accepted (D-72, R4) (§10 dashboard write)',
+            'the Author used POST /stories/:id/lock on story_0 — the Seed this phrase copies came from `compiled` (this Story\'s compiled Summary, which the crew wrote and the Author reviewed, so no cleanup pass is owed on it, R7); the provenance is recorded ONCE, at the start, because no later read can tell the two arms apart (R12, D-72) (§10 dashboard write)'
+        ]);
+        // THE FIELD ITSELF, on the row the accept wrote — the audit sentence and the row must agree.
+        expect(plotlinesOf(world.store)!.seed_source).toBe('compiled');
     });
 
     it('leaves a claim about Phrase ②’s own entry open — the sweep is the Summary\u2019s, not the Story\u2019s (R3)', async () => {
@@ -358,6 +378,16 @@ describe('POST /stories/:id/lock — Phrase ② starts automatically, and a star
 
         expect(manual.status).toBe(200);
 
+        // R12 — the Author's manual start is TWO journal lines (the copy, and the provenance recorded beside
+        // it). Counted here, BEFORE the accept runs, so the assertion below can say what the accept itself
+        // wrote rather than restating what the start did.
+        const linesAfterManualStart = world.store.journal.filter(
+            (event) => event.commit_label === 'phrase_start'
+        ).length;
+
+        expect(linesAfterManualStart).toBe(2);
+        expect(plotlinesOf(world.store)!.seed_source).toBe('custom');
+
         const reply = await call(world.app, 'POST', '/stories/story_0/lock');
 
         expect(reply.status).toBe(200);
@@ -367,11 +397,17 @@ describe('POST /stories/:id/lock — Phrase ② starts automatically, and a star
         );
 
         // THE SEED DID NOT MOVE: the Author's own text is the input Phrase ②'s entries and claim keys were
-        // written against, and an accept is not a re-seed (D-72). One row, and no `phrase_start` commit from
-        // the accept — the no-op performed no write at all.
+        // written against, and an accept is not a re-seed (D-72). One row; the accept added NO journal line of
+        // its own — the two `phrase_start` lines belong to the Author's earlier start (the copy, and R12's
+        // provenance), and the no-op performed no write at all, which is what the unchanged count says. The
+        // provenance stayed `custom` for the same reason: a row the accept did not create is not the accept's
+        // to re-label, least of all with the arm THIS request did not perform (R6 / R12).
         expect(plotlinesOf(world.store)!.seed).toBe('A coast guard finds a wreck she reported herself.');
+        expect(plotlinesOf(world.store)!.seed_source).toBe('custom');
         expect(world.store.phrases.list().filter((phrase) => phrase.key === 'plotlines')).toHaveLength(1);
-        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_start')).toHaveLength(1);
+        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_start')).toHaveLength(
+            linesAfterManualStart
+        );
 
         // THE LOCK STILL LANDED beside the no-op: idempotence is about the phrase, not about the accept.
         expect(viewOf(reply)).toMatchObject({ phase: 'plotlines', summary_locked: true });

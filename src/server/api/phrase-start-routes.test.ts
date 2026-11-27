@@ -36,6 +36,9 @@ import { LoopEngine } from '../loop/engine';
 import { RunExecutor } from '../run/executor';
 import { MockToolRuntime, AUTHOR_ATTR } from '../run/mock';
 import { Store } from '../store/store';
+// R7 (this wave) — the Start verb's journal line names the `seed_hash` of the bytes it copied, and this file
+// pins that literal. Same function the phrase's own gates hash with, so the two values are one fact.
+import { seedHashOf } from '../../shared/seed-hash';
 import { buildStorylineRuntime } from './server';
 // THE PHRASE DOMAIN, used here as a FIXTURE only. The chapter entries exist because the Editor's brief was
 // accepted, and the only honest way to get real ones is the domain operation that creates them — this file
@@ -51,6 +54,8 @@ import type { LoopEngineConfig } from '../loop/types';
 interface TestApp {
     app: Hono;
     store: Store;
+    /** THE ROUTE TABLE'S TRANSPORT. Returned so a test can count model calls rather than infer them. */
+    chat: MockChatClient;
 }
 
 /** The shipped wiring with the loop's two doubles and the sweep timer off (as in `phrase-routes.test.ts`). */
@@ -65,7 +70,7 @@ function makeApp(): TestApp {
     const engine = new LoopEngine({ store, executor, criteria, digest, config: engineConfig });
     const built = buildStorylineRuntime({ store, chat, runtime, executor, engine, engineConfig, streamDebounceMs: 5 });
 
-    return { app: built.app, store };
+    return { app: built.app, store, chat };
 }
 
 interface Reply {
@@ -95,6 +100,28 @@ const viewOf = (reply: Reply): Record<string, unknown> => reply.body as Record<s
 /** The LAST journal line a commit label wrote — the audit read every phrase verb is pinned against. */
 const journalWhy = (store: Store, label: string): string =>
     (store.journal.filter((event) => event.commit_label === label).slice(-1)[0].attribution as { why: string }).why;
+
+/**
+ * R12 — the commit's lines by OPERATION, oldest first.
+ *
+ * The Start commit writes TWO events in one group: the phrase CREATE that copies the Seed, and the UPDATE
+ * that records which arm wrote it (`Phrase.seed_source`, R12). `journalWhy` therefore lands on the
+ * provenance line now, so a test that means "what did the copy itself say" names the create. Both lists are
+ * pinned where they matter, because the honest audit of a start IS two sentences — the bytes, and where they
+ * came from.
+ */
+const journalWhysByOp = (store: Store, label: string): Array<{ op: string; why: string }> =>
+    store.journal
+        .filter((event) => event.commit_label === label)
+        .map((event) => ({ op: event.op, why: (event.attribution as { why: string }).why }));
+
+/** The CREATE line of a start — the sentence that names the copied text. */
+const journalCreateWhy = (store: Store, label: string): string =>
+    journalWhysByOp(store, label).filter((event) => event.op === 'create')[0].why;
+
+/** The UPDATE line of a start — the sentence that names the arm (`Phrase.seed_source`). */
+const journalProvenanceWhy = (store: Store, label: string): string =>
+    journalWhysByOp(store, label).filter((event) => event.op === 'update')[0].why;
 
 /**
  * A Story on the create route's DEFAULTS — both dials on (R5/R11: `summary_mode: 'groups'` and
@@ -421,6 +448,10 @@ describe('POST /stories/:id/phrases/:key/start: the Author starts Phrase ② fro
             'seed_chars',
             'seed_head',
             'started',
+            // R8 — the two phase fields are ADDITIVE, in the order the receipt answers them: `started` is
+            // the phrase row, `phase_opened` is the loop's pointer. Nothing above this line moved.
+            'phase_opened',
+            'phase_open_reason',
             'view'
         ]);
         expect(body.story_id).toBe('story_0');
@@ -433,14 +464,32 @@ describe('POST /stories/:id/phrases/:key/start: the Author starts Phrase ② fro
         expect(phrase.seed).toBe(overview);
         expect(body.seed_head).toBe(overview);
         expect(body.seed_chars).toBe(overview.length);
+        // R8, HALF ONE — THIS BOOK'S SUMMARY IS NOT SIGNED OFF, so the crew stays exactly where it was. The
+        // phrase started; the pointer did not, and the reason names the verb that DOES move it. (The
+        // signed-off half — the pointer moving — is the `R8` block below.)
+        expect(body.phase_opened).toBe(false);
+        expect(body.phase_open_reason).toBe(
+            'the Summary is not signed off, so the crew stays on Phrase ①: POST /stories/story_0/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)'
+        );
+        expect(world.store.stories.require('story_0')).toMatchObject({ phase: 'summary', summary_locked: false });
+        // And no phase commit happened at all: `phrase_start` is the only label this press writes.
+        expect(world.store.journal.filter((event) => event.commit_label === 'open_plotlines_phase')).toHaveLength(0);
 
         // The start is the ROW (there is no counter for it), and it is journaled in the same commit.
         expect(phrase.key).toBe('plotlines');
         expect(phrase.revision).toBe(0);
         expect(phrase.group_refs).toEqual([]);
-        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_start')).toHaveLength(1);
-        expect(journalWhy(world.store, 'phrase_start')).toContain(
+        // The start is the ROW (there is no counter for it), and it is journaled in the same commit — TWO
+        // lines, one commit: the copy, and the provenance R12 records beside it. They cannot disagree, and a
+        // start that recorded only one of the two would leave the row's own origin unstated.
+        expect(journalWhysByOp(world.store, 'phrase_start').map((event) => event.op)).toEqual(['create', 'update']);
+        expect(journalCreateWhy(world.store, 'phrase_start')).toContain(
             "the Plotlines Phrase was started from the Story's compiled Summary (D-72)"
+        );
+        // R12 — the arm, named on the row AND in its audit line, in the same commit as the copy.
+        expect(phrase.seed_source).toBe('compiled');
+        expect(journalProvenanceWhy(world.store, 'phrase_start')).toContain(
+            'the Seed this phrase copies came from `compiled`'
         );
 
         // And the response's `view` is the read a fresh GET answers — the rail needs no follow-up call.
@@ -467,6 +516,98 @@ describe('POST /stories/:id/phrases/:key/start: the Author starts Phrase ② fro
         // Trimmed at the edges, verbatim inside: the verb does not re-write the Author's sentence.
         expect(plotlinesPhrase(world.store)!.seed).toBe(seed);
         expect(viewOf(await call(world.app, 'GET', '/stories/story_0/phrases/plotlines')).seed_head).toBe(seed);
+    });
+
+    // THE ARMS, READ AS A START AND A COPY (AC1 / AC2). R7's recorded decision puts a one-time grammar pass on
+    // the `custom` arm ONLY, as a proposal the Author confirms BEFORE this verb runs; the `compiled` arm is the
+    // crew's own reviewed text and gets no pass at all. Neither half of that can be pinned by asserting a
+    // response shape, so these two tests assert the two things that would actually break: the compiled arm
+    // asking a model (a second opinion about text the Critic already graded, and a Seed that no longer matches
+    // the rail), and a start writing its Seed more than once (D-72 — a re-seeded phrase has entries, revisions
+    // and claim keys pointing at words that used to be there).
+    it('asks the model NOTHING on the compiled arm, and copies the compiled Summary byte for byte (AC2)', async () => {
+        const world = await makeStoryWithSummary();
+        const before = world.chat.callCount;
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start', { source: 'compiled' });
+
+        expect(reply.status).toBe(200);
+        // ZERO calls. The sweep timer is off in this rig, so the only thing that could have asked is this verb —
+        // and the `compiled` arm must never ask: the Overview it copies was written by the crew and reviewed by
+        // the Critic, so a cleanup pass would move the Seed away from the text the rail showed.
+        expect(world.chat.callCount).toBe(before);
+        // BYTE-IDENTICAL, in all three places the copy can be read: the row, the receipt, and the fresh rail read.
+        expect(plotlinesPhrase(world.store)!.seed).toBe(world.overview);
+        expect(viewOf(reply).seed_head).toBe(world.overview);
+        expect(viewOf(reply).seed_chars).toBe(world.overview.length);
+        // And one row, in ONE commit — the copy is one act, whatever arm produced the text. The commit carries
+        // two events (the create, and R12's provenance update), and neither of them is a model call: the
+        // compiled arm still asks the transport nothing, which is the `callCount` assertion above.
+        expect(world.store.phrases.list().filter((row) => row.key === 'plotlines')).toHaveLength(1);
+        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_start')).toHaveLength(2);
+    });
+
+    it('writes the confirmed custom Seed ONCE, and the journal names the bytes it wrote (AC1)', async () => {
+        // NO COMPILED SUMMARY on this book (`makeStory` writes none), which is the arm the desk used to refuse
+        // even though the verb accepts it — AC4's server half, and the reason a cleanup proposal has to be
+        // produced BEFORE the start rather than corrected after it.
+        const world = await makeStory();
+        const model = new MockChatClient(() => ({ message: msg({ content: 'no crew answer expected' }) }));
+
+        // THE CONFIRM, modelled the way the desk performs it: the proposal text is the text the Author presses
+        // Start with, so `text` here is the confirmed cleanup and this verb is only the write. `model` is parked
+        // beside the rig rather than wired into it — nothing on this path may reach a transport.
+        expect(model.callCount).toBe(0);
+
+        const confirmed =
+            'A mapmaker finds her own coastline redrawn on a chart she surveyed herself, and she needs 6 charts to prove it.';
+
+        expect(world.store.phrases.list().filter((row) => row.key === 'plotlines')).toHaveLength(0);
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start', {
+            source: 'custom',
+            text: confirmed
+        });
+
+        expect(reply.status).toBe(200);
+        expect(viewOf(reply).source).toBe('custom');
+        expect(world.chat.callCount).toBe(0);
+
+        // ONE write, and it holds exactly the confirmed text (D-72: this is the copy, and it is the only one).
+        // R12 — the same commit records the ARM: `custom`, because these bytes came from the Author's hand
+        // (through the cleanup proposal they confirmed), and that word is what tells the next reader no
+        // further pass is owed and no compiled Overview was involved.
+        const rows = world.store.phrases.list().filter((row) => row.key === 'plotlines');
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].seed).toBe(confirmed);
+        expect(rows[0].seed_source).toBe('custom');
+        expect(journalWhysByOp(world.store, 'phrase_start').map((event) => event.op)).toEqual(['create', 'update']);
+
+        // THE AUDIT LINE NAMES THE TEXT (P11): the length and the hash of what was copied, the same hash every
+        // Phrase-② gate is keyed to. "Started from the Author's own text" alone left the copied bytes unnamed.
+        expect(journalCreateWhy(world.store, 'phrase_start')).toContain(
+            `the Plotlines Phrase was started from the Author's own text (D-72) — ${confirmed.length} characters, seed_hash=${seedHashOf(confirmed)}.`
+        );
+        // And the provenance line says which arm, in the words the desk's cleanup gate reads.
+        expect(journalProvenanceWhy(world.store, 'phrase_start')).toContain(
+            'the Seed this phrase copies came from `custom`'
+        );
+
+        // A second press cannot replace it: the 409 that names the row, and the row still holds the confirmed
+        // bytes (D-76 / §18.13 — after the start there is no verb that re-seeds a phrase). The refused press
+        // wrote NOTHING, so the commit count is the two lines the first press wrote — no third provenance
+        // line, and no re-labelled arm (R12: only the writer of the row declares its origin).
+        const again = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start', {
+            source: 'custom',
+            text: 'A cleaner rewrite nobody confirmed.'
+        });
+
+        expect(again.status).toBe(409);
+        expect(plotlinesPhrase(world.store)!.seed).toBe(confirmed);
+        expect(plotlinesPhrase(world.store)!.seed_source).toBe('custom');
+        expect(world.store.journal.filter((event) => event.commit_label === 'phrase_start')).toHaveLength(2);
+        expect(world.chat.callCount).toBe(0);
     });
 
     it('treats an absent body as `source: compiled`, and previews at most 400 characters of the seed', async () => {
@@ -648,6 +789,230 @@ describe('POST /stories/:id/phrases/:key/start: the Author starts Phrase ② fro
 
         expect(reply.status).toBe(404);
         expect(errorOf(reply)).toBe('no story named story_9 is in the book (P1: the store is the memory)');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// R8 (D-78, one move later) — THE START VERB'S SECOND MOVE. The decision this pins: "Opening Phrase ②
+// should move the crew when Phase ① is already signed off." One press, two writes, and the guard decides
+// the second one:
+//   - SIGNED OFF (`stories.summary_locked === true`) → the pointer moves to `plotlines`, with the same
+//     field set and the same Author attribution the Accept's phase write uses (`engine.ts:3222-3235`), in
+//     its OWN commit;
+//   - NOT signed off → the crew stays on Phrase ① and the answer names L-33's precondition and the verb
+//     that DOES satisfy it (`POST /stories/:id/lock`) — that is the half of the decision that reads
+//     "before sign-off, nothing moves", and it is pinned in the Start-verb block above;
+//   - already at phase ② or past it → no double advance, and the pointer's owner stays `lockPhase` (L-7).
+//
+// WHY THE FIXTURE SEEDS THE ROW: the pair `phase: 'summary'` + `summary_locked: true` is NOT reachable
+// through the current verbs. Accept moves the pointer itself (`invalidation.ts:644 next_phase: 'plotlines'`)
+// and starts Phrase ② in the same act (`routes.ts:1508-1524`, pinned by `lock-accept-routes.test.ts:250`),
+// and a backtrack to `summary` CLEARS the flag (`engine.ts:3285` — probe-confirmed: it lands with
+// `summary_locked: false`). The pair is the state a RESTORED or hand-edited book is in, which is exactly
+// what this rule is for, so the fixture states the row the way `story-delete.test.ts:247-253` does instead
+// of pretending a verb produced it. The rule is therefore defensive by construction: on a book the verbs
+// did produce, the guard answers "already in phase plotlines" rather than walking the pointer twice.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('a Start that lands on a signed-off Summary moves the crew into Phase ② (R8, D-78)', () => {
+    /** The pointer-side fields the move writes — the after-state, stated as ONE exact value. */
+    const POINTER_KEYS = ['phase', 'status', 'pending_kind', 'status_reason', 'blocked_on'] as const;
+
+    const pointerOf = (story: Story): Record<string, unknown> =>
+        Object.fromEntries(POINTER_KEYS.map((key) => [key, (story as unknown as Record<string, unknown>)[key]]));
+
+    /**
+     * Everything on the SUMMARY side of the book, as one snapshot for `toEqual`: the artifact and its lock
+     * mirror, Phrase ①'s row, its sections and their history, and the queue. Phrase ②'s own row is excluded
+     * because the Start writes it — the point of the snapshot is that NOTHING ELSE moved.
+     *
+     * The clone is a JSON round-trip because that is this store's own snapshot rule (`store.ts:210-218`:
+     * every §4 record is JSON by construction), so the before-snapshot is the same shape the after-read
+     * returns and `toEqual` compares rows against rows, not live objects against live objects.
+     */
+    const cloneRows = <T>(rows: readonly T[]): T[] => JSON.parse(JSON.stringify(rows)) as T[];
+    const summaryBook = (store: Store) => {
+        const summaryId = store.phrases.list().find((phrase) => phrase.key === 'summary')!.id;
+        const story = store.stories.require('story_0');
+
+        return {
+            summaries: cloneRows(store.summaries.list()),
+            summaryPhrase: cloneRows(store.phrases.list().filter((phrase) => phrase.key === 'summary')),
+            sections: cloneRows(store.phraseGroups.list().filter((group) => group.phrase_id === summaryId)),
+            history: cloneRows(store.groupRevisions.list()),
+            revisions: cloneRows(store.revisions.list()),
+            findings: cloneRows(store.findings.list()),
+            tasks: cloneRows(store.tasks.list()),
+            // R7's lock mirror: an accepted Summary keeps its Phrase-row `locked_at`, and a Start is not an
+            // Accept — it may not re-date a sign-off it did not make.
+            locks: { summary_locked: story.summary_locked, plotlines_locked: story.plotlines_locked }
+        };
+    };
+
+    /**
+     * A book whose Summary IS signed off and whose Phrase ② is not open: `phase: 'summary'` over
+     * signed-off text, the pair written as data (see the block header for why no verb writes it).
+     */
+    const restoredBook = async () => {
+        const world = await makeStoryWithSummary();
+        const story = world.store.stories.require('story_0');
+
+        world.store.stories.update(
+            story.id,
+            { summary_locked: true, status: 'pending', pending_kind: 'phase_signoff' },
+            { run_ref: null, author: true, why: 'seed: phase ① is signed off while the pointer is still on it (L-7)' },
+            [{ id: story.id, rev: story.rev }]
+        );
+
+        return world;
+    };
+
+    it('moves the pointer into Phase ② and leaves the signed-off Summary exactly as it was (AC1)', async () => {
+        const world = await restoredBook();
+
+        // THE BEFORE-STATE, stated: Phase ①'s pointer over signed-off text, Phrase ② not started.
+        expect({ phase: world.store.stories.require('story_0').phase, summary_locked: world.store.stories.require('story_0').summary_locked }).toEqual({
+            phase: 'summary',
+            summary_locked: true
+        });
+        expect((viewOf(await call(world.app, 'GET', '/stories/story_0')) as unknown as StorylineStoryView).phrase_started).toEqual({
+            summary: true,
+            plotlines: false
+        });
+
+        const before = summaryBook(world.store);
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start');
+
+        expect(reply.status).toBe(200);
+
+        const body = viewOf(reply);
+
+        // THE MOVE HAPPENED, and the receipt says so in the same breath as the phrase row. `phase_open_reason`
+        // is `''` on the writing arm — the same convention the Accept's `phrase_start_reason` uses, so a rail
+        // cannot invent a reason for a decision it has no reason about.
+        expect(body.phase_opened).toBe(true);
+        expect(body.phase_open_reason).toBe('');
+
+        const story = world.store.stories.require('story_0');
+
+        expect({ phase: story.phase, status: story.status, pending_kind: story.pending_kind, blocked_on: story.blocked_on }).toEqual({
+            phase: 'plotlines',
+            status: 'ready',
+            pending_kind: 'none',
+            blocked_on: ''
+        });
+        // The reason sentence, exact apart from the clock the route stamps: it names BOTH acts, in the order
+        // the Author did them, and the rules they answer.
+        expect(story.status_reason).toMatch(
+            /^phase summary was signed off and the Author started the Plotlines Phrase at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z; phase plotlines is open \(L-7, L-29\)$/
+        );
+        // L-37: a drain round is per phase, so the move retires it — the same field the lock's phase write
+        // clears (`engine.ts:3231`), and the reason the crew cannot carry Phrase ①'s drain into Phase ②.
+        expect(story.probe).toBeUndefined();
+        // The lock survives the move: signing Phase ① off is not undone by opening Phrase ②.
+        expect(story.summary_locked).toBe(true);
+
+        // PHRASE ② IS A ROW, and the rail's second row goes live. The row is the whole fact — the phrase
+        // table has no "started" flag beyond the row itself and the seed it was handed (D-72), so `seed` is
+        // the started-ness assertion here, and the rail's `phrase_started` is the read the Author sees.
+        const phrase = plotlinesPhrase(world.store)!;
+
+        expect(phrase.key).toBe('plotlines');
+        expect(phrase.seed).toBe(world.overview);
+        expect((viewOf(await call(world.app, 'GET', '/stories/story_0')) as unknown as StorylineStoryView).phrase_started).toEqual({
+            summary: true,
+            plotlines: true
+        });
+
+        // NOTHING ON THE SUMMARY SIDE MOVED — the artifact, its lock mirror, the sections, the history, the
+        // queue. This is §18.12's guarantee ("a Start that leaves the Summary alone"), and it holds on the
+        // arm where the POINTER moves too: the move is the pointer, never the signed-off text.
+        expect(summaryBook(world.store)).toEqual(before);
+
+        // L-6: two writes, TWO journal events, in the order the Author did them — and the Start's own line
+        // still names ONLY the Start. This is why the pointer is its own commit and not an extra clause on
+        // `phrase_start`: the pinned audit line for the verb cannot absorb a phase act it did not do.
+        const labels = world.store.journal.filter(
+            (event) => event.commit_label === 'phrase_start' || event.commit_label === 'open_plotlines_phase'
+        );
+
+        expect(labels.map((event) => event.commit_label)).toEqual([
+            'phrase_start',
+            // R12 — the start commit's second line (the provenance), in the SAME group: the label list grows
+            // by one start event, not by one commit, and the phase leg is still its own commit after it.
+            'phrase_start',
+            'open_plotlines_phase'
+        ]);
+        expect(labels.every((event) => event.attribution.author === true)).toBe(true);
+        expect(journalCreateWhy(world.store, 'phrase_start')).toContain(
+            "the Plotlines Phrase was started from the Story's compiled Summary (D-72)"
+        );
+        expect(journalWhy(world.store, 'open_plotlines_phase')).toContain(
+            'the Author started the Plotlines Phrase while phase summary was already signed off at'
+        );
+        expect(journalWhy(world.store, 'open_plotlines_phase')).toContain('phase plotlines opened (L-7, L-29, L-33)');
+    });
+
+    it('answers a second press with the phrase that already exists, and the pointer does not move again (AC3)', async () => {
+        const world = await restoredBook();
+
+        expect((await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start')).status).toBe(200);
+
+        const again = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start');
+
+        // The start verb's own idempotence comes FIRST (the row exists, so the seed is load-bearing — the
+        // 409 every Start test pins), and the pointer leg never runs against a started phrase.
+        expect(again.status).toBe(409);
+        expect(world.store.stories.require('story_0').phase).toBe('plotlines');
+        expect(world.store.journal.filter((event) => event.commit_label === 'open_plotlines_phase')).toHaveLength(1);
+    });
+
+    it('does not double-advance a book the Accept already moved into Phase ② (AC3)', async () => {
+        const world = await makeStoryWithSummary();
+        const story = world.store.stories.require('story_0');
+
+        // The reachable arm of the same guard: pointer already in Phase ②, Phrase ② still unstarted — what
+        // an Accept leaves behind when its auto-start leg refuses (nothing compiled, or the classic lane).
+        world.store.stories.update(
+            story.id,
+            { summary_locked: true, phase: 'plotlines' },
+            { run_ref: null, author: true, why: 'seed: the Accept moved the pointer (L-7)' },
+            [{ id: story.id, rev: story.rev }]
+        );
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start');
+
+        expect(reply.status).toBe(200);
+
+        const body = viewOf(reply);
+
+        expect(body.started).toBe(true);
+        expect(body.phase_opened).toBe(false);
+        expect(body.phase_open_reason).toBe(
+            'the Story is already in phase plotlines, which is where the loop\'s pointer belongs; a Phrase ② start does not move it again (L-7: each phase transition is the Author\'s sign-off)'
+        );
+        expect(world.store.stories.require('story_0').phase).toBe('plotlines');
+        expect(world.store.journal.filter((event) => event.commit_label === 'open_plotlines_phase')).toHaveLength(0);
+    });
+
+    it('leaves a Phase ③ book where it is — a phrase verb does not reopen Phase ②', async () => {
+        const world = await makeStoryWithSummary();
+        const story = world.store.stories.require('story_0');
+
+        world.store.stories.update(
+            story.id,
+            { summary_locked: true, plotlines_locked: true, phase: 'chapters' },
+            { run_ref: null, author: true, why: 'seed: both sign-offs are on and the book is writing chapters (L-7, L-29)' },
+            [{ id: story.id, rev: story.rev }]
+        );
+
+        const reply = await call(world.app, 'POST', '/stories/story_0/phrases/plotlines/start');
+
+        expect(reply.status).toBe(200);
+        expect(viewOf(reply).phase_opened).toBe(false);
+        expect(world.store.stories.require('story_0').phase).toBe('chapters');
+        // The Start's own write still happened (D-78/L-37): the desk is cleared even where the pointer stays.
+        expect(world.store.stories.require('story_0').pending_kind).toBe('none');
     });
 });
 

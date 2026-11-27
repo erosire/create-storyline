@@ -1130,6 +1130,23 @@ committed. `loop/engine.ts:lockPhase` is still the single-commit lock and now an
   `StoryOutline.test.tsx` cases cover the transport, the lazy phrase read, the numbering, the Start card and the
   refusal sentences — with one honesty: `components/PhraseEntries.tsx` has NO test file of its own and is pinned
   only through the two panes that render it. What no vitest run can substitute for stays the LIVE-browser probe.
+- **The Phrase ② seat wave (2026-11-27, spec §18.14, D-81…D-85)**, recorded in the dated section at the end of
+  this file and summarised here so this list stays THE list. Five decisions landed — the structuring seat is told
+  ITS phrase's law and shown ITS own `PHRASE SEED`, the declared `chapter_count` is the DEFAULT it honors (D-81);
+  a seat sees exactly ONE structuring write (D-82); the Seed proofread is a write-less projection the Author
+  confirms and the Start records the winning arm as `Phrase.seed_source` (D-83); the Start verb opens Phase ② on a
+  signed-off Summary and phrase scoping is ONE predicate, and one owed set, shared by the drain, the verify queue
+  and the phase sign-off (D-84); and the crew's
+  phrase attribution is a per-book projection, never a column (D-85). **Open, in one line each** (the full text is
+  the dated section and spec §18.11): the chapter seat's brief is still over `BRIEF_CHAR_BUDGET` (15,438 → 14,878
+  against a 12,000 budget, `run/brief.test.ts:2092-2093`, and over it at every seed size probed — 14,247 → 38,248 —
+  so the drop rung fires on every real run of that seat), and the byte figure the wave quoted (12,773) exists in
+  no file here; `phase_open_reason` is on the wire and rendered by nothing; `CrewPanel` is still unmounted, so the
+  per-run label reaches only the live-threads chips; the proofread's proposal is component state, its draft rides a
+  query string, the desk now refuses an over-long draft before dialing but the server still does not, and the Seed
+  pane has no arm for it; the guards have never met a live model
+  (`run/seed-cleanup.test.ts:19`); and a grammar pass over the Author's Seed is an Editor responsibility with no
+  §2 principle behind it, which this wave recorded rather than invented.
 
 ## Fixes this pass made
 
@@ -2297,6 +2314,15 @@ offers rather than debts. The normative text is `documents/specifications.md` §
 with the record itself in §4.20, the tool in §8.8 and the dial in §4.1. This section is the map, and it
 amends — it does not delete — the phrase-① statements above.
 
+**A second leg landed on 2026-11-27 (`spec §18.14`, D-81…D-85), and this section carries it: the structuring seat
+now speaks in per-phrase law (D-81), sees exactly one structuring write (D-82), the Author gets a one-shot Seed
+proofread whose answer is a proposal and whose winning arm is recorded as `Phrase.seed_source` (D-83), the Start
+verb opens Phase ② when Phase ① is signed off and phrase scoping became ONE predicate behind ONE owed set —
+read by the drain, the verify queue and the phase sign-off (D-84) — and the crew's rows
+carry a computed phrase attribution (D-85).** It adds no phase, no permission, no criterion and no snapshot
+version, and it does not change the five facts below — it changes what the seat is told, what it may write, and
+which rows the loop counts.
+
 ### The five facts that explain the rest
 
 - **The dial and the lane are two facts, and reading one as the other is the bug of this wave.**
@@ -2353,8 +2379,10 @@ amends — it does not delete — the phrase-① statements above.
 | The prompts | `src/server/run/phase1-prompt.ts:promptLaneOf` (446) picks the lane from the JOB's group rows, never from `stories.phase`; all four group compilers then render the controller's law text. `src/server/run/phase1-prompt-plotlines.test.ts` pins both halves: the chapter crew briefed about a CHAPTER, and the Summary lane's bytes UNCHANGED (including the lock seat's `## CANDIDATE SECTION` / `## LOCKED PEERS` wording) |
 | The crew's structuring call | `src/server/tools/plotlines.ts` — refusals in this order: no phrase to structure (`T-11`, naming the Author as the starter), `plotlines_locked` (`L-7`), a `seed_hash` that does not match (`P5`, printing received/expected), then the count and the seeds disagreeing (`T-11`); every value validated BEFORE the idempotence read, then prior accepted briefs for the phrase demoted to `draft` and the new one created + accepted in one commit |
 | The templates | `src/server/templates/templates.ts` — `writer-plotlines-sampler` (798) and `editor-plotlines-structure` (841), `serves_phase: ['plotlines']`, assigned LAST in `DEFAULT_ASSIGNMENT` (947-948) so no unbound Editor/Writer job binds a phrase prompt |
-| The wires | `src/server/api/routes.ts` — `GET /stories/:id/phrases/:key` (1167, doc comment 1152; 404 only for a key the catalog does not enable; an unstarted phrase is an EMPTY view), `POST /stories/:id/phrases/:key/start` (1213, doc comment 1181; `{source: 'compiled' \| 'custom', text?}`, 409 read off `definition.starts_on_demand` rather than a name, 409 for an already-started phrase, 400 for `custom` without text, 409 for an empty compiled Summary), revise (1223) taking `plotpoints` for a chapter entry, and `plotlines_mode` checked by the same two-words rule on both Story routes (POST 799/864-871, PATCH 1721/1814-1822) with the dial frozen by a 409 (1834-1844) once the phrase row exists. `src/server/api/projections.ts` — `compiledSummaryOf` (1499: the complete CLEAN selection, else the composed content) and `summaryIsCompiled`, `SEED_HEAD_CHARS = 400` (1485), the Story view's `phrase_started: {summary, plotlines}` (612/680) and `summary_compiled` (620/684) |
+| The wires | `src/server/api/routes.ts` — `GET /stories/:id/phrases/:key` (1167, doc comment 1152; 404 only for a key the catalog does not enable; an unstarted phrase is an EMPTY view), `POST /stories/:id/phrases/:key/start` (1213, doc comment 1181; `{source: 'compiled' \| 'custom', text?}`, 409 read off `definition.starts_on_demand` rather than a name, 409 for an already-started phrase, 400 for `custom` without text, 409 for an empty compiled Summary), revise (1223) taking `plotpoints` for a chapter entry, and `plotlines_mode` checked by the same two-words rule on both Story routes (POST 799/864-871, PATCH 1721/1814-1822) with the dial frozen by a 409 (1834-1844) once the phrase row exists. `src/server/api/projections.ts` — `compiledSummaryOf` (1711 — **three arms since 2026-11-27, as spec §18.8's row now states**: the complete CLEAN selection, else the Author's `chosen` selection re-validated row by row, else the phrase's composed `content`; the pre-wave sentence "the clean selection else the composed content" described two of the three) and `summaryIsCompiled`, `SEED_HEAD_CHARS = 400` (1485), the Story view's `phrase_started: {summary, plotlines}` (612/680) and `summary_compiled` (620/684) |
 | The desk (written, and pinned since T-W4/T-W6) | `src/dashboard/api.ts` — `getPhraseDetail`, `startPhrase`, `revisePhraseEntry`, and the widened Story view (`plotlines_mode`, `phrase_started: {summary, plotlines}`, `summary_compiled`). `src/dashboard/state.ts` — `refreshPhraseDetail` fetches Phrase ②'s read LAZILY (`phraseDetailWanted`: the dial says the entries are the surface, or that surface is already open) into its own slot AND its own error slot, so the Plotlines pane can never print the Summary read's sentence. `components/story-contract.ts` — `plotlinesEntries`, `plotlinesBrief`, `plotlinesStarted`, `plotlinesHandoffRefusal`, `plotlinesSurfaceView`, `isPlotlinesGroups`; `shell-binding.ts` binds the verbs (the dial, `startPhrase`, `revisePhraseEntry`) with the usual "no id, no POST" guard. The shared pair `components/PhraseEntries.tsx` (`PhraseEntryRow` / `PhraseEntryRows` / `PhraseReadState` / `PhraseEntryDetail`, one `PhraseSurface` per phrase: `SUMMARY_SURFACE`, `PLOTLINE_SURFACE`), Phrase ②'s surface `components/PlotlinesPhrasePane.tsx` (the brief card, the chapter entries, the contract editor) and its Start card `components/PlotlinesHandoff.tsx` (enabled by `summary_compiled` — the same projection the start verb copies its seed from), reached through `StoryView`'s `isPlotlinesGroups` route so a classic book keeps `PlotlinesPane`'s §4.3 records untouched. The rail: `story-nav.ts` numbers the pipeline Summary ① → Plotlines ② → Chapters ③ in `ALL_STORY_PHRASES` and renders the first TWO as rows (`STORY_PHRASES` — Chapters has no rail row of its own), and lists Characters as a supplement (`STORY_SUPPLEMENTS`), and since 2026-11-26 (`U-25`, spec §18.13) **each phrase header carries its own `Seed` child row** — ①'s opens `SeedPane` over `view.story.idea`, ②'s opens the copy through the phrase read's `seed_head`/`seed_chars` and asks for that read only on the grouped dial (`state.ts:phraseDetailWanted`'s rule — on a classic book its pane says no read is coming, it is not waiting on one) — with no story-level Seed row left on the rail. **The desk half is pinned now** (verified 2026-11-26): this row's own nouns match THIRTEEN dashboard test files — `api.plotlines`, `state.plotlines`, `StorylineApp.plotlines`, `StoryView.plotlines`, `StoryOutline`, `PlotlinesPhrasePane`, `PlotlinesHandoff`, `story-folders.plotlines`, `story-nav.groups`, `story-nav.seed`, `PhraseSeedPane`, plus the U-25 correction pass's `real-server-seed` (the rail-click integration file) and `DirectiveBar` (the bar on a grouped dial) — so the row cites the desk by file, and the §18.8 desk grep below answers THIRTEEN test files rather than nothing |
+
+| The 2026-11-27 seat wave (`spec §18.14`, D-81…D-85) | **`src/server/run/seed-cleanup.ts`** — the one-shot, tool-less Seed proofread: `proposeSeedCleanup` (136), the ratio guards (66/69), NO `Store` in the dependency bag so it cannot write, and the header (1-40) that gives every reason including the phase-① precedent (`documents/phase-1-research-pipeline.md:73`). **`api/routes.ts`** — `GET …/phrases/:key/seed/cleanup` (1702), `openPlotlinesOnSignedOffSummary` (487, the phase leg, its own commit at 524), `recordSeedSource` (583, the `seed_source` write inside the start commit). **`run/catalogue.ts`** — `structurePlotlines` in `REPORT_TOOLS` (53) and `reportToolsForStructureSeat(declaresChapterCount)` (144), the capability bit at `phrase/controller.ts:132`. **`phrase/controller.ts:phraseStructureSeatOf`** (304) and the `structure` instruction slot (162, the type at 106). **`run/brief.ts`** — the seat section (1207), the seat-aware trim rung (1225 / 1450 / 1476) and the seat's job render (614). **`api/projections.ts`** — `runPhraseKeyOf` (1155), `projectRunRow` (1159), the single-Story slice now attributed (679). **Desk** — `components/PlotlinesHandoff.tsx` (the proofread ask, the proposal, `applied` at 96), `story-contract.ts:seedCleanupAskRefusal` (1405), `:plotlinesCustomStartRefusal` (1320), `:plotlinesSeedOrigin` (1470, consumed at `PlotlinesHandoff.tsx:257`), `components/story-nav.ts:crewPhraseMarks` (294, the rule comment at 33) |
 
 ### Things that are easy to get wrong here
 
@@ -2390,6 +2418,69 @@ amends — it does not delete — the phrase-① statements above.
   job's `groupRefs` belong to — at settle time `loop/engine.ts` resolves the owning phrase from those refs
   and picks the validator and the instructions from it, never from `stories.phase`.
 
+- **The structuring seat is routed by CLAIM-KEY PREFIX, and the prefix exists in three copies.**
+  `phrase/controller.ts:phraseStructureSeatOf` (304) matches the Work Item id against each controller's
+  `instructions.structure.seatKeyPrefix`, and an id matching NOTHING falls back to Phrase ①'s law (311) — which
+  is deliberate for a hand-armed `structure_seed` job and a named limitation for everything else (spec §18.11).
+  The agreement between the planner and the seat is carried differently on each side: the projection IMPORTS the
+  planner's Plotlines family (`api/projections.ts:32`, `PLOTLINES_STRUCTURE_ITEM_PREFIX` from `loop/records.ts`,
+  matched at 1127) but copies phase ①'s by hand (1058), and the controller's `seatKeyPrefix` is a hand-copied
+  string with no equality test anywhere — the pins are the planner's own builder
+  (`loop/phase2-groups.test.ts:254`) and a hardcoded copy dispatched as a seat (`run/executor.test.ts:2277`,
+  `wi_structure_plotlines_fac9695f`). So a family that merely NESTS under another (`wi_structure_plotlines_alt_`)
+  runs Phrase ①'s law while attributing itself `plotlines` — one seat, two answers.
+- **Two seeds, two hashes, and the tool that finally prints both.** `readSeed`
+  (`server/tools/plumbing.ts:110`) answers `phrases[]` in composition order since 2026-11-27: each started
+  phrase's own text (`phraseSeedOf`, seam S2), the hash `structurePlotlines` actually compares
+  (`tools/plotlines.ts:187`), and `seed_is_story_idea`. Before this the seat's only read printed the STORY Seed's
+  hash while its job told it to "send the seed's hash", so the Editor guessed and ate a P5 refusal naming a seed
+  change that had not happened. Top-level `seed`/`seed_hash` still mean `stories.idea` (§8.4), and `structureSeed`
+  still answers with that one — the two tools take different hashes because they gate on different text.
+- **`Phrase.seed_source` and `PhraseDefinition.seed_source` are different fields with one name.** The phrase
+  row's (`shared/types.ts:1592`) is the provenance of the text THIS book's phrase was seeded with, written once
+  inside the start commit by `api/routes.ts:recordSeedSource` (583), surfaced on `PhraseDetailView` only
+  (`projections.ts:1652`, omitted rather than defaulted when the row predates the field — absent is legacy, never
+  a third word). The catalog's (`shared/phrase.ts`) is data about the text a KIND is created with, and
+  `startPlotlinesPhrase` reads it through `phraseSeedInitOf`. Reading one as the other puts a desk sentence about
+  "the Author's own words" on top of a catalog constant. The desk's words for the row's field are
+  `story-contract.ts:plotlinesSeedOrigin` (1470 → `PlotlinesHandoff.tsx:257`, an unrecorded origin said as
+  unrecorded).
+- **Phrase scoping is ONE predicate behind ONE owed set, and the phase pointer moves at the Start verb — not in the engine.**
+  `loop/status.ts:findingClaimsSettledPhrase` (179) asks `phrase/findings.ts:findingGroupScope` whether a claim is
+  about a phrase the Story's phase has left behind, and the set that subtracts those claims —
+  `loop/status.ts:unconfirmedFindingsOwed` (223) = `records.ts:unconfirmedBlockingFindings` (559) minus the predicate —
+  is what **three** readers ask, one question: the drain (`status.ts:244`), the verify queue's claim skip
+  (`loop/work.ts:2407`), and the **phase sign-off** (`status.ts:849`, clause `findingsUnconfirmed === 0` at `:929`).
+  Writing a second clause list in any place is how a finding started holding a drained Story in a phase it had
+  already left — and the third reader is the one that could starve: the queue refuses a settled claim
+  (`work.ts:2404-2407`), so no Editor run can ever settle it, and a sign-off that counted it barred the Phase-② lock
+  forever on a debt nobody pays. **Two legs are deliberately NOT scoped, and that is not an oversight:**
+  `records.ts:1634` (`samplingArmed`'s unconfirmed leg, the read at 1643) and `records.ts:2490`
+  (`pendingRevisionReviewEntry`, the read at 2505) ask the unscoped set, because both are reachable only from phase ①
+  (`work.ts:2301`, `engine.ts:1962`, `engine.ts:2430`) where the predicate is FALSE by construction (`status.ts:185`) —
+  scoping them would subtract nothing, and the second one asks "has the Editor's D-33 decision landed", which is not
+  the queue question. If either ever gains a later-phase caller, those are the lines that have to consult the
+  predicate. The Summary lane's group read is scoped the same way —
+  `loop/work.ts:1100` takes `storyPhrase` (the Summary row BY KEY), because with two phrase rows on the book a
+  primary-phrase fallback answers the PLOTLINES row and the critics seat against the wrong group set. And the
+  pointer: `api/routes.ts:487` moves `phase` when the Start lands on a `summary_locked` Story (L-33 read as the
+  precondition), in its own commit, reporting `phase_opened`/`phase_open_reason`; a started Phrase ② on a Story
+  still pointing at ① "keeps buying Phrase-① passes", which is the report this closes.
+- **A structuring seat sees exactly ONE structuring write, and that is a capability, not a filter you can drop.**
+  `run/catalogue.ts:reportToolsForStructureSeat(declaresChapterCount)` (144) removes the OTHER phrase's name from
+  the pair, driven by `PhraseStructureInstructionSet.declaresChapterCount` (`controller.ts:132`). Adding a third
+  phrase means adding its write to `REPORT_TOOLS` AND its bit to this mapping; skip the second half and the new
+  seat closes its run on another phrase's report — the row looks answered while the other phrase moved. Note also
+  that `run/brief.ts` SUPPLIES the bit rather than naming the phrase: that is D-70's rule, and "the brief builder
+  must not name a phrase" is the check that keeps this from regressing into an `if`.
+- **The Seed cleanup is a PROJECTION: it cannot write, its guards may say no, and its answer is only a draft.**
+  `run/seed-cleanup.ts` takes no `Store`; `GET …/seed/cleanup` returns a `200` carrying `{ok:false, refusal}` for
+  the four tokens (spec §18.8), so a client that branches on status misses every refusal. The Author's "Use this
+  text" moves the proposal into the box and writes nothing (`components/PlotlinesHandoff.tsx:212`); the write is
+  still the Start commit's, with the bytes the box holds. The number-train guard and the 0.6/1.25 length envelope
+  (66/69) catch REWRITE, not meaning — the semantic check is the confirmation, and no vitest run stands in for it
+  (`run/seed-cleanup.test.ts:19`).
+
 ### How to verify
 
 ```bash
@@ -2414,10 +2505,84 @@ grep -rln "plotlines_mode\|startPhrase\|PlotlinesPhrasePane\|PlotlinesHandoff" p
 The rig answers a chapter batch with `loop/mock.ts`'s `chapterDraft` knob (the same `draft_groups` kind,
 `ChapterDraft` schema, defaulting to exactly the refs the Work Item carried); `integration/harness.ts`
 carries the matching seam and notes it must keep handing the lane its triple even when a `chat` client is
-injected (T-W4).
+injected (T-W4). **And since 2026-11-27 it answers a Phrase-② structuring seat with that seat's OWN write.**
+Both structuring passes share the `structure_seed` KIND and the seat is the claim-key family, so the crew used to
+answer Phrase ②'s seat with `structureSeed` — a call that SUCCEEDS, files the OTHER phrase's `seed_briefs` row, and
+left a probe lane at 40 runs with ZERO Plotline Briefs and no no-op row to complain about (`mock.ts:778-786`). On the
+Plotlines family the crew now calls `structurePlotlines` with that phrase's own hash and the count the Summary row
+declares (`mock.ts:787-814`), and `loop/phase2-groups.test.ts:286` pins the CALL, the accepted brief, the
+`chapter_1` entry set, and Phrase ①'s Seed Brief still being the only one. **The double is a crew double only for
+the writes it actually makes:** a seat answered with the wrong phrase's tool leaves every mock-driven run green over
+a lane nothing ever drove, which is exactly how this one passed unnoticed.
 
 ### Holes this wave left open
 
+- **OPEN (2026-11-27, spec §18.14, amended the same day): the chapter seat's brief is still over
+  `BRIEF_CHAR_BUDGET` — at EVERY seed size — and the one section the trim rung trades is the derived `SEED BRIEF`,
+  so for this seat the rung is not a fallback, it is the normal path.** `run/brief.ts:69` is 12,000; the pinned probe
+  numbers are **15,438** before the seat-aware rung and **14,878** after (`run/brief.test.ts:2092-2093`, naming the
+  git-ignored probe logs `Temp/c1/probe-10-after.log` and `Temp/c6/probe-after-2.log` — re-measure before quoting a
+  saving), and the pin at `:2094` asserts OVER budget as the honest outcome — the rung drops
+  `SEED_BRIEF_HEADING` (97) for the
+  structure seat only (`:1228`, `:1446`-`:1472`). **And the drop is not rare: probed at five seed sizes on the
+  built-in template, this seat's brief is over the budget at every one — 14,247 characters at a 422-character seed,
+  15,248 / 18,248 / 26,248 in between, 38,248 at 24,423 — with `has_seed_brief: false` on all five rows**
+  (`Temp/c9/probe-f3.out`; the measurement lives in the seat test's header at `phrase/plotlines-structure-seat.test.ts:18-19`
+  and `:48-49`, which is why `Temp/`'s disposability does not lose it). Consequence, and it is why the seat's job
+  sentence changed with it: in production that heading is NEVER in the brief, so copy telling the seat to read the
+  `SEED BRIEF` "beside" the `SEED` was sending it hunting for a section it never got, and the trim — decided after
+  the job text is composed (`brief.ts:1220-1228`) — is the only honest subject of the sentence. What is left is the ROLE prompt, `PHASE AND GOAL CRITERIA`
+  (`:1140`-`:1169`, where every criterion reaches the crew), the seat's own `PHRASE SEED` and THE JOB, and E-0/D-13
+  refuse to trade those for a character count. **Do not quote a byte saving from this wave without measuring:
+  the wave's own pre-change figure for the same brief (12,773) exists in no file in this tree**, so it is not the
+  same story or the same ruler as the two pinned numbers.
+- **OPEN (2026-11-27, §18.14 D-84): `phase_opened` / `phase_open_reason` are on the wire and rendered nowhere.**
+  `api/routes.ts:1646`/`:1647` send them, `dashboard/api.ts:943`/`:950` declare them, `testing/shell-fakes.tsx:821`
+  and the desk suites carry the L-33 sentence verbatim — and no component prints it. So the case the Author most
+  needs words for (the Start copied the Seed, the crew stayed on Phrase ① because the Summary is unsigned) is a
+  sentence the desk holds and does not say.
+- **OPEN (2026-11-27, §18.14 D-85): the per-run phrase label reaches only the live-threads chips.** The wire
+  attributes every row (`projections.ts:1155`, and the single-Story slice since this wave at `:679`), but the
+  surface is the header's `crew-phrase-<key>` chips, live runs only (`StoryView.tsx:120`/`:206`), and
+  `CrewPanel` — the panel that would show it per row, tests and all — is mounted nowhere. Archived runs carry an
+  answer nothing prints.
+- **OPEN (2026-11-27, §18.14 D-83): the proofread's proposal is component state, and the Seed pane has no arm for
+  it.** `components/PlotlinesHandoff.tsx` holds `{proposal, applied}` in `useState` (96) — a navigate or a remount
+  drops the proposal — and the draft it proofreads travels as `?seed=` on a `GET`
+  (`api/routes.ts:1702`, the ceiling stated in the swagger parameter at 485-486), so a very long pasted Seed is not
+  addressable by that read. **The desk now refuses the ask rather than dialing it, and the server still does not:**
+  `SEED_CLEANUP_ASK_URL_LIMIT = 12_000` (`story-contract.ts:1416`) shuts the control at `:1437`, measured on
+  `encodeURIComponent(text)` because the listener counts the ESCAPED form (a pasted 9,000-character draft is 12,008
+  on the wire) — and the guard's shape is the transport's: an ask whose escaped seed is 16,200 characters is routed
+  and answered, and the same shape at 16,300 dies with **HTTP 431**, where Node's ~16,384-byte request-header budget
+  puts it, leaving a ~4,300-character margin that also carries the fixed 53-character path prefix
+  (`Temp/c9/probe-f4.out`, restated at `story-contract.ts:1406-1414`). It is a refusal that keeps the Author's text
+  in the box, not a contract the API enforces — the route still measures nothing, so a client that is not this desk
+  still gets the bare 431 with no proposal, no refusal token and no sentence.
+  `components/PhraseSeedPane.tsx` gained the paste arm's own gate
+  (`story-contract.ts:1320`) and the provenance line, but **no proofread arm**: the cleanup lives only on the
+  Start card, so an Author who wants the same pass on a Seed he is already looking at has no button.
+- **OPEN (2026-11-27): the cleanup's guards have never met a live model.** `run/seed-cleanup.test.ts:19` says so
+  in its own header: a scripted transport answers every case, so `SEED_CLEANUP_MIN_RATIO`/`MAX_RATIO` (0.6 / 1.25,
+  `run/seed-cleanup.ts:66`/`:69`) are thresholds nobody has watched a real provider cross, and the number-train
+  guard has no measured false-positive rate. The semantic judgement is the Author's confirmation by design — which
+  is also the only judgement that matters here.
+- **RECORDED, NOT FIXED (2026-11-27, §18.14 D-83): a grammar pass over the Author's Seed is a NEW Editor
+  responsibility with no principle behind it, and this wave minted none.** Nothing in §2 or §6 authorises an
+  Editor to touch prose — P5 (:48) makes the Seed read-only for every agent, P10 (:67) makes the Writer write
+  everything, and L-19 (:645) is the merge-is-a-Writer rule §13 turns into "No Editor prose" (:1169). The
+  mitigation actually in the code is procedural: the pass writes nothing, the guards reject rewrite, and the
+  Author's confirmation is the only step that turns text into a Seed. If this becomes a real lane rather than a
+  desk-time suggestion, the principle has to be written first.
+- **The ids this wave minted, and where they live (the same note §18.11 carries for `D-78`).** `D-81` (seat law +
+  the `PHRASE SEED` section + the declared count as a DEFAULT), `D-82` (seat-scoped report tools), `D-83` (the
+  Seed cleanup as a projection, and `seed_source` on the row), `D-84` (the Start opening Phase ②, and ONE phrase
+  scoping predicate) and `D-85` (the run's phrase attribution as a projection) are §18's next free numbers —
+  checked free package-wide, the highest existing being `D-80` — and their normative text is **spec §18.14**, with
+  one-line entries added to §18.10's index and the honest holes in §18.11. **No `U` id was minted**: the desk
+  changes are amendments to U-19/U-20/U-25, recorded in §4.20/§10.2, not a new requirement. **And the wave's
+  comment letters `R7`–`R10`/`R12` are its own task labels, not ids** — §18.14's citation map says which D owns
+  each, and §18.1's T-W6 mapping still governs every file that predates this wave.
 - **CLOSED (T-W6): `plotline_briefs` no longer survives `deleteStory`.** The purge is now FOUR deletes in
   one commit — `engine.ts:3044-3046` for `phrases`/`phrase_groups`/`group_revisions` and `3051` for
   `plotlineBriefs` — and `api/story-delete.test.ts` names every collection and counts the neighbouring Story's

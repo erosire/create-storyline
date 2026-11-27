@@ -126,7 +126,7 @@ import {
     wholeStoryVerdicts
 } from './records';
 import { pendingDirectives } from './directives';
-import { dialKeyOf, drainPreconditions, probeIsLive } from './status';
+import { dialKeyOf, drainPreconditions, findingClaimsSettledPhrase, probeIsLive } from './status';
 import type { WorkCandidate } from './types';
 import {
     type RoleKind,
@@ -213,8 +213,9 @@ import {
     // The PHRASE-level dial (`story.plotlines_mode`). `isGroupManagedStory` above stays the Summary's
     // predicate for the classic pins; this is the form the phase-② lane asks.
     isPhraseGroupManaged,
-    // The phrase's OWN copied seed (seam S2) — Phrase ②'s structuring input, never `stories.idea`.
-    phraseSeedOf,
+    // `phraseSeedOf` used to be imported here for the Phrase ② structuring note, which quoted the whole
+    // copied seed into a note the brief builder then clipped. The seed is a brief SECTION now
+    // (`phrase/controllers/plotlines.ts:plotlinesStructureSeedSection`), so the planner no longer reads it.
     planGroupDraftBatch,
     phraseGroupsOf,
     scoredVectorHashes,
@@ -1077,12 +1078,31 @@ function phase1GroupCandidates(
     brief: SeedBrief | undefined
 ): WorkCandidate[] {
     const out: WorkCandidate[] = [];
-    const groups = phraseGroupsOf(store, story.id);
+    // R9 (b) — THE SUMMARY LANE READS THE SUMMARY'S ROWS. `phrase/catalog.ts:150-156` states the rule this
+    // call site used to break: `phraseGroupsOf` WITHOUT a phrase is every phrase's rows, and "a caller that
+    // means one phrase — which is every pipeline caller — passes `phraseId`". With Phrase ② started on the
+    // same book (the Author may start it any time — `routes.ts` runs no phase gate), the unscoped read
+    // interleaved `chapter_1…N` with `premise…ending` (both order 1) into:
+    //   - `allRefs`, which is the `group_refs` every `review_groups` (`:1233`), `score_sections` (`:1304`)
+    //     and deep `check_unit` (`:1471`) seat carries — so the Critic was asked to judge chapter contracts
+    //     as part of the Overview, and the score seat ("the answer must name every group exactly once",
+    //     `phrase/section-scores.ts`) was handed chapter entries beside the five sections it scores; and
+    //   - `groups.length`, in the score seat's own sentence.
+    // The rest of the lane already scopes itself — `groupWorkTargets` and `cleanSelectionOf` default to the
+    // PRIMARY phrase and the vector hashes with those rows — so the seats and the vector could disagree
+    // about which groups one Overview has. Scoping this read to the Summary row makes the lane one book's
+    // answer again, and it is what keeps the crew on Phrase ① when Phrase ② was opened early.
+    //
+    // `storyPhrase` is the Summary's row BY KEY, not "the Story's phrase": with two rows on the book, a
+    // primary-phrase fallback would answer the Plotlines row when the Summary row is missing. A book with
+    // no Summary row passes `undefined`, which is `phraseGroupsOf`'s unscoped arm — the pre-Phrase-②
+    // behavior, kept for the hand-edited book that holds group rows and no phrase row at all.
+    const phrase = storyPhrase(store, story.id);
+    const groups = phraseGroupsOf(store, story.id, phrase?.id);
 
     if (groups.length === 0) return [];
 
     const allRefs = groups.map((group) => group.id);
-    const phrase = storyPhrase(store, story.id);
 
     // -- 1. The Writer batch -------------------------------------------------------------------
     // The batch is the owed set cut three ways, in this order, because each cut is a different rule:
@@ -1606,12 +1626,19 @@ export function phase2GroupCandidates(store: Store, story: Story): WorkCandidate
                 // Editor pool pick is `editor-general`, and this job is not that job.
                 templateRef: 'editor-plotlines-structure',
                 roleName: 'editor',
-                // The seed and its hash travel in the note because the briefing renders it
-                // (`run/brief.ts:renderJob`) and the tool refuses a hash it did not print. The clip is
-                // the brief builder's, so the tail sentence — the one that says what to DO — is written
-                // before the variable-length quote.
-                note:
-                    `Plotline structure: the PHRASE seed below is the text you are structuring — not the Story's Seed, and not the Summary's prose. Call structurePlotlines once with chapter_count, the number of chapters this seed resolves into, and seed_hash exactly as printed. The call also accepts the brief: that single write declares summaries.chapter_count and creates chapter_1..chapter_N, and every chapter contract is written against that set (D-3b). Never edit the phrase seed, never write a plotline yourself.\n\nPHRASE SEED (seed_hash=${seedHash}):\n${phraseSeedOf(phrase, story)}`
+                // THE NOTE IS THE POINTER, NOT THE ARTIFACT. It used to carry the whole phrase seed after
+                // a 535-character instruction, and `run/brief.ts:renderJob` clips the note at 600
+                // characters (`clip(item.note, 600)`), so on a real compiled Overview the seat received 65
+                // characters of its own seed plus a "read the full record with the read tool" tail (the
+                // clip's fixed tail), i.e. 3.6% of the text it was being asked to structure. The seed now
+                // has a first-class, unclipped section in the brief —
+                // `phrase/controllers/plotlines.ts:plotlinesStructureSeedSection`, mounted by
+                // `run/brief.ts:assembleBrief` — and the seat's tool surface prints the same text and hash
+                // (`tools/plumbing.ts:readSeed`'s `phrases[]`), so the note keeps only the instruction and
+                // the hash, stays under the clip, and the "read the full record" tail never renders.
+                // `seed_hash=` stays in the `=` form because `integration/harness.ts:901` reads that
+                // pattern out of the brief as the scripted crew's answer.
+                note: `Phrase ② structure: the text you are structuring is this brief's PHRASE SEED section, printed whole — not the Story's Seed and not the Summary's prose. It prints seed_hash=${seedHash}: send that value verbatim, because structurePlotlines refuses a hash it did not print (P5). Call structurePlotlines once with chapter_count, the number of chapters the seed resolves into, and that seed_hash; that one call declares summaries.chapter_count and creates chapter_1..chapter_N (D-3b). Never edit the phrase seed.`
             }
         );
 
@@ -2355,6 +2382,15 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     // its reply) grow with every Critic report, which is where a 1M-token thread came from; a
     // single finding per Work Item keeps each thread small and its decision auditable.
     //
+    // R9 — PHRASE SCOPING COMES FIRST, and it is the clause that answers the Author's report ("when
+    // Phrase ② starts, the staff start working on Phrase ① again"). The loop's pointer says phase ②;
+    // the findings list does not carry a phase, so every claim the Summary left behind — and the accept
+    // deliberately keeps the mixed-scope and post-accept ones alive, `loop/invalidation.ts:742-756` —
+    // bought an Editor run about settled text, every sweep, forever. Measured on a real book: 11 open
+    // Phrase-① claims and a fresh `wi_verify_finding_finding_16_1` in the very last sweep. Skipping the
+    // row here is what `loop/status.ts:findingClaimsSettledPhrase` also subtracts from the drain clause,
+    // so the queue and the probe cannot disagree about who owes what (L-37).
+    //
     // T6/R2c + R2d put two bounds on this queue, both of which the sweep's escalation reads the same
     // way (`records.ts:findingsVerifyStalled`), so generation and escalation cannot disagree:
     //
@@ -2366,6 +2402,10 @@ export function generateWork(store: Store, story: Story, ctx: { at: string; phas
     //    run that closes without calling a tool leaves the finding `unconfirmed`, and an unconfirmed
     //    finding is a D-33 hold, so an uncapped queue bought the same question every sweep forever.
     for (const finding of unconfirmed) {
+        // R9: the claim belongs to a phrase this Story signed off and left behind, so this phase does not
+        // owe it a verdict. The row stays on the record exactly as it was — the Author still reads it.
+        if (findingClaimsSettledPhrase(store, story, ctx.phase, finding)) continue;
+
         if (
             ctx.phase === 'summary' &&
             (findingRevisionScope(store, story, finding) === 'superseded' ||

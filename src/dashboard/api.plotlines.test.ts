@@ -264,3 +264,77 @@ describe('api — PATCH /stories/:id with the Phrase ② dial (T-W4)', () => {
         );
     });
 });
+
+// R7 — THE SEED PROOFREAD, on the wire. The verb is a GET, so the Author's draft rides in the QUERY: this suite is
+// the only place that fact is pinned, and a client that interpolated the draft raw would ask about a DIFFERENT
+// brief the moment the Author wrote an `&` or a `#` — which a prose brief does routinely, and the answer would look
+// like a proofread of text nobody typed.
+describe('api — GET /stories/:id/phrases/plotlines/seed/cleanup (R7)', () => {
+    it('asks with the draft in the query, with no body, and hands the proposal back untouched', async () => {
+        const proposal = { ok: true, source_hash: '9b8387ee', text: 'A mapmaker finds her own coastline.', changed: true };
+
+        ok(proposal);
+
+        expect(await api.getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker she find her own coastline.')).toEqual(
+            proposal
+        );
+        // A GET with no body: the pass writes nothing, and the client must not offer it a body to write with.
+        expect(lastFetch()).toEqual({
+            url: `${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup?seed=A%20mapmaker%20she%20find%20her%20own%20coastline.`,
+            method: 'GET'
+        });
+        expect(lastFetch().body).toBeUndefined();
+    });
+
+    it('escapes the punctuation a prose brief actually contains, so the server reads the whole draft', async () => {
+        ok({ ok: true, source_hash: '00000000', text: 'x', changed: false });
+
+        await api.getPhraseSeedCleanup(
+            'story_1',
+            PHRASE_PLOTLINES_KEY,
+            'Six chapters & a tide # 6 charts + 1 lighthouse? she=drew it'
+        );
+
+        // `&` and `#` are the two that would TRUNCATE an unescaped query — the proofread would run over a fragment
+        // and the Author would be shown a correction of a sentence they never sent.
+        expect(lastFetch().url).toBe(
+            `${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup?seed=Six%20chapters%20%26%20a%20tide%20%23%206%20charts%20%2B%201%20lighthouse%3F%20she%3Ddrew%20it`
+        );
+    });
+
+    it('addresses an unquoted phrase key the way every other phrase verb does', async () => {
+        ok({ ok: true, source_hash: '00000000', text: 'x', changed: false });
+
+        await api.getPhraseSeedCleanup('story_1', 'unwritten idea', 'A brief.');
+
+        expect(lastFetch().url).toBe(`${API_ROOT}/stories/story_1/phrases/unwritten%20idea/seed/cleanup?seed=A%20brief.`);
+    });
+
+    it('passes the guard’s refusal arm through as a value, because a refusal is an answer (AC3)', async () => {
+        // The route answers 200 with no `text`; the client has no business turning that into a throw, and the card
+        // decides what to show from `ok`.
+        ok({ ok: false, source_hash: '9b8387ee', refusal: 'numbers_lost' });
+
+        expect(await api.getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker needs 6 charts.')).toEqual({
+            ok: false,
+            source_hash: '9b8387ee',
+            refusal: 'numbers_lost'
+        });
+    });
+
+    it('raises the no-transport 409 with the server’s own sentence (L-13)', async () => {
+        refused(
+            409,
+            'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
+        );
+
+        const failure = await api
+            .getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A brief.')
+            .catch((error: unknown) => error);
+
+        expect((failure as ApiError).status).toBe(409);
+        expect((failure as ApiError).message).toBe(
+            'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
+        );
+    });
+});

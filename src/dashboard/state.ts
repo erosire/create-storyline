@@ -48,9 +48,14 @@ import {
     type PhraseEntryReviseInput,
     type PhraseStartInput,
     type PhraseView,
+    // R7 — the store's cleanup verb hands the PROPOSAL back to the card that asked (see the verb below).
+    type SeedCleanupProposal,
     type StoryKnowledgeTree
 } from './api';
-import type { Cost, Run, Template } from '../shared/types';
+// R4 — `ProjectedRun` is the crew listing's row shape (the §4.13 record plus its phrase attribution); `Run`
+// itself no longer appears in this file, because every run this store holds came from that listing.
+import type { ProjectedRun } from './api';
+import type { Cost, Template } from '../shared/types';
 
 /** Everything a render may read. One immutable object, replaced wholesale on every change. */
 export interface DashboardSnapshot {
@@ -118,8 +123,20 @@ export interface DashboardSnapshot {
     knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
     queue: QueueItem[];
-    /** U-7 — runs for the active Story, or every Story when none is selected. */
-    runs: Run[];
+    /**
+     * U-7 — runs for the active Story, or every Story when none is selected.
+     *
+     * R4 — these are the PROJECTED rows (`api.ts:ProjectedRun`): each one carries the phrase it belongs to, which
+     * is what the desk prints so a Phrase-② thread cannot read as Phrase-① work (`StoryView.tsx`'s crew line,
+     * and `CrewPanel`'s row mark).
+     * R10 — BOTH fills now label. `refreshRuns` takes the labelled crew listing, and `refreshStory` below parks
+     * the Story payload's `runs` slice in this same slot — a slice that used to carry the plain §4.13 rows, which
+     * is why a desk fed by `GET /stories/:id` could only print "phrase not named". `server/api/projections.ts`'s
+     * `storyView` runs the identical rule (`projectRunRow`), so the slot reads alike whichever route answered.
+     * The field stays OPTIONAL because other routes still answer bare rows (`POST /runs/:id/kill`, the assistant
+     * spawn) and the desk renders those with the same honest line rather than inventing a phrase.
+     */
+    runs: ProjectedRun[];
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
     /** The global employee roster and every Story thread each employee is working right now. */
@@ -274,6 +291,8 @@ export function createDashboardStore(client: ApiClient = api) {
             const storyViews = { ...snapshot.storyViews, [storyId]: view };
             // The active Story's runs are the crew panel's content (U-7); the view already
             // carries them, so a story refresh keeps `runs` honest without a second request.
+            // R10 — that carried slice is LABELLED at the source (`projections.ts:storyView` → `projectRunRow`),
+            // so this shortcut cannot leave the crew slot with unlabelled rows while `GET /runs` has labels.
             return storyId === snapshot.activeStoryId
                 ? { storyViews, runs: view.runs, loading: false }
                 : { storyViews, loading: false };
@@ -430,11 +449,72 @@ export function createDashboardStore(client: ApiClient = api) {
      * the row itself decides which surface a write lands on — and the route answers with THAT phrase's read
      * (`routes.ts:phraseVerbView`: the Summary's `PhraseView`, Phrase ②'s `PhraseDetailView`). Committing a chapter
      * entry's refreshed read into `phrases[]` would put chapter rows in the Summary's slot, so the store asks its
-     * own caches which one holds the id. `'summary'` is the fallback, and it is the honest one: when neither cache
-     * has the row (a first lock straight after a start), `mutate`'s own re-read is what puts the new state on screen.
+     * own caches which one holds the id.
+     *
+     * R5 — THE `'summary'` FALLBACK IS GONE. It used to answer Summary for a row neither cache held, on the
+     * theory that `mutate`'s own re-read would sort it out afterwards. That guess is how a chapter entry ended
+     * up rendered inside the Summary surface: a Phrase-② read that has not landed yet — or a stale copy written
+     * before the entry existed — reports no such row, so the row's phrase was decided by ABSENCE, and the
+     * Summary slot was left holding five sections plus a chapter. The answers now are the ones the desk can
+     * defend:
+     *
+     *   1. `'plotlines'` / `'summary'` — one of the two caches HOLDS the row. Present is present;
+     *   2. `'unassigned'` — neither cache holds it and the refreshed read names no phrase either, so NOTHING is
+     *      committed into either slot: a row the desk has not read is a row it may not file;
+     *   3. before (2) is reached, a Phrase-② read this Story wants but has not landed (or has landed without the
+     *      row) is fetched ONCE — `refresh` is coalesced, so that is at most one flight — because "not loaded"
+     *      is exactly the state the mis-slot came from.
+     *
+     * A classic book, whose Plotlines pane needs no entry rows, is never asked (the same `phraseDetailWanted`
+     * gate every other Phrase-② read uses), and the Summary path does not move: a Summary section IS in the
+     * Summary cache, so rule (1) answers it before any of this runs.
      */
-    const groupSurfaceOf = (storyId: string, groupId: string): 'summary' | 'plotlines' =>
-        snapshot.phraseDetails[storyId]?.groups.some((row) => row.id === groupId) === true ? 'plotlines' : 'summary';
+    type PhraseSurface = 'summary' | 'plotlines' | 'unassigned';
+
+    const groupSurfaceOf = (storyId: string, groupId: string): PhraseSurface => {
+        if (snapshot.phraseDetails[storyId]?.groups.some((row) => row.id === groupId) === true) return 'plotlines';
+        if (snapshot.phrases[storyId]?.groups.some((row) => row.id === groupId) === true) return 'summary';
+
+        return 'unassigned';
+    };
+
+    /**
+     * R5 — the phrase the ROUTE'S OWN ANSWER names, the most authoritative witness available.
+     *
+     * `routes.ts:phraseVerbView` picks the refreshed read from the GROUP ROW's phrase, so a chapter entry's lock
+     * answers with the Phrase-② read — and that read carries `key:'plotlines'` (`api.ts:PhraseDetailView`), the
+     * catalog kind it is scoped to. The Summary's `PhraseView` has no `key` field at all, so the ABSENCE of one is
+     * itself the Summary's signature. Either way the store is reading an answer rather than inferring from which
+     * cache happens to be warm. A key naming a phrase this desk does not slot (the catalog has two today) stays
+     * `'unassigned'`: filing it under the Summary would be the same invention R5 removes.
+     */
+    const surfaceOfLockView = (view: PhraseView): 'summary' | 'plotlines' | 'unassigned' => {
+        const key = (view as Partial<PhraseDetailView>).key;
+
+        if (key === undefined) return 'summary';
+        if (key === PHRASE_PLOTLINES_KEY) return 'plotlines';
+
+        return 'unassigned';
+    };
+
+    /**
+     * R5 — the slot a lock/unlock response belongs in, in the order the answers arrive: the response's own `key`,
+     * then the cache that holds the row, then one forced Phrase-② read, then "nowhere".
+     */
+    const phraseSurfaceFor = async (storyId: string, groupId: string, view: PhraseView): Promise<PhraseSurface> => {
+        const named = surfaceOfLockView(view);
+
+        if (named !== 'unassigned') return named;
+
+        const cached = groupSurfaceOf(storyId, groupId);
+
+        if (cached !== 'unassigned') return cached;
+        if (!phraseDetailWanted(storyId)) return 'unassigned';
+
+        await refreshPhraseDetail(storyId);
+
+        return groupSurfaceOf(storyId, groupId);
+    };
 
     /**
      * R1 — one group lock/unlock write, in `chooseReviewedSummary`'s exact choreography (see the two verbs
@@ -449,18 +529,22 @@ export function createDashboardStore(client: ApiClient = api) {
     ): Promise<PhraseGroupLockResult | null> =>
         mutate(async () => {
             const key = groupLockKey(storyId, groupId);
-            const surface = groupSurfaceOf(storyId, groupId);
 
             try {
                 const result = await run();
                 const view = lockViewOf(result);
+                // R5 — the slot is decided from the ANSWER, and only when there is one. A route that sent no group
+                // rows (`lockViewOf` → `undefined`) commits nothing either way, so there is no surface to work out
+                // and no Phrase-② read to chase in order to work it out.
+                const surface = view === undefined ? 'unassigned' : await phraseSurfaceFor(storyId, groupId, view);
 
                 commit({
-                    ...(view === undefined
+                    ...(view === undefined || surface === 'unassigned'
                         ? {}
                         : surface === 'plotlines'
                           ? // The refreshed read a Phrase ② route answers with is a `PhraseDetailView`; the lock
-                            // routes may also send the plain rows, and `lockViewOf` already proved rows are present.
+                            // routes may also send the plain rows, and `surfaceOfLockView` proved its key says
+                            // plotlines — which is what makes this cast an answer rather than a guess.
                             { phraseDetails: { ...snapshot.phraseDetails, [storyId]: view as PhraseDetailView } }
                           : { phrases: { ...snapshot.phrases, [storyId]: view } }),
                     // Cleared on the way through, so a stale refusal from an earlier click on THIS group cannot
@@ -784,6 +868,48 @@ export function createDashboardStore(client: ApiClient = api) {
 
                 return result;
             }, storyId),
+        /**
+         * R7 — the Author asks for a PROOFREAD of the Seed they are about to start on
+         * (`GET /stories/:id/phrases/:key/seed/cleanup?seed=…`), and the PROPOSAL goes back to the card that asked.
+         *
+         * NO `mutate`, AND THAT IS THE POINT (P10). Every other verb here is wrapped because it WRITES a row, and
+         * the row is what the shell re-reads (P1: the durable store is the only memory). This one writes nothing —
+         * no Seed (the Start copies it, D-72), no revision, no journal line — so there is no row to re-read, and a
+         * refetch would re-render the handoff card out from under a draft the Author is still typing and a proposal
+         * the card is still holding. The proposal is not a record either: it lives in component state and is thrown
+         * away the moment the box changes. So the verb commits nothing to the snapshot except, at most, the shell's
+         * error line.
+         *
+         * THE TWO ARMS OF A 200 BOTH COME BACK AS VALUES (AC3). `{ok: false, refusal}` is an ANSWER — the model
+         * replied and a guard threw its rewrite away — so it is returned untouched and the card prints
+         * `story-contract.seedCleanupRefusalNotice` inline; turning it into the shell's error strip would render a
+         * failure over a request that succeeded, and would read like "your brief was rejected".
+         *
+         * `null` IS THE FAILURE, and only the failure: the route's 400 (no draft named), 404 (no such Story or
+         * phrase), and the three 409s (a phrase the Author does not seed, a phrase already started, a server with
+         * no transport). Those sentences are the server's and go up verbatim through the shell's `error` (L-13) —
+         * the same channel `startPhrase`'s refusals use, because both are about the same control.
+         */
+        requestSeedCleanup: async (
+            storyId: string,
+            phraseKey: string,
+            seed: string
+        ): Promise<SeedCleanupProposal | null> => {
+            try {
+                const proposal = await client.getPhraseSeedCleanup(storyId, phraseKey, seed);
+
+                // A SUCCESS CLEARS THE LINE, as `mutate` does: the previous sentence may have been this very
+                // control's 409, and an error that outlives the request which raised it is the desk describing a
+                // moment that has passed.
+                commit({ error: null });
+
+                return proposal;
+            } catch (cause) {
+                commit({ error: failureText(cause) });
+
+                return null;
+            }
+        },
         /**
          * T-W4 — the Author rewrites ONE CHAPTER ENTRY (`POST …/phrases/groups/:id/revise`, the entry leg).
          *

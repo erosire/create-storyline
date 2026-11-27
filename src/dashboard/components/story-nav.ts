@@ -30,6 +30,8 @@ import {
     isGroupSummary,
     isGroupWriterBusy,
     isGroupWritten,
+    // R10 — the crew marks read the LIVE run states, and the predicate is the contract's, not a copy.
+    isLiveRun,
     isPendingRevision,
     isReviewableRevision,
     isSupersededSummaryDraft,
@@ -53,6 +55,10 @@ import {
     summaryScopeContext
 } from './story-contract';
 import type { FindingRevisionScope, RevisionUnit, StoryViewData } from './story-contract';
+// R10 — the CREW's phrase vocabulary. The projection ships a phrase KEY (`api.ts:RunPhraseKey`) and the row shape
+// that carries it (`api.ts:ProjectedRun`); the WORDS stay here, in the rail's own list, so a rail that renumbers
+// cannot leave the crew line printing an old number (`CrewPanel.tsx`'s own rule, line 28-31).
+import type { ProjectedRun, RunPhraseKey } from '../api';
 
 /** The four reading phrases, in the Author's order. */
 export type StoryPhraseKey = 'summary' | 'characters' | 'plotlines' | 'chapters';
@@ -80,6 +86,48 @@ export interface StorySelection {
 }
 
 export const DEFAULT_STORY_SELECTION: StorySelection = { panel: 'summary' };
+
+// ---------------------------------------------------------------------------
+// R4 (symptom 3) — WHERE THE DESK LANDS when the Author opens a phrase
+//
+// THE RAIL WAS STATIC ABOUT THIS. It lists Summary ① and Plotlines ② and always opened on Phrase ①, so the
+// moment the Author accepted the final Summary or pressed "Start Phrase 2", the desk went on showing the phrase
+// they had just LEFT — while the crew kept working on the one they had just entered. The frame looked as though
+// the book had gone back to Phrase ①, which is symptom 3 as the Author sees it.
+//
+// WHY A SELECTION AND NOT A FLAG: the rail's selection is the shell's one piece of UI state
+// (`StorylineApp.tsx`), and the panes, the pane title and the directive bar all resolve from it. Moving one
+// value moves every surface at once, and it stays the Author's own navigation rather than a second opinion
+// about what is on screen.
+//
+// WHY THE ANSWER MAY BE `undefined`: `undefined` means "stay where the Author is", and that is the
+// NON-DESTRUCTIVE half. A start that the route refused, a lock that did not open Phrase ②, and a frame whose
+// reads have not landed all answer `undefined` — the desk keeps the pane it had rather than jumping to a
+// surface the server has not confirmed. The confirmation is `story.phrase_started.plotlines`, the projection's
+// read of the phrase ROW (`projections.ts:phrase_started`), never a row count (L-14).
+// ---------------------------------------------------------------------------
+
+/**
+ * The selection the desk should move to after a verb that can OPEN a phrase has succeeded.
+ *
+ * TODAY ONLY PHRASE ② CAN BE OPENED BY A VERB: Phrase ①'s row set comes from the catalog and the loop writes
+ * it, so an Accept on the Summary is the Author staying with Phrase ①, and the rail must not yank them out of
+ * a group pane they are standing in. Phrase ②'s Start (`POST …/phrases/plotlines/start`) and the Accept that
+ * hands the compiled Summary over are the two acts that put a chapter pipeline on screen, and both land on the
+ * phrase's own overview (`{panel:'plotlines'}`, no ref) so the Author sees the brief and the entry rows, not
+ * one stale entry.
+ *
+ * `undefined` is the honest answer whenever the frame cannot prove the phrase is open — including a frame that
+ * is `undefined` because the Story read has not landed. Absent is not "started": it is unknown.
+ */
+export function phraseLandingSelection(
+    view: Pick<StoryViewData, 'phrase_started'> | undefined,
+    phrase: StoryPhraseKey
+): StorySelection | undefined {
+    if (phrase !== 'plotlines' || view === undefined) return undefined;
+
+    return plotlinesStarted(view) ? { panel: 'plotlines' } : undefined;
+}
 
 export interface StoryPhraseSpec {
     key: StoryPhraseKey;
@@ -201,6 +249,89 @@ export const isPhraseSeedRef = (ref: string | undefined): boolean => ref === PHR
  */
 export function phraseSeedTitle(phrase: StoryPhraseSpec): string {
     return `${phraseLabel(phrase)} · Seed`;
+}
+
+// ---------------------------------------------------------------------------
+// R10 — WHICH PHRASE the crew is working on, spelled from the rows that say so
+//
+// THE GAP THIS CLOSES. C2a put the attribution on the wire (`projections.ts:projectRunRow`, and from C7 on the
+// `GET /stories/:id` runs slice carries it too) and on a crew panel that nothing mounts — so the Author still
+// watched a Phrase-② thread under a rail lit on Phrase ① and had no words on the desk to contradict it. This
+// function is the ONE read the mounted surfaces use: the Story's status line (`StoryView.tsx`) prints its answer
+// for the runs that are alive right now, which is the only place above the fold on every pane.
+//
+// WHY THE GROUPING IS PER PHRASE AND NOT PER RUN. The loop fans out (`GET /loop`'s ceiling, S-5), so twelve live
+// threads would be twelve chips on a line the panes already share with the status badge; a phrase is what the
+// Author is actually asking about, and one chip per named phrase — plus one for the unnamed ones — keeps the
+// sentence bounded and true. The claim keys ride in the chip's tooltip instead, so the evidence is one hover
+// away without becoming the sentence.
+//
+// WHY 'unknown' IS ITS OWN MARK. `projections.ts:runPhraseKeyOf` answers `'unknown'` for the vector-hash families
+// both phrases mint, and an ABSENT key means the route attributed nothing at all. Both print "phrase not named";
+// neither is filed under Phrase ①, which is the default R4 retired and the lie this whole chain exists to stop.
+// ---------------------------------------------------------------------------
+
+/** One mark of {@link crewPhraseMarks}: what the desk may say about a set of live threads. */
+export interface CrewPhraseMark {
+    /** The projection's key; `'unknown'` also covers a row that carries no key at all. */
+    key: RunPhraseKey;
+    /** The words: the rail's own `Phrase N — Title`, or "phrase not named". */
+    text: string;
+    /** How many live threads carry this key. */
+    count: number;
+    /** The live rows' claim keys, oldest thread first — the evidence behind the words, empty when none is claimed. */
+    claimKeys: string[];
+}
+
+/**
+ * The marks the desk prints for the runs that are ALIVE in this frame.
+ *
+ * `runs` is typed as the projected row, whose `phrase_key` is optional: `GET /runs` and (since C7)
+ * `GET /stories/:id` both send it, while `POST /runs/:id/kill` answers the plain §4.13 record, and the desk says
+ * "phrase not named" for those rather than inventing one. The order is fixed — Phrase ①, Phrase ②, then the
+ * unnamed set — so the line cannot reshuffle between refetches.
+ */
+export function crewPhraseMarks(runs: ProjectedRun[] | undefined): CrewPhraseMark[] {
+    if (runs === undefined || runs === null) return [];
+
+    const live = runs.filter((run) => isLiveRun(run));
+    const grouped = new Map<RunPhraseKey, ProjectedRun[]>();
+
+    for (const run of live) {
+        // An absent key and `'unknown'` join the same bucket: both mean the rows do not name a phrase.
+        const key: RunPhraseKey = run.phrase_key === undefined ? 'unknown' : run.phrase_key;
+        const rows = grouped.get(key);
+
+        if (rows === undefined) grouped.set(key, [run]);
+        else rows.push(run);
+    }
+
+    // Oldest thread first inside a bucket, so the claim keys the tooltip lists are stable across refetches.
+    const byAge = (left: ProjectedRun, right: ProjectedRun): number =>
+        left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id);
+    const marks: CrewPhraseMark[] = [];
+
+    for (const key of ['summary', 'plotlines', 'unknown'] as RunPhraseKey[]) {
+        const rows = grouped.get(key);
+
+        if (rows === undefined) continue;
+
+        const phrase = key === 'unknown' ? undefined : ALL_STORY_PHRASES.find((row) => row.key === key);
+
+        marks.push({
+            key,
+            // A phrase the rail has no row for still cannot be renamed here: without a numbered spec the desk
+            // says it cannot name the phrase, which is the honest half of the rule.
+            text: phrase === undefined ? 'phrase not named' : phraseLabel(phrase),
+            count: rows.length,
+            claimKeys: rows
+                .sort(byAge)
+                .map((run) => run.work_item_ref ?? '')
+                .filter((ref) => ref.length > 0)
+        });
+    }
+
+    return marks;
 }
 
 // ---------------------------------------------------------------------------

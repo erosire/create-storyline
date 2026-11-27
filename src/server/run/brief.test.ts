@@ -11,9 +11,13 @@ import { Store, type Attribution } from '../store';
 // D-33c: the live open-issue count in a Critic brief is the loop's OWN predicate, so the assertions
 // that pin that count are built from it rather than from a number typed into the test.
 import { openIssueFindings } from '../loop/records';
-import { hashBrief, buildBrief, assembleBrief, BRIEF_CHAR_BUDGET, REVISIONS_HEADING } from './brief';
+import { hashBrief, buildBrief, assembleBrief, BRIEF_CHAR_BUDGET, REVISIONS_HEADING, SEED_BRIEF_HEADING } from './brief';
 import { resolveHarness } from './harness';
 import { ensurePhraseCatalog } from '../phrase/catalog';
+// THE STRUCTURE SEAT's fixture needs a real Plotlines Phrase row: the seat's `PHRASE SEED` section reads
+// the phrase's OWN copied seed (`phrase/controllers/plotlines.ts:plotlinesStructureSeedSection`), so
+// starting the phrase through its own function is the only way to get the row the section reads.
+import { startPlotlinesPhrase } from '../phrase/controllers/plotlines';
 import { recordUidAt } from '../store/persist';
 import {
     AUTHOR_ATTR,
@@ -1872,5 +1876,268 @@ describe('SUMMARY PHRASE — the brief gives a phase-① pass the group ids it h
         const { text } = buildBrief(store, item, resolveHarness(store, item));
 
         expect(text).toContain('dispute the scope rather than confirming it');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// THE STRUCTURE SEAT — its closing sentence, and the one section a seat may be trimmed of
+// (S-4, E-3, E-0, R7, T-W2)
+//
+// ONE Work Item kind serves both phrases' structuring passes (`structure_seed` — `loop/work.ts` arms
+// Phrase ①'s Seed pass and Phrase ②'s chapter pass with it), and the seat is the CLAIM KEY
+// (`phrase/controller.ts:phraseStructureSeatOf`). Two things follow, and both are pinned below rather
+// than argued:
+//   D-a — the sentence that closes the run names the tools THIS seat may end on. Phrase ②'s seat ends on
+//     `structurePlotlines` and is never told about `structureSeed` (that call writes the OTHER phrase's
+//     Seed Brief, and it SUCCEEDS doing it); Phrase ①'s seat keeps `structureSeed` and is never offered
+//     the Phrase ② call. The union itself is untouched for every other crew, and the phase-① sentence is
+//     byte-identical to what it said before `structurePlotlines` joined the catalogue.
+//   D-b — the seat's own artifact section (`PHRASE SEED`) is untrimmable, so when the brief still will
+//     not fit E-3 the section that goes is the phase-① `SEED BRIEF` — the derived projection of a Seed
+//     this seat is not structuring, which the seat's own job sentence already calls "context only"
+//     (`phrase/controllers/plotlines.ts:plotlinesStructureJob`). The rung is a TRIM: it fires only on an
+//     over-budget seat brief, and a phase-① seat (whose `seedSection` is undefined) never meets it.
+// ---------------------------------------------------------------------------
+
+describe('THE STRUCTURE SEAT — the closing sentence and the seat-aware trim (S-4, E-3, E-0, R7)', () => {
+    /** Phrase ②'s seed as the Author handed it to the phrase — short, so every length below is checkable by hand. */
+    const PLOTLINE_SEED =
+        '## Premise\nA lighthouse keeper owes a debt she cannot pay in money.\n\n## Ending\nShe pays it in the light.';
+
+    /**
+     * A book Phrase ② has been armed on: Story at `plotlines` + Summary + Goal + Digest, an ACCEPTED
+     * phase-① Seed Brief, and the Plotlines Phrase carrying `PLOTLINE_SEED`.
+     *
+     * The accepted brief is the load-bearing part of the fixture: without that row the `SEED BRIEF`
+     * section would be absent for want of data, and its absence from the seat's brief would prove
+     * nothing about the trim rung. The role prompt's length is the knob that decides whether the seat
+     * brief fits E-3 — the only condition the rung is allowed to act on.
+     */
+    function seatFixture(rolePrompt: string) {
+        const { store, story } = seedStore({ phase: 'plotlines' });
+
+        seedTemplate(store, {
+            name: 'editor-plotlines-structure',
+            roles: [{ name: 'editor', kind: 'editor', prompt: rolePrompt }],
+            serves_phase: ['plotlines']
+        });
+        // The phase-① Seed Brief this book already accepted, in the state `structureSeed` leaves it.
+        store.seedBriefs.create(
+            {
+                story_id: story.id,
+                seed_hash: 'abcd1234',
+                logline: 'A keeper owes a debt she cannot pay in money.',
+                protagonist: 'the keeper',
+                want: 'to keep the light',
+                need: 'to give it up',
+                obstacle: 'the debt',
+                stakes: 'the ships',
+                setting: 'a lighthouse, 1911',
+                world_rules: ['no magic'],
+                promise: 'the debt is paid in the light',
+                tone_hints: 'cold',
+                constraints: ['no flashbacks'],
+                open_questions: ['who signed for the lamp?'],
+                status: 'accepted'
+            },
+            AUTHOR_ATTR
+        );
+        const phrase = startPlotlinesPhrase(store, story, PLOTLINE_SEED, AUTHOR_ATTR).phrase;
+
+        // The two structuring seats, same Story, same template — the ONLY difference is the claim-key
+        // family, which is exactly what `phraseStructureSeatOf` routes on (R7).
+        const plotlinesSeat: WorkItem = {
+            id: 'wi_structure_plotlines_fac9695f',
+            storyId: story.id,
+            kind: 'structure_seed',
+            templateRef: 'editor-plotlines-structure',
+            roleName: 'editor',
+            unit: undefined
+        };
+        const seedSeat: WorkItem = { ...plotlinesSeat, id: 'wi_structure_seed_abcd1234' };
+
+        return { store, story, phrase, plotlinesSeat, seedSeat };
+    }
+
+    /** Over E-3: the role prompt is padded, so the seat brief reaches the trim ladder's last rung. */
+    const LONG_PROMPT = 'You read the phrase seed once and decide the chapter set. '.repeat(120);
+    /** Under E-3: the same seat, same rows, a brief that fits. */
+    const SHORT_PROMPT = 'You read the phrase seed once and decide the chapter set.';
+
+    /** The one `End the run ONLY after reporting…` etiquette line, without its list-marker. */
+    const s4Line = (text: string): string =>
+        text
+            .split('\n')
+            .find((line) => line.startsWith('- End the run ONLY after reporting'))
+            ?.slice(2) ?? '(no S-4 line)';
+
+    it('ends the Phrase ② seat on `structurePlotlines`, and never on `structureSeed` (S-4, R7)', () => {
+        const { store, plotlinesSeat } = seatFixture(SHORT_PROMPT);
+        const { text } = buildBrief(store, plotlinesSeat, resolveHarness(store, plotlinesSeat));
+
+        // The exact sentence, for the seat whose only write is the Phrase ② structuring call: its own
+        // tool is IN the closing list, and the phase-① tool it must not end on is OUT.
+        expect(s4Line(text)).toBe(
+            'End the run ONLY after reporting with one of: submitVerdict, raiseFinding, createTask, ' +
+                'requestAuthor, proposeIdea, verifyIdea, verifyFinding, confirmFinding, reviewSeed, ' +
+                'selectRevision, requestMerge, rejectAll, structurePlotlines, writeKnowledge, ' +
+                'reportNoResearch (S-4). What costs the Story a turn is the missing REPORT, never an empty ' +
+                'set of findings: a pass that files nothing and reports that the text holds has done its ' +
+                'job, while a run that ends without one of these calls is a no-op turn counted against the ' +
+                'Story — and a Writer run that wrote nothing and escalated nothing is a bug in its brief, ' +
+                'not a cost.'
+        );
+        // The one `structureSeed` mention C1's probe found in this brief (`Temp/c1/probe-10-after.log`)
+        // was THIS sentence. It is now zero, while the seat's own tool is still named by its job text.
+        expect(text.split('structureSeed').length - 1).toBe(0);
+        expect(text.includes('call `structurePlotlines` ONCE with `chapter_count`')).toBe(true);
+    });
+
+    it('keeps naming `structureSeed` to the Phase ① seat, and never offers it `structurePlotlines` (S-4, R7)', () => {
+        const { store, seedSeat } = seatFixture(SHORT_PROMPT);
+        const brief = buildBrief(store, seedSeat, resolveHarness(store, seedSeat));
+
+        expect(s4Line(brief.text)).toBe(
+            'End the run ONLY after reporting with one of: submitVerdict, raiseFinding, createTask, ' +
+                'requestAuthor, proposeIdea, verifyIdea, verifyFinding, confirmFinding, reviewSeed, ' +
+                'selectRevision, requestMerge, rejectAll, structureSeed, writeKnowledge, ' +
+                'reportNoResearch (S-4). What costs the Story a turn is the missing REPORT, never an empty ' +
+                'set of findings: a pass that files nothing and reports that the text holds has done its ' +
+                'job, while a run that ends without one of these calls is a no-op turn counted against the ' +
+                'Story — and a Writer run that wrote nothing and escalated nothing is a bug in its brief, ' +
+                'not a cost.'
+        );
+        expect(brief.text.split('structurePlotlines').length - 1).toBe(0);
+        // THE SENTENCE A PHASE-① BRIEF PRINTED BEFORE `structurePlotlines` JOINED THE CATALOGUE IS THE
+        // SENTENCE IT PRINTS NOW, byte for byte: `reportToolsForStructureSeat(false)` is the old union
+        // with the new name cut back out. This is the AC4 guarantee at the sentence level; the whole-brief
+        // byte identity is carried by `brief_hash` (see `Temp/c6/probe-brief.ts`, 96999f0d… before and
+        // after).
+        expect(brief.text).toContain('End the run ONLY after reporting with one of: submitVerdict');
+    });
+
+    it('hands every run that is not a structure seat S-4’s whole union, both structuring writes included (S-4)', () => {
+        const { store } = seatFixture(SHORT_PROMPT);
+        // The ordinary `check_unit` job `seedStore` is shaped for (`brief.test.ts:itemFor`).
+        const review = itemFor();
+        const { text } = buildBrief(store, review, resolveHarness(store, review));
+
+        // A run that is not a seat has no structuring write to be confused by, and the union is the
+        // accounting answer it deserves: either name landing is work the loop must not re-dispatch.
+        expect(s4Line(text)).toContain('rejectAll, structureSeed, structurePlotlines, writeKnowledge, reportNoResearch');
+    });
+
+    it('trims the phase-① SEED BRIEF out of an over-budget seat brief, and nothing else (E-3, E-0, D-b)', () => {
+        const { store, plotlinesSeat } = seatFixture(LONG_PROMPT);
+        const brief = buildBrief(store, plotlinesSeat, resolveHarness(store, plotlinesSeat));
+
+        // The data is there — a non-seat brief over the SAME store renders the section, so what follows
+        // is a trim, not a hole.
+        const review = itemFor();
+        const { sections: reviewerSections, text: reviewerText } = buildBrief(
+            store,
+            review,
+            resolveHarness(store, review)
+        );
+
+        expect(reviewerSections).toContain(SEED_BRIEF_HEADING);
+        expect(reviewerText).toContain('logline: A keeper owes a debt she cannot pay in money.');
+
+        // The seat's section list, EXACTLY: eleven sections became ten, and the one that went is the
+        // phase-① Seed Brief. Every other heading — the ROLE prompt, the criteria, the raw Seed, the
+        // seat's own PHRASE SEED, the Digest, the artifact, the job, the notes, the Ideas and the
+        // etiquette — is pinned in render order, so a future rung cannot quietly take a second one.
+        expect(brief.sections).toEqual([
+            'ROLE — editor (editor) of editor-plotlines-structure',
+            `PHASE AND GOAL CRITERIA — ${store.stories.get('story_0')?.title ?? 'story_0'}`,
+            'SEED — Author truth, read-only for you at every phase, forever',
+            expect.stringMatching(/^PHRASE SEED — the text Phrase ② resolves into chapters .* · seed_hash=[0-9a-f]{8,}$/),
+            'DIGEST rev 1 (derived by the engine, never a crew: D-12a)',
+            expect.stringMatching(/^ARTIFACT UNDER REVIEW — the Phrase ② seed /),
+            'THE JOB',
+            'WHAT CHANGED SINCE THE LAST PASS',
+            'SELECTED IDEAS THIS RUN MUST ABSORB (D-29 — selected, not yet written in)',
+            'TOOLS AND HOW TO END'
+        ]);
+        expect(brief.sections).not.toContain(SEED_BRIEF_HEADING);
+        expect(brief.text).not.toContain('logline: A keeper owes a debt she cannot pay in money.');
+        // F3 — THE JOB SENTENCE HAS TO SURVIVE THE TRIM IT DESCRIBES. This is the render that proves the rung
+        // fired (the heading is gone above), so it is also the only place the copy can be checked AGAINST the
+        // trimmed brief: the seat is told the trade and told to read the headings actually on the page, and it is
+        // NOT told the section sits "beside" anything. The sentence's exact bytes live in
+        // `phrase/plotlines-structure-seat.test.ts`; what belongs here is the pairing — section dropped AND no
+        // presence claim — because either half on its own passes the old wording.
+        expect(brief.text).toContain(
+            'and so is the derived `SEED BRIEF` — and that second heading is NOT one this brief guarantees you'
+        );
+        expect(brief.text).not.toContain('`SEED BRIEF` beside it');
+        // The block the seat no longer pays for, measured on the SAME store: the reviewer's brief renders
+        // the same accepted row through the same renderer, so what is in it and missing from the seat's
+        // brief IS the trim — no fixture-local magic number involved.
+        const blockOf = (text: string, heading: string): string => {
+            const start = text.indexOf(`# ${heading}\n`);
+
+            if (start === -1) return '';
+
+            const next = text.indexOf('\n# ', start + 1);
+
+            return text.slice(start, next === -1 ? text.length : next);
+        };
+
+        expect(blockOf(reviewerText, SEED_BRIEF_HEADING).length).toBeGreaterThan(0);
+        expect(blockOf(brief.text, SEED_BRIEF_HEADING)).toBe('');
+        // E-3 is STILL not met, and that is the honest outcome (E-0): the ladder's last rung and this one
+        // are both spent, and what is left is the ROLE prompt, the criteria, the seat's own seed and the
+        // job — the material E-0 refuses to trade for a character count. The measured before/after on the
+        // real built-in template: `Temp/c1/probe-10-after.log` (15,438, the accepted pre-C6 state) →
+        // `Temp/c6/probe-after-2.log` (14,878, 11 sections → 10, every other section byte-sized the same).
+        expect(brief.text.length > BRIEF_CHAR_BUDGET).toBe(true);
+
+        // AND THE SEED ITSELF IS UNTOUCHED (E-0, D-13): the section the trim exists to protect still
+        // carries the phrase's whole text, byte for byte, with the hash the tool compares.
+        const seedHeading = brief.sections.find((heading) => heading.startsWith('PHRASE SEED'))!;
+        const seedBody = brief.text.slice(brief.text.indexOf(seedHeading) + seedHeading.length);
+
+        expect(seedBody.trimStart().startsWith(`${PLOTLINE_SEED}\n\nseed_hash=`)).toBe(true);
+        expect(brief.text.includes(PLOTLINE_SEED)).toBe(true);
+        // The job text and the ROLE prompt — the two other sections a size fix could have raided — are
+        // rendered whole: nothing was clipped out of the seat's own instruction.
+        expect(brief.text.includes('You read the phrase seed once and decide the chapter set. '.repeat(120))).toBe(
+            true
+        );
+        expect(brief.text.includes('call `structurePlotlines` ONCE with `chapter_count`')).toBe(true);
+    });
+
+    it('keeps the SEED BRIEF for a seat brief that FITS the budget — the rung is a trim, not a mounting rule (E-0)', () => {
+        const { store, plotlinesSeat } = seatFixture(SHORT_PROMPT);
+        const brief = buildBrief(store, plotlinesSeat, resolveHarness(store, plotlinesSeat));
+
+        expect(brief.text.length <= BRIEF_CHAR_BUDGET).toBe(true);
+        // Under budget, nothing is traded: the section is handed to the seat even though it belongs to
+        // the other phrase, because E-0 refuses to spend a section on a number that was never exceeded.
+        expect(brief.sections).toContain(SEED_BRIEF_HEADING);
+        expect(brief.text).toContain('logline: A keeper owes a debt she cannot pay in money.');
+        // F3 — THE OTHER ARM OF THE SAME SENTENCE. The job text is composed before this file knows whether the
+        // rung will fire, so the seat that DOES receive the section is told the same non-promise: nothing about
+        // presence, everything about the trade. If these two briefs ever print different wording, the copy has
+        // become trim-aware by accident and one of the two arms is lying.
+        expect(brief.text).toContain(
+            'and so is the derived `SEED BRIEF` — and that second heading is NOT one this brief guarantees you'
+        );
+    });
+
+    it('never trims the phase-① seat brief, whose artifact section already is the Seed (E-0, R7)', () => {
+        const { store, seedSeat } = seatFixture(LONG_PROMPT);
+        const brief = buildBrief(store, seedSeat, resolveHarness(store, seedSeat));
+
+        // Over budget AND a structure seat — and the section STAYS, because Phrase ①'s `seedSection`
+        // returns `undefined`: for this seat the Seed Brief is the artifact its own call writes, and the
+        // rung is keyed on the seat declaring a section of its own, never on a phrase name.
+        expect(brief.text.length > BRIEF_CHAR_BUDGET).toBe(true);
+        expect(brief.sections).toContain(SEED_BRIEF_HEADING);
+        expect(brief.sections.some((heading) => heading.startsWith('PHRASE SEED'))).toBe(false);
+        expect(brief.sections).toContain(
+            'ARTIFACT UNDER REVIEW — the Seed (structure pass — you derive the brief, never edit the Seed, P5)'
+        );
     });
 });

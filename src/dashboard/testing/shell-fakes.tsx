@@ -24,12 +24,15 @@ import type {
     PhraseStartResult,
     PhraseView,
     QueueItem,
+    // R7 — the desk's cleanup read is part of the wire this file stands in for.
+    SeedCleanupProposal,
     StoryRow,
     StoryView
 } from '../api';
 import { DashboardContext, createDashboardStore, type DashboardStore } from '../state';
 import { DEFAULT_AUTO_APPROVE_COSTS, type Goal, type Story } from '../../shared/types';
 import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
+import { seedHashOf } from '../../shared/seed-hash';
 
 /** One STORIES-panel row with §4.1-plausible defaults; override what the test cares about. */
 export function storyRow(id: string, overrides: Partial<StoryRow> = {}): StoryRow {
@@ -811,7 +814,28 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                         ? (input.text ?? '')
                         : 'A smuggler pays the tide to cross the salt road, and the road collects.',
                 started: { phrase_id: 'phrase_plotlines_1', key, started_at: '2026-11-09T10:00:00.000Z' },
+                // R11 — THE TWO POINTER FIELDS ARE ON THE WIRE, so the fake that stands in for the route has to
+                // carry them too. This one never moves the crew (the book's Summary is not signed off in any
+                // fixture), and the reason is the SERVER'S OWN sentence, character for character, so a desk test
+                // that renders it under a successful start is rendering what the route would print (L-13).
+                phase_opened: false,
+                phase_open_reason: `the Summary is not signed off, so the crew stays on Phrase ①: POST /stories/${storyId}/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)`,
                 view: phraseDetailView(storyId)
+            })
+        ),
+        // R7 — the one-time Seed cleanup. THE DEFAULT IS "NOTHING TO FIX": the pass answers the Author's own draft
+        // back unchanged (`changed:false`), which is the one proposal arm every fixture can render without
+        // pretending a rewrite happened. A test that wants a real proposal, or a guard refusal, overrides this with
+        // its own `vi.fn` — the same shape as `startPhrase`'s 409 arms.
+        getPhraseSeedCleanup: vi.fn(
+            async (storyId: string, key: string, seed: string): Promise<SeedCleanupProposal> => ({
+                ok: true,
+                // THE REAL HASH, not a stand-in: the desk compares it against the draft in the Seed box to prove a
+                // proposal belongs to the text it was computed over, so a fake that invented one would hide a
+                // mismatch. `shared/seed-hash.ts` is the browser-side module the desk itself dials.
+                source_hash: seedHashOf(seed),
+                text: seed,
+                changed: false
             })
         ),
         // T-W4 — ONE CHAPTER ENTRY's hand revision: the revise envelope, but with the PHRASE ② read as `view`

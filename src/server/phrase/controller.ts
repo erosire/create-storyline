@@ -64,6 +64,90 @@ export interface PhraseAnswerContract {
     schema: unknown;
 }
 
+/**
+ * What one phrase's STRUCTURING seat is told about the book it is structuring.
+ *
+ * It is an INPUT rather than a captured string because the seat's law is not constant: Phrase ②'s job
+ * sentence has to print THIS phrase's seed hash (the value `tools/plotlines.ts:structurePlotlines`
+ * compares, `plotlines.ts:187`) and the chapter count already on the record (R3, D-3b), and both are
+ * per-book facts. `story` is `undefined` only on the direct-render fallback path
+ * (`run/brief.ts:renderJob` called for a Work Item whose Story row is gone — `assembleBrief` throws
+ * before that), so a seat's copy has to have an honest answer for it rather than a thrown one.
+ */
+export interface PhraseStructureSeatInput {
+    store: Store;
+    story: Story | undefined;
+}
+
+/** One assembled brief section: the heading the brief prints, and the body under it. */
+export interface PhraseBriefSection {
+    heading: string;
+    body: string;
+}
+
+/**
+ * THE STRUCTURE SEAT — one phrase's structuring-Editor law (R2/R3), the fifth instruction slot.
+ *
+ * WHY THIS IS A SEAT AND NOT A KIND: the loop generates BOTH structuring jobs with the SAME Work Item
+ * kind (`structure_seed` — `loop/work.ts:1935` for Phrase ① and `loop/work.ts:1614` for Phrase ②),
+ * because the KIND is "an Editor derives a brief before anything is drafted" and that sentence is
+ * true of both phrases. What differs is the artifact, the tool, and the number the seat owns. Before
+ * this slot existed, `run/brief.ts:jobStatement` could only ask the kind, so Phrase ②'s structuring
+ * Editor was handed Phrase ①'s sentence — it was told to call `structureSeed` over the Story's Seed
+ * and to list `research_questions`, in the one brief whose own role prompt told it the opposite. That
+ * is the "the Editor messed up the compile" symptom the Owner reported: the seat was not wrong about
+ * the phrase seed, it was briefed for the other phrase.
+ *
+ * WHY THE PHRASE OWNS THE TEXT (documents/specifications.md:2044, R7): the phrase controller is the
+ * single owner of instruction law, so a third phrase adds one more slot here rather than a new phrase
+ * branch in the brief builder. `run/brief.ts` keeps ONE fact — which seat a Work Item id names, via
+ * {@link phraseStructureSeatOf} — and never names a phrase.
+ */
+export interface PhraseStructureInstructionSet {
+    /**
+     * The claim-key family that identifies THIS phrase's structure seat in a Work Item id:
+     * `wi_structure_seed` (phase ①, `loop/work.ts:1935`) or `wi_structure_plotlines`
+     * (`loop/records.ts:1420`, `PLOTLINES_STRUCTURE_ITEM_PREFIX`).
+     *
+     * The family, not the Story's phase, is the discriminator, and it has to be: the two phrases'
+     * structuring claims are deliberately disjoint — the same text in both phrases hashes the same, and
+     * one family would let Phrase ①'s accepted structuring silently satisfy Phrase ②
+     * (`loop/work.ts:1543-1545`) — and a phase read would misroute a Phrase ② structure job that
+     * re-arms while the book is already in phase `chapters`. A test ties this literal to the planner's
+     * real key (`loop/phase2-groups.test.ts`), so a rename in either layer fails loudly.
+     */
+    seatKeyPrefix: string;
+    /**
+     * Does this phrase's ONE structuring write DECLARE the chapter count (D-3b)?
+     *
+     * It is a capability question, not a wording one, and only the phrase can answer it: Phrase ①'s
+     * `structureSeed` writes a `seed_briefs` row and leaves `summaries.chapter_count` the Author's, while
+     * Phrase ②'s `structurePlotlines` accepts the brief and THAT is the write that sets the count
+     * (`controllers/plotlines.ts:acceptPlotlineBrief`). `run/brief.ts`'s tool-etiquette line says "never
+     * touch `chapter_count`" to every crew in the book — true for every seat but this one, where the
+     * number is the whole product of the job. Naming it per phrase keeps D-3b intact (the count is still
+     * never an authoring crew's field, and the Author's number stays the default the seat must honor or
+     * explain, R3) without the brief builder asking which phrase it is talking to.
+     */
+    declaresChapterCount: boolean;
+    /** The engine-owned job sentence — the first block of the brief's `THE JOB` section. */
+    job: (input: PhraseStructureSeatInput) => string;
+    /** The `ARTIFACT UNDER REVIEW` heading, so the seat cannot mistake which record it is judging. */
+    artifactHeading: (input: PhraseStructureSeatInput) => string;
+    /**
+     * The artifact the seat structures, rendered WHOLE (E-1, D-13), or `undefined` when the brief's
+     * existing `SEED` section already is that artifact (Phrase ①).
+     *
+     * This is the section that makes the phrase seed reach the seat at all. The job NOTE is clipped to
+     * 600 characters by `run/brief.ts:renderJob` (`clip(item.note, 600)`, `brief.ts:747`), and the
+     * Phrase ② note's fixed prefix is 535 characters, so a whole compiled Overview used to arrive as
+     * 65 characters of prose plus a "read the full record with the read tool" tail that named no tool
+     * able to return it. A seat that declares a section gets it unclipped; the note then carries the
+     * instruction and the hash only.
+     */
+    seedSection: (input: PhraseStructureSeatInput) => PhraseBriefSection | undefined;
+}
+
 /** The four engine-owned instruction slots the prompt compiler reads (see {@link PhraseController.instructions}). */
 export interface PhraseInstructionSet {
     /** What a valid DRAFT answer looks like for this phrase. */
@@ -74,6 +158,8 @@ export interface PhraseInstructionSet {
     score: string;
     /** What the Editor may conclude about LOCKING one of this phrase's entries. */
     lock: string;
+    /** THE STRUCTURE SEAT — what this phrase's structuring Editor is told (see {@link PhraseStructureInstructionSet}). */
+    structure: PhraseStructureInstructionSet;
 }
 
 /** One entry of a parsed draft answer, in the phrase's composition order. */
@@ -197,6 +283,32 @@ export const PHRASE_CONTROLLERS: readonly PhraseController[] = [summaryPhraseCon
 /** The controller for a `phrases.key`, or `undefined` for a retired or unknown kind. */
 export function phraseController(key: string): PhraseController | undefined {
     return PHRASE_CONTROLLERS.find((controller) => controller.key === key);
+}
+
+/**
+ * The structure-seat law a Work Item is entitled to, resolved from its CLAIM KEY (seam: R7 — the
+ * phrase owns its instruction law, and `run/brief.ts` never names a phrase).
+ *
+ * WHY THE CLAIM KEY CARRIES THE ANSWER: a structuring job is generated by the planner that owns the
+ * phrase, and the claim-key family is the one field of the Work Item that records WHICH phrase armed
+ * it (`wi_structure_seed_<story seed hash>` vs `wi_structure_plotlines_<phrase seed hash>`). Story
+ * phase cannot answer it — a Phrase ② structure claim re-armed while the book is in phase `chapters`
+ * is still Phrase ②'s job — and the kind cannot either, because both phrases deliberately share the
+ * `structure_seed` kind (`loop/work.ts:1598`).
+ *
+ * A key that matches no family falls back to Phrase ①'s copy rather than throwing, and that is a
+ * choice, not an accident: the kind predates Phrase ②, and a hand-created or directive-armed
+ * structuring job is the Seed-structuring pass it has always been. Silence about the phrase would be
+ * the bug; a job that says which phrase it is never has to be guessed at.
+ */
+export function phraseStructureSeatOf(workItemId: string): PhraseStructureInstructionSet {
+    const seat = PHRASE_CONTROLLERS.find(
+        (controller) =>
+            controller.instructions.structure.seatKeyPrefix !== '' &&
+            workItemId.startsWith(controller.instructions.structure.seatKeyPrefix)
+    );
+
+    return seat?.instructions.structure ?? summaryPhraseController.instructions.structure;
 }
 
 /**

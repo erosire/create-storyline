@@ -22,6 +22,7 @@ import {
     type ApiClient,
     type PhraseEntryReviseResult,
     type PhraseStartResult,
+    type SeedCleanupProposal,
     type StreamKind,
     type StoryPatch
 } from './api';
@@ -43,6 +44,10 @@ function harness(
         getPhraseDetail?: ApiClient['getPhraseDetail'];
         startPhrase?: ApiClient['startPhrase'];
         revisePhraseEntry?: ApiClient['revisePhraseEntry'];
+        // R7 — the Seed proofread, overridable so a test can answer a proposal, a guard refusal, or a route
+        // failure. Left alone it is `testing/shell-fakes.tsx`'s "nothing to fix" default, which is the one answer
+        // that cannot invent a rewrite a fixture never asked for.
+        getPhraseSeedCleanup?: ApiClient['getPhraseSeedCleanup'];
     } = {}
 ) {
     const rows = [storyRow('s1'), storyRow('s2')];
@@ -84,6 +89,10 @@ function harness(
                 seed_chars: 67,
                 seed_head: 'A smuggler pays the tide to cross the salt road, and the road collects.',
                 started: { id: 'start_1', at: '2026-11-09T12:00:00.000Z' },
+                // R11 — the pointer fields are part of the receipt the store commits from. The fake's book has an
+                // unsigned Summary, so the crew stays on Phrase ① and the route's own sentence rides with it.
+                phase_opened: false,
+                phase_open_reason: `the Summary is not signed off, so the crew stays on Phrase ①: POST /stories/${storyId}/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)`,
                 view: phraseDetailView(storyId, { seed_chars: 67 })
             }))
     );
@@ -122,6 +131,12 @@ function harness(
             getPhraseDetail,
             startPhrase,
             revisePhraseEntry,
+            // R7 — passed through ONLY when the test names one: spreading an explicit `undefined` over the base
+            // fake would leave the verb undefined, and the tests that rely on the default answer would be testing
+            // a shell with no route instead.
+            ...(options.getPhraseSeedCleanup === undefined
+                ? {}
+                : { getPhraseSeedCleanup: options.getPhraseSeedCleanup }),
             // The Summary read keeps its own slot here too, so the two caches can be told apart in the
             // assertions below (`phrases.s1` has five groups, `phraseDetails.s1` has three chapter entries).
             getPhrase: vi.fn(async (storyId: string) => groupedPhraseView(storyId)),
@@ -355,5 +370,114 @@ describe('the store — the Phrase ② verbs commit the receipt, not a guess (T-
 
         expect(fresh.getSnapshot().phraseDetails).toEqual({});
         expect(fresh.getSnapshot().phraseDetailErrors).toEqual({});
+    });
+});
+
+// R7 — THE SEED PROOFREAD IN THE STORE. The verb is the only one on this surface that WRITES NOTHING, and the two
+// things worth pinning are exactly the two things a reader of the other verbs would assume wrongly: that the value
+// is committed into the snapshot (it is not — it lives in the card, and dies with the draft it describes), and that
+// the shell refetches afterwards (it does not — there is no row that changed, and a refetch would re-render the
+// handoff card under a draft the Author is still typing).
+describe('the store — the Seed proofread answers the card, not the snapshot (R7)', () => {
+    /** The cleanup verb's calls, as the literal argument list the client received. */
+    function cleanupCalls(client: ApiClient): unknown[][] {
+        return (client.getPhraseSeedCleanup as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    }
+
+    it('hands the proposal back untouched, commits nothing, and reads nothing else (P10)', async () => {
+        // `as const` on `ok`, because the union's arms are keyed by the LITERAL booleans — an inferred
+        // `ok: boolean` is a value that matches neither arm, which is exactly the shape error the card would
+        // inherit if a caller ever built a proposal out of a variable.
+        const proposal: SeedCleanupProposal = {
+            ok: true,
+            source_hash: '9b8387ee',
+            text: 'A mapmaker finds her own coastline redrawn on a chart she surveyed herself.',
+            changed: true
+        };
+        // The GROUPED dial, because that is the surface the handoff card is on — and the one where `openStory` has
+        // already fetched the Phrase ② read, so "the proofread re-read nothing" has a real number to compare.
+        const world = harness({ mode: 'groups', getPhraseSeedCleanup: vi.fn(async () => proposal) });
+
+        await world.store.openStory('s1');
+
+        const storyReads = (world.client.getStory as unknown as { mock: { calls: unknown[][] } }).mock.calls.length;
+        const detailReads = detailCalls(world.client);
+
+        expect(await world.store.requestSeedCleanup('s1', 'plotlines', 'A mapmaker she find her own coastline.')).toEqual(
+            proposal
+        );
+
+        // THE ARGUMENTS, verbatim: the draft rides in the query, so this list IS the claim that the pass read the
+        // text the card was holding.
+        expect(cleanupCalls(world.client)).toEqual([['s1', 'plotlines', 'A mapmaker she find her own coastline.']]);
+
+        // NO REFETCH, IN EITHER SLOT. The read changed no row, so re-reading the Story and the Phrase ② surface
+        // would be work bought for nothing — and the hazard is concrete: the handoff card would re-render, and its
+        // proposal area would be re-mounted under a draft the Author is still typing.
+        expect((world.client.getStory as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(storyReads);
+        expect(detailCalls(world.client)).toEqual(detailReads);
+
+        // THE PROPOSAL IS NOT A RECORD: it goes to the caller and nowhere else. Nothing in the snapshot grew a slot
+        // for it, and the phrase caches are exactly what `openStory` put there.
+        expect(world.store.getSnapshot()).not.toHaveProperty('seedCleanup');
+        expect(world.store.getSnapshot().phraseDetails.s1).toBeDefined();
+    });
+
+    it('a guard refusal is a VALUE, not the shell’s failure line (AC3)', async () => {
+        const world = harness({
+            getPhraseSeedCleanup: vi.fn(
+                async (): Promise<SeedCleanupProposal> => ({ ok: false, source_hash: '9b8387ee', refusal: 'numbers_lost' })
+            )
+        });
+
+        await world.store.openStory('s1');
+
+        // The two arms of a 200 both come back: the card decides what to print from `ok`, and the store has no
+        // business deciding that a refused rewrite is an error.
+        expect(await world.store.requestSeedCleanup('s1', 'plotlines', 'A mapmaker needs 6 charts.')).toEqual({
+            ok: false,
+            source_hash: '9b8387ee',
+            refusal: 'numbers_lost'
+        });
+        expect(world.store.getSnapshot().error).toBeNull();
+    });
+
+    it('a route failure answers null and prints the server’s own sentence (L-13)', async () => {
+        const world = harness({
+            getPhraseSeedCleanup: vi.fn(async (): Promise<never> => {
+                throw new ApiError(
+                    409,
+                    'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
+                );
+            })
+        });
+
+        await world.store.openStory('s1');
+
+        expect(await world.store.requestSeedCleanup('s1', 'plotlines', 'A brief.')).toBeNull();
+        // VERBATIM, in the shell's channel — the same line `startPhrase`'s refusals use, because both are about
+        // the same control, and the card renders no proposal so there is nowhere else for it to go.
+        expect(world.store.getSnapshot().error).toBe(
+            'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
+        );
+    });
+
+    it('a successful proofread clears the error line the refused start left behind', async () => {
+        const world = harness({
+            startPhrase: vi.fn(async (): Promise<never> => {
+                throw new ApiError(409, 'the plotlines Phrase is already started on this Story');
+            })
+        });
+
+        await world.store.openStory('s1');
+
+        expect(await world.store.startPhrase('s1', 'plotlines', { source: 'custom', text: 'A brief.' })).toBeNull();
+        expect(world.store.getSnapshot().error).toBe('the plotlines Phrase is already started on this Story');
+
+        await world.store.requestSeedCleanup('s1', 'plotlines', 'A mapmaker she find her own coastline.');
+
+        // An error strip that outlives the request which raised it describes a moment that has passed; the read
+        // succeeded, so the desk stops claiming anything failed (L-13).
+        expect(world.store.getSnapshot().error).toBeNull();
     });
 });

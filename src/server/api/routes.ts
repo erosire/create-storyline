@@ -50,6 +50,11 @@ import { authorAttr, competingRevisions, liveRuns, openIssueFindings, requireSto
 import { rememberGlobalMaxConcurrent } from '../loop/ceiling';
 import { isAgentKind, setAgentModel } from '../run/agent-models';
 import { listProviderModels } from '../run/provider-models';
+// R7 — the desk's ONE-TIME Seed cleanup: the one-shot, tool-less proposal the Author confirms BEFORE the
+// phrase exists. It is in the run layer (`run/seed-cleanup.ts`) but it is not a run: no Work Item, no
+// `runs` row, no thread, and NO `Store` handed in, which is what makes it structurally unable to write.
+// This route is its only caller.
+import { proposeSeedCleanup } from '../run/seed-cleanup';
 // U-13's two routes install and queue drafts, so they use the tool layer's own §4.15 body codec and
 // its task opener: the Editor's `selectRevision`/`requestMerge` read the SAME functions, so an
 // Author's choice and a Reader's choice cannot disagree about what a stored draft says (D-22, D-23).
@@ -127,9 +132,19 @@ import {
     type StoryPhase,
     type Template
 } from '../../shared/types';
+// R7 (this wave) — the phrase-start journal line names the `seed_hash` of the text it copied. That value is
+// the key every Phrase-② gate is written against (the structuring claim ref `wi_structure_plotlines_<hash>`
+// and `plotline_briefs.seed_hash`), so putting it beside the act makes the audit JOINABLE to the brief and the
+// seats instead of leaving the Author's "what did the Start actually copy" question to a re-read. Same function
+// the phrase's own gates hash with (`shared/seed-hash.ts`), so one text has one hash everywhere.
+import { seedHashOf } from '../../shared/seed-hash';
 import type { GoalCriterionOp } from '../../dashboard/api';
 import type { StoryKnowledge } from '../knowledge';
 import type { StoryThreadLog } from '../run/thread-log';
+// R7 — the transport the desk's Seed cleanup asks. It is the SAME `ChatClient` the runs are spawned with
+// (`server.ts` resolves the provider triple once); the routes only ever hand it to `proposeSeedCleanup`,
+// which sends one tool-less turn and writes nothing.
+import type { ChatClient } from '../llm';
 import {
     agentThreads,
     agentThreadsAcross,
@@ -218,6 +233,24 @@ export interface StorylineRoutesDeps extends ProjectionDeps {
     providerBaseUrl: string;
     /** The transport's optional bearer; the catalog request sends the same one. */
     providerApiKey?: string;
+    /**
+     * R7 — the model transport, the same instance `./server` builds for the runs. It is here for exactly
+     * ONE verb, `GET …/phrases/:key/seed/cleanup`, which asks `run/seed-cleanup.ts` for a proposal and
+     * writes nothing.
+     *
+     * OPTIONAL, and absent is a real state rather than a legacy one: `./server` always passes it (both
+     * shapes resolve the provider triple before wiring the routes), so what is absent is a hand-wired
+     * embed or a route test that never handed in a transport. Such a host has no model to ask, and the
+     * cleanup answers 409 with that sentence instead of pretending a proofread happened. Everything else
+     * in this table stays reachable, because every other route answers from ROWS.
+     */
+    chat?: ChatClient;
+    /**
+     * R7 — the model the cleanup pass asks for, the host's default (`server.ts`'s `defaultModel`, the same
+     * value the run layer is handed). It travels beside `chat` because a transport without a model name is
+     * a request the provider will refuse.
+     */
+    defaultModel?: string;
     /** Test seam for the catalog fetch; defaults to `globalThis.fetch`. */
     fetchImpl?: typeof fetch;
     /** SSE debounce: one commit bursts into one frame per topic, so a sweep cannot flood the client. */
@@ -376,6 +409,15 @@ async function startPlotlinesFromAcceptedSummary(store: Store, storyId: string):
             );
 
             started = result.started;
+
+            // R12 — THE PROVENANCE, and ONLY FOR THE ROW THIS COMMIT CREATED. The accept's arm is `compiled`
+            // by definition: the text is `compiledSummaryOf`, the Overview the Author just accepted. A row
+            // that already existed (`started: false`) is left EXACTLY as it is — the accept touches nothing
+            // on an already-started phrase, and stamping a legacy row's absent provenance with a word this
+            // request did not earn would turn "unknown" into a guess (R6's no-migration rule).
+            if (result.started) {
+                recordSeedSource(store, result.phrase.id, 'compiled', storyId, 'POST /stories/:id/lock');
+            }
         });
     } catch (error) {
         // R4's tolerance, stated rather than swallowed: the accept happened, and the sentence names the
@@ -394,6 +436,172 @@ async function startPlotlinesFromAcceptedSummary(store: Store, storyId: string):
               phrase_started: false,
               phrase_start_reason: `the ${controller.definition.key} Phrase was already started by the time the accept reached it, so its seed is the text that row was written against (D-72).`
           };
+}
+
+// ---------------------------------------------------------------------------
+// R8 (D-78, one move later) — the Start verb's second move: Phase ② opens when Phase ① is signed off
+// ---------------------------------------------------------------------------
+
+/** What the phase leg reports — the two fields the Start response carries about the loop's pointer. */
+interface PhraseStartPhaseOpen {
+    /** True ONLY when THIS start moved the Story into phase `plotlines`; a no-op says why instead. */
+    phase_opened: boolean;
+    /** `''` when the pointer moved. Otherwise the sentence the rail shows under a successful start. */
+    phase_open_reason: string;
+}
+
+/** The one shape the three no-move answers share, so a refusal can never be mistaken for a write. */
+const phaseNotMoved = (reason: string): PhraseStartPhaseOpen => ({ phase_opened: false, phase_open_reason: reason });
+
+/**
+ * R8 — "OPENING PHRASE ② MOVES THE CREW WHEN PHASE ① IS ALREADY SIGNED OFF." The Author's Start verb is
+ * the only hand here (D-1: `phase` is owned by the loop engine and the Author, never by an agent tool), and
+ * the write is the Author's act: it carries `authorAttr` with the route in the sentence, exactly like the
+ * other Author-shaped Story-row writes this file makes (`/findings/:id` clears the desk, `/ideas/:id/select`
+ * empties the tray, `PATCH /stories/:id` moves a dial).
+ *
+ * WHY THE POINTER HAS TO MOVE AT ALL (the user's report): Phase is the loop's only pointer
+ * (`shared/types.ts:308 Story.phase`), and work generation is phase-gated (`loop/work.ts:2282` runs the
+ * Summary pipeline only for `phase: 'summary'`; `:2297` runs the chapter lane only for `phase: 'plotlines'`).
+ * So a Story that holds a started Phrase ② but still points at phase ① keeps buying Phrase-① passes: the
+ * crew "starts working on Phrase ① again" instead of the phrase the Author just opened.
+ *
+ * WHY THIS LEG AND NOT THE ENGINE'S: the Accept already moves the pointer (`loop/engine.ts:lockPhase` →
+ * `loop/invalidation.ts:lockWrites` → `next_phase: 'plotlines'`), and it moves it as part of LOCKING. Here
+ * the lock already happened — the phase write is a separate Author act that happens to need the same
+ * precondition — and `lockPhase` cannot be re-entered: it would re-run `lockWrites` (voiding findings,
+ * emptying a tray that is already empty) and re-judge a Goal gate this verb has no business judging. The
+ * field set and the journal shape below are `engine.ts:3222-3235`'s, byte-for-byte in kind: the same
+ * `status`/`pending_kind`/`blocked_on`/`probe` handling, an `authorAttr` line naming the act, one commit.
+ *
+ * THE THREE WAYS IT DOES NOT MOVE, each reported rather than thrown — the phrase started either way, and a
+ * start the pointer refused is a successful start with a sentence beside it (the same tolerance R4's
+ * auto-start answers with):
+ *   - the phrase is not Phrase ② (the route is phrase-generic; only Phrase ② owns a phase to enter);
+ *   - the Summary is not signed off (`summary_locked` false) — L-33's precondition read as a guard: the
+ *     crew stays on Phrase ① until the Author accepts it, which is the half of the Author's decision that
+ *     says "before sign-off, nothing moves"; and
+ *   - the pointer is already at phase ② or past it — no double advance, no walk backwards. `lockPhase` owns
+ *     those moves, and a Story in `chapters` does not reopen phase ② because a phrase verb ran.
+ */
+async function openPlotlinesOnSignedOffSummary(
+    store: Store,
+    storyId: string,
+    phraseKey: string
+): Promise<PhraseStartPhaseOpen> {
+    // PHRASE ② OWNS PHASE ②. `shared/phrase.ts` pairs them, and a third on-demand kind enters its own phase
+    // through its own leg; the start route itself stays phrase-generic (R1).
+    if (phraseKey !== PHRASE_PLOTLINES_KEY) {
+        return phaseNotMoved(
+            `a ${phraseKey} Phrase start owns no phase of its own; the loop's pointer moves with the phrase that owns the phase the Story would enter (R1)`
+        );
+    }
+
+    const story = requireStory(store, storyId);
+
+    // L-33, read as the precondition rather than as a refusal: phase ② may be ENTERED only with phase ①
+    // locked. Unsigned, the crew keeps working Phrase ① — the Author has not frozen that text yet.
+    if (!story.summary_locked) {
+        return phaseNotMoved(
+            `the Summary is not signed off, so the crew stays on Phrase ①: POST /stories/${storyId}/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked)`
+        );
+    }
+
+    // NO DOUBLE ADVANCE. The Accept already moved this Story (that is the normal route), and a Story in
+    // phase ③ is nowhere near phase ② again; neither state gets a second write from a phrase verb.
+    if (story.phase !== 'summary') {
+        return phaseNotMoved(
+            `the Story is already in phase ${story.phase}, which is where the loop's pointer belongs; a Phrase ② start does not move it again (L-7: each phase transition is the Author's sign-off)`
+        );
+    }
+
+    const at = new Date().toISOString();
+
+    // ITS OWN COMMIT, after the phrase row's: a pointer that moved while the start rolled back would be a
+    // phase the Author never asked for, and a start that survived a refused pointer write stays explainable
+    // because the receipt below says so. Same two-commits-in-the-order-the-Author-experienced-them shape as
+    // the Accept's lock → auto-start pair.
+    await store.commit('open_plotlines_phase', () => {
+        const fresh = requireStory(store, storyId);
+
+        store.stories.update(
+            fresh.id,
+            {
+                phase: 'plotlines',
+                // D-2a's hand-off, exactly as the lock's phase write does it: the phase being entered is
+                // open work, so the Story is `ready` with nothing pending and nothing blocked on.
+                status: 'ready',
+                pending_kind: 'none',
+                status_reason: `phase summary was signed off and the Author started the Plotlines Phrase at ${at}; phase plotlines is open (L-7, L-29)`,
+                blocked_on: '',
+                // The drain round is per phase, so a phase move retires it (L-37) — the same field the
+                // lock's phase write clears (`loop/engine.ts:3231`).
+                probe: undefined
+            },
+            authorAttr(
+                authorWhy(
+                    'POST /stories/:id/phrases/:key/start',
+                    storyId,
+                    `the Author started the Plotlines Phrase while phase summary was already signed off at ${at}; phase plotlines opened (L-7, L-29, L-33)`
+                )
+            ),
+            [{ id: fresh.id, rev: fresh.rev }]
+        );
+    });
+
+    return { phase_opened: true, phase_open_reason: '' };
+}
+
+// ---------------------------------------------------------------------------
+// R12 — the Seed's PROVENANCE, recorded on the phrase row at its start
+// ---------------------------------------------------------------------------
+
+/**
+ * The arm a Seed came from — ONE vocabulary for three places: the request's `source`, the row's
+ * `seed_source`, and the phrase read's `seed_source`. `compiled` is this Story's compiled Summary (whether
+ * the Author pressed the handoff button or the Summary Accept started the phrase for them); `custom` is the
+ * Author's own text, which is the only kind the one-time cleanup (`run/seed-cleanup.ts`) ever proposes.
+ */
+type PhraseSeedSource = 'compiled' | 'custom';
+
+/**
+ * Records WHICH ARM wrote this phrase's Seed, in the start's own commit.
+ *
+ * WHY IT IS A WRITE AT ALL (and not a derived read): the two arms can copy the same characters, and once
+ * they are on the row nothing — not the phrase, not the Seed's hash, not the rail — says whose prose they
+ * are. The user's model of the Editor depends on the difference ("the Editor's job is to fix grammar if
+ * there is any; that is only needed when the seed comes from the user directly"), and a fact the desk needs
+ * has to be on the row that outlives the request. The only moment the answer exists is the start, so this
+ * is where it is written: ONCE, beside the text it describes, and no later verb re-writes it (a phrase is
+ * never re-seeded, D-72).
+ *
+ * WHY THE DETAIL SENTENCE CARRIES THE VALUE: P11 asks the journal to state the decision, and an audit line
+ * that says only "provenance recorded" cannot be read next to the `seed` it describes. `seed_source` is
+ * also the value the desk's cleanup gate reads, so a named arm in the journal joins the audit to the pass
+ * that the arm licenses.
+ */
+function recordSeedSource(
+    store: Store,
+    phraseId: string,
+    source: PhraseSeedSource,
+    storyId: string,
+    route: string
+): void {
+    store.phrases.update(
+        phraseId,
+        { seed_source: source },
+        authorAttr(
+            authorWhy(
+                route,
+                storyId,
+                `the Seed this phrase copies came from \`${source}\` ` +
+                    (source === 'custom'
+                        ? '(the Author typed it, and their own press confirmed it — the only arm the one-time grammar cleanup ever runs on, R7)'
+                        : "(this Story's compiled Summary, which the crew wrote and the Author reviewed, so no cleanup pass is owed on it, R7)") +
+                    `; the provenance is recorded ONCE, at the start, because no later read can tell the two arms apart (R12, D-72)`
+            )
+        )
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,9 +1401,44 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      * after a start therefore cannot move Phrase ② — which is why the rail shows the copied text
      * (`seed_head`) rather than re-deriving it, and why a `GET` after a Seed edit still says the same thing.
      *
+     * R7 (this wave) — THE `custom` ARM IS THE AUTHOR'S WORDS, AND NOTHING REWRITES THEM SILENTLY. The recorded
+     * decision is "Editor normalizes the seed once, at start, with Author confirm": a Seed that came from the
+     * Author directly may carry the typos of a typed brief, while a Seed COMPILED from Phrase ① was written and
+     * reviewed by the crew and needs no pass at all. So the cleanup is a pre-start PROPOSAL, never an edit: it
+     * runs before this handler, the confirmed text is what the Author then presses Start with, and `phrases.seed`
+     * is still written exactly ONCE — the only ordering that keeps D-72's single copy, D-76/§18.13's "no verb
+     * replaces the seed after the start", and Phrase ②'s hash gate (`structurePlotlines` validates
+     * `phraseSeedOf`) out of reach of a seed that moves underneath it. The transform is the one-shot runner at
+     * `run/seed-cleanup.ts`: a tool-less turn, no run row, no writes, with the number-train and length guards
+     * that reject a rewrite rather than proposing it (P10 / L-19 — a projection, not an edit).
+     *
+     * HOW THE CONFIRM REACHES THIS VERB, and why the request never changed. The proposal is offered by
+     * `GET …/phrases/:key/seed/cleanup` (below) and the Author's confirm is a SECOND PRESS OF THIS SAME
+     * BUTTON: the desk puts the cleaned text in the Seed box and the next `{source:'custom', text}` carries
+     * it. `StartPhraseRequest` and `StartPhraseResult` therefore stay byte-identical — no `cleanup` flag, no
+     * pending slot on the receipt — which is the one property that keeps the two `additionalProperties:
+     * false` schemas this contract pins from widening, and keeps `state.ts:startPhrase` committing one
+     * receipt. The transport for the pass is `deps.chat` + `deps.defaultModel`, which `server.ts` now hands
+     * the route table; the arm itself is unchanged: `custom` is trimmed and otherwise untouched, so the text
+     * the Author pressed with is the text the phrase is written from.
+     *
+     * R12 (this wave) — THE START ALSO RECORDS WHICH ARM WON. In the SAME commit as the copied text, the
+     * phrase row gains `seed_source: 'custom' | 'compiled'` (see {@link recordSeedSource}): the provenance is
+     * the fact the Editor's two different jobs turn on — an Author-typed Seed gets the grammar pass, a
+     * compiled one never does — and it is unrecoverable after the copy, because both arms store plain prose.
+     * A row this verb did not create (`started: false`, a concurrent start) is left untouched, and a phrase
+     * written before the field exists keeps it ABSENT, which means "legacy: nobody recorded which arm this
+     * Seed came from" — never a defaulted `compiled` (R6). The receipt shows the value where the rail reads
+     * everything else: on `view.seed_source`.
+     *
      * NO PHASE GATE, ON PURPOSE: the loop's phase counter says nothing about whether the Author may start
      * Phrase ②. Starting is an Author decision (R5), so the only refusals here are about the STATE of the
-     * text being handed over — never about "phase ① is not locked yet".
+     * text being handed over — never about "phase ① is not locked yet". R8 did NOT move this: a start is
+     * still accepted on an unsigned Summary, and the phase pointer simply does not follow until the Author
+     * signs phase ① off (see {@link openPlotlinesOnSignedOffSummary}). It also does not touch what
+     * §18.12's line for this verb — "a Start that leaves the Summary alone", pinned at
+     * `phrase-start-routes.test.ts:654` — protects: the leg below writes the STORY row, and no Summary row,
+     * group, Overview or lock mirror.
      *
      * THE REFUSALS, each with its own sentence:
      *   - 400 — `source: 'custom'` without a non-blank `text`. This verb does not author the Seed;
@@ -1209,6 +1452,14 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
      *
      * THE `view` IS THE POINT OF THE RESPONSE: one round trip gives the rail its started phrase, its empty
      * entry set and its copied Seed preview, so the press does not need a follow-up `GET` to show anything.
+     *
+     * PHRASE ② ALSO OPENS PHASE ② WHEN PHASE ① IS ALREADY SIGNED OFF (R8) — see
+     * {@link openPlotlinesOnSignedOffSummary}. The Author's decision, recorded when it was made: starting
+     * Phrase ② on a Summary the Author has already accepted moves the crew to Phrase ②; starting it BEFORE
+     * the accept moves nothing, because Phrase ① is still live text. The two `phase_opened` /
+     * `phase_open_reason` fields report which of the two happened, and `phase_open_reason` names the verb
+     * (`POST /stories/:id/lock`) that does move the pointer when this one may not. The response shape stays
+     * additive: every key the verb answered before is still there, byte-stable.
      */
     app.post('/stories/:id/phrases/:key/start', async (c) => {
         const store = bookOf(c);
@@ -1300,22 +1551,80 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
             // journal is a phrase the Author cannot explain afterwards.
             let started: PhraseStartResult | undefined;
 
+            // THE AUDIT LINE NAMES THE TEXT, not just the arm (P11). "Started from the compiled Summary" left
+            // the next reader guessing which of `compiledSummaryOf`'s three answers travelled — the complete
+            // reviewed Overview, the vector the Author chose, or the live composed Overview — and the projection
+            // keeps that choice to itself, so this layer says the rule and records the two facts that ARE
+            // specific here: the length and the hash of the bytes that were copied. `seed_hash` is the value
+            // Phrase ②'s whole pipeline is keyed to (`loop/records.ts:plotlinesStructureKeyOf`,
+            // `plotline_briefs.seed_hash`), which is what makes the journal line joinable to the brief and to
+            // the seats instead of being a sentence beside them.
+            const copied =
+                `— ${seed.length} characters, seed_hash=${seedHashOf(seed)}. ` +
+                (source === 'compiled'
+                    ? 'The bytes `compiledSummaryOf` handed over: the complete reviewed Overview when the crew produced one, else the vector the Author chose, else the composed Overview as it stood at that moment (D-76).'
+                    : 'The words the Author handed over in this request, which the Author’s own press confirms (R7): the row is written ONCE with exactly these bytes, and after the start no verb replaces them (D-72, D-76).');
+
             await store.commit('phrase_start', () => {
-                started = controller.start(
+                const result = controller.start(
                     store,
                     requireStory(store, story.id),
                     authorAttr(
                         authorWhy(
                             'POST /stories/:id/phrases/:key/start',
                             story.id,
-                            `the ${controller.definition.title} was started from ${source === 'compiled' ? "the Story's compiled Summary" : "the Author's own text"} (D-72)`
+                            `the ${controller.definition.title} was started from ${
+                                source === 'compiled' ? "the Story's compiled Summary" : "the Author's own text"
+                            } (D-72) ${copied}`
                         )
                     ),
                     { seedText: seed }
                 );
+
+                started = result;
+
+                // R12 — THE PROVENANCE, IN THE SAME COMMIT AS THE TEXT. `seed_source` answers, once and for
+                // the life of the row, whether this Seed came from the Author's hand (`custom`) or out of
+                // Phrase ①'s compiled Overview (`compiled`) — the distinction the whole product model turns
+                // on, because the first is text nobody has proofread and the second is text the crew wrote.
+                // It CANNOT be derived afterwards: both arms copy plain prose, and the two are
+                // byte-indistinguishable once stored, so the only moment it exists is this one.
+                //
+                // WHY A SECOND WRITE AND NOT A FIELD ON THE CREATE: the row is minted by the phrase's own
+                // controller (`phrase/controllers/plotlines.ts:startPlotlinesPhrase`), which knows the TEXT
+                // it is handed and not the ARM that supplied it — the arm is an HTTP decision (`StartPhraseRequest.source`),
+                // and teaching the domain layer about request bodies to save one journaled update would put
+                // the wire in the domain. Same commit, so the two can never disagree: there is no moment in
+                // which the book holds a copied Seed whose origin was never recorded.
+                //
+                // ONLY FOR THE ROW THIS CALL CREATED. The route refuses a second start before it writes
+                // (the 409 above), so `started: false` here means something started it in the same moment —
+                // and that row's origin is not this request's to declare, least of all on a book written
+                // before the field existed (R6: an absent provenance stays absent, never defaulted).
+                if (result.started) {
+                    recordSeedSource(store, result.phrase.id, source, story.id, 'POST /stories/:id/phrases/:key/start');
+                }
             });
 
             if (started === undefined) return refusal(c, new Error('the phrase start produced no result'));
+
+            // R8 — THE POINTER, SECOND (see {@link openPlotlinesOnSignedOffSummary}). Strictly after the
+            // phrase row, in its own commit, and REPORTED rather than thrown: a pointer write that fails
+            // leaves a started phrase and an honest sentence, exactly like the Accept's auto-start leg
+            // (`startPlotlinesFromAcceptedSummary`) answers a refused start with a reason instead of a
+            // rewind. The guard is L-33's precondition, so the only Story this moves is one whose phase ①
+            // is already signed off.
+            let phaseMove: PhraseStartPhaseOpen;
+
+            try {
+                phaseMove = await openPlotlinesOnSignedOffSummary(store, story.id, started.phrase.key);
+            } catch (error) {
+                phaseMove = phaseNotMoved(
+                    `the ${started.phrase.key} Phrase started, but the loop's pointer did not move: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`
+                );
+            }
 
             // Read back AFTER the commit, from the row: `seed_head`/`seed_chars` here are the phrase's own
             // projection fields, so the receipt and the rail cannot drift about what was copied, and the
@@ -1331,11 +1640,167 @@ export function createStorylineRoutes(deps: StorylineRoutesDeps): Hono {
                     seed_chars: view.seed_chars,
                     seed_head: view.seed_head,
                     started: started.started,
+                    // ADDITIVE (R8): which half of the Author's decision this press was. A rail that shows
+                    // the phrase without showing where the crew went is the rail that let the Author watch
+                    // Phrase-① work after opening Phrase ②.
+                    phase_opened: phaseMove.phase_opened,
+                    phase_open_reason: phaseMove.phase_open_reason,
                     view
                 },
                 200
             );
         } catch (error) {
+            return refusal(c, error);
+        }
+    });
+
+    /**
+     * R7 — the desk's ONE-TIME Seed cleanup: `GET /stories/:id/phrases/:key/seed/cleanup` (D-76, R12).
+     *
+     * WHAT IT IS. The recorded decision is "Editor normalizes the seed once, at start, with Author confirm",
+     * and this is the half of it the Author can reach: a Seed they typed or pasted may carry the typos of a
+     * typed brief, and the crew would then plan chapters against text nobody cleaned up. The Editor's pass
+     * (`run/seed-cleanup.ts`) answers the CLEANED TEXT and nothing else — one tool-less turn, `temperature:
+     * 0`, no `Store` handed in, so it cannot write — and the Author's confirm is the step that turns it into
+     * a Seed. The confirm is this verb's only consumer: the desk puts the proposal in the Seed box and the
+     * Author's NEXT Start press carries those bytes as `source: 'custom'`.
+     *
+     * WHY A PROPOSAL RATHER THAN AN EDIT (P10 / L-19, and the phase-① precedent at
+     * `documents/phase-1-research-pipeline.md:73` — "Clean up and structure' is a projection, not an edit").
+     * Nothing here touches a record: `phrases.seed` is still written EXACTLY ONCE, by the Start commit, with
+     * the bytes the Author confirmed. That ordering is the only one that keeps D-72's single copy, D-76's
+     * "no verb replaces the seed after the start", and Phrase ②'s seed-hash gate out of reach of a Seed that
+     * moves underneath it.
+     *
+     * WHY A `GET`, AND WHY THE SEED RIDES THE QUERY. This verb performs no write, so the honest method is a
+     * read — and because it writes nothing, it has no row to read the draft off either: the text being
+     * proofread is the Author's PENDING Seed, which lives in the desk's text box until the Start commits it.
+     * So the request target carries it (`?seed=…`), the same way `GET /runs` carries `story_id`. The cost of
+     * that shape is stated rather than hidden: a request target has a transport ceiling (a Node request line
+     * is bounded by `maxHeaderSize`), so a Seed far larger than a brief stops being addressable by this read.
+     * The alternative — widening `StartPhraseRequest` with a `cleanup_confirmed` flag and `StartPhraseResult`
+     * with a pending slot — would move two `additionalProperties: false` schemas this contract pins, and
+     * would still leave the Author pressing Start twice. Start stays byte-identical, which is what makes
+     * "the next press is the confirm" true.
+     *
+     * THE REFUSALS, each about a state the Author can act on:
+     *   - 400 — no `seed`, or a blank one. This verb does not author the text it proofreads, and a blank
+     *     brief is the Start verb's own 400, so asking after one spends a model call on nothing;
+     *   - 404 — no such Story, or a `key` outside the §4.11 catalog (R1: the catalog is the Server's);
+     *   - 409 — the phrase is not `starts_on_demand` (Phrase ① has no Seed an Author supplies, so there is
+     *     nothing of theirs to proofread — the cleanup is R7's custom arm, and only that arm);
+     *   - 409 — the phrase has ALREADY started. The cleanup belongs BEFORE the copy: a started phrase's Seed
+     *     is the text every entry, revision and claim key is written against, and no verb replaces it (D-72);
+     *   - 409 — this server has no transport wired into its route table, so there is nothing to ask.
+     *
+     * A GUARD REFUSAL IS NOT AN HTTP REFUSAL. When the pass answers `numbers_lost` / `too_short` /
+     * `too_long` / `empty_answer`, the model DID reply and the guards threw its rewrite away; that is a
+     * 200 carrying `{ok: false, refusal}` and the desk says "there is no proposal, your own text stands".
+     * A rejected cleanup is a no-op, never a worse Seed, and the desk has no confirm control to press in
+     * that state — which is what makes "silently confirmed" impossible to reach.
+     */
+    app.get('/stories/:id/phrases/:key/seed/cleanup', async (c) => {
+        const store = bookOf(c);
+        const story = storyOf(store, c.req.param('id'));
+
+        if (story === undefined) return missing(c, 'story', c.req.param('id'));
+
+        const phraseKey = c.req.param('key');
+        const controller = phraseController(phraseKey);
+
+        if (controller === undefined) return missing(c, 'phrase', phraseKey);
+
+        // ONLY A PHRASE THE AUTHOR SEEDS HAS TEXT OF THEIRS TO PROOFREAD. `starts_on_demand` is catalog data
+        // (R1), so the gate is read off the definition rather than named here: Phrase ①'s Seed is
+        // `stories.idea` and the loop writes its entries, so an Editor pass over "the Author's brief" has no
+        // arm to attach to. A third on-demand kind lands in the 200 arm without this route changing.
+        if (!controller.definition.starts_on_demand) {
+            return errorResponse(
+                c,
+                409,
+                `the ${phraseKey} Phrase has no Seed the Author hands over: its entry set comes from the catalog and the loop writes it, so there is no brief of yours for the Editor to proofread (R7). GET /stories/${story.id}/phrases/${PHRASE_PLOTLINES_KEY}/seed/cleanup is the read that takes one.`
+            );
+        }
+
+        // BEFORE THE START, OR NOT AT ALL. The proposal is what the Author confirms WITH the start; after it,
+        // the copied Seed is the input every entry, revision and claim key was written against and no verb
+        // replaces it (D-72). Saying so here keeps a desk-time suggestion from becoming a late rewrite the
+        // Author reads as "the Editor changed my Seed".
+        const startedAlready = controller.phraseOf(store, story.id);
+
+        if (startedAlready !== undefined) {
+            return errorResponse(
+                c,
+                409,
+                `the ${phraseKey} Phrase is already started on this Story (${startedAlready.id}), so its Seed is copied and read-only: the cleanup is the Editor's pass over your draft BEFORE the start, and the confirm is the Start press itself (R7, D-72).`
+            );
+        }
+
+        // THE TRANSPORT. `server.ts` hands the routes the same client the runs spawn with; a host that wired
+        // the table without one has no model to ask, and says so instead of answering with the Author's own
+        // text wearing a proposal's clothes. Captured into locals for the same reason every other dep read in
+        // this table is: the handler's narrowing has to survive the guard clauses below it.
+        const chat = deps.chat;
+        const model = deps.defaultModel;
+
+        if (chat === undefined || model === undefined) {
+            return errorResponse(
+                c,
+                409,
+                'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
+            );
+        }
+
+        // THE DRAFT, off the query. `undefined` is a request that named no text at all; a present-but-blank
+        // one is the Start verb's own 400, and asking the model to proofread nothing would spend a call on an
+        // answer the route already knows.
+        const query = c.req.query('seed');
+
+        if (query === undefined) {
+            return errorResponse(
+                c,
+                400,
+                '`seed` is the query parameter this read proofreads — the Author’s pending Seed, which has no row to read it from until the Start copies it (R7, D-72).'
+            );
+        }
+
+        const draft = query.trim();
+
+        if (draft === '') {
+            return errorResponse(
+                c,
+                400,
+                "`seed` is blank, and there is nothing to proofread: the cleanup exists to correct the grammar of text the Author wrote, and an empty Seed is the Start verb's 400 anyway (R7, D-76)."
+            );
+        }
+
+        try {
+            const outcome = await proposeSeedCleanup({ chat, model }, draft);
+
+            // THE WIRE SHAPE, narrowed from the runner's outcome: the Author's text travels BACK only as its
+            // hash, because the desk is holding the text already and re-sending a pasted brief is bandwidth
+            // spent on a copy. The hash is `shared/seed-hash.ts` over the SAME trimmed bytes the pass
+            // proofread — the identical value the Start commit journals beside the copied length — so the
+            // desk can prove which draft a proposal belongs to, and a proposal cannot be confirmed onto text
+            // it was never computed over.
+            return c.json(
+                outcome.ok
+                    ? {
+                          ok: true,
+                          source_hash: outcome.source_hash,
+                          text: outcome.text,
+                          changed: outcome.changed
+                      }
+                    : {
+                          ok: false,
+                          source_hash: seedHashOf(outcome.source),
+                          refusal: outcome.refusal
+                      },
+                200
+            );
+        } catch (error) {
+            // The provider failed, not the rule: `refusal` keeps the message the transport gave, which is the
+            // sentence L-13 wants the Author to read instead of a bare 500.
             return refusal(c, error);
         }
     });

@@ -53,7 +53,7 @@ import { type RoleAggregation, type RoleKind, type Run, type RunDelegation, type
 import { type Store, type UpdatePatch } from '../store';
 import { runModelFor } from './agent-models';
 import { buildBrief, type AssembledBrief } from './brief';
-import { isReportTool, REPORT_TOOLS, toolsForRunKind } from './catalogue';
+import { isReportTool, REPORT_TOOLS, reportToolsForStructureSeat, toolsForRunKind } from './catalogue';
 import { genericReasonerPrompt, resolveHarness, kickoffLine, type ResolvedHarness } from './harness';
 import { createTally, runAgentLoop, wasAborted, type LoopOutcome, type RunEndCause, type RunTally } from './loop';
 import { type PanelOutcome, runPanel } from './panel';
@@ -72,7 +72,7 @@ import { runEngineAgent, StoryHarnessManager } from './story-engine';
 // reader `loop/engine.ts` uses when it stamps the score rows, so the prompt the Reader is shown and
 // the `vector_hash` the ledger files cannot name different books. `server/phrase` imports nothing from
 // the run layer, so this adds no cycle (and `phase1-prompt.ts` already reaches across the same way).
-import { sectionScoreVectorHashOf } from '../phrase';
+import { phraseStructureSeatOf, sectionScoreVectorHashOf } from '../phrase';
 // PHRASE GROUP LOCK: the other half of the same read for an Editor lock seat — `{vector, group}` off the
 // `wi_group_lock_<cleanVectorHash>_<groupId>` claim key, owned by `loop/editor-lock.ts` because the
 // generator, the compiler and the settle all spell the key from there.
@@ -622,6 +622,19 @@ export class RunExecutor {
                 }
             );
 
+            // S-4's closing sentence, per seat (D-a). The kickoff repeats the closed report list, so it
+            // has to be cut the same way the brief's `TOOLS AND HOW TO END` section is cut
+            // (`run/brief.ts:renderEtiquette`): a structuring seat must not be told to end on the OTHER
+            // phrase's structuring write — Phrase ②'s Editor ending on `structureSeed` lands a Seed Brief
+            // for the wrong phrase and leaves the chapter set unaccepted, and Phrase ①'s seat is offered a
+            // `structurePlotlines` call the tool refuses outright. Every non-seat run gets the whole
+            // union, byte-identically to before, and Phrase ①'s list is unchanged too (its seat never
+            // saw `structurePlotlines` in the union, so cutting it is a no-op).
+            const kickoffTools =
+                item.kind === 'structure_seed'
+                    ? reportToolsForStructureSeat(phraseStructureSeatOf(item.id).declaresChapterCount)
+                    : REPORT_TOOLS;
+
             if (compiled !== undefined) {
                 const outcome = await this.runStructuredTurn(scope, compiled);
 
@@ -640,7 +653,7 @@ export class RunExecutor {
                     { chat: this.chat, runtime: this.runtime, runAgent: this.runAgent },
                     {
                         brief: scope.briefing.text,
-                        kickoff: kickoffLine(REPORT_TOOLS),
+                        kickoff: kickoffLine(kickoffTools),
                         model: scope.model,
                         roleName: scope.harness.roleName,
                         roleKind: scope.harness.kind,
@@ -680,7 +693,7 @@ export class RunExecutor {
                         runId,
                         requestTitle: requestTitleOf(item),
                         system: scope.briefing.text,
-                        kickoff: kickoffLine(REPORT_TOOLS),
+                        kickoff: kickoffLine(kickoffTools),
                         model: scope.model,
                         context: scope.context,
                         storyId: item.storyId,

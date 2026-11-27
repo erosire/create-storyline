@@ -37,6 +37,8 @@ import { PhaseControls } from './story-phase-controls';
 import { ContinuityPane, DigestPane, FindingsPane, SeedPane, SettingsPane } from './story-folders';
 import {
     ALL_STORY_PHRASES,
+    // R10 — the crew line's words come from the rail's vocabulary, exactly as `CrewPanel`'s mark does.
+    crewPhraseMarks,
     DEFAULT_STORY_SELECTION,
     isPhraseSeedRef,
     plotlineGroupFocus,
@@ -112,6 +114,10 @@ export function StoryView({
     const paused = story.status === 'stopped';
     const liveRuns = view.runs.filter(isLiveRun).length;
     const killedRuns = runsStoppedByPause(view.runs);
+    // R10 — WHICH PHRASE the crew is on, from the same rows the count above reads. The wire sends the label
+    // (`projections.ts:projectRunRow` on both `GET /runs` and this payload's runs slice), so the desk prints an
+    // answer rather than a guess; rows the server could not attribute come back as their own mark.
+    const crewMarks = crewPhraseMarks(view.runs);
     const lock = lockCheck(view);
 
     const summaryUnit = summaryRevisionUnit(view);
@@ -185,6 +191,32 @@ export function StoryView({
                     {story.phase === 'summary' && view.sampling !== undefined && !grouped ? (
                         <span className="sv-story-sampling">Sampling round {view.sampling.round}</span>
                     ) : null}
+
+                    {/* R10 (symptom 3, the half the Author actually sees) — WHICH PHRASE the crew is working on,
+                        on the one line that is above the fold on EVERY pane. The rail's lit row is the only other
+                        phrase word on screen, and it names what the Author is READING, not what the staff is
+                        doing; a Phrase-② Writer therefore used to sit under a rail lit on Phrase ① with nothing on
+                        the desk to say otherwise. The words are the rail's own vocabulary (`story-nav.crewPhraseMarks`
+                        → `phraseLabel`), and the key behind them is derived server-side
+                        (`server/api/projections.ts:runPhraseKeyOf`) — never guessed here. An unattributable thread
+                        gets its own honest chip rather than Phrase ①, which is the default this requirement removes.
+                        It renders for live threads only: closed rows are history, and the line above the pane is
+                        the Author's answer to "what are they doing right now". */}
+                    {crewMarks.map((mark) => (
+                        <span
+                            className={`sv-story-crew sv-story-crew-${mark.key}`}
+                            data-testid={`crew-phrase-${mark.key}`}
+                            key={mark.key}
+                            title={[
+                                `which phrase the crew's live threads belong to — read off the group rows each thread holds or the phrase its claim key is keyed on (R4, V-3, R10)`,
+                                mark.count > 1 ? `${mark.count} threads on it` : '1 thread on it',
+                                mark.claimKeys.length > 0 ? `claims: ${mark.claimKeys.join(', ')}` : 'no work item claimed yet'
+                            ].join(' · ')}
+                        >
+                            crew: {mark.text}
+                            {mark.count > 1 ? ` ×${mark.count}` : ''}
+                        </span>
+                    ))}
                 </p>
 
                 {/* U-25 — THE SEED PANES, ONE PER PHRASE. `panel:'seed'` is gone from the nav model, so the Seed opens

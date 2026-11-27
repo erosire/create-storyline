@@ -1,9 +1,10 @@
 // The binding layer's own contract: the wire shape → the panel props, in BOTH argument shapes
 // the panels produce (see the header of `shell-binding.ts`). Pure functions plus the action
 // bindings, so this file needs no DOM and no W10/W11 component — only their types.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assignedTemplates, criteriaOps, shellActions, storyViewData } from './shell-binding';
 import { fakeHarness, storyRow, storyView } from './testing/shell-fakes';
+import type { SeedCleanupProposal } from './api';
 import type { Chapter, Criterion, Template } from '../shared/types';
 
 const criterion = (id: string, hard: boolean): Criterion => ({
@@ -281,5 +282,65 @@ describe('shell-binding — the Reviewed Summary reaches the pane as props, not 
         // And a first argument that DOES name the book, in the second position: still this Story, no note.
         await actions.chooseReviewedSummary?.('story_1');
         expect(client.choosePhraseReviewed).toHaveBeenLastCalledWith('story_1', {});
+    });
+});
+
+// R7 — the desk's one-time Seed proofread, as the binding passes it. The card's action type names three
+// arguments (`story-contract.ts:requestSeedCleanup`); the shell-local shape names the draft alone, with the
+// Story and Phrase ② implied by the shell's scope. Both reach the SAME store verb, and nothing else: this read
+// writes no row, so the binding takes no `phraseOpened` hop and no refetch (`state.ts:requestSeedCleanup`
+// deliberately commits nothing but the error line, P10 — a refetch would re-render the card mid-draft).
+describe('shell-binding — the Seed proofread is carried, not landed (R7)', () => {
+    it('dials the store with the Story, Phrase ②, and the draft, in every shape the caller can send', async () => {
+        // The harness's own `getStory`, but as a SPY: `bound()` installs a plain function there, and "the
+        // proofread re-read nothing" needs a call list to count.
+        const getStory = vi.fn(async (storyId: string) => storyView(storyRow(storyId)));
+        const harness = fakeHarness([storyRow('story_1')], [], { getStory });
+        await harness.store.openStory('story_1');
+        const actions = shellActions(harness.store, 'story_1');
+        const client = harness.client;
+        const draft = 'A mapmaker she find her own coastline, and she need 6 charts.';
+        const storyReads = getStory.mock.calls.length;
+
+        // The card's pinned call: (storyId, phraseKey, seed).
+        await actions.requestSeedCleanup?.('story_1', 'plotlines', draft);
+        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
+
+        // The shell-local call: the draft alone, against this shell's Story and the handoff phrase. A bare string
+        // is NOT an id here — the ask has no id slot — so it is the seed, and the Story comes from the scope.
+        await actions.requestSeedCleanup?.(draft);
+        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
+
+        // A bare call is the ask with no draft. The binding sends `''` rather than guessing an id, so the ROUTE's
+        // 400 sentence is the answer (`routes.ts` refuses an unnamed Seed instead of spending a model call).
+        await actions.requestSeedCleanup?.();
+        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', '');
+
+        // NO WRITE, NO REFETCH, NO LANDING. The phrase surface is untouched and the Story has not been re-read,
+        // which is the difference between this verb and every other phrase verb in this file.
+        expect((client.getStory as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(storyReads);
+        expect(client.startPhrase).not.toHaveBeenCalled();
+    });
+
+    it('answers the card with the proposal itself — the binding adds nothing and drops nothing', async () => {
+        // A proposal with `changed: true`, because the arms the card branches on (`ok`, `changed`) have to survive
+        // the binding intact: a binding that mapped the answer into a boolean is a desk offering "confirm" on a
+        // refusal.
+        const proposal: SeedCleanupProposal = {
+            ok: true,
+            source_hash: '9b8387ee',
+            text: 'A mapmaker finds her own coastline, and she needs 6 charts.',
+            changed: true
+        };
+        const harness = fakeHarness([storyRow('story_1')], [], {
+            getPhraseSeedCleanup: vi.fn(async () => proposal)
+        });
+        await harness.store.openStory('story_1');
+        const actions = shellActions(harness.store, 'story_1');
+
+        expect(await actions.requestSeedCleanup?.('story_1', 'plotlines', 'A mapmaker she find it.')).toBe(proposal);
+        // The refusal arm travels the same way, as a VALUE: the shell's error line is for the route's failures,
+        // and a guard's "I refused" is not one (AC3).
+        expect(harness.store.getSnapshot().error).toBeNull();
     });
 });

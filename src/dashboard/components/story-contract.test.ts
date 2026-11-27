@@ -30,8 +30,23 @@ import {
     phaseLocks,
     phasesAfter,
     pendingProposalsFor,
+    plotlinesCustomStartNotice,
+    plotlinesCustomStartRefusal,
+    plotlinesHandoffRefusal,
+    // R7 — the cleanup's sentences and the receipt's provenance clause: every one is a wire state's words, so each
+    // is pinned as a literal here rather than re-typed inside a component test.
+    plotlinesSeedOrigin,
+    // F4 — the transport budget the ask is shut at, pinned as a number here so the margin below the measured
+    // 431 ceiling is a reviewed value rather than a constant buried in a component.
+    SEED_CLEANUP_ASK_URL_LIMIT,
+    SEED_CLEANUP_APPLIED_NOTE,
+    SEED_CLEANUP_NOTHING_TO_FIX,
+    SEED_CLEANUP_PROPOSAL_NOTE,
+    seedCleanupAskRefusal,
+    seedCleanupRefusalNotice,
     runsStoppedByPause,
     revisionBodyText,
+    summaryIsCompiled,
     summaryScopeContext,
     undoTargetFor,
     unconfirmedBlockingFindings
@@ -940,5 +955,201 @@ describe('story-contract — Phase ①\u2019s Accept gate names the waits the en
                 summaryScopeContext(barePayload)
             )
         ).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R7 (this wave) — the CUSTOM-seed arm answers to its OWN gate, not the compiled arm's.
+//
+// The bug these pins exist for: `PlotlinesHandoff.tsx` gated "Start from your own brief" on
+// `plotlinesHandoffRefusal`, whose middle clause is "there is no compiled Summary". That clause is true about the
+// COMPILED arm and irrelevant to this one — `server/api/routes.ts` validates `custom` with no `text` (400) BEFORE
+// it asks whether anything is compiled (the 409), so a non-empty `custom` start is accepted on a Story whose
+// Summary was never written (pinned over there by `api/phrase-start-routes.test.ts`). The desk was blocking a move
+// the server allows. Two refusals, each naming the control it describes, is the fix; the notice is the half the
+// Author was missing. Every string below is the sentence the Author reads, so it is pinned as an exact value.
+// ---------------------------------------------------------------------------
+describe('story-contract — the custom-seed start gate (R7, D-76)', () => {
+    /** The card's two inputs, as projected facts: the phrase row's started-ness and the compiled flag. */
+    const handoffView = (over: { compiled?: boolean; started?: boolean; locked?: boolean } = {}): StoryViewData => {
+        const view = fixtureView();
+
+        return {
+            ...view,
+            story: { ...view.story, summary_locked: over.locked !== false },
+            phrase_started: { summary: true, plotlines: over.started === true },
+            summary_compiled: over.compiled === true
+        };
+    };
+
+    const STARTED_SENTENCE =
+        'Phrase 2 has already started on this Story: its copied Seed is the text every chapter entry, revision and claim key was written against, so a new Seed means a new Story rather than a re-start (D-72).';
+
+    it('opens the custom arm with no compiled Summary, while the compiled arm stays shut', () => {
+        const view = handoffView({ compiled: false });
+
+        expect(summaryIsCompiled(view)).toBe(false);
+        // THE ARM IS OPEN. No compiled Summary is one of the two facts this gate reads.
+        expect(plotlinesCustomStartRefusal(view, true)).toBe('');
+        // And the compiled arm's sentence survives unchanged — the card is partly shut, not blocked, and the
+        // default arm is still the one the Author has to wait on (U-16 names the reason for the button that IS shut).
+        expect(plotlinesHandoffRefusal(view, true)).toBe(
+            'There is no compiled Summary to start Phrase 2 from yet — the Overview (or the reviewed Summary) is the text the phrase copies, so the gate is above this control (R5).'
+        );
+    });
+
+    it('shuts the custom arm only for the missing verb and a started phrase, the same words the compiled arm uses', () => {
+        // U-16: no verb means the field could not be submitted, and the sentence names the shell, not the Summary.
+        expect(plotlinesCustomStartRefusal(handoffView({ compiled: false }), false)).toBe(
+            'The phrase start route is not available in this shell.'
+        );
+        // D-72: one-way start. Both arms answer this state with ONE sentence, so the card cannot offer a button the
+        // route would refuse with a 409.
+        expect(plotlinesCustomStartRefusal(handoffView({ compiled: false, started: true }), true)).toBe(
+            STARTED_SENTENCE
+        );
+        expect(plotlinesHandoffRefusal(handoffView({ compiled: false, started: true }), true)).toBe(STARTED_SENTENCE);
+        // A started phrase on a book that IS compiled: still the D-72 sentence, not the R5 one (the order of the
+        // clauses is the order the Author meets them).
+        expect(plotlinesCustomStartRefusal(handoffView({ compiled: true, started: true }), true)).toBe(
+            STARTED_SENTENCE
+        );
+    });
+
+    it('explains the partly-shut card, and names where the crew goes after the start (L-33)', () => {
+        // UNSIGNED — the crew stays on Phrase ①, and the sentence is the Start route's own guard wording
+        // (`routes.ts:openPlotlinesOnSignedOffSummary`), capitalized here because it stands alone.
+        expect(
+            plotlinesCustomStartNotice(handoffView({ compiled: false, locked: false }), true)
+        ).toBe(
+            'There is no compiled Summary to copy yet, so the compiled arm stays shut — “Start from your own brief” is open, ' +
+                'and the text you write there is the Seed the phrase copies (the Start verb takes `source: custom` without a compiled Summary, R5 / D-76). ' +
+                'The Summary is not signed off, so the crew stays on Phrase ①: POST /stories/s1/lock is the act that signs phase summary off and opens phase plotlines (L-33: a phase is entered only with every earlier phase locked).'
+        );
+        // SIGNED OFF — the pointer follows the start, which is the other half of the same rule.
+        expect(plotlinesCustomStartNotice(handoffView({ compiled: false }), true)).toBe(
+            'There is no compiled Summary to copy yet, so the compiled arm stays shut — “Start from your own brief” is open, ' +
+                'and the text you write there is the Seed the phrase copies (the Start verb takes `source: custom` without a compiled Summary, R5 / D-76). ' +
+                'This Summary is signed off, so starting Phrase 2 also moves the crew into Phase 2 (the pointer follows a start only when phase ① is locked, L-33).'
+        );
+        // Nothing to explain when both arms are live…
+        expect(plotlinesCustomStartNotice(handoffView({ compiled: true }), true)).toBe('');
+        // …and nothing when NEITHER is: with no verb the card renders no custom button at all, so a line claiming
+        // that arm is open would be U-16's lie rather than an explanation.
+        expect(plotlinesCustomStartNotice(handoffView({ compiled: false }), false)).toBe('');
+    });
+
+    // R7 — THE CLEANUP'S SENTENCES. Four guard codes, one sentence each: `SeedCleanupRefusal` is a closed
+    // vocabulary (`run/seed-cleanup.ts`), so a desk that folded two of them into one shrug would hide WHICH rule
+    // fired — and "the Editor declined" is not something an Author can act on (L-13). Every sentence also says the
+    // one thing AC3 needs the Author to know: their own text still stands, because there was no proposal to confirm.
+    it('names the proofread’s four refusals apart, and never as a failure', () => {
+        expect(seedCleanupRefusalNotice('empty_answer')).toBe(
+            'The Editor answered with nothing usable, so there is no proposal — your own text stands, and nothing was written (R7).'
+        );
+        // THE ONE AN AUTHOR WOULD OTHERWISE NOT NOTICE: a dropped digit changes the brief's facts, not its grammar.
+        expect(seedCleanupRefusalNotice('numbers_lost')).toBe(
+            'The rewrite dropped a number you wrote — a chapter count, a deadline, an age — so the Editor threw it away rather than proofread your facts away. Your own text stands (R7).'
+        );
+        expect(seedCleanupRefusalNotice('too_short')).toBe(
+            'The rewrite came back shorter than your brief, so it was summarising rather than correcting — there is no proposal, and your own text stands (R7).'
+        );
+        expect(seedCleanupRefusalNotice('too_long')).toBe(
+            'The rewrite came back longer than your brief, so it was expanding rather than correcting — there is no proposal, and your own text stands (R7).'
+        );
+    });
+
+    it('gates the ask on the two facts the route gates it on', () => {
+        // NO VERB: U-16's standing rule — a shut control names the missing route.
+        expect(seedCleanupAskRefusal('Six chapters, alternating timeline.', false)).toBe(
+            'This shell has no Editor proofread route wired, so there is nothing to ask.'
+        );
+        // A BLANK BOX: the route 400s rather than spend a model call on an answer it already knows.
+        expect(seedCleanupAskRefusal('   \n  ', true)).toBe(
+            'Write your brief first — the proofread reads the text in this box, and there is nothing to correct yet.'
+        );
+        // LIVE. Note what is NOT in this gate: `summary_compiled` — the cleanup belongs to the arm whose Seed is
+        // already in the Author's hand, and the compiled arm's wait is not this control's problem (AC6).
+        expect(seedCleanupAskRefusal('Six chapters, alternating timeline.', true)).toBe('');
+    });
+
+    // F4 — THE THIRD FACT, and the only one the route cannot tell the desk about. The proofread read carries the
+    // draft in the address (`dashboard/api.ts:1870` → `?seed=${encodeURIComponent(seed)}`), so an over-long
+    // draft dies in the listener's request line BEFORE routing: the desk gets HTTP 431, no
+    // `SeedCleanupRefusal`, and nothing to print. Measured on the real listener — the route answers (404, i.e.
+    // it routed) at an escaped seed of 16,200 and returns 431 at 16,300, and the same 431 lands at an escaped
+    // 18,080 while an escaped 12,056 still routes (`Temp/c9/probe-f4.ts`, `Temp/c9/probe-f4.out`). The limit is
+    // the round number under that: 12,000 escaped characters, ≈4,300 (≈26 %) of margin below the failure point,
+    // which also covers the 53-character path prefix and the rest of the request line.
+    it('shuts the ask when the draft will not fit the address it travels in (F4)', () => {
+        expect(SEED_CLEANUP_ASK_URL_LIMIT).toBe(12_000);
+
+        // The sentence, in full, because a refusal an Author reads IS the product (L-13): it names the fix
+        // (paste less), says the text is untouched (AC3), and never reads as a failure the desk caused.
+        const TOO_LONG =
+            'That draft is too long for this ask — the proofread sends it inside the request’s address, and an ' +
+            'address past about 12,000 escaped characters comes back refused (HTTP 431) before the Editor reads a ' +
+            'word. Paste the part you want proofread — a chapter or two at a time — and the ask opens again; your ' +
+            'text in this box stands.';
+
+        // EXACTLY AT THE LIMIT: the guard fires past the budget, not at it, and the escaped form is the axis.
+        const atLimit = 'x'.repeat(SEED_CLEANUP_ASK_URL_LIMIT);
+
+        expect(atLimit.length).toBe(12_000);
+        expect(encodeURIComponent(atLimit).length).toBe(12_000);
+        expect(seedCleanupAskRefusal(atLimit, true)).toBe('');
+
+        // ONE PAST IT: refused, in the desk's own words.
+        const overLimit = 'x'.repeat(SEED_CLEANUP_ASK_URL_LIMIT + 1);
+
+        expect(encodeURIComponent(overLimit).length).toBe(12_001);
+        expect(seedCleanupAskRefusal(overLimit, true)).toBe(TOO_LONG);
+
+        // THE ARM THAT MAKES THE GUARD NECESSARY — pasted characters are not wire characters. A space is `%20`,
+        // so 9,006 characters of ordinary prose escape to 12,008: a guard on the pasted length would dial the
+        // very request the transport refuses, which is the bug this clause closes.
+        const pasted = 'light '.repeat(1_501);
+
+        expect(pasted.length).toBe(9_006);
+        expect(encodeURIComponent(pasted).length).toBe(12_008);
+        expect(seedCleanupAskRefusal(pasted, true)).toBe(TOO_LONG);
+
+        // The other two clauses keep their precedence: with no verb the missing-route sentence is still the
+        // answer, and a blank box is blank before it is long.
+        expect(seedCleanupAskRefusal(overLimit, false)).toBe(
+            'This shell has no Editor proofread route wired, so there is nothing to ask.'
+        );
+        // AC3's standing clause.
+        expect(TOO_LONG).toContain('your text in this box stands');
+    });
+
+    it('says what the card may claim about the text it is showing (R7 / D-72)', () => {
+        // A SUGGESTION THAT LOOKS APPLIED. The card is showing the Author a better sentence than the one they
+        // typed, and the natural reading of a highlighted suggestion in every other editor is "done". Here nothing
+        // is done until the Start press, so the note has to say so in the same breath.
+        expect(SEED_CLEANUP_PROPOSAL_NOTE).toBe(
+            'Nothing has changed yet. This is the Editor’s proofread of the brief above — grammar, spelling, punctuation and typos, nothing else — and the only act that records it is your next “Start Phrase 2 from this Seed” press, which copies the text now in the box (R7 / D-72).'
+        );
+        // `changed: false` is an ANSWER, not a miss, and the Author needs to hear that the pass actually read it.
+        expect(SEED_CLEANUP_NOTHING_TO_FIX).toBe(
+            'The Editor read your brief and found nothing to fix — its grammar is already clean. Nothing was written, and the Start press copies your text exactly as it stands.'
+        );
+        // AFTER "Use this text": the box changed on screen, so the line has to name what did NOT happen.
+        expect(SEED_CLEANUP_APPLIED_NOTE).toBe(
+            'The box now holds the Editor’s version. Nothing has been recorded yet — the next “Start Phrase 2 from this Seed” press is the act that copies it into the phrase, and it copies exactly the text you can read here (R7 / D-72).'
+        );
+    });
+
+    // R12 — THE RECEIPT CREDITS THE RIGHT HAND. `seed_source` is written once, at the start, by the Start route;
+    // the projection OMITS it for a row that predates the field, and the desk has three wordings because there are
+    // three facts. Guessing `compiled` for the third would tell an Author their own typed brief was the crew's
+    // Overview, which is the reverse of what R12 records.
+    it('calls a copied Seed by the name the row actually carries (R12)', () => {
+        expect(plotlinesSeedOrigin('compiled')).toBe('the Summary the crew compiled');
+        expect(plotlinesSeedOrigin('custom')).toBe('the brief you wrote and started on');
+        // ABSENT MEANS UNKNOWN — and the wording says "never recorded", not "the crew's".
+        expect(plotlinesSeedOrigin(undefined)).toBe(
+            'text whose origin this desk never recorded — the phrase started before the Seed’s provenance was kept'
+        );
     });
 });

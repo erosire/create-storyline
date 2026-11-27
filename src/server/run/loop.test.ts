@@ -609,3 +609,190 @@ describe('loop — a REFUSED terminal report leaves the Critic its correction tu
         expect(recoveredTally.reports).toEqual(['submitVerdict']);
     });
 });
+
+// ---------------------------------------------------------------------------
+// T-W2 (D-a) — a structuring seat reports with its ONLY write, and a report is not an ending
+//
+// `templates.ts:editor-plotlines-structure` tells the Editor two things in the same breath: "Your only
+// write is structurePlotlines" and "End the run as soon as structurePlotlines reports". So the single
+// call that accepts the Plotline Brief has to be a report, or the run that obeyed its own template is a
+// no-op turn: `tally.reports` stays empty, `runs.no_op` is set (`run/executor.ts:712`), the row never
+// moves to `reporting` (§9's report step), and the loop owes the seat the job it just finished
+// (`run/executor.ts:1327`, `run/story-engine.ts:648` read the same predicate).
+//
+// Adding the name to `catalogue.ts:REPORT_TOOLS` raises exactly two questions, and this block answers
+// both by EXECUTION rather than by reading the code:
+//   DOES IT END THE RUN TOO EARLY? No, and the guard is the role gate, not the list: the terminal
+//     decision belongs to the Critic policy alone — `isCriticPass` here (`run/loop.ts:236`) and
+//     `payload.agent === 'critic'` in the engine's plugin
+//     (`run/plugins/critic-termination.ts:356,371`) — and a structuring job is an EDITOR job
+//     (`templates.ts:editor-plotlines-structure`). An editor keeps looping to its natural end, E-0's
+//     "no cap", however many report tools it fires.
+//   DOES IT DOUBLE-REPORT? No: `onReport` fires per distinct NAME (`run/loop.ts:325`), so the row moves
+//     to `reporting` once however often the seat retries the call — and the real tool answers a retry
+//     with the existing brief rather than a second one (`tools/plotlines.ts`).
+// ---------------------------------------------------------------------------
+
+/** The kind `templates.ts:editor-plotlines-structure` binds — the only kind that holds a structuring job. */
+const EDITOR_SESSION: RunToolSession = {
+    ...SESSION,
+    templateRef: 'editor-plotlines-structure',
+    roleName: 'editor',
+    roleKind: 'editor'
+};
+
+/** The answer `tools/plotlines.ts:structurePlotlines` gives: the brief it accepted, and the count it wrote. */
+const STRUCTURE_RESULT = { ok: true, id: 'plotline_brief_0', rev: 1, data: { chapter_count: 3 } };
+
+/** A refusal, in the shape the real tool returns it — P5, the seed moved under the seat (T-1a). */
+const STRUCTURE_REFUSAL = { ok: false, refused: 'P5', error: 'seed_hash does not match the seed this phrase holds' };
+
+/** The call the seat's job sentence tells it to make, args and all (T-5's `why` included). */
+const STRUCTURE_CALL = {
+    name: 'structurePlotlines',
+    args: { chapter_count: 3, seed_hash: 'fac9695f', why: 'the seed resolves into three chapters' }
+};
+
+/**
+ * The seat harness — the loop's own client with `structurePlotlines` answered for real on an EDITOR
+ * context, plus a counter for how many times the tool ACTUALLY ran. The counter is what lets the dedupe
+ * test tell "called twice, reported once" from "called once, reported once"; the answer it returns is a
+ * knob so the refusal case keeps the same harness.
+ */
+function seatHarness(
+    turns: Array<(request: ChatRequest) => ChatResponse>,
+    answer: () => { ok: boolean } = () => STRUCTURE_RESULT
+) {
+    const store = Store.empty();
+    const story = seedStory(store);
+    let structureCalls = 0;
+    const runtime = new MockToolRuntime(store, story.id, {
+        structurePlotlines: () => {
+            structureCalls += 1;
+
+            return answer();
+        }
+    });
+    const requests: ChatRequest[] = [];
+    const client = new MockChatClient((request, state) => {
+        requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })) });
+
+        const turn = turns[state.callIndex];
+
+        if (turn === undefined)
+            throw new Error(
+                `no scripted turn for call ${state.callIndex} (the loop asked more times than the test scripted)`
+            );
+
+        return { ...turn(request), usage: { input: 100, output: 40, cached_input: 0 } };
+    });
+
+    return {
+        store,
+        story,
+        runtime,
+        client,
+        requests,
+        structureCalls: () => structureCalls,
+        context: runtime.createContext(EDITOR_SESSION)
+    };
+}
+
+describe('loop — a structuring seat’s only write is its report (S-4, T-W2, E-0)', () => {
+    it('reports on `structurePlotlines` so the run is not a no-op turn, and still ends at its natural end (S-4, E-0)', async () => {
+        const h = seatHarness([
+            () => ({ message: msg({ content: 'deciding the chapter set', toolCalls: calls([STRUCTURE_CALL]) }) }),
+            () => ({ message: msg({ content: 'Three chapters; the brief is accepted.' }) }),
+            // Tripwire: a loop that asked a third time would answer here and fail the turn count.
+            () => ({ message: msg({ content: 'never asked' }) })
+        ]);
+        const tally = createTally();
+        const reported: string[] = [];
+
+        const outcome = await runAgentLoop(
+            { chat: h.client, runtime: h.runtime, onReport: (name) => reported.push(name) },
+            specFor(h.context),
+            tally
+        );
+
+        // S-4's ACCOUNTING question, fired: the call reached the tool and ANSWERED, so the seat reported.
+        // `onReport` is what moves the row to `reporting` (§9) and `tally.reports` is what
+        // `run/executor.ts:712` turns into `no_op: false`. Before `structurePlotlines` was in the report
+        // set, both were empty and a run that had already accepted the brief was owed the job again.
+        expect(reported).toEqual(['structurePlotlines']);
+        expect(tally.reports).toEqual(['structurePlotlines']);
+        expect(tally.executed).toEqual(['structurePlotlines']);
+        expect(h.structureCalls()).toBe(1);
+
+        // E-0's SHAPE, unchanged: the run ends because the model stopped calling tools, not because a
+        // report tool fired. No `endCause`, no third request — an Editor is outside the C2-AD3 policy,
+        // so this is the same natural end the paired Writer test (above) pins for `submitVerdict`.
+        expect(outcome).toEqual({ text: 'Three chapters; the brief is accepted.', turns: 2 });
+        expect(h.client.callCount).toBe(2);
+    });
+
+    it('reports the structuring write ONCE when the seat repeats the call (S-4, T-4)', async () => {
+        // A retry is a real outcome, not a hypothetical: `tools/plotlines.ts` answers a second call for
+        // the same hash with the EXISTING brief, and T-4's re-send note invites the model to try again.
+        // The dedupe is the loop's, not the tool's — `onReport` fires per distinct NAME (`loop.ts:325`) —
+        // so the row moves to `reporting` once and `tally.reports` names the tool once, while BOTH calls
+        // stay in `executed` (S-4 lists what really ran).
+        const h = seatHarness([
+            () => ({ message: msg({ toolCalls: calls([STRUCTURE_CALL, STRUCTURE_CALL]) }) }),
+            () => ({ message: msg({ content: 'Accepted — three chapters.' }) })
+        ]);
+        const tally = createTally();
+        const reported: string[] = [];
+
+        const outcome = await runAgentLoop(
+            { chat: h.client, runtime: h.runtime, onReport: (name) => reported.push(name) },
+            specFor(h.context),
+            tally
+        );
+
+        expect(h.structureCalls()).toBe(2);
+        expect(reported).toEqual(['structurePlotlines']);
+        // THE TWO LISTS ANSWER DIFFERENT QUESTIONS, and the difference is pre-existing for every report
+        // tool (`run/loop.ts:325-327`): `onReport` is the ONCE-PER-NAME row transition — the run moves to
+        // `reporting` (§9) the first time the name lands and never again — while `tally.reports` is the
+        // per-CALL ledger S-4 keeps, so a second filed report is recorded as the second call it was.
+        // Neither one can double-fire the transition, which is the "double-report" question this settles;
+        // `no_op` is `tally.reports.length === 0` (`run/executor.ts:712`), so the repeat changes nothing
+        // about the run's standing either.
+        expect(tally.reports).toEqual(['structurePlotlines', 'structurePlotlines']);
+        expect(tally.executed).toEqual(['structurePlotlines', 'structurePlotlines']);
+        expect(outcome).toEqual({ text: 'Accepted — three chapters.', turns: 2 });
+    });
+
+    it('files NO report when `structurePlotlines` is refused, so the seat stays owed (T-1a, S-4)', async () => {
+        // The other half of the same rule, and the half that keeps the loop honest: a call the tool
+        // turned away filed nothing (`result.ok === false`), so it clears neither `onReport` nor
+        // `tally.reports`. A seat whose chapter set was never accepted under a stale hash OWES its seat
+        // again — exactly the state S-4's flag exists to record, and the reason membership in
+        // `REPORT_TOOLS` is not a licence for the model to stop after a refusal.
+        const h = seatHarness(
+            [
+                () => ({ message: msg({ toolCalls: calls([STRUCTURE_CALL]) }) }),
+                () => ({ message: msg({ content: 'The seed moved; I will re-read it.' }) })
+            ],
+            () => STRUCTURE_REFUSAL
+        );
+        const tally = createTally();
+        const reported: string[] = [];
+
+        const outcome = await runAgentLoop(
+            { chat: h.client, runtime: h.runtime, onReport: (name) => reported.push(name) },
+            specFor(h.context),
+            tally
+        );
+
+        expect(h.structureCalls()).toBe(1);
+        expect(reported).toEqual([]);
+        expect(tally.reports).toEqual([]);
+        // The call still RAN, so it is in the executed tally — and the refusal is the message the model
+        // answered on its next turn (T-1a's visible-refusal rule).
+        expect(tally.executed).toEqual(['structurePlotlines']);
+        expect(JSON.parse(String(h.requests[1].messages[3].content))).toEqual(STRUCTURE_REFUSAL);
+        expect(outcome).toEqual({ text: 'The seed moved; I will re-read it.', turns: 2 });
+    });
+});

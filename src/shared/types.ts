@@ -1563,6 +1563,34 @@ export interface Phrase extends StoredRecord {
      */
     seed?: string;
     /**
+     * R12 (additive) — WHERE that copied Seed came from: `'custom'` (the Author typed or pasted it in the
+     * Start request) or `'compiled'` (this Story's compiled Summary, whether the Author pressed the handoff
+     * button or the Summary Accept started the phrase on their behalf).
+     *
+     * WHY THE PROVENANCE IS A ROW FIELD AND NOT A DERIVED READ. The whole product model is that these two
+     * origins are DIFFERENT JOBS for the Editor: a Seed that came from the Author directly is text nobody
+     * has proofread, so it gets the one-time cleanup (`server/run/seed-cleanup.ts`) and the Author's
+     * confirm; a Seed compiled out of Phrase ① was written and reviewed by the crew, so a cleanup pass on
+     * it is a model call buying nothing. That question has to be answerable AFTER the start — the desk, the
+     * rail and any later wave ask it of a phrase that already exists — and nothing in the book answers it:
+     * `seed` is just text, and the two arms can copy the same bytes. So the fact is recorded once, in the
+     * start commit, beside the text it describes.
+     *
+     * ABSENT MEANS LEGACY, and it is a DIFFERENT ANSWER from either word — not a stand-in for one. A row
+     * written before this field existed has a Seed whose origin nobody recorded, and no later read can
+     * recover it: a `custom` Seed and a `compiled` one are byte-indistinguishable once copied (the R6
+     * no-migration rule, the same shape `seed` itself and the Story's `summary_mode`/`plotlines_mode`
+     * switches use — an absent field is the older book, never a defaulted new one). `api/projections.ts`
+     * therefore OMITS `seed_source` from the phrase read rather than guessing `compiled` for an old row, and
+     * the desk says the provenance is unknown instead of naming an arm it cannot support.
+     *
+     * NOT THE CATALOG'S `seed_source`: `shared/phrase.ts:PhraseDefinition.seed_source` is a definition field
+     * (`'supplied'` | `'story_idea'`, what text a phrase kind is CREATED with) and is resolved at creation
+     * by `phrase/catalog.ts:phraseSeedInitOf`. This one is a per-row record of the arm an Author actually
+     * pressed, and its vocabulary is the Start verb's (`StartPhraseRequest.source`).
+     */
+    seed_source?: 'custom' | 'compiled';
+    /**
      * D-68 (additive) — the Reviewed Summary the AUTHOR chose, as the group revision vector it was
      * made of (`{groupId: revisionNumber}`).
      *

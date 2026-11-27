@@ -76,8 +76,78 @@ const startLane = (rig: Rig) => {
     return { phrase: started.phrase, story: rig.story() };
 };
 
-/** The compiled Summary Phrase ② was seeded from — the text the structure note has to carry verbatim. */
+/** The compiled Summary Phrase ② was seeded from — the text the structure brief has to carry whole. */
 const seedTextOf = (rig: Rig): string => storyPhraseByKey(rig.store, rig.storyId, PHRASE_SUMMARY_KEY)!.content;
+
+/**
+ * An Overview long enough to CROSS `run/brief.ts:renderJob`'s 600-character note clip: the size class in
+ * which a note-borne seed stops arriving (measured at HEAD, a 1,714-character compiled Overview reached the
+ * structuring crew as a 41-character fragment).
+ *
+ * WHY THE TEST WRITES ITS OWN SEED: the phrase seed is whatever the Author pushed in — the compiled Summary
+ * OR their own text (R1) — and the mock sampler's Overview is only 422 characters, i.e. under the clip, so a
+ * fixture-dependent length would make the self-containment claim accidental. The literal below is pinned, and
+ * `LONG_OVERVIEW.length > 600` is asserted before anything reads it, so the test cannot quietly degenerate
+ * into a short-seed pass if someone edits the prose.
+ */
+const LONG_OVERVIEW = [
+    '## Premise',
+    'Maren climbs to the ridge with a map the garrison drew before the dam existed, and the town she is',
+    'sworn to warn is under the water the map insists is a marsh.',
+    '',
+    '## Promise',
+    'Every chapter repays one debt the last chapter opened, and the map is wrong in a new way each time —',
+    'wrong about the road, wrong about the season, wrong about who signed the register.',
+    '',
+    '## Theme',
+    'A town drowned twice: once by the water, once by the paperwork that insisted the water was somewhere',
+    'else. The second drowning is the one nobody apologises for.',
+    '',
+    '## Tone',
+    'Plain sentences, cold weather, and a clerk who reads the ordinance aloud at the worst possible moment.',
+    '',
+    '## Ending',
+    'The register is signed in the wrong name, and the reader knew before the clerk did — the map is filed',
+    'as evidence, correct at last and forty years too late.'
+].join('\n');
+
+/**
+ * The WHOLE briefing the mock crew was actually sent for the lane's structuring job (`''` when the sweep
+ * never dispatched it).
+ *
+ * WHY THE REQUEST LOG AND NOT `buildBrief`: `rig.requests` is the chat double's log of the provider request
+ * (`loop/mock.ts:300`, the same surface the phase-① S-2/E-1 assertions use in
+ * `loop/phase1-research.test.ts:samplePromptOf`). Asserting on it is the claim "the text reached the model
+ * that was briefed", which a render helper called by the test itself cannot make — the run row's
+ * `brief_hash` is computed over exactly this text (§4.13). The marker is the section this job alone prints.
+ */
+const structureBriefTextOf = (rig: Rig): string => {
+    const request = rig.requests.find((candidate) =>
+        candidate.messages.some((message) => message.content.includes('PHRASE SEED'))
+    );
+
+    return request === undefined ? '' : request.messages.map((message) => message.content).join('\n\n');
+};
+
+/** The section headings of a rendered brief — the same rule `run/brief.ts:assemble` uses for `AssembledBrief.sections`. */
+const briefSectionsOf = (brief: string): string[] =>
+    brief.split('\n').filter((line) => line.startsWith('# ')).map((line) => line.slice(2));
+
+/** Every `seed_hash=<hex>` a briefing asks the seat to answer with, in order and deduplicated. */
+const briefSeedHashesOf = (brief: string): string[] => [
+    ...new Set([...brief.matchAll(/seed_hash=([0-9a-f]{8,})/g)].map((match) => match[1]))
+];
+
+/** The `THE JOB` section's body: the sentence the seat acts on, isolated from the rest of the brief. */
+const jobTextOf = (brief: string): string => {
+    const start = brief.indexOf('# THE JOB\n');
+
+    if (start === -1) return '';
+
+    const end = brief.indexOf('\n# ', start);
+
+    return brief.slice(start, end === -1 ? undefined : end);
+};
 
 /** Started PLUS a declared chapter set: the state the draft batch is cut against. */
 const structureLane = (rig: Rig, chapterCount = 3) => {
@@ -94,6 +164,23 @@ const chaptersOf = (rig: Rig, phrase: Phrase): PhraseGroup[] =>
         .list()
         .filter((group) => group.phrase_id === phrase.id)
         .sort((left, right) => left.order - right.order);
+
+/**
+ * F2 — every structuring write the scripted crew actually CALLED, in call order.
+ *
+ * WHY THE RUNTIME LOG: `runtime.calls` is what `MockToolRuntime.execute` pushed (§8's double records every
+ * call that reached it), so this is the crew's tool surface, not the planner's intent and not a render
+ * helper the test itself invoked. Both structuring writes are filtered in on purpose: a crew that answers
+ * Phrase ②'s seat with `structureSeed` shows up here as the wrong NAME, which is the regression.
+ */
+const structureCallsOf = (rig: Rig) =>
+    rig.runtime.calls
+        .filter((call) => call.name === 'structurePlotlines' || call.name === 'structureSeed')
+        .map((call) => ({
+            name: call.name,
+            seed_hash: call.args.seed_hash,
+            chapter_count: call.args.chapter_count
+        }));
 
 /** The lane's candidates as the planner's own tuples: kind, claim key, unit, and the crew it bound. */
 const laneJobs = (rig: Rig, story: Story) =>
@@ -170,13 +257,176 @@ describe('the structure gate: nothing below it is answerable', () => {
             `wi_structure_seed_${plotlinePhraseSeedHashOf(phrase, story)}`
         );
 
-        // The seed and its hash travel in the note because the briefing renders the note and
-        // `tools/plotlines.ts:structurePlotlines` refuses a hash it did not print.
+        // THE NOTE CARRIES THE INSTRUCTION AND THE HASH, NOT THE TEXT. `tools/plotlines.ts:structurePlotlines`
+        // refuses a hash it did not print, so the hash has to be in front of the model; the seed itself now
+        // rides the brief's `PHRASE SEED` section (proved by the two tests below), because the note is clipped.
         const note = phase2GroupCandidates(rig.store, story)[0]!.item.note ?? '';
 
-        expect(note).toContain(`PHRASE SEED (seed_hash=${plotlinePhraseSeedHashOf(phrase, story)}):\n${seedTextOf(rig)}`);
+        expect(note).toContain('PHRASE SEED');
+        expect(note).toContain(`seed_hash=${plotlinePhraseSeedHashOf(phrase, story)}`);
+        expect(note).toContain('structurePlotlines');
+        expect(note).toContain('chapter_count');
+        // THE SEED IS NOT NOTE-BORNE ANY MORE, and that is the contract rather than an accident: the text the
+        // seat structures arrives in the `PHRASE SEED` section (the next test), where the trim ladder cannot
+        // reach it. A note that carried it again would put it back under `renderJob`'s clip.
+        expect(note).not.toContain(seedTextOf(rig));
+        // THE CLIP IS WHY: `run/brief.ts:renderJob` cuts notes at 600 characters, so a note that tried to
+        // carry the seed would be the thing that silently loses it.
+        expect(note.length).toBeLessThanOrEqual(600);
 
         expect(drainPreconditions(rig.store, story)).toEqual({ met: false, unmet: [NO_BRIEF_CLAUSE] });
+    });
+
+    // F2 — THE CREW'S ANSWER, NOT JUST THE BRIEF. The two neighbours above prove what the seat is TOLD;
+    // this one proves what the scripted crew DOES with it. Both structuring passes share the
+    // `structure_seed` KIND, and the rig used to answer this seat with `structureSeed` — the phase-① write,
+    // which SUCCEEDS and lands a `seed_briefs` row for the other phrase. Measured on a probe lane: 40 runs
+    // spent, zero Plotline Briefs, no no-op row to complain about, and no mock test ever on the path.
+    // Pinning the CALL (not only the rows) is what keeps a future `crewCalls` edit from sliding back.
+    it('is answered by the rig crew with `structurePlotlines`, and one sweep leaves a chapter set (F2)', async () => {
+        const rig = await laneRig();
+        const { phrase, story } = startLane(rig);
+
+        // The state the seat is armed on: no Plotline Brief, no entries, and phase ①'s seeded Seed Brief as
+        // the only structuring row on the book (`seedStructured` defaults to true in `createRig`).
+        expect(rig.store.plotlineBriefs.list()).toEqual([]);
+        expect(chaptersOf(rig, phrase)).toEqual([]);
+        expect(rig.store.seedBriefs.list()).toHaveLength(1);
+
+        await rig.step();
+
+        // Exactly one structuring write, on the Phrase-② tool, with the hash THIS phrase prints and the
+        // count the book declares (1 — the same number the job sentence above pins as the default).
+        expect(structureCallsOf(rig)).toEqual([
+            {
+                name: 'structurePlotlines',
+                seed_hash: plotlinePhraseSeedHashOf(phrase, story),
+                chapter_count: 1
+            }
+        ]);
+        // THE RECORD THAT WRITE LEAVES: the accepted brief and the entry set it materializes in the same
+        // commit (D-3b) — the two rows the whole lane is cut against.
+        expect(
+            rig.store.plotlineBriefs.list().map((brief) => ({
+                phrase_id: brief.phrase_id,
+                seed_hash: brief.seed_hash,
+                chapter_count: brief.chapter_count,
+                status: brief.status
+            }))
+        ).toEqual([
+            {
+                phrase_id: phrase.id,
+                seed_hash: plotlinePhraseSeedHashOf(phrase, story),
+                chapter_count: 1,
+                status: 'accepted'
+            }
+        ]);
+        expect(chaptersOf(rig, phrase).map((group) => group.key)).toEqual(['chapter_1']);
+        // Nothing was written on PHRASE ①'s side either: the seeded Seed Brief is still the only one, so the
+        // crew cannot have answered with `structureSeed` and called the lane forward by accident.
+        expect(rig.store.seedBriefs.list()).toHaveLength(1);
+        // THE GATE CLOSES: with a declared set the lane's next job is the draft batch, and the
+        // "no accepted Plotline Brief" clause the sweep above reported is gone.
+        expect(laneJobs(rig, rig.story()).map((job) => job.kind)).toEqual(['draft_groups']);
+        expect(drainPreconditions(rig.store, rig.story()).unmet).not.toContain(NO_BRIEF_CLAUSE);
+    });
+
+    it('briefs the structuring crew with the whole seed, so it never has to go and find it (S-2, E-1/D-13, R1-R3)', async () => {
+        const rig = await laneRig();
+
+        // The fixture property the proof depends on, asserted BEFORE anything reads the text.
+        expect(LONG_OVERVIEW.length).toBeGreaterThan(600);
+
+        // THE AUTHOR'S OWN TEXT, pushed into the phrase — R1's path that is NOT the compiled Summary, and the
+        // one whose length no pipeline controls. Phrase ② hashes exactly this text, so it is also the text the
+        // seat has to be able to answer for.
+        const started = startPlotlinesPhrase(rig.store, rig.story(), LONG_OVERVIEW, AUTHOR_ATTR);
+        const story = rig.story();
+
+        await rig.step();
+
+        const brief = structureBriefTextOf(rig);
+
+        // The sweep really dispatched this seat, so the text below is what its run was briefed with.
+        expect(rig.items.has(plotlinesStructureKeyOf(started.phrase, story))).toBe(true);
+        expect(brief).not.toBe('');
+
+        // AC1 — SELF-CONTAINED: the seed reaches the brief the crew was actually SENT, whole, at a size where
+        // the note could not have carried it. `toContain` on the full text is the claim; a clipped,
+        // summarized, or "read the full record" version fails it.
+        expect(brief).toContain(LONG_OVERVIEW);
+        // And it is a NAMED SECTION of the assembled brief, not prose glued into another section (S-2).
+        expect(briefSectionsOf(brief)).toContain(
+            'PHRASE SEED — the text Phrase ② resolves into chapters (read-only for you, P5 one phrase down) · ' +
+            `seed_hash=${plotlinePhraseSeedHashOf(started.phrase, story)}`
+        );
+
+        // AC2 — ONE hash to answer with, in the `seed_hash=` form the seat has to send back, and it is the
+        // PHRASE seed's, not the Story Seed's that `readSeed` prints. Every `seed_hash=<hex>` in the text is
+        // collected below; a second value is the failure this task is about, because the lane refuses an
+        // answer it never printed.
+        expect(briefSeedHashesOf(brief)).toEqual([plotlinePhraseSeedHashOf(started.phrase, story)]);
+
+        const job = jobTextOf(brief);
+
+        // AC3 — the job names the tool this seat may call, the field it answers with, and no phase-① tool.
+        expect(job).toContain('structurePlotlines');
+        expect(job).toContain('chapter_count');
+        expect(job).not.toContain('structureSeed');
+        expect(job).toContain(`seed_hash=${plotlinePhraseSeedHashOf(started.phrase, story)}`);
+
+        // AC4 — the number already on the record is surfaced as the default to honor. This rig's Summary row
+        // declares 1, so the copy also has to stay grammatical at that number — "1 chapter", never "1 chapters".
+        expect(job).toContain('The book declares `chapter_count: 1`');
+        expect(job).toContain('Answer with exactly 1 unless the seed cannot be read as that many chapters');
+        expect(job).not.toContain('1 chapters');
+        expect(job).not.toContain('MUST MATCH');
+    });
+
+    it("states the Author's declared chapter count as the default this job honors (R3, D-3b unbent)", async () => {
+        const rig = await laneRig();
+
+        startLane(rig);
+
+        // The Author's own number on the Summary row — the field `acceptPlotlineBrief` is the only writer of
+        // (D-3b), set here exactly the way the accept step sets it so the row keeps its real shape.
+        const summary = rig.store.summaries.list().find((row) => row.story_id === rig.storyId)!;
+
+        rig.store.summaries.update(summary.id, { chapter_count: 12 }, AUTHOR_ATTR, [
+            { id: summary.id, rev: summary.rev }
+        ]);
+
+        await rig.step();
+
+        const job = jobTextOf(structureBriefTextOf(rig));
+
+        // The count is VISIBLE, named as the Author's, and the deviation rule is stated in the `why` the call
+        // already carries — no new step, and no claim that the number is a ceiling.
+        expect(job).toContain('The book declares `chapter_count: 12`');
+        expect(job).toContain('that number is the Author’s (D-3b)');
+        expect(job).toContain('Answer with exactly 12');
+        expect(job).toContain('name the reason in this call’s `why`');
+        expect(job).not.toContain('No chapter count is on the record');
+
+        // THE OTHER BRANCH, on its own book: a Summary row whose number is still 0 has no declared default,
+        // and the honest copy is "yours to decide" — not "honor 0", which would be an unsatisfiable job.
+        const bare = await laneRig();
+
+        startLane(bare);
+
+        const bareSummary = bare.store.summaries.list().find((row) => row.story_id === bare.storyId)!;
+
+        bare.store.summaries.update(bareSummary.id, { chapter_count: 0 }, AUTHOR_ATTR, [
+            { id: bareSummary.id, rev: bareSummary.rev }
+        ]);
+
+        await bare.step();
+
+        const bareJob = jobTextOf(structureBriefTextOf(bare));
+
+        expect(bareJob).toContain('No chapter count is on the record for this book yet');
+        expect(bareJob).toContain('1 is a legitimate chapter set (D-3b)');
+        expect(bareJob).not.toContain('The book declares `chapter_count: 0`');
     });
 
     it('generates nothing when an accepted brief has no entries — the accept step is the only writer', async () => {

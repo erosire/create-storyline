@@ -427,6 +427,19 @@ paths:
         is a backtrack, not this verb). A `key` outside the §4.11 catalog is 404; a catalog phrase that is
         NOT `starts_on_demand` — Phrase ①, which the loop writes — is 409 rather than 404, because the
         phrase exists and starting it by hand is the impossible part.
+        THE AUTHOR'S OWN SEED IS PROOFREAD BEFORE THIS PRESS, NOT BY IT (R7). A `custom` Seed is text nobody
+        has corrected, so the Editor may be asked for a one-time grammar pass first
+        (`GET …/phrases/{key}/seed/cleanup`), and the Author's confirmation is this verb: the desk puts the
+        proposal in the Seed box and the next press here carries those bytes as `text`. THAT is why this
+        request and this response never grew a `cleanup` field — the confirm is a press, not a flag — and it
+        is why the row is still written exactly ONCE, with the bytes the Author pressed. `custom` is trimmed
+        and otherwise untouched: nothing on this path rewrites the Author's words behind their back.
+        THE ARM IS RECORDED ON THE PHRASE ROW (R12). In the same commit as the copied text, the row gains
+        `seed_source` (`custom` / `compiled`), and the receipt's `view` shows it. Provenance is not derivable
+        afterwards — both arms store plain prose, and a hash cannot tell whose prose it is — while the
+        Editor's two jobs depend on the difference, so the fact is written at the only moment it exists. A
+        phrase started before the field exists keeps it absent, which means the origin was never recorded
+        rather than defaulting to `compiled` (R6).
       requestBody:
         required: false
         content:
@@ -450,6 +463,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StartPhraseResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/storyline/stories/{id}/phrases/{key}/seed/cleanup:
+    parameters:
+      - $ref: '#/components/parameters/StoryId'
+      - $ref: '#/components/parameters/PhraseKey'
+      - name: seed
+        in: query
+        required: true
+        description: >-
+          THE TEXT TO PROOFREAD — the Author's PENDING Seed, the paragraph sitting in the desk's Seed box. It
+          rides the query because this verb writes nothing and therefore has no row to read the draft off:
+          `phrases.seed` does not exist until the Start copies it (D-72), and the proposal is the step BEFORE
+          that copy. It is sent as the Author typed it; the server trims it and hashes the trimmed bytes,
+          which is the same trim the Start verb applies to `source: custom`, so the proposal and the Seed the
+          confirm writes are one text rather than two. A request target has a transport ceiling, so a Seed far
+          larger than a brief is not addressable by this read — that is the shape's one cost, stated here
+          rather than discovered at the desk.
+        schema:
+          type: string
+    get:
+      tags: [Stories]
+      operationId: getPhraseSeedCleanup
+      summary: Ask for the one-time grammar cleanup of a Seed the Author supplied (a proposal, never a write)
+      description: >-
+        R7 — the recorded decision is "Editor normalizes the seed once, at start, with Author confirm", and
+        this is the half the Author can reach. A Seed that came FROM THE AUTHOR DIRECTLY may carry the typos
+        of a typed brief, and the crew would then plan the chapter set against text nobody cleaned up; a Seed
+        COMPILED out of Phrase ① was written and reviewed by the crew, so a proofread on it is a model call
+        buying nothing. Only the first kind is ever offered one, and only before the phrase exists.
+        IT IS A PROPOSAL, NOT AN EDIT (P10 / L-19). The Editor writes no story prose, so this pass returns
+        TEXT and touches no record: no run row, no thread, no work item, and nothing written. `phrases.seed`
+        is still written EXACTLY ONCE, by `POST …/phrases/{key}/start`, with the bytes the Author confirmed —
+        the only ordering that keeps D-72's single copy and §18.13's "no verb replaces the seed after the
+        start" out of reach of a Seed that moves underneath it. The confirm is not a field on this contract:
+        the desk puts the proposal in the Seed box, and the Author's NEXT `source: custom` Start press carries
+        it, which is why `StartPhraseRequest` and `StartPhraseResult` are byte-identical to what they were.
+        THE TRANSPORT IS THE SERVER'S, NOT THE DESK'S. One tool-less turn at temperature 0 on the model this
+        server already runs its crew on (`STORYLINE_PROVIDER_*`); the desk names no model and dials no
+        provider.
+        THE ANSWER IS GUARDED, NOT TRUSTED. A model asked to "fix grammar" happily rewrites, so three
+        mechanical checks decide whether the answer is still the Author's brief — the reply is non-empty,
+        EVERY NUMBER in the source still appears in it in the same order (a `3 chapters` that became `several
+        chapters` is the rewrite a chapter plan turns on and the one an Author would not spot in corrected
+        prose), and the length stays inside 0.6x–1.25x of the source (much shorter is a summary, much longer
+        is invention). A reply any check rejects answers `ok: false` with the reason, and the desk keeps the
+        Author's OWN text: a rejected cleanup is a no-op, never a worse Seed. Whether the text still MEANS
+        what the Author wrote is not machine-decided — that is what the Author's confirmation is for.
+        REFUSALS: 400 when `seed` is absent or blank (this verb does not author the text it proofreads, and a
+        blank brief is the Start verb's own 400); 404 for a `key` outside the §4.11 catalog (R1); 409 when the
+        phrase is not one the Author seeds — Phrase ① has no brief of the Author's to proofread; 409 when the
+        phrase has ALREADY started, because the cleanup belongs before the copy and a started phrase's Seed is
+        read-only (D-72); 409 when this server has no model transport wired into its route table, which is the
+        truth rather than a proposal wearing the Author's own text.
+      responses:
+        '200':
+          description: >-
+            The proposal, or the reason there is none. Both are 200: a guard rejecting a rewrite is the pass
+            answering the question honestly, not a request the server refused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeedCleanupProposal'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -3956,6 +4036,23 @@ components:
             length even when this string is shorter. It is the same read every phrase-level gate uses
             (`phrase/catalog.ts:phraseSeedOf`), which is what lets the rail show the Author WHICH text the
             crew was started on and prove it did not move when Phrase ① was edited afterwards.
+        seed_source:
+          type: string
+          enum: [compiled, custom]
+          description: >-
+            R12 — WHICH ARM copied this phrase's Seed: `custom` is text the Author typed and their own Start
+            press confirmed; `compiled` is this Story's compiled Summary, whether the Author pressed the
+            handoff button or the Summary Accept started Phrase ② for them. The distinction is the Editor's
+            job description (R7): an Author's own Seed is the only one the one-time grammar pass
+            (`GET …/phrases/{key}/seed/cleanup`) ever runs on, and a compiled one was written and reviewed by
+            the crew, so it owes nothing — and the desk cannot tell the two apart from the text alone,
+            because both arms copy plain prose of the same shape.
+            ABSENT MEANS LEGACY, and it is not a third spelling of either arm. A phrase whose row predates
+            this field had no recorder, and nothing later can recover the origin, so the read carries the key
+            ONLY when the row actually says — the same absent-not-null rule `review.mirror` follows on a
+            phrase with no legacy prose to agree with, and the R6 rule that an absent field is the older book
+            rather than a defaulted new one. A client that treats absent as `compiled` would tell an Author
+            that their own typed brief was the crew's Overview.
         brief:
           nullable: true
           description: >-
@@ -4598,18 +4695,34 @@ components:
             `compiled` copies THIS Story's compiled Summary — a complete reviewed Overview when the crew has
             produced one, else the Overview as it stands, which is the same preference the rail's reviewed
             block reports. `custom` copies the Author's `text` instead, which is how a book starts Phrase ②
-            without running Phrase ①'s pipeline.
+            without running Phrase ①'s pipeline. The word is not only the arm of THIS request: it is written
+            onto the Phrase row as `seed_source` in the same commit (R12) and read back on the phrase view,
+            because it is the fact that decides whether the Editor owes this Seed a grammar pass (R7).
         text:
           type: string
           description: >-
             The Author's own Seed, read ONLY when `source: custom`. It is trimmed and stored verbatim — this
             verb does not author prose on the Author's behalf — so a missing or blank `text` on that arm is
             400 rather than a phrase started on nothing. A `text` beside `source: compiled` is ignored, not
-            half-applied.
+            half-applied. When the Author used the one-time cleanup first, this is the CONFIRMED text: the
+            desk placed the proposal in the Seed box and this press carries it, which is the whole of the
+            confirm (R7) — the server never substitutes the proposal for a press.
     StartPhraseResult:
       type: object
       additionalProperties: false
-      required: [story_id, phrase_id, key, source, seed_chars, seed_head, started, view]
+      required:
+        [
+          story_id,
+          phrase_id,
+          key,
+          source,
+          seed_chars,
+          seed_head,
+          started,
+          phase_opened,
+          phase_open_reason,
+          view
+        ]
       properties:
         story_id:
           type: string
@@ -4639,8 +4752,74 @@ components:
           description: >-
             Always true on this response: the row exists and this call stamped it. Re-pressing the button is
             the 409 that names the phrase row, not a receipt that says `started: false`.
+        phase_opened:
+          type: boolean
+          description: >-
+            TRUE ONLY WHEN THIS START MOVED THE CREW, i.e. the Story entered phase `plotlines` because of this
+            press (L-33). The pointer follows a Phrase ② start ONLY when phase ① is already signed off — that
+            is L-33's precondition read as a guard — so `false` is the ORDINARY answer for a Story whose
+            Summary has not been accepted yet, and it is not a failure: the phrase started and the crew stays
+            on Phrase ① until the Author signs it off. A Story already past phase ① gets `false` for the same
+            reason (no double advance, and no walk backwards: `lockPhase` owns those moves).
+        phase_open_reason:
+          type: string
+          description: >-
+            `''` when `phase_opened` is true — the pointer moved, and there is nothing to explain. Otherwise
+            the sentence a client prints under a successful start, naming WHICH of the three no-move states
+            this is: the Summary is not signed off (it names `POST /stories/{id}/lock`, the act that DOES
+            move the pointer), the Story is already in another phase, or the phrase the path names owns no
+            phase of its own. The sentence is the server's, so a client quotes it instead of inventing one;
+            the field is here so that quote is possible at all, and a client that stays silent about it is
+            silent about WHY the phase did not move, not about a failure. The start itself succeeded in every
+            case: a pointer the start could not move is reported, never rewound.
         view:
           $ref: '#/components/schemas/PhraseDetailView'
+    SeedCleanupProposal:
+      type: object
+      additionalProperties: false
+      required: [ok, source_hash]
+      description: >-
+        The Editor's one-shot proofread of the Author's pending Seed: the proposal, or the reason the model's
+        answer was thrown away. THE PASS WRITES NOTHING — this object is the whole product of one tool-less
+        model turn, and the only record it can lead to is the Seed the Author's next Start press copies.
+        The two shapes are distinguished by `ok`: when it is true, `text` and `changed` are present; when it
+        is false, `refusal` is, and the desk keeps the Author's own text with no confirm control to press.
+      properties:
+        ok:
+          type: boolean
+          description: >-
+            True when there is a usable proposal. False is an ANSWER, not an error: the model replied and a
+            guard decided the rewrite was not still the Author's brief, which is why the verb answers 200.
+        source_hash:
+          type: string
+          description: >-
+            `shared/seed-hash.ts` over the TRIMMED bytes the pass proofread — the same hash the Start commit
+            journals beside the copied length, and the same value Phrase ②'s whole pipeline keys its brief to
+            (`plotline_briefs.seed_hash`). The Seed's text is deliberately NOT echoed back: the desk is
+            holding it, and this is what lets the desk prove WHICH draft a proposal belongs to, so a
+            proposal cannot be confirmed onto text it was never computed over.
+        text:
+          type: string
+          description: >-
+            THE PROPOSAL — the Author's brief with grammar, spelling, punctuation and typos corrected and
+            nothing else. Present only when `ok` is true. It is not written anywhere: putting it in the Seed
+            box is the Author's confirmation, and the next `source: custom` start copies it verbatim.
+        changed:
+          type: boolean
+          description: >-
+            Whether the proposal differs from the trimmed source. `false` is the answer a proofread owes the
+            Author when there was nothing to fix — "your text already stands" — and it is deliberately NOT
+            reported as a refusal, so the desk does not offer identical text as a suggestion.
+        refusal:
+          type: string
+          enum: [empty_answer, numbers_lost, too_short, too_long]
+          description: >-
+            Present only when `ok` is false, and the reason the rewrite was thrown away rather than
+            proposed. `empty_answer` — the model returned nothing (or the source was blank); `numbers_lost`
+            — a number in the source is gone or out of order, which is a summary wearing a proofread's
+            clothes, and the one thing a chapter plan turns on; `too_short` — under 0.6x the source's length,
+            so it condensed; `too_long` — over 1.25x, so it invented. The desk states which kind happened and
+            leaves the Author's own text in the box.
     PhraseGroupReviseResult:
       type: object
       additionalProperties: false
