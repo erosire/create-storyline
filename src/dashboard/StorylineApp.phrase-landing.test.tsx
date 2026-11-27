@@ -31,7 +31,14 @@ import {
     storyRow,
     storyView
 } from './testing/shell-fakes';
-import { ApiError, type PhraseDetailView, type PhraseStartResult, type StoryView } from './api';
+import {
+    ApiError,
+    type CreateStoryInput,
+    type PhraseDetailView,
+    type PhraseStartResult,
+    type StoryRow,
+    type StoryView
+} from './api';
 import type { DashboardStore } from './state';
 
 vi.mock('./components/StoryView', () => {
@@ -272,5 +279,148 @@ describe('StorylineApp — the desk lands on the phrase the Author just opened (
         expect(desk()).toContain('panel:summary');
         expect(litPhrase()).toBe('Summary');
         expect(harness.store.getSnapshot().phraseDetails.story_1).toBeUndefined();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R1 (W2) — the SAME landing rule applied to the create form's `start_phrase`.
+//
+// THE SYMPTOM. An Author writes the Seed, picks "Plotlines" from the catalog and presses create. The engine starts
+// that phrase in the SAME commit as the Story row (`routes.ts`), so the book is open ON Phrase ②'s work — but the
+// rail's default is the Summary, and a Summary pane is the one surface a book that never wrote one does not have.
+// The desk has to move, and it may only move on PROOF: `story-nav.phraseLandingSelection` reads the projection
+// (`phrase_started`), never the fact that a verb ran.
+//
+// TWO HONEST STATES THIS COVERAGE KEEPS APART:
+//   - the create asked for a phrase and the read says it started  -> the rail moves, once;
+//   - the create asked and the read has not caught up (or says no) -> the desk stays on the Summary AND the hint is
+//     still spent, because a hint that outlived its own create would move the rail on a later, unrelated open.
+// The third case is the one the plan cares about most: a create that named NO phrase must request no Phrase ② read
+// at all, so the desk cannot claim work the loop was never pointed at.
+// ---------------------------------------------------------------------------
+describe('StorylineApp — a create that started a phrase lands the desk on that phrase (R1)', () => {
+    /**
+     * The desk with NO story open: the create is the act that opens one, so the landing is the
+     * whole story. `started` is the projection on the read of the book the create just made, and
+     * a fake that flipped it before `GET /stories/:id` ran would let the shell pass on a guess.
+     */
+    function createHarness(wire: { started?: boolean } = {}) {
+        const rows: StoryRow[] = [];
+        const createInputs: CreateStoryInput[] = [];
+        /** Every `GET /stories/:id/phrases/:key` this create caused, in call order. */
+        const detailKeys: string[] = [];
+
+        const view = (storyId: string): StoryView => ({
+            ...storyView(storyRow(storyId, { title: 'Hollow Sea' })),
+            phrase_started: { summary: true, plotlines: wire.started === true },
+            summary_compiled: true
+        });
+
+        const harness = fakeHarness([], [], {
+            listStories: vi.fn(async () => [...rows]),
+            createStory: vi.fn(async (input: CreateStoryInput): Promise<StoryRow> => {
+                // The body is pinned as received, because the store must hand `start_phrase` to the
+                // route verbatim — a default it invented here would look identical on screen.
+                createInputs.push({ ...input });
+                const row = storyRow('story_new', { title: input.title ?? 'Untitled' });
+                rows.push(row);
+
+                return row;
+            }),
+            getStory: vi.fn(async (storyId: string) => view(storyId)),
+            getPhrase: vi.fn(async (storyId: string) => groupedPhraseView(storyId)),
+            getPhraseDetail: vi.fn(async (storyId: string, key: string) => {
+                detailKeys.push(key);
+
+                return phraseDetailView(storyId);
+            })
+        });
+
+        return { ...harness, createInputs, detailKeys };
+    }
+
+    /** Mounts the home desk with one pre-loaded read, so the first paint is not a spinner. */
+    async function mountHome(wire: { started?: boolean } = {}) {
+        const harness = createHarness(wire);
+
+        await harness.store.reload();
+        await act(async () => {
+            renderWithStore(<StorylineApp store={harness.store} />, harness.store);
+        });
+
+        return harness;
+    }
+
+    /**
+     * Runs the create and lets the store's whole post-write chain settle: the row, the re-reads, the
+     * hint commit, the shell's landing effect, and the re-render. The hint lands AFTER the re-reads by
+     * design (`state.ts:createStory`), so a single tick is not enough to see the landing.
+     */
+    async function createWith(harness: ReturnType<typeof createHarness>, input: CreateStoryInput) {
+        await act(async () => {
+            await harness.store.createStory(input);
+            for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+        });
+    }
+
+    it('lands on Phrase 2 in the rail and the content area, and spends the hint once', async () => {
+        const harness = await mountHome({ started: true });
+
+        // Nothing is open yet: the desk is the home screen, and the landing is what changes that.
+        expect(screen.queryByTestId('story-view')).toBeNull();
+
+        await createWith(harness, { title: 'Hollow Sea', idea: 'A smuggler pays the tide to cross the salt road.', start_phrase: 'plotlines' });
+
+        // The body the route got: the phrase key the Author picked, and no invented fields.
+        expect(harness.createInputs).toEqual([
+            { title: 'Hollow Sea', idea: 'A smuggler pays the tide to cross the salt road.', start_phrase: 'plotlines' }
+        ]);
+        // The pane AND the lit rail row move together — the symptom was a rail that never moved.
+        expect(desk()).toContain('panel:plotlines');
+        expect(desk()).toContain('ref:header');
+        expect(desk()).toContain('started:yes');
+        expect(litPhrase()).toBe('Plotlines');
+        // Phrase ②'s own read is fetched with the key the Author picked, on the create alone: the
+        // cache starts empty on a book one frame old, and the pane's SEED (R3) comes from this read.
+        expect(harness.detailKeys).toEqual(['plotlines']);
+        expect(harness.store.getSnapshot().phraseDetails.story_new).toBeDefined();
+        // The hint is one-shot. A frame that kept it would move the rail again on the next open of
+        // the same book, which is the C2a bug wearing a different coat.
+        expect(harness.store.getSnapshot().phraseLanding).toBeNull();
+        expect(harness.store.takePhraseLanding()).toBeNull();
+    });
+
+    it('asks for no Phrase 2 read at all when the create named no phrase', async () => {
+        const harness = await mountHome();
+
+        await createWith(harness, { title: 'Hollow Sea', idea: 'A smuggler pays the tide to cross the salt road.' });
+
+        // No `start_phrase` on the body, so no hint and no Phrase ② read: the desk opens where it
+        // always has, and the desk never claims work the loop was not pointed at.
+        expect(harness.createInputs).toEqual([
+            { title: 'Hollow Sea', idea: 'A smuggler pays the tide to cross the salt road.' }
+        ]);
+        expect(desk()).toContain('panel:summary');
+        expect(litPhrase()).toBe('Summary');
+        expect(harness.client.getPhraseDetail).not.toHaveBeenCalled();
+        expect(harness.store.getSnapshot().phraseDetails.story_new).toBeUndefined();
+        expect(harness.store.getSnapshot().phraseLanding).toBeNull();
+    });
+
+    it('stays on the Summary when the read does not prove the start, and still spends the hint', async () => {
+        const harness = await mountHome({ started: false });
+
+        await createWith(harness, { title: 'Hollow Sea', idea: 'A smuggler pays the tide.', start_phrase: 'plotlines' });
+
+        // The projection says the phrase is not open, so the shell does not jump into a pane with no
+        // rows behind it — the same non-destructive half the start-phrase tests pin.
+        expect(desk()).toContain('panel:summary');
+        expect(desk()).toContain('started:no');
+        expect(litPhrase()).toBe('Summary');
+        // The read was still requested (the create asked for the phrase, whatever the read answers),
+        // and the hint is spent anyway so it cannot move a later open of this book.
+        expect(harness.detailKeys).toEqual(['plotlines']);
+        expect(harness.store.getSnapshot().phraseLanding).toBeNull();
+        expect(harness.store.takePhraseLanding()).toBeNull();
     });
 });

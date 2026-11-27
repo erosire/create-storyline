@@ -1082,8 +1082,45 @@ describe('StoryView — the research pipeline surfaces (§10, §3.3, §6.6)', ()
         expect(container.querySelector('.sv-seed-brief')?.textContent).toBe(
             "The Editor's brief: A cartographer maps a sea that remembers her fleet."
         );
-        // The D-3b measure rides the pane the rail's row opened (the number the book is measured against).
-        expect(container.querySelector('.sv-seed-measure')?.textContent).toBe('The book\'s measure: 7 chapters (D-3b).');
+        // R4 (W2) — THE DECLARATION, NOT THE DEFAULT. The old line printed `summaries.chapter_count` under a sentence
+        // that read like the Author's own measure, so a book the Editor sized was shown a count nobody named. The
+        // fixture Story carries no `chapter_count_request` — a book written before the create asked — and the pane
+        // says exactly that, then the count the book actually runs on. Pinned as the literal (L-13).
+        expect(container.querySelector('.sv-seed-measure')?.textContent).toBe(
+            'No chapter count was recorded on this book — it was written before the create asked, so the number below is ' +
+                'what the Story runs on, not a number you named (D-3b). The number the book counts against is 7, and C-0 fails on any other count (D-3b).'
+        );
+    });
+
+    // R4 (W2) — THE OTHER TWO STATES OF THE SAME FIELD, on the surface the Author reads them on. A declared number
+    // and "the Editor decides" are different answers the Author gave at the create, and the desk may not print the
+    // running count as though it were either.
+    it('states a declared chapter count as the declaration it is, and an omitted one as the Editor’s (R4, D-3b)', () => {
+        const declared = render(
+            <StoryView
+                view={{ ...fixtureView(), story: { ...fixtureView().story, chapter_count_request: 9 } }}
+                selection={{ panel: 'summary', ref: phraseSeedRef() }}
+            />
+        );
+
+        expect(declared.container.querySelector('.sv-seed-measure')?.textContent).toBe(
+            'You asked for 9 chapters — a declared count is Author truth, and nothing downstream may disagree with it silently (D-3b). ' +
+                'The number the book counts against is 7, and C-0 fails on any other count (D-3b).'
+        );
+
+        const editorDecides = render(
+            <StoryView
+                view={{ ...fixtureView(), story: { ...fixtureView().story, chapter_count_request: null } }}
+                selection={{ panel: 'summary', ref: phraseSeedRef() }}
+            />
+        );
+
+        expect(editorDecides.container.querySelector('.sv-seed-measure')?.textContent).toBe(
+            'You left the chapter count to the Editor: “you choose” was the answer you gave at the create, and that ' +
+                'suppresses the old default rather than falling back to it (D-3b). The number the book counts against is 7, and C-0 fails on any other count (D-3b).'
+        );
+        // What all three readings share: the count is quoted as the number the book COUNTS AGAINST, never as a request.
+        expect(editorDecides.container.querySelector('.sv-seed-measure')?.textContent).not.toContain('You asked for 7');
     });
 });
 

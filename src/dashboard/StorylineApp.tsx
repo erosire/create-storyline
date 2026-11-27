@@ -65,6 +65,8 @@ function Shell() {
         phraseDetailErrors,
         reviewedErrors,
         groupLockErrors,
+        // R1 (W2) — the one-shot landing the create committed once its re-reads landed; this is the frame that spends it.
+        phraseLanding,
         templates,
         agents,
         selectedAgent,
@@ -87,6 +89,30 @@ function Shell() {
     useEffect(() => {
         setSelection(DEFAULT_STORY_SELECTION);
     }, [activeStoryId]);
+
+    // R1 (W2) — WHERE THE DESK LANDS after a create that started a phrase.
+    //
+    // The reset above is right for every other move, but a book created straight onto Phrase ② is open ON that
+    // phrase's work, and a Summary pane is the one surface it does not have yet. `state.ts:createStory` re-reads
+    // the Story, the Summary phrase and the started phrase's own detail BEFORE it commits the hint, so this effect
+    // runs on a frame that can be checked rather than guessed at:
+    //   - `story-nav.phraseLandingSelection` answers `undefined` unless the projection (`phrase_started`) proves
+    //     that phrase started — a create whose read failed, or whose row says the phrase is not open, keeps the
+    //     Summary the reset put there;
+    //   - the hint is consumed on the first frame that matches its Story, proved or not, because a hint that
+    //     outlived the create it belongs to would move the rail on a later, unrelated open of the same book.
+    useEffect(() => {
+        if (phraseLanding === null) return;
+        if (activeStoryId === null) return;
+        if (phraseLanding.story_id !== activeStoryId) return;
+
+        const landed = phraseLandingSelection(storyFrame(store, activeStoryId), phraseLanding.phrase_key);
+
+        // Clearing re-renders this effect with `null`, which is the one-shot's whole teardown.
+        store.takePhraseLanding();
+
+        if (landed !== undefined) setSelection(landed);
+    }, [phraseLanding, activeStoryId, store]);
 
     const story = activeStoryId ? stories.find((row) => row.id === activeStoryId) : undefined;
     const view = activeStoryId ? storyViews[activeStoryId] : undefined;

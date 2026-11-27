@@ -16,6 +16,9 @@
 // the only case where one chapter legitimately sits at a different vintage than its neighbours.
 import { RevisionsCompare } from './RevisionsCompare';
 import { ProseEditor } from './ProseEditor';
+// R5 — the contract beside the prose is the same ordered beat list the Plotlines pane prints (one component,
+// `PlotlineContract.tsx`); this pane only adds the prose next to it.
+import { PlotlineContract } from './PlotlineContract';
 import {
     ACTIVITY_LABELS,
     ACTIVITY_ORDER,
@@ -135,26 +138,13 @@ export function PlotlineChapters({
                                                     (P4).
                                                 </p>
                                             ) : (
-                                                <dl className="sv-plotline-fields">
-                                                    <div className="sv-plotline-field">
-                                                        <dt>Must happen (C-7)</dt>
-                                                        <dd>{plotline.must_happen || '—'}</dd>
-                                                    </div>
-                                                    <div className="sv-plotline-field">
-                                                        <dt>Must change (C-8)</dt>
-                                                        <dd>{plotline.must_change || '—'}</dd>
-                                                    </div>
-                                                    <div className="sv-plotline-field">
-                                                        <dt>POV</dt>
-                                                        <dd>{plotline.pov || '—'}</dd>
-                                                    </div>
-                                                    <div className="sv-plotline-field">
-                                                        <dt>Setups / payoffs (C-5)</dt>
-                                                        <dd>
-                                                            {plotline.setups || '—'} / {plotline.payoffs || '—'}
-                                                        </dd>
-                                                    </div>
-                                                </dl>
+                                                <PlotlineContract
+                                                    plotline={plotline}
+                                                    contractClassName="sv-plotline-fields"
+                                                    fieldClassName="sv-plotline-field"
+                                                    testId={`sv-chapter-${chapter.id}`}
+                                                    emptyLine="This chapter's contract lists no beats, so C-7 has nothing to check the prose against (P4)."
+                                                />
                                             )}
                                             <div className="sv-chapter-badges">
                                                 {plotline?.contract_locked ? (

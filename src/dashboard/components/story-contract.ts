@@ -58,6 +58,9 @@ import type {
     IdeaState,
     PendingKind,
     Proposal,
+    // R5 — the §4.3 contract row: the panes render its ORDERED beats and dialogue, and the deprecated prose fields
+    // are read by exactly one function in this module (`plotlineBeatsOf`'s recovery arm).
+    Plotline,
     Revision,
     Run,
     Story,
@@ -339,17 +342,19 @@ export interface StoryActions {
         input?: { source?: 'compiled' | 'custom'; text?: string }
     ) => Promise<unknown> | unknown;
     /**
-     * R7 — the Author asks the Editor to PROOFREAD the Seed they are about to start on
-     * (`GET /stories/:id/phrases/:key/seed/cleanup?seed=…`), and gets a PROPOSAL.
+     * R7 / R6 (W2) — the Author asks the Editor to PROOFREAD the Seed they are about to start on
+     * (`POST /stories/:id/phrases/:key/seed/cleanup`, body `{ seed }`), and gets a PROPOSAL.
      *
-     * IT IS A READ, AND THE DESK HAS TO SAY SO. Nothing is written: no Seed, no revision, no journal line. The
-     * pending Seed has no row to read it from (the Start copies it, D-72), so the Author's draft rides in the
-     * query and the answer rides back as text the card can show. That is why the verb is a GET and why it is not
-     * a run (P10: one tool-less turn, no work item, nothing for the queue).
+     * IT STILL WRITES NOTHING, AND THE DESK HAS TO SAY SO: no Seed, no revision, no journal line. The pending Seed
+     * has no row to read it from (the Start copies it, D-72), so the Author's draft is SENT and the answer rides
+     * back as text the card can show — which is why it is not a run (P10: one tool-less turn, no work item, nothing
+     * for the queue). R6 moved the draft out of the request line and into a BODY: a pasted brief is routinely
+     * longer than a request target, and the ask used to die at HTTP 431 before the Editor read a word.
      *
-     * THE CONFIRM IS THE NEXT START PRESS. The card puts the proposal in the Seed box and the Author's next
-     * `source:'custom'` press carries it; `PhraseStartInput` grew no flag, so there is no path by which a
-     * cleanup reaches the phrase without a press — which is the whole of AC3.
+     * THE CONFIRM IS THE NEXT PRESS. The card puts the proposal in the Seed box and the Author's next
+     * `source:'custom'` press (or the create) carries it; `PhraseStartInput` grew no flag, so there is no path by
+     * which a cleanup reaches the phrase without a press — which is the whole of AC3. THE SWITCH ABOVE THE ASK IS
+     * THE OTHER HALF: with the Editor-cleanup switch off, this verb is never dialed and no model turn is spent.
      *
      * THE RETURN IS THE PROPOSAL, NOT A RESULT WRAPPER. `ok: true` carries `text` (+ `changed`), `ok: false`
      * carries `refusal` and NO `text`, and BOTH are 200s: a guard refusal is an answer, not a failure, and the
@@ -362,10 +367,11 @@ export interface StoryActions {
      */
     requestSeedCleanup?: (storyId: string, phraseKey: string, seed: string) => Promise<SeedCleanupProposal | null>;
     /**
-     * T-W4 — the Author rewrites ONE CHAPTER ENTRY by hand. The route is the Summary group's revise; the BODY is
-     * different, because a chapter entry's text is composed from its contract fields
-     * (`PhrasePlotpointsInput`): `must_happen` and `must_change` are the entry, and the route 400s without them.
-     * The entry is addressed by its UUID, exactly as a Summary group is (U2).
+     * T-W4 / R5 (W2) — the Author rewrites ONE CHAPTER ENTRY by hand. The route is the Summary group's revise; the
+     * BODY is different, because a chapter entry's text is COMPOSED from its contract fields
+     * (`PhrasePlotpointsInput` — the optional `heading`, the ORDERED `beats`, and the optional ORDERED `dialogue`):
+     * the entry IS its beats, and the route 400s without at least one non-blank one (`contractListOf` drops the
+     * blanks, so `['', ' ']` is no contract). The entry is addressed by its UUID, exactly as a Summary group is (U2).
      *
      * `revisePhraseGroup` above stays the Summary's verb and keeps its `{content, note}` body — the two writes are
      * two shapes on the wire, and one union-typed action would let a Summary pane send plotpoints by accident.
@@ -1264,6 +1270,275 @@ export function unwrittenPlotlinesEntries(
 export const plotlinesStarted = (view: Pick<StoryViewData, 'phrase_started'>): boolean =>
     view.phrase_started?.plotlines === true;
 
+// ---------------------------------------------------------------------------
+// R5 (W2) — THE CHAPTER CONTRACT, AS TWO ORDERED LISTS
+//
+// WHY THESE HELPERS EXIST CLIENT-SIDE AT ALL. The contract is `heading` + ordered `beats` + optional ordered
+// `dialogue` (`phrase/plotpoints.ts:PlotpointFields`); the ENTRY's text and the §4.3 `plotlines` row are both
+// DERIVED from it (`chapterEntryContent`), and the per-phrase read carries the derived text (`PhraseGroupRow.content`),
+// not the fields. So the desk needs the field reading in two places: rendering a §4.3 row, and prefilling the
+// Author's beat editor from the entry text it was given. Both go through the ONE pair of functions below, which are
+// the client mirrors of the server's own, so a pane and a route cannot tell two stories about one contract
+// (L-14: the dashboard recomputes nothing the engine already answered — this is decoding a wire field, not
+// re-deriving a verdict).
+//
+// THE LEGACY PROSE IS COMPATIBILITY, NOT A SECOND TRUTH. `must_happen`/`must_change`/`pov`/`setups`/`payoffs` are
+// deprecated on the row (`shared/types.ts:Plotline`), and NOTHING in the current generation writes them; the only
+// reading left is the recovery below, which is the same rule `plotlineBeatsOf` states server-side. So the desk has
+// no "Must happen"/"Must change"/"POV"/"Setups"/"Payoffs" labels any more: a legacy chapter reads as the beats it
+// carries, which is what the criteria engine checks it against (C-7, and C-3/C-8 against the LAST beat).
+// ---------------------------------------------------------------------------
+
+/**
+ * The one list cleaner, and the client mirror of `phrase/plotpoints.ts:contractListOf`: trim each item, drop the
+ * blanks, KEEP THE ORDER. Order is the content (the beats are chronological), so a cleaner that sorted or
+ * deduplicated them would be editing the contract on the way to the screen.
+ */
+export function contractListOf(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+
+    return value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item !== '');
+}
+
+/**
+ * THE ONE COMPATIBILITY READ — a stored contract's beats, whichever generation wrote the row.
+ *
+ * The rules, in the server's own order (`phrase/plotpoints.ts:plotlineBeatsOf`):
+ *   1. `beats`, cleaned through {@link contractListOf}, wins when it is non-empty — a row written by the current
+ *      generation never falls back, so a half-mirrored install cannot be shadowed by older prose on the same row;
+ *   2. otherwise the legacy `must_happen` prose is RECOVERED as beats — split on newlines and on `;` (the two ways
+ *      an old answer listed several events in one block), trimmed, blanks dropped. A one-sentence `must_happen`
+ *      comes back as ONE beat, which is the honest answer, not a parsed list;
+ *   3. otherwise `[]`, and each surface states its own "no contract" line rather than showing an empty list.
+ *
+ * `must_change`/`pov`/`setups`/`payoffs` are NOT folded in: the last beat already carries the "what is different"
+ * rule (C-3/C-8), POV is not a contract field, and the ledger (C-5/C-6) was always the real source of the setups
+ * check. They stay on the row as data; the desk reads nothing from them.
+ */
+export function plotlineBeatsOf(plotline: Plotline | undefined): string[] {
+    if (plotline === undefined) return [];
+
+    const beats = contractListOf(plotline.beats);
+
+    if (beats.length > 0) return beats;
+
+    // LEGACY ROW — the deprecated `must_happen` prose is the only statement this chapter's contract ever made, and
+    // the split rules are the server's: an old answer listed several events either one per line or `;`-separated.
+    const legacy = typeof plotline.must_happen === 'string' ? plotline.must_happen : '';
+
+    return contractListOf(legacy.split(/[\n;]+/));
+}
+
+/**
+ * A §4.3 row's required DIALOGUE, cleaned the same way the beats are (R5).
+ *
+ * There is no legacy arm here on purpose: dialogue is a new field, so an absent key and an empty list are the same
+ * fact — the chapter owes no lines — and the surfaces render nothing rather than a blank row.
+ */
+export function plotlineDialogueOf(plotline: Plotline | undefined): string[] {
+    if (plotline === undefined) return [];
+
+    return contractListOf(plotline.dialogue);
+}
+
+/** One row of the Author's contract editor: the heading, the ORDERED beats, and the ORDERED dialogue. */
+export interface ChapterEntryDraft {
+    heading: string;
+    beats: string[];
+    dialogue: string[];
+}
+
+/** The block labels `chapterEntryContent` composes with, spelled ONCE so parse and render cannot drift. */
+const ENTRY_HEADING_LABEL = 'Heading:';
+const ENTRY_BEATS_LABEL = 'Beats:';
+const ENTRY_DIALOGUE_LABEL = 'Important dialogue:';
+
+/**
+ * The contract FIELDS a chapter entry's stored text was composed from — the inverse of
+ * `phrase/plotpoints.ts:chapterEntryContent`, and the reason the Author's beat editor can open PREFILLED.
+ *
+ * WHY PARSE THE TEXT INSTEAD OF READING FIELDS OFF THE ROW: the per-phrase read answers `PhraseGroupRow.content`
+ * (the composed prose) and no field list, so the fields are only recoverable from the text the route composed. The
+ * shapes are fixed by the server's own composer — `Heading: …`, then `Beats:` with `- ` items, then `Important
+ * dialogue:` with `- ` items, blocks joined by a blank-free newline — so this is a decoding of a known format, not
+ * a guess at prose.
+ *
+ * WHAT AN UNRECOGNISED TEXT MEANS (the legacy generation, or a row written before beats existed): the entry's text
+ * is not thrown away and is not silently re-flowed — it comes back as ONE beat, exactly as `plotlineBeatsOf`
+ * recovers a one-sentence `must_happen` into one beat. The Author sees their contract as one row, edits it into
+ * ordered beats, and the send writes the current shape. A prefill that dropped the text would be a write the
+ * Author did not make.
+ */
+export function chapterEntryDraft(content: string | undefined): ChapterEntryDraft {
+    const draft: ChapterEntryDraft = { heading: '', beats: [], dialogue: [] };
+    const text = typeof content === 'string' ? content : '';
+
+    if (text.trim() === '') return draft;
+
+    const lines = text.split('\n');
+    // WHICH LIST the `- ` items belong to. `none` covers the heading line and anything before a known label, which
+    // is what makes a legacy block fall through to the single-beat rule below rather than into the beat list.
+    let section: 'none' | 'beats' | 'dialogue' = 'none';
+    let recognised = false;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (trimmed === '') continue;
+
+        if (trimmed.startsWith(ENTRY_HEADING_LABEL)) {
+            draft.heading = trimmed.slice(ENTRY_HEADING_LABEL.length).trim();
+            recognised = true;
+            continue;
+        }
+        if (trimmed === ENTRY_BEATS_LABEL) {
+            section = 'beats';
+            recognised = true;
+            continue;
+        }
+        if (trimmed === ENTRY_DIALOGUE_LABEL) {
+            section = 'dialogue';
+            recognised = true;
+            continue;
+        }
+
+        if (section === 'none') continue;
+
+        // A bullet in the current section. The item text keeps its own inner punctuation; only the leading `- `
+        // (or a bare `-`) is the label, and an item that is only whitespace is dropped by `contractListOf`'s rules.
+        const item = trimmed.startsWith('-') ? trimmed.slice(1).trim() : trimmed;
+
+        if (item === '') continue;
+
+        if (section === 'beats') draft.beats.push(item);
+        else draft.dialogue.push(item);
+    }
+
+    if (!recognised || draft.beats.length === 0) {
+        // NOT A COMPOSED CONTRACT BLOCK. The text IS the contract as the previous generation wrote it, so it
+        // recovers as beats through the same rule §4.3 rows use — including the `;` split, because an old
+        // `must_happen` listed events that way — and an empty result leaves the editor open with one blank row.
+        draft.beats = contractListOf(text.split(/[\n;]+/).map((line) => line.replace(/^-\s*/, '')));
+        draft.dialogue = [];
+    }
+
+    return draft;
+}
+
+// ---------------------------------------------------------------------------
+// R4 (W2) — THE CHAPTER COUNT AT THE CREATE
+//
+// THE INPUT IS OPTIONAL, AND OPTIONAL HAS THREE MEANINGS ON THE WIRE, so the form needs one rule with one set of
+// tests rather than a `Number(value)` inlined in a submit handler:
+//   · blank      → the key is OMITTED, and the row records `chapter_count_request: null` — "the Editor decides";
+//   · a whole number ≥ 1 → the declaration, sent as `chapter_count` (the route validates an integer ≥ 1, and the
+//     form refuses anything else BEFORE dialing so the Author reads a sentence instead of a 400);
+//   · anything else (`0`, `1.5`, `seven`, a negative) → a refusal. `0` in particular is the accidental sentinel:
+//     it is a number a caller could compute by accident, and the server refuses it because "no chapters" is not a
+//     count the loop can honor.
+// ---------------------------------------------------------------------------
+
+/** Why the create's chapter-count box is refused, `''` when the value may be sent (or is blank, which sends nothing). */
+export function chapterCountInputRefusal(value: string): string {
+    const text = value.trim();
+
+    if (text === '') return '';
+
+    const count = Number(text);
+
+    if (!Number.isFinite(count) || !Number.isInteger(count))
+        return 'A chapter count is a whole number of chapters — a count the Editor has to honor cannot be a fraction or a word (D-3b).';
+
+    if (count < 1)
+        return 'A chapter count of 0 asks for a book with no chapters. Leave the box empty to let the Editor decide (D-3b), or name a number from 1 up.';
+
+    return '';
+}
+
+// ---------------------------------------------------------------------------
+// R4 (W2) — THE CHAPTER COUNT THE AUTHOR ACTUALLY DECLARED
+//
+// THREE STATES ON THE WIRE, AND THE DESK HAS TO SAY WHICH ONE IT IS LOOKING AT
+// (`shared/types.ts:Story.chapter_count_request`, mirrored at `types.ts:Story`):
+//   · a NUMBER — the Author declared it at the create, and the honor-the-request check reads that number;
+//   · `null`   — "the Editor decides", an explicit answer rather than a missing one;
+//   · ABSENT   — legacy. A book written before the field keeps the behaviour it always had (R6's no-migration
+//     rule), and the desk may not read its working count back as a request the Author never made.
+//
+// WHY THIS IS A FUNCTION AND NOT JSX IN A PANE. `summaries.chapter_count` — the number the loop counts against,
+// and what C-0 fails on — is a DIFFERENT fact from the declaration, and the actual default (1) is the value a pane
+// reaches for by accident. A pane that printed `The book's measure: 1 chapter` under a heading of "your chapter
+// count" told an Author they had asked for one when they had asked for nothing. The sentence lives here so the
+// three states are one rule with one set of tests, and every surface that quotes a count quotes the same reading.
+// ---------------------------------------------------------------------------
+
+/**
+ * The honest sentence about a Story's chapter-count DECLARATION, beside the count the book actually runs on.
+ *
+ * `runningCount` is `summaries.chapter_count` (D-3b's Author-truth mirror) and is optional because a book can exist
+ * with no Summary row yet — an absent Summary is a state to name, not a zero to print.
+ */
+export function chapterCountRequestLine(
+    story: Pick<Story, 'chapter_count_request'>,
+    runningCount: number | undefined
+): string {
+    const declared = story.chapter_count_request;
+    // WHAT THE BOOK COUNTS AGAINST. C-0's number, stated once per branch, because it is the fact an Author compares
+    // their own declaration against — and it is NOT a restatement of the declaration (`acceptPlotlineBrief` is the
+    // only writer in the phrase pipeline, so an accepted brief moves it without touching the request).
+    const running =
+        runningCount === undefined
+            ? 'This Story has no Summary row yet, so no count is being checked against anything (D-3b).'
+            : `The number the book counts against is ${runningCount}, and C-0 fails on any other count (D-3b).`;
+
+    if (typeof declared === 'number') {
+        return (
+            `You asked for ${declared} ${declared === 1 ? 'chapter' : 'chapters'} — a declared count is Author truth, ` +
+            `and nothing downstream may disagree with it silently (D-3b). ${running}`
+        );
+    }
+
+    if (declared === null) {
+        return (
+            'You left the chapter count to the Editor: “you choose” was the answer you gave at the create, and that ' +
+            `suppresses the old default rather than falling back to it (D-3b). ${running}`
+        );
+    }
+
+    // ABSENT — and the one claim this branch must not make is that the running number is what the Author asked for.
+    return (
+        'No chapter count was recorded on this book — it was written before the create asked, so the number below is ' +
+        `what the Story runs on, not a number you named (D-3b). ${running}`
+    );
+}
+
+/**
+ * The chapter entry's text as the SERVER composes it — the client mirror of
+ * `phrase/plotpoints.ts:chapterEntryContent`, kept for the surfaces that render a contract from FIELDS rather than
+ * from the row's stored text (a revision body carrying `plotpoints`, and the entry's own preview while the Author
+ * is editing).
+ *
+ * The rules are the composer's and not a style choice: a blank heading emits nothing, a beat list of `['']` emits
+ * nothing (no items survive `contractListOf`), and an empty dialogue section is omitted rather than printed with no
+ * lines under it.
+ */
+export function chapterEntryText(fields: { heading?: string; beats?: unknown; dialogue?: unknown }): string {
+    const heading = typeof fields.heading === 'string' ? fields.heading.trim() : '';
+    const beats = contractListOf(fields.beats);
+    const dialogue = contractListOf(fields.dialogue);
+    const blocks: string[] = [];
+
+    if (heading !== '') blocks.push(`${ENTRY_HEADING_LABEL} ${heading}`);
+    if (beats.length > 0) blocks.push([ENTRY_BEATS_LABEL, ...beats.map((beat) => `- ${beat}`)].join('\n'));
+    if (dialogue.length > 0)
+        blocks.push([ENTRY_DIALOGUE_LABEL, ...dialogue.map((line) => `- ${line}`)].join('\n'));
+
+    return blocks.join('\n');
+}
+
 /** Has Phrase ① been started? Always true for a book the loop wrote — Phrase ① is not an on-demand phrase. */
 export const summaryPhraseStarted = (view: Pick<StoryViewData, 'phrase_started'>): boolean =>
     view.phrase_started?.summary === true;
@@ -1394,52 +1669,24 @@ export const customSeedRefusal = (text: string): string =>
 // ---------------------------------------------------------------------------
 
 /**
- * The longest escaped `?seed=` this desk will dial (R7).
- *
- * WHY THE DESK HAS A TRANSPORT LIMIT AT ALL: the cleanup read carries the Author's draft IN THE ADDRESS
- * (`dashboard/api.ts:1870` → `…/seed/cleanup?seed=${encodeURIComponent(seed)}`, and `routes.ts:1678` explains
- * why a GET takes it there), so the draft is inside the request line the listener parses. Past that line the
- * request dies before routing — no `SeedCleanupProposal`, no refusal code, no sentence the desk could print:
- * just HTTP 431, which is not a fact an Author can act on.
- *
- * MEASURED, on the real listener (`Temp/c9/probe-f4.ts` / `probe-f4.out`, `startStorylineServer({ port: 0 })`):
- * the route answers normally at an escaped seed of 12,056 and 16,200 characters and returns 431 at 16,300 and
- * 18,080 — the refusal tracks the ESCAPED length, not the pasted one (a pasted space becomes `%20`, an em dash
- * nine bytes), and the ceiling sits where Node's 16,384-byte request-header budget says it would.
- *
- * 12,000 IS THE ROUND NUMBER UNDER IT, and the margin is deliberate: ≈4,300 escaped characters of headroom
- * (about 26 %) below the measured 16,300 failure point, which also covers the fixed 53-character path prefix
- * and every other header the client sends. It is a refusal, not a truncation: the rule is the one the server
- * already enforces by accident, stated where the Author can read it (U-16).
- */
-export const SEED_CLEANUP_ASK_URL_LIMIT = 12_000;
-
-/**
  * Why the "ask the Editor to proofread this" control is shut, `''` when it is live.
  *
- * THREE FACTS, and the first two are not gates the Start verb does not have: the shell must have the verb
- * (U-16), the box must hold the draft the pass would read — the route 400s a blank `seed` rather than spend a
- * model call on an answer it already knows (`routes.ts:GET …/seed/cleanup`) — and the draft has to FIT the
- * address it travels in (`SEED_CLEANUP_ASK_URL_LIMIT`, F4). `summary_compiled` is NOT in this list, on
- * purpose: the cleanup belongs to the custom arm, whose Seed is text this Story does not need to have.
+ * TWO FACTS, and neither is a gate the Start verb does not have: the shell must have the verb (U-16), and the box
+ * must hold the draft the pass would read — the route 400s a blank `seed` rather than spend a model call on an
+ * answer it already knows (`routes.ts:POST …/seed/cleanup`). `summary_compiled` is NOT in this list, on purpose:
+ * the cleanup belongs to the arm whose Seed is text this Story does not need to have — the Author's own draft.
+ *
+ * R6 (W2) — AND THERE IS NO LENGTH RULE ANY MORE. The desk used to refuse a draft whose ESCAPED form passed about
+ * 12,000 characters, because the ask was a GET and the draft rode in the request line the listener parses (F4's
+ * measured 431 ceiling). The proofread is a POST with the draft in a BODY now
+ * (`api.ts:requestPhraseSeedCleanup` / `requestSeedCleanupDraft`), which has no such ceiling — and a pasted synopsis
+ * is exactly the text that used to run into it, so the rule refused the ask at the moment the proofread mattered
+ * most. A long brief is therefore askable, and nothing tells the Author to paste "a chapter or two at a time".
  */
 export function seedCleanupAskRefusal(text: string, hasAction: boolean): string {
     if (!hasAction) return 'This shell has no Editor proofread route wired, so there is nothing to ask.';
     if (text.trim().length === 0)
         return 'Write your brief first — the proofread reads the text in this box, and there is nothing to correct yet.';
-
-    // F4 — the transport clause, measured on the ESCAPED form because that is the form the listener counts.
-    // A pasted 9,000-character prose draft is 12,008 characters on the wire, and a real compiled Overview
-    // (1,714 characters in the report that opened R1) escapes past the ceiling as well, so a guard on the
-    // pasted length would pass the requests the transport kills. The sentence keeps the section's rule: the
-    // ask is shut, the Author's text in the box is untouched, and the next act is theirs.
-    if (encodeURIComponent(text).length > SEED_CLEANUP_ASK_URL_LIMIT)
-        return (
-            'That draft is too long for this ask — the proofread sends it inside the request’s address, and an ' +
-            'address past about 12,000 escaped characters comes back refused (HTTP 431) before the Editor reads a ' +
-            'word. Paste the part you want proofread — a chapter or two at a time — and the ask opens again; your ' +
-            'text in this box stands.'
-        );
 
     return '';
 }
@@ -1448,8 +1695,21 @@ export function seedCleanupAskRefusal(text: string, hasAction: boolean): string 
  * What the Editor's guard answered, in the desk's words: the rewrite came back and a rule threw it away, so
  * there is no proposal and the Author's own draft stands. Each clause names WHICH rule, because "the Editor
  * declined" is not a fact an Author can act on (L-13).
+ *
+ * THE OPTIONAL `blocker` WINS THE SENTENCE (server W4/R6). A `blocker` ride-along means the `refusal` code was
+ * produced by the SERVER, not by the Author's draft or the model's answer: `src/templates/seed-cleanup.md` is
+ * refused, so the pass never ran and spent no call. Printing the code's own line there ("the Editor answered with
+ * nothing usable") tells the Author their brief was unreadable when the unreadable file is the server's, and the
+ * blocker string already names it — the loader's own sentence, file and rule — so the desk quotes it rather than
+ * paraphrasing it into a second opinion (L-13). Absent `blocker` is the ordinary guard refusal, byte-identical to
+ * what this function printed before the field existed.
  */
-export function seedCleanupRefusalNotice(refusal: SeedCleanupRefusal): string {
+export function seedCleanupRefusalNotice(refusal: SeedCleanupRefusal, blocker?: string): string {
+    // TRIMMED, because the sentence is composed into a paragraph and a padded loader line would read as a typo.
+    if (typeof blocker === 'string' && blocker.trim().length > 0) {
+        return `The Editor never got to read your brief — the server could not use its own proofreading instructions: ${blocker.trim()}. Nothing was written, and your own text stands exactly as the create or the Start copies it (R7).`;
+    }
+
     switch (refusal) {
         // The provider returned nothing usable, so there is no text to weigh at all.
         case 'empty_answer':
@@ -3009,6 +3269,26 @@ export function revisionBodyText(body: unknown): string {
     }
 
     if (body && typeof body === 'object') {
+        // R5 — A CHAPTER CONTRACT RIDES AS FIELDS, NOT AS PROSE. A revision of a chapter entry carries the
+        // `plotpoints` the route composed the entry's text from (`heading` + the ordered `beats` + the ordered
+        // `dialogue`), and a compare view that printed `beats: [object Object]` — or printed nothing, because the
+        // generic arm below only accepts strings — would be showing half a contract and calling it a draft. So a
+        // body that names beats is rendered by the SAME composer the server used to write the entry's text
+        // (`chapterEntryText`), which is the one text the Author recognises as this chapter's contract.
+        const record = body as Record<string, unknown>;
+        const plotpoints =
+            record.plotpoints !== undefined && record.plotpoints !== null && typeof record.plotpoints === 'object'
+                ? (record.plotpoints as Record<string, unknown>)
+                : record;
+
+        if (Array.isArray(plotpoints.beats)) {
+            return chapterEntryText({
+                heading: typeof plotpoints.heading === 'string' ? plotpoints.heading : undefined,
+                beats: plotpoints.beats,
+                dialogue: plotpoints.dialogue
+            });
+        }
+
         return Object.entries(body as Record<string, unknown>)
             .filter(([, value]) => typeof value === 'string')
             .map(([key, value]) => `${key}: ${value as string}`)

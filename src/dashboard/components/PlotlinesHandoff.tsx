@@ -441,7 +441,10 @@ export function PlotlinesHandoff({ view, actions = {}, onSelect }: PlotlinesHand
                                    take; the sentence names which rule fired, and the draft in the box is still the
                                    Author's. Deliberately NOT the shell's error strip: the request succeeded. */
                                 <p className="sv-group-notice" data-testid="plotlines-handoff-cleanup-refusal">
-                                    {seedCleanupRefusalNotice(proposal.refusal)}
+                                    {/* W4/R6 — `blocker` rides only on a refusal the SERVER caused, and the notice
+                                        puts it first: the Author has to be told which file to open, not that their
+                                        brief came back unreadable. */}
+                                    {seedCleanupRefusalNotice(proposal.refusal, proposal.blocker)}
                                 </p>
                             ) : !proposal.changed ? (
                                 <p className="sv-group-notice" data-testid="plotlines-handoff-cleanup-clean">

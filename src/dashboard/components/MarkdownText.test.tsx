@@ -167,48 +167,65 @@ function renderedLines(root: ParentNode): string[] {
     return lines.filter((line) => line !== '');
 }
 
-/** One chapter entry's plotpoints, as §4.3 records them — the input `chapterEntryContent` composes from. */
+/**
+ * One chapter entry's contract, as R5 records it — the input `chapterEntryContent` composes from. A heading, an
+ * ORDERED beat list, and the optional dialogue; the five prose fields this used to carry are the previous
+ * generation's and no longer reach the composer.
+ */
 const CHAPTER_FIELDS = {
     heading: 'The Salt Road',
-    must_happen: 'the crossing is attempted',
-    must_change: 'Wren loses the map',
-    pov: 'Wren',
-    setups: 'the bridge is burned',
-    payoffs: 'the gate is reached'
+    beats: ['the crossing is attempted', 'Wren loses the map', 'the gate is reached'],
+    dialogue: ['the bridge is burned']
 };
 
 describe('MarkdownText — every line break the writer installed survives rendering', () => {
-    it('puts one line on the page per `Label: value` line of a real chapter entry (`chapterEntryContent`)', () => {
-        // THE PRODUCER'S OWN BYTES, not a re-typed fixture: `server/phrase/plotpoints.ts:70-78` joins one
-        // `Label: value` line per field with a SINGLE `\n` and no blank lines, so there is nothing here for
-        // markdown to paragraph on. Before `remark-breaks` this rendered as ONE `<p>` with no break at all and
-        // the six labelled fields read as one sentence — the text was intact and unreadable.
-        const content = chapterEntryContent({ id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup, CHAPTER_FIELDS);
+    it('puts one line on the page per line of a real chapter entry (`chapterEntryContent`)', () => {
+        // THE PRODUCER'S OWN BYTES, not a re-typed fixture: `server/phrase/plotpoints.ts:chapterEntryContent` joins
+        // `Heading:`, then `Beats:` with one `- ` bullet per beat, then `Important dialogue:` the same way — all with
+        // a SINGLE `\n` and no blank lines. R5 changed what that means for the renderer: the beat bullets ARE markdown
+        // list items now, so the honest expectation is the list they render as, with the two label lines still on
+        // their own lines. What has NOT changed is the guarantee this suite exists for: no line of the producer's
+        // text is swallowed, and nothing that was one line becomes two.
+        const content = chapterEntryContent(
+            { id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup,
+            CHAPTER_FIELDS
+        );
 
         expect(content).toBe(
             'Heading: The Salt Road\n' +
-                'Must happen: the crossing is attempted\n' +
-                'Must change: Wren loses the map\n' +
-                'POV: Wren\n' +
-                'Setups: the bridge is burned\n' +
-                'Payoffs: the gate is reached'
+                'Beats:\n' +
+                '- the crossing is attempted\n' +
+                '- Wren loses the map\n' +
+                '- the gate is reached\n' +
+                'Important dialogue:\n' +
+                '- the bridge is burned'
         );
 
         const { container } = render(<MarkdownText>{content}</MarkdownText>);
         const wrapper = container.querySelector('.sv-markdown') as HTMLElement;
 
-        // One paragraph box — markdown has no reason to invent six, and a `<ul>` here would be a list the
-        // writer never wrote — with one break between each pair of the writer's lines.
-        expect(wrapper.querySelectorAll('p')).toHaveLength(1);
-        expect(wrapper.querySelectorAll('ul,ol,li,h1,h2,h3,h4,h5,h6')).toHaveLength(0);
-        expect(wrapper.querySelectorAll('br')).toHaveLength(5);
+        // THE BEATS SURVIVE AS A LIST, in order — a contract whose order vanished would be a different contract.
+        // WHAT THE FORMAT COSTS, pinned rather than glossed: `chapterEntryContent` joins its blocks with a single
+        // `\n` and no blank line, so the line after the last bullet is a LAZY CONTINUATION of that bullet's item —
+        // `Important dialogue:` lands inside the third `<li>`, on its own line, and its bullet starts a fourth item.
+        // Nothing is lost and no text moves (this suite's actual guarantee), and the surface that reads a contract
+        // STRUCTURALLY is `PlotlineContract.tsx`, which is why the panes do not render this block as prose.
+        expect(Array.from(wrapper.querySelectorAll('ul > li')).map((item) => item.textContent)).toEqual([
+            'the crossing is attempted',
+            'Wren loses the map',
+            'the gate is reached\nImportant dialogue:',
+            'the bridge is burned'
+        ]);
+        // The `## ` marker case this renderer was written for, and the labels: both still print, on their own lines.
+        expect(wrapper.textContent).not.toContain('## ');
         expect(renderedLines(wrapper)).toEqual([
             'Heading: The Salt Road',
-            'Must happen: the crossing is attempted',
-            'Must change: Wren loses the map',
-            'POV: Wren',
-            'Setups: the bridge is burned',
-            'Payoffs: the gate is reached'
+            'Beats:',
+            'the crossing is attempted',
+            'Wren loses the map',
+            'the gate is reached',
+            'Important dialogue:',
+            'the bridge is burned'
         ]);
     });
 
@@ -246,8 +263,7 @@ describe('MarkdownText — every line break the writer installed survives render
                 key: 'chapter_1',
                 title: 'Chapter 1 — The Salt Road',
                 content: chapterEntryContent({ id: 'chapter_1' } as unknown as PhraseGroup, {
-                    must_happen: 'the crossing is attempted',
-                    must_change: 'Wren loses the map'
+                    beats: ['the crossing is attempted', 'Wren loses the map']
                 })
             },
             {
@@ -255,16 +271,14 @@ describe('MarkdownText — every line break the writer installed survives render
                 title: 'Chapter 2 — The Gate',
                 content: chapterEntryContent({ id: 'chapter_2' } as unknown as PhraseGroup, {
                     heading: 'The Gate',
-                    must_happen: 'the gate is forced',
-                    must_change: 'the key is spent'
+                    beats: ['the gate is forced', 'the key is spent']
                 })
             }
         ]);
 
         expect(overview).toBe(
-            '## Chapter 1 — The Salt Road\nMust happen: the crossing is attempted\n' +
-                'Must change: Wren loses the map\n\n' +
-                '## Chapter 2 — The Gate\nHeading: The Gate\nMust happen: the gate is forced\nMust change: the key is spent'
+            '## Chapter 1 — The Salt Road\nBeats:\n- the crossing is attempted\n- Wren loses the map\n\n' +
+                '## Chapter 2 — The Gate\nHeading: The Gate\nBeats:\n- the gate is forced\n- the key is spent'
         );
 
         const { container } = render(<MarkdownText>{overview}</MarkdownText>);
@@ -277,16 +291,25 @@ describe('MarkdownText — every line break the writer installed survives render
         // The `## ` marker is gone, which is the symptom the user reported, and the two entries are two
         // paragraphs — the blank line between entries is still a block break, not a break.
         expect(wrapper.textContent).not.toContain('## ');
-        expect(wrapper.querySelectorAll('p')).toHaveLength(2);
-        expect(wrapper.querySelectorAll('br')).toHaveLength(3);
+        // R5 — each entry's beats render as that entry's own list, in order, and the blank line between the entries
+        // keeps the two lists apart. The guarantee this test carries is the one the user reported: no `##` source and
+        // no swallowed line.
+        expect(Array.from(wrapper.querySelectorAll('ul')).map((list) =>
+            Array.from(list.querySelectorAll('li')).map((item) => item.textContent)
+        )).toEqual([
+            ['the crossing is attempted', 'Wren loses the map'],
+            ['the gate is forced', 'the key is spent']
+        ]);
         expect(renderedLines(wrapper)).toEqual([
             'Chapter 1 — The Salt Road',
-            'Must happen: the crossing is attempted',
-            'Must change: Wren loses the map',
+            'Beats:',
+            'the crossing is attempted',
+            'Wren loses the map',
             'Chapter 2 — The Gate',
             'Heading: The Gate',
-            'Must happen: the gate is forced',
-            'Must change: the key is spent'
+            'Beats:',
+            'the gate is forced',
+            'the key is spent'
         ]);
     });
 

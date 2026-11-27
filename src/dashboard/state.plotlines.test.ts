@@ -47,7 +47,7 @@ function harness(
         // R7 — the Seed proofread, overridable so a test can answer a proposal, a guard refusal, or a route
         // failure. Left alone it is `testing/shell-fakes.tsx`'s "nothing to fix" default, which is the one answer
         // that cannot invent a rewrite a fixture never asked for.
-        getPhraseSeedCleanup?: ApiClient['getPhraseSeedCleanup'];
+        requestPhraseSeedCleanup?: ApiClient['requestPhraseSeedCleanup'];
     } = {}
 ) {
     const rows = [storyRow('s1'), storyRow('s2')];
@@ -134,9 +134,9 @@ function harness(
             // R7 — passed through ONLY when the test names one: spreading an explicit `undefined` over the base
             // fake would leave the verb undefined, and the tests that rely on the default answer would be testing
             // a shell with no route instead.
-            ...(options.getPhraseSeedCleanup === undefined
+            ...(options.requestPhraseSeedCleanup === undefined
                 ? {}
-                : { getPhraseSeedCleanup: options.getPhraseSeedCleanup }),
+                : { requestPhraseSeedCleanup: options.requestPhraseSeedCleanup }),
             // The Summary read keeps its own slot here too, so the two caches can be told apart in the
             // assertions below (`phrases.s1` has five groups, `phraseDetails.s1` has three chapter entries).
             getPhrase: vi.fn(async (storyId: string) => groupedPhraseView(storyId)),
@@ -322,7 +322,7 @@ describe('the store — the Phrase ② verbs commit the receipt, not a guess (T-
         await store.openStory('s1');
 
         await store.revisePhraseEntry('s1', 'entry-chapter_2', {
-            plotpoints: { must_happen: 'the toll is refused', must_change: 'the road collects' }
+            plotpoints: { beats: ['the toll is refused', 'the road collects'] }
         });
 
         const detail = store.getSnapshot().phraseDetails.s1;
@@ -358,7 +358,7 @@ describe('the store — the Phrase ② verbs commit the receipt, not a guess (T-
 
         expect(
             await store.revisePhraseEntry('s1', 'entry-chapter_1', {
-                plotpoints: { must_happen: 'x', must_change: 'y' }
+                plotpoints: { beats: ['x', 'y'] }
             })
         ).toBeNull();
         expect(store.getSnapshot().phraseDetails.s1).toBe(before);
@@ -381,7 +381,7 @@ describe('the store — the Phrase ② verbs commit the receipt, not a guess (T-
 describe('the store — the Seed proofread answers the card, not the snapshot (R7)', () => {
     /** The cleanup verb's calls, as the literal argument list the client received. */
     function cleanupCalls(client: ApiClient): unknown[][] {
-        return (client.getPhraseSeedCleanup as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+        return (client.requestPhraseSeedCleanup as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     }
 
     it('hands the proposal back untouched, commits nothing, and reads nothing else (P10)', async () => {
@@ -396,7 +396,7 @@ describe('the store — the Seed proofread answers the card, not the snapshot (R
         };
         // The GROUPED dial, because that is the surface the handoff card is on — and the one where `openStory` has
         // already fetched the Phrase ② read, so "the proofread re-read nothing" has a real number to compare.
-        const world = harness({ mode: 'groups', getPhraseSeedCleanup: vi.fn(async () => proposal) });
+        const world = harness({ mode: 'groups', requestPhraseSeedCleanup: vi.fn(async () => proposal) });
 
         await world.store.openStory('s1');
 
@@ -425,7 +425,7 @@ describe('the store — the Seed proofread answers the card, not the snapshot (R
 
     it('a guard refusal is a VALUE, not the shell’s failure line (AC3)', async () => {
         const world = harness({
-            getPhraseSeedCleanup: vi.fn(
+            requestPhraseSeedCleanup: vi.fn(
                 async (): Promise<SeedCleanupProposal> => ({ ok: false, source_hash: '9b8387ee', refusal: 'numbers_lost' })
             )
         });
@@ -444,7 +444,7 @@ describe('the store — the Seed proofread answers the card, not the snapshot (R
 
     it('a route failure answers null and prints the server’s own sentence (L-13)', async () => {
         const world = harness({
-            getPhraseSeedCleanup: vi.fn(async (): Promise<never> => {
+            requestPhraseSeedCleanup: vi.fn(async (): Promise<never> => {
                 throw new ApiError(
                     409,
                     'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'

@@ -1236,6 +1236,60 @@
     line-height: 1.65;
 }
 
+/* R1/R2/R4 (W2) — THE CREATE FORM'S OWN LINES.
+   `.field__hint` is the sentence UNDER a field, and it is load-bearing rather than decorative: an empty chapter-count
+   box, a phrase the catalog lists but this desk cannot press, and a proofread switch that is off are all states only
+   the words can state. `.field__hint--warn` is the SAME line when it is a refusal — same position, same measure, a
+   colour that says "this blocks the press" — so a refusal never needs a second component that could drift from the
+   note it replaced. `.field__row` keeps a checkbox and its sentence on one baseline instead of stacking a control
+   over a paragraph, which is what made the old switches read as two unrelated facts. */
+.field__hint {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.field__hint--warn {
+    color: var(--amber);
+}
+
+.field__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.field__row > .field__hint {
+    /* The sentence takes the rest of the row and keeps its own line height; the control stays its own width. */
+    flex: 1;
+    margin-top: 2px;
+}
+
+/* A switch field: the label sits above, the control and its sentence below on one line. `margin-top: 0` because the
+   hint is in the row, not under the field, and double spacing would separate the box from the words that explain it. */
+.field--switch .field__hint {
+    margin-top: 0;
+}
+
+/* R2 — the proofread panel under its switch. It is INDENTED once, from the field it belongs to, and it is a panel
+   rather than a field: it holds a button, a candidate text, and the two presses that decide what happens to it. */
+.new-story__cleanup {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: -2px 0 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.new-story__cleanup .field__row {
+    flex-wrap: wrap;
+}
+
 /* ------------------------------------------------------------------ directive bar */
 
 /* THE COMPOSER SHAPE, borrowed from the chat workstation (packages/loadscript/chat): ONE quiet

@@ -16,7 +16,7 @@
 // stored artifact — the Seed, the Summary, a plotline, the ledger, a template's
 // selection_rules — which is what makes a boolean with a citation possible at all (P6).
 
-import type { StoryVocabulary } from '../api';
+import type { PhraseCatalogEntry, StoryVocabulary } from '../api';
 import type { Criterion, Goal } from '../../types';
 
 // The shape itself lives in ./types (so §4.11's `goals.criteria` can hold it without an
@@ -69,14 +69,21 @@ export const BUILT_IN_CRITERIA: Criterion[] = [
     },
     {
         // §5.2 C-3 — soft on purpose: a flat arc is a legitimate choice, a restatement is not.
+        //
+        // R5 (W2) — RE-CUT FOR BEATS, ID UNCHANGED, and this file mirrors the server's table
+        // (`shared/criteria.ts:CRITERIA`) byte for byte. The rule has always been "the chapter leaves the book
+        // different"; what moved is where that sentence lives — the chapter's beat list now ENDS IN the change, so
+        // the question points at the last beat instead of at a prose field that no longer gets written. The ID is
+        // the load-bearing part: it is what an Author's per-Story setting names (G-1), so a re-worded criterion
+        // keeps the hard flag, the deletion and the override exactly where the Author left them.
         id: 'C-3',
-        label: 'every plotline\u2019s `must_change` is actually a change, not a restatement',
+        label: 'every plotline\u2019s last beat is actually a change, not a restatement of the beats before it',
         question:
-            'Is each plotline\u2019s must_change a real change of state, knowledge, relationship or position rather than a restatement of must_happen?',
+            'Is the last beat of each plotline a real change of state, knowledge, relationship or position, rather than a restatement of the beats that came before it?',
         checker: 'judge',
         hard: false,
         fix_hint:
-            'State must_change as a named before and after; if nothing is different at the end, the chapter has no contract.'
+            'State the last beat as a named before and after; if nothing is different when the chapter ends, the chapter has no contract.'
     },
     {
         // §5.2 C-4 — cross-plotline consistency; the level this fails on is the one that
@@ -108,18 +115,25 @@ export const BUILT_IN_CRITERIA: Criterion[] = [
         fix_hint: 'Reorder or re-date the timeline entries, and resolve the contradicting fact to one value (D-10).'
     },
     {
-        // §5.2 C-7 — the loop's one question, pointed at prose (P4).
+        // §5.2 C-7 — the loop's one question, pointed at prose (P4). R5 (W2): the contract is a LIST now, so the
+        // question is asked of every beat in order — strictly more checkable than "the events must_happen names",
+        // where one prose block could hide an event a reviewer never found. Mirrors `shared/criteria.ts` verbatim.
         id: 'C-7',
-        label: 'expanded prose delivers its chapter\u2019s `must_happen`',
-        question: 'Does the expanded prose deliver every event this chapter\u2019s must_happen names?',
+        label: 'expanded prose delivers every beat of its chapter\u2019s contract, in order',
+        question:
+            'Does the expanded prose deliver every beat this chapter\u2019s contract lists, and in the order the contract lists them?',
         checker: 'judge',
         hard: true,
-        fix_hint: 'Write the events the plotline names in this chapter; do not let an adjacent chapter do them instead.'
+        fix_hint:
+            'Write the beats the contract names in this chapter, in its order; do not let an adjacent chapter do them instead.'
     },
     {
+        // C-8 is the other half of the pair: C-7 asks whether the beats happened, C-8 asks whether the LAST one left
+        // the chapter changed (R5). Two lines, not one, because they fail for different reasons and the Author fixes
+        // them differently (L-14 reports each level's failures separately).
         id: 'C-8',
-        label: 'expanded prose delivers its chapter\u2019s `must_change`',
-        question: 'Does the expanded prose actually leave this chapter in the changed state its must_change declares?',
+        label: 'expanded prose lands the change its chapter\u2019s last beat declares',
+        question: 'Does the expanded prose actually leave this chapter in the changed state its last beat declares?',
         checker: 'judge',
         hard: true,
         fix_hint: 'Show the declared change happening on the page by the chapter\u2019s final section.'
@@ -393,40 +407,81 @@ export function seedHashOf(text: string): string {
     return hash.toString(16).padStart(8, '0');
 }
 
-/** The stored content format of one chapter entry, copied for fixtures only. */
+/**
+ * The stored content format of one chapter entry, copied for fixtures only — the server's composer
+ * (`server/phrase/plotpoints.ts:chapterEntryContent`), R5 shape: `Heading:` when a heading is given, `Beats:` with
+ * one `- ` bullet per beat IN ARRAY ORDER, then `Important dialogue:` the same way and ONLY when the list has a
+ * non-blank item. A blank heading or an empty list emits nothing at all rather than a label over nothing, which is
+ * why a fixture that wants "no contract" passes `beats: []`.
+ */
 export function chapterEntryContent(
     _group: unknown,
     fields: {
         heading?: string;
-        must_happen: string;
-        must_change: string;
-        pov?: string;
-        setups?: string;
-        payoffs?: string;
+        beats: string[];
+        dialogue?: string[];
     }
 ): string {
-    const labels: Array<[string, keyof typeof fields]> = [
-        ['Heading', 'heading'],
-        ['Must happen', 'must_happen'],
-        ['Must change', 'must_change'],
-        ['POV', 'pov'],
-        ['Setups', 'setups'],
-        ['Payoffs', 'payoffs']
-    ];
+    // The same cleaner the route applies: trim, drop blanks, KEEP THE ORDER — order is the contract.
+    const listOf = (rows: string[] | undefined): string[] =>
+        (rows ?? []).map((row) => row.trim()).filter((row) => row !== '');
 
-    return labels
-        .map(([label, field]) => {
-            const value = fields[field];
+    const heading = typeof fields.heading === 'string' ? fields.heading.trim() : '';
+    const beats = listOf(fields.beats);
+    const dialogue = listOf(fields.dialogue);
+    const blocks: string[] = [];
 
-            return typeof value === 'string' && value.trim() !== '' ? `${label}: ${value.trim()}` : '';
-        })
-        .filter((line) => line !== '')
-        .join('\n');
+    if (heading !== '') blocks.push(`Heading: ${heading}`);
+    if (beats.length > 0) blocks.push(['Beats:', ...beats.map((beat) => `- ${beat}`)].join('\n'));
+    if (dialogue.length > 0) blocks.push(['Important dialogue:', ...dialogue.map((line) => `- ${line}`)].join('\n'));
+
+    return blocks.join('\n');
 }
 
+/**
+ * `GET /phrases` — the phrase kinds a book may open on, row for row as the Server's catalog answers today
+ * (`server/api/projections.ts:phraseCatalogView` over `shared/phrase.ts:PHRASE_CATALOG`).
+ *
+ * WHY THIS IS DATA AND NOT A TEST HELPER WITH THE KEYS INLINED: the create form's selector, `POST /stories`'
+ * `start_phrase` and both cleanup verbs are GENERIC (R1), so the desk's own behaviour is pinned by these rows — the
+ * pressable option (`starts_on_demand`) is the one the form may send, and the on-create row
+ * (`starts_on_create:true`) is the default it must explain rather than offer. A third kind reaches this file as one
+ * more row, exactly as it reaches the server as one more definition, and every catalog-driven assertion keeps
+ * running (P15).
+ */
+export const PHRASE_CATALOG_ROWS: PhraseCatalogEntry[] = [
+    {
+        key: 'summary',
+        title: 'Summary Phrase',
+        description:
+            'The Overview the whole chain is measured against: five named groups, each with its own revision history, composed in this order.',
+        order: 1,
+        enabled: true,
+        starts_on_demand: false,
+        starts_on_create: true,
+        entry_policy: 'static_groups',
+        brief_kind: 'seed_brief',
+        seed_source: 'story_idea',
+        enters_phase: 'summary'
+    },
+    {
+        key: 'plotlines',
+        title: 'Plotlines Phrase',
+        description:
+            'The book\u2019s chapter contracts, one entry per chapter: each entry holds that chapter\u2019s precise plotpoints \u2014 the beats it has to deliver, in order, and the lines of dialogue it has to land \u2014 and the `plotlines` rows are the mirror the loop already reads.',
+        order: 2,
+        enabled: true,
+        starts_on_demand: true,
+        starts_on_create: false,
+        entry_policy: 'chapter_entries',
+        brief_kind: 'plotline_brief',
+        seed_source: 'supplied',
+        enters_phase: 'plotlines'
+    }
+];
+
 /** The server's sample/critic defaults, mocked for fixtures. */
-export const DEFAULT_SUMMARY_SAMPLING = 3;
-export const DEFAULT_SUMMARY_CRITICS = 5;
+export const DEFAULT_SUMMARY_SAMPLING = 3;export const DEFAULT_SUMMARY_CRITICS = 5;
 
 /** The server's auto-approve default, mocked for fixtures. */
 export const DEFAULT_AUTO_APPROVE_COSTS = ['critical', 'major', 'minor'] as const;

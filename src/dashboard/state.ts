@@ -46,6 +46,8 @@ import {
     PHRASE_PLOTLINES_KEY,
     type PhraseDetailView,
     type PhraseEntryReviseInput,
+    // R1 — the create form's phrase arm renders this list, so the store's snapshot has to name it.
+    type PhraseCatalogEntry,
     type PhraseStartInput,
     type PhraseView,
     // R7 — the store's cleanup verb hands the PROPOSAL back to the card that asked (see the verb below).
@@ -146,6 +148,34 @@ export interface DashboardSnapshot {
     runsHasMore: boolean;
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
+    /**
+     * R1 (W2) — the STARTABLE PHRASE CATALOG (`GET /phrases`), in the server's catalog order, or `null` while it
+     * has not landed (or failed — see `phraseCatalogError`).
+     *
+     * WHY `null` INSTEAD OF `[]`: those two answers reach the Author differently. `null` is "the desk does not know
+     * which kinds a Story may start on", and the create form then shows only its "start nothing" arm; `[]` is a
+     * server whose catalog offers no on-demand phrase at all, which is a fact about the build, not a missing read.
+     * An empty array invented from a failed read would render the second sentence over the first.
+     *
+     * WHY IT IS CACHED IN THE STORE AND NOT FETCHED BY THE FORM: the same list is the legal `start_phrase` value
+     * set and the target of both cleanup verbs, and the store is the desk's only mirror of the server (P1). A form
+     * that owned its own fetch would be a second cache with a second idea of "loaded".
+     */
+    phraseCatalog: PhraseCatalogEntry[] | null;
+    /** R1 — the catalog read's own refusal, the server's sentence (L-13), so the form says WHY it offers no phrase. */
+    phraseCatalogError: string | null;
+    /**
+     * R1 (W2) — ONE PENDING LANDING after a create that started a phrase: the Story the create returned, and the
+     * phrase key the Author picked.
+     *
+     * WHY THE STORE HOLDS A NAVIGATION HINT AT ALL: the shell resets the rail to the Summary whenever
+     * `activeStoryId` changes (`StorylineApp.tsx`), and a book created straight onto Phrase ② is the one case where
+     * that default is a lie — the Author is standing in the phrase's work, not on the Summary. The hint is written
+     * by the create and CONSUMED once by the shell, on the frame that proves the phrase started
+     * (`story-nav.phraseLandingSelection`), so it never moves the desk on a guess and never outlives the create
+     * that asked for it.
+     */
+    phraseLanding: { story_id: string; phrase_key: string } | null;
     /** The global employee roster and every Story thread each employee is working right now. */
     agents: AgentStatusRow[];
     /**
@@ -193,6 +223,11 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     runs: [],
     runsHasMore: false,
     templates: [],
+    // R1 — the catalog starts UNREAD, not empty: `null` is the state the create form renders as "no phrase offered
+    // yet", and only a read that answered `[]` may say the build offers no on-demand phrase at all.
+    phraseCatalog: null,
+    phraseCatalogError: null,
+    phraseLanding: null,
     agents: [],
     selectedAgent: null,
     agentThreads: {},
@@ -276,6 +311,32 @@ export function createDashboardStore(client: ApiClient = api) {
 
     const refreshTemplates = (): Promise<void> =>
         refresh('templates', async () => ({ templates: await client.listTemplates() }));
+
+    /**
+     * R1 (W2) — the STARTABLE PHRASE CATALOG, read once with the rest of the desk rather than by the create form.
+     *
+     * THE FAILURE KEEPS THE SLOT `null` AND CACHES ITS OWN SENTENCE, the `refreshPhrase` pattern one resource over
+     * (`state.ts:refreshPhrase`): the form must be able to tell "the desk does not know what a Story can start on"
+     * from "this build offers no on-demand phrase", and an empty array committed from a 503 would print the second
+     * sentence over the first. The server's sentence rides `phraseCatalogError` (L-13) AND the shell's `error`, the
+     * same two channels every other cached refusal uses.
+     */
+    const refreshPhraseCatalog = (): Promise<void> =>
+        refresh('phraseCatalog', async () => {
+            try {
+                return {
+                    phraseCatalog: await client.getPhraseCatalog(),
+                    phraseCatalogError: null
+                };
+            } catch (error) {
+                return {
+                    // Absent is the honest word: the read did not answer, so the catalog is unknown, not empty.
+                    phraseCatalog: null,
+                    phraseCatalogError: failureText(error),
+                    error: failureText(error)
+                };
+            }
+        });
 
     const refreshAgents = (): Promise<void> => refresh('agents', async () => ({ agents: await client.listAgents() }));
 
@@ -384,11 +445,17 @@ export function createDashboardStore(client: ApiClient = api) {
      *
      * The failure is cached per Story in its own slot (`phraseDetailErrors`), never in `phraseErrors`: the two
      * routes fail about different surfaces, and the Plotlines pane may not print the Summary read's sentence.
+     *
+     * R1 (W2) — THE PHRASE KEY IS AN ARGUMENT, NOT A DEFAULT THE CALLER FORGOT. `POST /stories`' `start_phrase` can
+     * name any startable kind, and the create that opens a book on a phrase has to read THAT phrase's surface — a
+     * client that quietly re-read `'plotlines'` for a create that started something else is the same hardcoded pair
+     * the catalog read exists to remove (P15). The parameter defaults to Phrase ② because that is the only kind with
+     * a pane today, and every existing call site means exactly that.
      */
-    const refreshPhraseDetail = (storyId: string): Promise<void> =>
-        refresh(`phrase-detail:${storyId}`, async () => {
+    const refreshPhraseDetail = (storyId: string, phraseKey = PHRASE_PLOTLINES_KEY): Promise<void> =>
+        refresh(`phrase-detail:${storyId}:${phraseKey}`, async () => {
             try {
-                const phrase = await client.getPhraseDetail(storyId, PHRASE_PLOTLINES_KEY);
+                const phrase = await client.getPhraseDetail(storyId, phraseKey);
 
                 return {
                     phraseDetails: { ...snapshot.phraseDetails, [storyId]: phrase },
@@ -652,6 +719,10 @@ export function createDashboardStore(client: ApiClient = api) {
             void refreshStories();
             void refreshQueue();
             void refreshTemplates();
+            // R1 — the create form's phrase arm reads the catalog, and the desk is standing on that form for an
+            // Author with no Story open; a catalog that arrives after the form paints is a selector that fills in
+            // under the Author's hand.
+            void refreshPhraseCatalog();
             void refreshAgents();
             void refreshAgentModels();
             void refreshLoop();
@@ -806,6 +877,9 @@ export function createDashboardStore(client: ApiClient = api) {
                 refreshAgentModels(),
                 refreshLoop(),
                 refreshRuns(),
+                // R1 — "reload the desk" re-reads the catalog too: a phrase kind the server turned on mid-session
+                // should reach the create form on the same press that reloads everything else.
+                refreshPhraseCatalog(),
                 // R6: the group rail reloads with everything else, so "reload the desk" is one verb
                 // rather than a rail that quietly keeps last poll's group rows.
                 ...(snapshot.activeStoryId ? [refreshPhrase(snapshot.activeStoryId)] : []),
@@ -814,6 +888,28 @@ export function createDashboardStore(client: ApiClient = api) {
         },
 
         // ---- story control (U-3 / P8) ------------------------------------------------
+        /**
+         * R1 / R2 / R4 (W2) — the create, with the three things the Author just decided: the Seed, WHICH PHRASE the
+         * book opens on (`start_phrase`, a catalog key), and the chapter count they declared or left to the Editor
+         * (`chapter_count`).
+         *
+         * THE PHRASE START IS NOT A SECOND PRESS, AND THE DESK MUST NOT WAIT FOR ONE. The engine starts that
+         * phrase's controller in the SAME commit as the Story rows and moves the pointer to the phase its catalog
+         * row names (`routes.ts`), so `GET /stories/:id` already answers `phrase_started[key] === true` when this
+         * verb's re-read lands. Two consequences, both handled here:
+         *
+         *   1. the phrase's OWN read is fetched (`refreshPhraseDetail`) even though `phraseDetailWanted` is still
+         *      false — the cache is empty on a book that is one frame old, and the Plotlines pane would otherwise
+         *      print "no entries" at a phrase the create just started (and `PhraseSeedPane` would have no Seed to
+         *      show, which is R3's whole point); and
+         *   2. the shell is handed the landing hint (`phraseLanding`), because the rail's default is the Summary and
+         *      a book created onto Phrase ② is open ON its work. The hint is consumed by the frame that PROVES the
+         *      start (`story-nav.phraseLandingSelection`), so a create whose read has not landed still opens on the
+         *      Summary rather than on a guess.
+         *
+         * A create with NO `start_phrase` changes none of that: no hint, and the Phrase ② read stays unrequested for
+         * a book that has not started the phrase (the store fetches no surface a Story does not have).
+         */
         createStory(input: CreateStoryInput): Promise<StoryRow | null> {
             return mutate(async () => {
                 const row = await client.createStory(input);
@@ -826,10 +922,33 @@ export function createDashboardStore(client: ApiClient = api) {
                     // R6: a new Story is group-managed from its first commit, so the rail has five groups
                     // to show the moment the Author lands on the Summary.
                     refreshPhrase(row.id),
-                    refreshStories()
+                    refreshStories(),
+                    // R1 — the phrase the create itself started. Addressed by the key the Author picked, never by a
+                    // default, and only when they picked one.
+                    ...(input.start_phrase === undefined
+                        ? []
+                        : [refreshPhraseDetail(row.id, input.start_phrase), refreshPhrase(row.id)])
                 ]);
+                // R1 — the landing hint rides the SUCCESS, after the re-reads, so the shell's next frame can check
+                // it against a payload that has had its chance to answer.
+                if (input.start_phrase !== undefined) {
+                    commit({ phraseLanding: { story_id: row.id, phrase_key: input.start_phrase } });
+                }
                 return row;
             });
+        },
+        /**
+         * R1 — the shell consumes the pending create landing. One read, and it CLEARS: a hint that outlived the
+         * frame it was written for would move the rail on a later, unrelated open of the same Story.
+         */
+        takePhraseLanding(): { story_id: string; phrase_key: string } | null {
+            const pending = snapshot.phraseLanding;
+
+            if (pending === null) return null;
+
+            commit({ phraseLanding: null });
+
+            return pending;
         },
         /** §10 / P1 — the hard delete: close the Story's view and drop its cached projections. */
         deleteStory(storyId: string): Promise<{ deleted: string } | null> {
@@ -968,8 +1087,8 @@ export function createDashboardStore(client: ApiClient = api) {
                 return result;
             }, storyId),
         /**
-         * R7 — the Author asks for a PROOFREAD of the Seed they are about to start on
-         * (`GET /stories/:id/phrases/:key/seed/cleanup?seed=…`), and the PROPOSAL goes back to the card that asked.
+         * R7 / R6 (W2) — the Author asks for a PROOFREAD of the Seed they are about to start on
+         * (`POST /stories/:id/phrases/:key/seed/cleanup`, body `{ seed }`), and the PROPOSAL goes back to the card that asked.
          *
          * NO `mutate`, AND THAT IS THE POINT (P10). Every other verb here is wrapped because it WRITES a row, and
          * the row is what the shell re-reads (P1: the durable store is the only memory). This one writes nothing —
@@ -995,11 +1114,41 @@ export function createDashboardStore(client: ApiClient = api) {
             seed: string
         ): Promise<SeedCleanupProposal | null> => {
             try {
-                const proposal = await client.getPhraseSeedCleanup(storyId, phraseKey, seed);
+                const proposal = await client.requestPhraseSeedCleanup(storyId, phraseKey, seed);
 
                 // A SUCCESS CLEARS THE LINE, as `mutate` does: the previous sentence may have been this very
                 // control's 409, and an error that outlives the request which raised it is the desk describing a
                 // moment that has passed.
+                commit({ error: null });
+
+                return proposal;
+            } catch (cause) {
+                commit({ error: failureText(cause) });
+
+                return null;
+            }
+        },
+        /**
+         * R2 (W2) — the SAME proofread on a brief with NO Story yet, addressed by the catalog key the create will
+         * send as `start_phrase` (`POST /phrases/:key/seed/cleanup`, body `{ seed }`).
+         *
+         * WHY THE CREATE FORM NEEDS ITS OWN VERB: the Seed the Author is typing has no row anywhere — the create
+         * copies it into the Story and the Start copies it into the phrase (D-72) — so the pre-create arm is the
+         * only proofread available before the first press. The story-scoped verb cannot stand in for it: its route
+         * addresses a Story that does not exist yet, and 404s before it ever reaches the model.
+         *
+         * IDENTICAL HONESTY RULES to the verb above, because it is the same pass: NO `mutate` (nothing is written,
+         * P10), the two 200 arms both come back as VALUES, and `null` is only the transport/route failure, whose
+         * server sentence goes up through the shell's `error` (L-13). THE SWITCH DECIDES WHETHER THIS IS DIALED AT
+         * ALL — with the Editor-cleanup switch off, the form never calls it and no model turn is spent.
+         */
+        requestSeedCleanupDraft: async (
+            phraseKey: string,
+            seed: string
+        ): Promise<SeedCleanupProposal | null> => {
+            try {
+                const proposal = await client.requestSeedCleanupDraft(phraseKey, seed);
+
                 commit({ error: null });
 
                 return proposal;

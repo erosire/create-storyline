@@ -9,25 +9,21 @@
 // and let it read as Phrase ②'s Seed. It never reads `story.idea` at all.
 //
 // WHAT IS ON THE WIRE, AND WHAT IS NOT. `GET /stories/:id/phrases/:key` answers the phrase's copied Seed as
-// `seed_head` (a 400-character PREFIX, `src/server/api/projections.ts:2016-2034` and `SEED_HEAD_CHARS`) plus
-// `seed_chars` (the true length), mirrored client-side as `api.ts:PhraseDetailView`. THE FULL SEED IS NOT ON THE
-// WIRE, and this pane does not pretend otherwise: it prints the prefix and says how long the text is. Provenance is
-// worded from those same fields — the read carries no `seed_source`, and the planner's decision is not to add one —
-// so the pane says what it knows: the text was copied once at Start, from the compiled Overview or from the Author's
-// own words, and nothing re-seeds it afterwards (D-72).
+// `seed_head` (a 400-character PREFIX, `projections.ts:SEED_HEAD_CHARS`) plus `seed_chars` (the true length), and
+// R3 (W2) added the WHOLE TEXT beside them: `PhraseDetailView.seed`, the bytes `phrase/catalog.ts:phraseSeedOf`
+// answers with — the same read the Start verb and the phrase's own gates use, so this is the record rather than a
+// rendering of it. The pane renders THAT text, which is what the requirement asked for in the plainest words: the
+// Author's complete Premise, Promise, Theme, Tone and Ending on the screen, not the first 400 characters of them.
+// Provenance comes from `seed_source` when the row carries one (R12 — `'custom'` is text the Author pressed,
+// `'compiled'` is the Overview Phrase ① wrote) and says so when the row predates the field, because an absent
+// provenance is UNKNOWN, not `'compiled'` (R6's no-migration rule, the same shape `review.mirror` takes).
 //
-// R6 (2026-11-27) — A PREFIX HAS TO SAY IT IS A PREFIX. Spec §18.13 pins the window ("never the full copied seed,
-// which is not on the wire and was not added to it"), and the pane honoured it by printing the head with NO
-// boundary: on a real book that is 400 of 3,602 characters, rendered as markdown and ending mid-word, under a
-// sentence that said "these 3,602 characters". A complete copy therefore LOOKED incomplete, which is exactly how
-// the Author's report reached the log ("it doesn't copy the complete compile Seed correctly (or maybe it did and
-// the Editor mess it up)"). Two additive lines close that, and neither touches `seed_head` for any other consumer:
-//   · `phrase-seed-preview` names the window the read carries, the residue it does not, and the fact that the cut
-//     belongs to the read (D-76) and never to the copy (D-72);
-//   · `phrase-seed-provenance` compares the copy against THE Summary the rail prints — `reviewedSummaryText`, the
-//     same one function the Summary tab reads its text from — and answers `match` / `pending` / `differs`, so the
-//     one difference the Author cannot compute at home (the full Seed is on no read) is never silent. A `differs`
-//     is D-72's normal case, not a fault, and the line says so rather than implying a broken copy.
+// R6 (2026-11-27) / R3 (W2) — A PREVIEW HAD TO SAY IT WAS A PREVIEW, AND A WHOLE TEXT DOES NOT HAVE TO. The
+// surface used to be a window: `seed_head` with a notice naming the cut, because the full Seed was not on the read
+// and the rail only had to show WHICH text got copied. That reading is now the fallback, not the experience — the
+// pane prints the preview notice only when the read genuinely carries a prefix and nothing more (an older server),
+// and the sentence attributes the cut to the READ (D-76) rather than to the copy (D-72), which is what the Author's
+// report needed: "it doesn't copy the complete compile Seed correctly (or maybe it did and the Editor mess it up)".
 //
 // WHY THE START CHOICE IS HERE. For an unstarted Phrase ② there is no copied text yet, and the honest answer is the
 // choice itself: the compiled Phrase ① Overview, or the Author's paste. This is the SAME verb the Summary's handoff
@@ -136,17 +132,18 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
     const seedRefusal = customSeedRefusal(seed);
     const canStartCustom = actions.startPhrase !== undefined && seedRefusal === '';
 
-    // R6 / AC4 — HOW MUCH OF THE COPIED SEED THIS READ ACTUALLY CARRIES.
+    // R6 / AC4 + R3 (W2) — HOW MUCH OF THE COPIED SEED THIS READ ACTUALLY CARRIES.
     //
-    // `seed_head` is a 400-character PREFIX by contract (`projections.ts:SEED_HEAD_CHARS`, D-76 §18.8, and
-    // spec §18.13: "never the full copied seed, which is not on the wire and was not added to it"), so on a
-    // real book the rendered block below is 400 of a several-thousand-character text and its last token is
-    // cut in half. Before this, the pane printed that prefix with no boundary at all and the Author's report
-    // was "it doesn't copy the complete compiled Seed correctly" — a COMPLETE copy reading as a truncated
-    // one. The wire stays exactly as pinned (`seed_head`/`seed_chars`, additive nothing); the pane stops
-    // presenting a prefix as a whole document.
-    const seedShownChars = detail === undefined ? 0 : detail.seed_head.length;
-    const seedTruncated = detail !== undefined && seedShownChars < detail.seed_chars;
+    // R3 put the WHOLE TEXT on the read (`PhraseDetailView.seed`), so the pane's primary experience is the complete
+    // Seed — every section the Author's brief or the compiled Overview holds, not a window into it. `seed_head` and
+    // `seed_chars` stay on the wire (the rail, the handoff receipt and every existing consumer read them) and the
+    // pane falls back to the head ONLY for a build that answers without the new key, in which case the preview
+    // notice says which of the two states the Author is looking at, in the read's own terms.
+    const seedFull = detail?.seed;
+    const seedWhole = seedFull !== undefined;
+    const seedText = seedFull ?? detail?.seed_head ?? '';
+    const seedShownChars = seedWhole ? seedFull.length : detail === undefined ? 0 : detail.seed_head.length;
+    const seedTruncated = !seedWhole && detail !== undefined && seedShownChars < detail.seed_chars;
 
     // R6 — THE TEXT THE AUTHOR ACCEPTED, read through the ONE function that decides which text the Summary
     // tab prints (`story-contract.ts:reviewedSummaryText`: `chosen.overview` in `chosen`, `reviewed.overview`
@@ -259,43 +256,52 @@ export function PhraseSeedPane({ view, actions = {}, phrase }: PhraseSeedPanePro
                         )
                     ) : (
                         <>
-                            {/* R6 / AC4 — THE PREVIEW SAYS WHERE IT STOPS. `seed_head` is a whole-character
-                                prefix cut at `SEED_HEAD_CHARS` (400), so on a compiled Overview it ends in the
-                                middle of a word, and the pane used to render that prefix with no boundary at
-                                all: a COMPLETE 3,602-character copy read as a truncated one, which is the
-                                shape of the Author's report ("it doesn't copy the complete compile Seed
-                                correctly"). The line names the window the read carries and the residue it does
-                                not, so the cut is attributed to the read (D-76) and never to the copy (D-72). */}
+                            {/* R6 / AC4 — THE PREVIEW LINE, and with R3 it is a FALLBACK rather than the headline:
+                                a read that carries `seed` shows the whole text and this says so; only a build that
+                                answers without the key still cuts the copy at `SEED_HEAD_CHARS`, and there the line
+                                names the window, the residue, and the fact that the cut belongs to the READ (D-76)
+                                and never to the copy (D-72). */}
                             <p
                                 className="sv-group-notice"
                                 data-testid="phrase-seed-preview"
                                 data-cut={seedTruncated ? 'true' : 'false'}
+                                data-whole={seedWhole ? 'true' : 'false'}
                             >
                                 {seedTruncated
                                     ? `A preview, not the whole Seed: this read carries the first ${seedShownChars} of ${detail.seed_chars} characters and stops mid-word (D-76). The other ${detail.seed_chars - seedShownChars} characters are on the phrase’s row and are part of the Seed — the copy is ${detail.seed_chars} characters long, and nothing about the preview shortens it.`
-                                    : `The whole Seed is on this read — all ${detail.seed_chars} characters, with nothing cut off (D-76) — and it is read-only, exactly as it was copied (D-72).`}
+                                    : `The whole Seed is on this read — all ${detail.seed_chars} characters, every section of it, with nothing cut off (D-76) — and it is read-only, exactly as it was copied (D-72).`}
                             </p>
-                            {/* U-23 — the copied Seed IS markdown (it is the compiled Overview's bytes), so the reading
-                                copy renders through the one markdown renderer rather than printing `## Premise`. It is a
-                                400-character prefix, so it can end mid-token; `PlotlinesHandoff.test.tsx` pins what each
-                                truncation does, and the residue stays on screen either way. */}
+                            {/* U-23 — the copied Seed IS markdown (it is the compiled Overview's bytes, or the
+                                Author's own brief), so the reading copy renders through the one markdown renderer
+                                rather than printing `## Premise`. R3 feeds it the WHOLE text: the report this pane
+                                exists to answer was a long Premise/Promise/Theme/Tone/Ending cut at 400 characters,
+                                and a long Seed's last section is now on screen either way. A fallback head can still
+                                end mid-token, and the residue stays on screen in that state too. */}
                             <MarkdownText className="sv-summary-text sv-phrase-seed-head" testId="phrase-seed-head">
-                                {detail.seed_head}
+                                {seedText}
                             </MarkdownText>
-                            {/* R6 / AC3 — THE ONE COMPARISON THE AUTHOR CANNOT MAKE THEMSELVES, because the full
-                                copied Seed is on no read and the Summary's own text is on another one. Three
-                                honest answers, and none of them is silence:
-                                  · `match`   — the copy is the Summary this rail shows today (the recovered
-                                    book's `ready` state, where `compiledSummaryOf` and `reviewedSummaryText`
-                                    are byte-identical by construction);
-                                  · `pending` — the rail prints NO Summary (state `pending`), so what the Start
-                                    copied is the composed Overview the five groups held, which is the one arm
-                                    of `compiledSummaryOf` the Summary tab never shows;
-                                  · `differs` — the copy and today's Summary are different texts of known
-                                    lengths. D-72 makes that ORDINARY (the Seed is copied once and the Summary
-                                    keeps moving under it), so the line says which direction the difference
-                                    goes and what this read cannot tell — that it is not a truncated copy. */}
-                            {summaryReadLanded ? (
+                            {/* R12 / R3 — WHERE THIS TEXT CAME FROM, stated from the read's OWN field when the row
+                                carries one. `seed_source` is recorded once in the start commit
+                                (`routes.ts:recordSeedSource`): `'custom'` is text the Author pressed, `'compiled'`
+                                is the Overview Phrase ① wrote. That is the fact the Author is asking about, and it
+                                is the row's answer rather than a comparison the desk infers.
+ 
+                                AN ABSENT `seed_source` IS NEITHER ARM. A phrase row written before the field exists
+                                says nothing about its origin, and guessing `'compiled'` would tell an Author their
+                                own typed brief was the crew's Overview (R6's rule for a row, and for a read). So the
+                                desk falls back to the ONE comparison it can prove from the wire — the copy against
+                                the Summary this rail prints today — and says what it cannot tell. */}
+                            {detail.seed_source === 'custom' || detail.seed_source === 'compiled' ? (
+                                <p
+                                    className="sv-group-notice"
+                                    data-testid="phrase-seed-provenance"
+                                    data-match={detail.seed_source}
+                                >
+                                    {detail.seed_source === 'custom'
+                                        ? `This Seed is your own text: you pressed Start on it, the phrase copied it whole, and nothing has rewritten it since (R12, D-72). Its ${detail.seed_chars} characters are the bytes every chapter entry, revision and claim key is written against.`
+                                        : `This Seed is the compiled Phrase 1 Overview, copied whole at the Start (R12, D-72): its ${detail.seed_chars} characters came from the crew's Summary, not from a brief you typed, and nothing has rewritten them since.`}
+                                </p>
+                            ) : summaryReadLanded ? (
                                 <p
                                     className="sv-group-notice"
                                     data-testid="phrase-seed-provenance"

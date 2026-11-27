@@ -298,8 +298,12 @@ describe('PlotlinesHandoff — the started state is a receipt, not a dead button
     it('says the origin is unrecorded when the row predates the field — absent is never guessed as `compiled` (R12)', () => {
         const detail = phraseDetailView('s1', { seed_head: 'A keeper refuses the relief boat.', seed_chars: 32 });
 
-        // THE FIXTURE ITSELF IS THE ASSERTION: `phraseDetailView` carries no `seed_source` key, exactly as
-        // `projections.ts:phraseDetailView` answers a legacy row (omitted, not `null`).
+        // THE LEGACY ROW IS MODELLED EXPLICITLY, because the shared fixture now carries a CURRENT row: R3 put the
+        // whole `seed` on the read, and a current read also carries `seed_source` (this fixture says `'compiled'`,
+        // matching the file's default `startPhrase` fake). A row written before the field OMITS the key — not `null`
+        // — so the key is deleted here, and that deletion is the state under test.
+        delete (detail as Partial<PhraseDetailView>).seed_source;
+
         expect('seed_source' in detail).toBe(false);
 
         render(<PlotlinesHandoff view={handoffView({ started: true, detail })} actions={fixtureActions().actions} />);

@@ -415,10 +415,16 @@ export interface StoryView {
      *
      * This is the rail's tick and the handoff button's after-state: a phrase that has started has a copied Seed
      * that every entry, revision and claim key was written against, so its start is not repeatable (the start
-     * route 409s on it). Both keys are always present on the wire, and `summary` answers `true` for every book
-     * the loop wrote, because Phrase ① is not an on-demand phrase.
+     * route 409s on it). Both current keys are always present on the wire, and `summary` answers `true` for every
+     * book the loop wrote, because Phrase ① is not an on-demand phrase.
+     *
+     * R1 (W2) — TYPED AS THE MAP IT IS ON THE WIRE. The projection builds one entry per phrase KIND the catalog
+     * knows (`Object.fromEntries(startable + auto-created definitions)`), so a third phrase arrives as data and a
+     * client with a two-key literal would report `undefined` for it — the same P15 failure the phrase selector
+     * exists to prevent. A `view.phrase_started[key]` read is unchanged by this: the two keys a desk renders
+     * today are still read by name, and an unknown key is honestly `undefined`.
      */
-    phrase_started?: { summary: boolean; plotlines: boolean };
+    phrase_started?: Record<string, boolean>;
     /**
      * T-W4 — whether THIS Story has a compiled Summary the Plotlines phrase can be started from.
      *
@@ -923,10 +929,23 @@ export interface PhraseDetailView extends Omit<PhraseView, 'mode' | 'review'> {
         mode: PhraseMode;
         mirror?: PhraseReviewState['mirror'];
     };
-    /** A PREFIX of the phrase's copied Seed, never the whole text (the rail only needs to recognise it). */
+    /** A PREFIX of the phrase's copied Seed, never more than `SEED_HEAD_CHARS` of it (`projections.ts`). */
     seed_head: string;
     /** The Seed's true length, so a truncated head still says how much text it stands for. */
     seed_chars: number;
+    /**
+     * R3 (W2) — THE WHOLE COPIED SEED, the bytes `phrase/catalog.ts:phraseSeedOf` answers with.
+     *
+     * WHY IT IS ON THE READ NOW. The preview was the whole surface while the rail only had to show WHICH text got
+     * copied; the Author's surface is the Seed itself, and a 400-character window inside a several-thousand-character
+     * brief reads as a broken copy ("it doesn't copy the complete compile Seed correctly"). The server sends the text
+     * through the SAME read the start verb and the phrase's own gates use, so this is the record, not a rendering.
+     *
+     * OPTIONAL FOR THE SAME REASON EVERY ADDITIVE FIELD HERE IS OPTIONAL: a build that predates the field answers
+     * `seed_head`/`seed_chars` only, and the pane then says so instead of pretending it holds the whole text. It is
+     * never reconstructed from the head — a prefix is a prefix (R6's absent-means-absent rule).
+     */
+    seed?: string;
     /** The Plotlines structure brief, or `null` for any other phrase and for a phrase nobody structured. */
     brief: PhraseBriefView | null;
     /**
@@ -1018,26 +1037,45 @@ export type SeedCleanupRefusal = 'empty_answer' | 'numbers_lost' | 'too_short' |
  * the same 8 hex digits the Start commit journals beside the copied length — so the desk can prove WHICH draft a
  * proposal belongs to and refuse to confirm a proposal onto text it was never computed over. The Seed's text is
  * deliberately not echoed back on the refusal arm: the desk is holding it.
+ *
+ * THE OPTIONAL `blocker` (server W4/R6) is present ONLY on a refusal that was the SERVER's rather than the
+ * Author's: `src/templates/seed-cleanup.md` is refused, so the pass had no instructions and spent no model call.
+ * It is the loader's own sentence naming the file and the rule. WHY THE TYPE CARRIES IT: without the key the desk
+ * prints `empty_answer`'s line — "the Editor answered with nothing usable" — over an answer the Editor never
+ * gave, which is the one reading that sends an Author off editing their brief when the file to open is the
+ * server's. The three transports (workspace POST, Story-scoped GET, Story-scoped POST) all answer it, because
+ * all three call `routes.ts:seedCleanupBody`, so this ONE type is the whole contract on the client's side.
  */
 export type SeedCleanupProposal =
     | { ok: true; source_hash: string; text: string; changed: boolean }
-    | { ok: false; source_hash: string; refusal: SeedCleanupRefusal };
+    | { ok: false; source_hash: string; refusal: SeedCleanupRefusal; blocker?: string };
 
 /**
- * The Author's contract fields for ONE chapter entry (`routes.ts:plotpointsFromBody`).
+ * The Author's contract fields for ONE chapter entry (`routes.ts:plotpointsFromBody`, whose field type is
+ * `phrase/plotpoints.ts:PlotpointFields`).
  *
- * A chapter entry's stored text is a DERIVATION of these fields, so the revise body carries the fields and not the
- * prose: `must_happen` and `must_change` must both be non-empty (the route 400s otherwise), and the optional ones
- * travel only when they say something — a blank label in a contract block reads like a promise the chapter makes
- * and pays with nothing. A `content` key beside `plotpoints` is not read: deriving the text is the point (P4).
+ * R5 (W2) — THE CONTRACT IS TWO ORDERED LISTS, not prose and not five prose boxes. `beats` is the events the
+ * chapter has to deliver IN ORDER (array order IS the content: the beats are chronological, so a redraft that
+ * re-orders them is a different contract), and `dialogue` is the lines it has to land, speaker inline. A chapter
+ * entry's stored text is a DERIVATION of these fields — `chapterEntryContent` composes `Heading:`, `Beats:` with
+ * `- ` items, and `Important dialogue:` with `- ` items — so the revise body carries the fields and never the
+ * prose, and a `content` key beside `plotpoints` is not read (P4: deriving the text is the point).
+ *
+ * THE ROUTE'S RULES, MIRRORED ON THE WAY OUT (so the desk never sends a body it knows will be refused):
+ *   - `beats` must hold AT LEAST ONE non-blank item — `['', '  ']` is a non-empty array that carries no beat, and
+ *     the route 400s on it (`contractListOf` drops blanks and keeps the order, which is what makes "one beat" a
+ *     real requirement rather than a type check);
+ *   - `heading` and `dialogue` travel ONLY when they say something; a blank optional field is omitted rather than
+ *     sent empty, so an empty dialogue box cannot wipe a contract the loop wrote.
+ *
+ * THE DEPRECATED PROSE (`must_happen`/`must_change`) is NOT on this type: the route still accepts it from a client
+ * that has not caught up and recovers beats from it (`plotlineBeatsOf`), which is compatibility on the server's
+ * side of the wire, not a shape this desk writes any more.
  */
 export interface PhrasePlotpointsInput {
-    must_happen: string;
-    must_change: string;
     heading?: string;
-    pov?: string;
-    setups?: string;
-    payoffs?: string;
+    beats: string[];
+    dialogue?: string[];
 }
 
 /**
@@ -1054,6 +1092,74 @@ export interface PhraseEntryReviseInput {
 /** What the chapter-entry revise answers: the install report, with the refreshed PHRASE ② read. */
 export interface PhraseEntryReviseResult extends Omit<PhraseGroupReviseResult, 'view'> {
     view: PhraseDetailView;
+}
+
+// ---------------------------------------------------------------------------
+// R1 (W2) — THE PHRASE CATALOG (`GET /phrases`)
+//
+// WHY THE DESK READS A CATALOG INSTEAD OF NAMING PHRASES. The create form, `POST /stories`' `start_phrase` and
+// the two cleanup verbs all address the SAME thing: the phrase kinds an Author may open a book on. That set is
+// the SERVER's (`shared/phrase.ts:PHRASE_CATALOG`, filtered to `enabled`), and a picker that spelled out
+// 'summary' and 'plotlines' was a fourth copy of the list — which is exactly how a third phrase kind would reach
+// the Author as a missing button (P15). One read, three consumers, one definition.
+//
+// W4 — THE ROW IS THE DEFINITION, NOT A SUBSET OF IT. This list used to be the on-demand kinds only, which left
+// the create form unable to name the DEFAULT without naming a key in a component. So the read answers EVERY
+// enabled kind, in catalog order, and carries BOTH words: `starts_on_demand` (the Author presses Start and hands
+// over a Seed — the pressable options) and `starts_on_create` (the row arrives with the Story — the default the
+// Server mints). A selector reads one field for the options it offers and the other for the default it explains;
+// neither is derived from the other in the client, because a client that negated a field would be re-running the
+// server's rule from an old copy of it.
+//
+// WHAT DOES NOT FOLLOW FROM BEING LISTED: the START VERB and the two STORY-scoped cleanup legs gate on
+// `starts_on_demand`, so naming a `starts_on_create` kind is the plain create stated explicitly, never a press —
+// which is why the form offers those rows as the default it explains rather than as an option to send. The form's
+// "start nothing" arm is that same create with the key simply omitted (`routes.ts`: "an omitted key is the normal
+// create"). THE WORKSPACE CLEANUP LEG IS THE EXCEPTION (server W6, R2): `requestSeedCleanupDraft` takes EVERY key
+// on this list, because it is asked before any row exists, of the brief the create turns into that phrase's Seed —
+// which is why `NewStoryForm` addresses the proofread at the on-create row when the Author pressed nothing.
+// ---------------------------------------------------------------------------
+
+/** How a phrase's entry set is decided (`shared/phrase.ts:PhraseEntryPolicy`) — enumerated, or counted by its brief. */
+export type PhraseEntryPolicy = 'static_groups' | 'chapter_entries';
+
+/** The structure pass that reads a phrase's Seed (`shared/phrase.ts:PhraseBriefKind`). */
+export type PhraseBriefKind = 'seed_brief' | 'plotline_brief';
+
+/** Where the copied Seed comes from (`shared/phrase.ts:PhraseSeedSource`). */
+export type PhraseSeedSource = 'story_idea' | 'supplied';
+
+/**
+ * One row of `GET /phrases` — a phrase kind an Author may open a book on, as the catalog states it
+ * (field-for-field `server/api/projections.ts:PhraseCatalogEntry`).
+ *
+ * `enters_phase` is `null` for a phrase whose work lives inside a phase somebody else owns: a real answer, not a
+ * missing one, and the create's phase write follows it rather than a hardcoded pair. `enabled` is always `true`
+ * here — it is what made the row eligible — and it stays on the wire so a row is the definition rather than an
+ * opinion about it.
+ */
+export interface PhraseCatalogEntry {
+    /** The key every phrase-addressable route takes: `POST /stories`' `start_phrase`, `…/phrases/:key/…`. */
+    key: string;
+    /** The label the selector shows. */
+    title: string;
+    /** What starting this phrase means, in the phrase's own words — the selector's sub-label. */
+    description: string;
+    /** Catalog composition order, and the order this list is answered in. */
+    order: number;
+    enabled: boolean;
+    /** Whether the Author's Start press creates the row from a Seed they hand over — the PRESSABLE options. */
+    starts_on_demand: boolean;
+    /**
+     * Whether the row arrives WITH the Story (the derived other half of `starts_on_create`, W4). Phrase ① is
+     * `true` here, and that is how a create form renders the default from catalog data instead of naming a key.
+     */
+    starts_on_create: boolean;
+    entry_policy: PhraseEntryPolicy;
+    brief_kind: PhraseBriefKind;
+    seed_source: PhraseSeedSource;
+    /** The phase this phrase IS work, or `null` when its work lives inside a phase somebody else owns. */
+    enters_phase: StoryPhase | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,11 +1264,26 @@ export interface QueueItem {
  * `POST /stories` body. `chapter_count` is Author truth — declared, never agent-chosen (D-3b).
  * The route lets the server name an untitled Story from its Seed, which is what the Create Story
  * tab's "tell the Editor" path uses; the form still sends all three fields.
+ *
+ * R4 (W2) — `chapter_count` has a THIRD state now, and it is the OMITTED one. Sending a number declares it (the
+ * engine records the same number as `Story.chapter_count_request` in the same commit, so the declaration and the
+ * count can never disagree); sending nothing is not a declaration, it is "the Editor decides", and the row says so
+ * with `chapter_count_request: null`. The form therefore sends the key ONLY when the Author typed a number —
+ * an empty box must not become a `0`, a `NaN` or an invented 1 (R4's honesty rule). The route validates it as an
+ * integer ≥ 1, and the form refuses anything else before dialing.
+ *
+ * R2 (W2) — `start_phrase` opens a book ON a phrase the Author picks, in the create's own commit: the engine starts
+ * that phrase's controller and moves the pointer to the phase its catalog row names (`enters_phase`), so there is
+ * no follow-up Start press and no window in which a sweep catches a book in phase ① that was created to work
+ * somewhere else. The legal values are `GET /phrases`' keys, validated server-side by the same
+ * `isStartablePhraseKey` the cleanup verbs and the engine's guard call; omitting the key is the ordinary create.
  */
 export interface CreateStoryInput {
     title?: string;
     idea: string;
     chapter_count?: number;
+    /** A startable phrase's catalog key (`PhraseCatalogEntry.key`); absent means the loop's own opening phrase. */
+    start_phrase?: string;
     /** Phase ①: Writer samples per Summary (standard 5 when omitted). */
     summary_sampling?: number;
     /** Phase ①: Critic passes per sample (standard 5 when omitted). */
@@ -1550,36 +1671,72 @@ export interface ApiClient {
      */
     startPhrase(storyId: string, key: string, input?: PhraseStartInput): Promise<PhraseStartResult>;
     /**
-     * R7 — the ONE-TIME Seed cleanup, asked BEFORE the start: `GET /stories/:id/phrases/:key/seed/cleanup`.
+     * R1 (W2) — THE PHRASE CATALOG: `GET /phrases`, every ENABLED phrase kind in catalog order, and the row that
+     * says which kind is a press and which is the default.
      *
-     * THE VERB IS A READ, AND THAT IS THE WHOLE DESIGN. The pending Seed has no row to read it from (the Start
-     * copies it, D-72), so the Author's draft travels in `?seed=` and the answer is a PROPOSAL: text the desk
-     * can show, and nothing else. Nothing is written — no Seed, no revision, no journal line — so a cleanup the
-     * Author ignores costs one tool-less model turn and no record, which is what keeps it out of the run layer
-     * (P10) and out of the Seed's lifecycle (D-76 / §18.13).
+     * THE FORM'S ONE SOURCE OF TRUTH FOR "what can a Story start on". The same list is the legal value set of
+     * `POST /stories`' `start_phrase` and the `:key` of the workspace cleanup verb, so a third phrase kind shows up
+     * as a selector row, a create body and a cleanup address with NO new client code (P15). W4: the Summary IS on
+     * it — with `starts_on_create: true` and `starts_on_demand: false`, which is how the form renders it as the
+     * phrase the Story arrives with rather than as a press the start verb would refuse. W6 — the two STORY-scoped
+     * cleanup legs take the pressable subset only; see this interface's note above.
      *
-     * THE CONFIRM IS THE NEXT START PRESS, NOT A FLAG ON THIS RESPONSE. The desk puts `text` in the Seed box and
-     * the Author's next `source:'custom'` press carries it; `StartPhraseRequest` grew nothing, so there is no
-     * path by which a cleanup lands on the phrase without a press.
-     *
-     * `refusal` IS NOT AN ERROR AND COMES BACK 200: `empty_answer` / `numbers_lost` / `too_short` / `too_long`
-     * mean the model answered and a guard threw the rewrite away. Such an answer carries NO `text`, so the desk
-     * has nothing to confirm and the Author's own draft stands. The refusals that ARE errors (400 no `seed`,
-     * 404 no such story or phrase, 409 a phrase that is not Author-seeded / already started / has no transport)
-     * arrive as `ApiError` from `request`, and the desk prints the server's sentence (L-13).
-     *
-     * THE ONE COST OF A GET: the draft rides in the request line, so a brief longer than the server's request-line
-     * ceiling (Node's 16 KiB by default) fails at the transport rather than at a rule. The Seed box holds a brief,
-     * not a manuscript, and the ceiling is documented on the yaml operation.
+     * IT IS A CATALOG, NOT A PER-BOOK READ: no `groups`, no rows, no Story. A desk that has not read it yet renders
+     * its "start nothing" arm rather than a phrase list it does not have.
      */
-    getPhraseSeedCleanup(storyId: string, key: string, seed: string): Promise<SeedCleanupProposal>;
+    getPhraseCatalog(): Promise<PhraseCatalogEntry[]>;
+    /**
+     * R7 / R6 (W2) — the ONE-TIME Seed cleanup on a Story that exists: `POST /stories/:id/phrases/:key/seed/cleanup`,
+     * body `{ seed }`.
+     *
+     * THE VERB STILL WRITES NOTHING, AND THE DRAFT STILL HAS TO TRAVEL. The pending Seed has no row to read it from
+     * (the Start copies it, D-72), so the Author's draft is sent and the answer is a PROPOSAL: text the desk can
+     * show, and nothing else. Nothing is written — no Seed, no revision, no journal line — so a cleanup the Author
+     * ignores costs one tool-less model turn and no record, which is what keeps it out of the run layer (P10) and
+     * out of the Seed's lifecycle (§18.13).
+     *
+     * WHY A BODY NOW RATHER THAN `?seed=` (R6). The GET is the shape the desk grew with, and its one cost is the
+     * request target: a pasted synopsis is routinely larger than a request line can carry (`maxHeaderSize`), so the
+     * read stopped being addressable at exactly the moment the proofread mattered most. A body has no such ceiling,
+     * and BOTH arms answer a byte-identical `SeedCleanupProposal` because both call one function server-side
+     * (`routes.ts`). The GET stays published compatibility on the server for a client that has not caught up; this
+     * desk posts.
+     *
+     * THE CONFIRM IS THE NEXT PRESS, NOT A FLAG ON THIS RESPONSE. The desk puts `text` in the Seed box and the
+     * Author's next `source:'custom'` start (or the create) carries it; `StartPhraseRequest` grew nothing, so there
+     * is no path by which a cleanup lands on the phrase without a press.
+     *
+     * `refusal` IS NOT AN ERROR AND COMES BACK 200: `empty_answer` / `numbers_lost` / `too_short` / `too_long` mean
+     * the model answered and a guard threw the rewrite away. Such an answer carries NO `text`, so the desk has
+     * nothing to confirm and the Author's own draft stands. The refusals that ARE errors (400 no `seed`, 404 no
+     * such story or phrase, 409 a phrase that is not Author-seeded / already started / has no transport) arrive as
+     * `ApiError` from `request`, and the desk prints the server's sentence (L-13).
+     */
+    requestPhraseSeedCleanup(storyId: string, key: string, seed: string): Promise<SeedCleanupProposal>;
+    /**
+     * R2 / R6 (W2) — the SAME proofread BEFORE there is a Story to hang it on: `POST /phrases/:key/seed/cleanup`,
+     * body `{ seed }`.
+     *
+     * WHY IT IS ADDRESSED BY PHRASE KIND: the create form proofreads the brief the Author is about to submit, and a
+     * Story id does not exist yet, so the route takes the catalog key (the same key the create will send as
+     * `start_phrase`) and the draft in a body. Nothing about the pass changes — `run/seed-cleanup.ts`, one tool-less
+     * turn, no `Store`, no write — and the Author's NEXT press (the create, or the Start) is the confirm.
+     *
+     * THE REFUSALS are the story-scoped verb's minus the Story's: 400 for a missing/blank `seed`, 404 for a key the
+     * catalog has never heard of, 409 for a key this build does not offer as a START (a definition switched off —
+     * W6 fixed this leg's gate: it used to be `starts_on_demand`, which 409'd the Summary, the very kind the create
+     * mints and whose Seed this brief becomes), and 409 for a server with no model transport. A guard refusal stays
+     * a 200 with `ok: false`, and carries `blocker` when the reason was the server's own prompt file (W4/R6).
+     */
+    requestSeedCleanupDraft(key: string, seed: string): Promise<SeedCleanupProposal>;
     /**
      * T-W4 — the Author rewrites ONE CHAPTER ENTRY (`POST …/phrases/groups/:groupId/revise`, the entry leg).
      *
      * Same route as the Summary group's revise, different body: an entry's text is composed from its contract
-     * fields, so this verb sends `plotpoints` and the route derives the prose (`phrase/plotpoints.ts`). It refuses
-     * a plotlines entry with no plotpoints rather than mirroring a stale `plotlines` contract under new prose (P4),
-     * and the refreshed `view` is the PHRASE ② read rather than the Summary's.
+     * fields, so this verb sends `plotpoints` — the two ORDERED lists, `beats` and `dialogue` (R5) — and the route
+     * derives the prose (`phrase/plotpoints.ts:chapterEntryContent`). It refuses a plotlines entry with no
+     * plotpoints rather than mirroring a stale `plotlines` contract under new prose (P4), and the refreshed `view`
+     * is the PHRASE ② read rather than the Summary's.
      */
     revisePhraseEntry(
         storyId: string,
@@ -1880,6 +2037,10 @@ export const api: ApiClient = {
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
     // R6 — the group read. One route per Story, because the rail is one read of the whole Summary Phrase.
     getPhrase: (storyId) => request<PhraseView>(storyPath(storyId, '/phrases')),
+    // R1 — the STARTABLE PHRASE CATALOG. A bare array in catalog order, no Story in the path, and no wrapping key:
+    // the route answers `phraseCatalogView()` directly (`routes.ts`), so a client that unwrapped `{phrases: []}`
+    // would be inventing an envelope the server never sends.
+    getPhraseCatalog: () => request<PhraseCatalogEntry[]>('/phrases'),
     // R2 — the Author's hand edit of ONE group. The group is addressed by its UUID, so a refetch that
     // reorders the catalog cannot move the write onto a sibling group.
     revisePhraseGroup: (storyId, groupId, input) =>
@@ -1920,16 +2081,21 @@ export const api: ApiClient = {
                   ? { source: 'custom', text: input.text ?? '' }
                   : { source: 'compiled' }
         ),
-    // R7 — THE SEED CLEANUP, and the reason the draft rides in the QUERY rather than a body: the verb is a GET, so
-    // the one-time proofread stays a read the desk can retry, cancel or ignore without a write to undo (P10). The
-    // text is `encodeURIComponent`-escaped because a brief is prose: an `&`, a `#` or a `+` in the Author's
-    // sentence is ordinary, and a client that interpolated it raw would silently ask about a different draft.
-    // `refusal` comes back 200 (see `SeedCleanupProposal`), so the desk reads the arm off `ok` and never off a
-    // status code; the 400/404/409 arms arrive as `ApiError`, whose `message` is the server's own sentence.
-    getPhraseSeedCleanup: (storyId, key, seed) =>
-        request<SeedCleanupProposal>(
-            storyPath(storyId, `/phrases/${encodeURIComponent(key)}/seed/cleanup?seed=${encodeURIComponent(seed)}`)
+    // R7 — THE SEED CLEANUP, and the reason the draft rides in a BODY rather than the request line: a pasted brief
+    // is routinely larger than a request target can carry (`maxHeaderSize`), which is exactly when the proofread
+    // matters (R6/W2). The verb still writes NOTHING (P10) — the body is how an unwritable draft travels, not how a
+    // row is written. `refusal` comes back 200 (see `SeedCleanupProposal`), so the desk reads the arm off `ok` and
+    // never off a status code; the 400/404/409 arms arrive as `ApiError`, whose `message` is the server's sentence.
+    requestPhraseSeedCleanup: (storyId, key, seed) =>
+        post<SeedCleanupProposal>(
+            storyPath(storyId, `/phrases/${encodeURIComponent(key)}/seed/cleanup`),
+            { seed }
         ),
+    // R2 — the SAME proofread with no Story to address yet: the create form's brief is proofread before the create
+    // exists, so the route is addressed by the PHRASE KIND the create will name as `start_phrase`. One body key, the
+    // same proposal, the same no-write rule.
+    requestSeedCleanupDraft: (key, seed) =>
+        post<SeedCleanupProposal>(`/phrases/${encodeURIComponent(key)}/seed/cleanup`, { seed }),
     // T-W4 — ONE CHAPTER ENTRY's hand revision. The body carries `plotpoints`, never `content`: the entry's prose
     // is composed from the contract fields server-side, and a `content` key beside them is not read (P4). The group
     // is addressed by its UUID, exactly as the Summary group's revise does, so a refetch that reorders the entries

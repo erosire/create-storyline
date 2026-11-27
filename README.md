@@ -52,7 +52,10 @@ lives in the separate `@underload/storyline` package/repository and is never imp
 
 - **The UI** (`src/dashboard/`) — the compact Stories panel with the phrase rail, the tabbed home desk,
   the pane-aware directive bar, the crew rail, the Ideas tray, the Goal panel, the prose editor and the
-  phrase panes (Summary groups, Plotlines chapters, Seed views). It holds no authoritative state:
+  phrase panes (Summary groups, Plotlines chapters, Seed views). The create card asks the server's catalog
+  (`GET /phrases`) which kinds a story may begin with and offers them in the catalog's order; the chapter-count
+  box is optional and an empty box means "the Editor decides" rather than zero; the proofread switch is off by
+  default and spends no model call while off; the Seed pane shows the phrase's copied Seed in full. It holds no authoritative state:
   components render store snapshots, and `src/dashboard/api.ts` is the only transport.
 - **The wire types** (`src/types.ts`) — TYPE DEFINITIONS ONLY: the §4 record shapes the server sends.
   There is no runtime product data in this package (no phrase catalog/composition, criteria roster,

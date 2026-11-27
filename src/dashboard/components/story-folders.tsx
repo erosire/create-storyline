@@ -12,6 +12,8 @@ import type { StoryPhraseSpec } from './story-nav';
 import {
     EDITOR_GROUP_LOCKING_LABEL,
     EDITOR_GROUP_LOCKING_NOTE,
+    // R4 — the one reading of a Story's chapter-count declaration (number / null / absent legacy).
+    chapterCountRequestLine,
     findingKindLabel,
     findingKindToken,
     isEditorGroupLockingEnabled,
@@ -66,11 +68,17 @@ export function SeedPane({ view, phrase }: { view: StoryViewData; phrase?: Story
                     The Editor&apos;s brief: {view.seed_brief.logline}
                 </p>
             ) : null}
-            {view.summary ? (
-                <p className="sv-seed-measure">
-                    The book&apos;s measure: {view.summary.chapter_count} chapters (D-3b).
-                </p>
-            ) : null}
+            {/* R4 (W2) — THE DECLARATION, NOT THE DEFAULT. `chapter_count_request` has three states (a number the
+                Author declared, `null` for "the Editor decides", and ABSENT on a book written before the create
+                asked), and the number the book runs on (`summaries.chapter_count`, what C-0 fails on) is a different
+                fact. The old line printed that running number under a sentence that read like the Author's own
+                measure, so a book the Editor sized showed a count nobody had named. `story-contract.chapterCountRequestLine`
+                states which of the three it is and then the count it is honored against — one rule, and every surface
+                that quotes a count quotes the same reading. It renders with or without a Summary row: "you choose" is
+                still the answer the Author gave, and an absent Summary is a state to name (the line says so). */}
+            <p className="sv-seed-measure" data-testid="seed-measure">
+                {chapterCountRequestLine(view.story, view.summary?.chapter_count)}
+            </p>
         </section>
     );
 }

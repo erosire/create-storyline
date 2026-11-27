@@ -127,7 +127,16 @@ export function fixtureSummary(): Summary {
     };
 }
 
-/** §4.3 — the chapter contracts, side by side with the prose they govern (U-4). */
+/**
+ * §4.3 — the chapter contracts, side by side with the prose they govern (U-4).
+ *
+ * R5 (W2) — A CONTRACT IS ITS ORDERED BEATS. C-7 asks whether the prose delivers every beat in the order the
+ * contract lists them, and C-3/C-8 ask about the LAST beat, so the list is written as a list here and its last item
+ * is the change the chapter owes. The five prose fields stay filled because a real §4.3 row still carries them
+ * (`types.ts` documents them deprecated): they are the compatibility mirror `story-contract.plotlineBeatsOf` falls
+ * back to when a row has NO `beats`, and a fixture that dropped them could not show that a row carrying BOTH answers
+ * from `beats` — the server's own precedence, which this desk mirrors rather than re-decides.
+ */
 export function fixturePlotlines(): Plotline[] {
     return [
         {
@@ -139,6 +148,9 @@ export function fixturePlotlines(): Plotline[] {
             chapter_ref: 'c1',
             order: 1,
             heading: 'The Sealed Stack',
+            // The change is the LAST beat, which is what C-3 reads and what the old `must_change` field used to hold
+            // as a separate sentence.
+            beats: ['She is refused entry and names the refusal.', 'She goes from archivist to trespasser.'],
             must_happen: 'She is refused entry and names the refusal.',
             must_change: 'She goes from archivist to trespasser.',
             pov: 'Hale',
@@ -157,8 +169,12 @@ export function fixturePlotlines(): Plotline[] {
             chapter_ref: 'c2',
             order: 2,
             heading: 'Ghost Index',
-            must_happen: 'The index answers in a voice that is not hers.',
+            beats: ['The index answers in a voice that is not hers.', 'She stops trusting the record.'],
+            // R5 — the optional dialogue: the lines this chapter has to land, in order, and the only contract field
+            // besides the beats the desk prints.
+            dialogue: ['"That is my voice, and it is not in the catalogue."'],
             // C-2: an unaligned plotline is shown as the gap it is, not silently corrected.
+            must_happen: 'The index answers in a voice that is not hers.',
             must_change: 'She stops trusting the record.',
             pov: 'Hale',
             setups: 'her own voice in the index',

@@ -357,6 +357,8 @@ export const SummarySampleSchema = Type.Object(
 
 `chapter_count` is deliberately absent: it is Author truth (D-3b) and the engine writes it once.
 
+**Amended 2026-11-27 (spec §19.3, D-88):** the Author now has a second, separate word on the number. `stories.chapter_count_request` records the *request* — a number (binding on the structuring pass), `null` (the Editor decides, decided explicitly) or absent (a row from before the field) — and it is written in the create's own commit (`src/server/loop/engine.ts:2964` through `chapterCountRequestPatch`, `src/server/loop/types.ts:235`). `stories.chapter_count` keeps the meaning this line gives it: the count the book runs on, written when the brief is accepted. Nothing here makes the request a default.
+
 ```ts
 // src/shared/schemas/issue-list.ts
 export const IssueListSchema = Type.Object(
@@ -675,7 +677,7 @@ prose; its output is Knowledge. `refusal_rules` for a Researcher writing a story
 
 ## 8. Templates (the prompts)
 
-Add to `src/server/templates/templates.ts`:
+Add to `src/server/templates/templates.ts` — **the file the built-ins lived in when this was written; since 2026-11-27 (spec §19.7, D-92) the built-ins are `src/templates/*.md`, one Markdown file per row, read live. The instructions below are unchanged; where they say `templates.ts`, read the roster**:
 
 1. **`editor-seed-structure`** — kind `editor`, `serves_phase: ['summary']`, `attempts: 1`.
    Prompt: validate the Seed against the structural checklist; write `structureSeed`; where the Seed
@@ -803,7 +805,7 @@ Author's three grouped verbs and their refusals are §17.9 of `specifications.md
 | 7 | `src/server/run/phase1-prompt.ts` | The compiler, the filter, the byte-stable hash. Unit tests for determinism. |
 | 8 | `src/server/loop/work.ts`, `src/server/loop/records.ts` | `structure_seed`, `research`, `sample_unit`, `screen_samples`, `choose_sample`; gates; claim keys; status preconditions. |
 | 9 | `src/server/loop/engine.ts` | `settleJob` for the new kinds: persist a revision, a `SampleReview`, run the selector, truncate, append `sampling_history`, arm the next round. |
-| 10 | `src/server/templates/templates.ts` | The five templates and the new default assignment. |
+| 10 | `src/server/templates/templates.ts` — `src/templates/*.md` since 2026-11-27 (spec §19.7, D-92) | The five templates and the new default assignment. |
 | 11 | `src/server/api/*`, `src/dashboard/*`, `src/storyline-server.swagger.yaml` | Projections, routes, Researcher tile, Knowledge pane, sampling view. |
 | 12 | `src/server/loop/*.test.ts`, `src/server/integration/*.test.ts` | The tests below; retire the classic summary-pipeline assertions behind `pipeline: 'classic'`. |
 

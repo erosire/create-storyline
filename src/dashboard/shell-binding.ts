@@ -313,13 +313,14 @@ export interface ShellActions {
      */
     startPhrase?(storyIdOrKey?: string, keyOrInput?: string | PhraseStartInput, input?: PhraseStartInput): Promise<unknown>;
     /**
-     * R7 — the Author asks the Editor to PROOFREAD the pending Seed (`GET …/phrases/:key/seed/cleanup?seed=…`).
+     * R7 / R6 (W2) — the Author asks the Editor to PROOFREAD the pending Seed
+     * (`POST /stories/:id/phrases/:key/seed/cleanup`, body `{ seed }`).
      * Pinned `(storyId, key, seed)`; the local shape is the draft ALONE, because the Story is the shell's scope and
      * the phrase is Phrase ② — the only one whose Seed an Author hands over (a phrase the loop writes has no brief
-     * of theirs to proofread, and the route 409s saying so, R1).
+     * of theirs to proofread, and the route 409s saying so, R1: `starts_on_demand` is catalog data).
      *
      * THE ONE VERB HERE THAT MUST NOT SWALLOW ITS RESULT. Every write binding above returns `Promise<unknown>`
-     * because the caller's next frame comes from the store's refetch. This is a READ that writes nothing (P10): the
+     * because the caller's next frame comes from the store's refetch. This one writes nothing (P10): the
      * card is waiting for the proposal itself — `ok`, `text`/`refusal` — and erasing it into `unknown` would leave
      * the desk with a button that asked and an answer it cannot show.
      */

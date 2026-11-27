@@ -21,6 +21,8 @@ import type {
     PhraseReviewedChooseResult,
     PhraseReviewedGroup,
     PhraseReviewedSummary,
+    // R1 (W2) — the create form's phrase list is part of the wire this file stands in for.
+    PhraseCatalogEntry,
     PhraseStartResult,
     PhraseView,
     QueueItem,
@@ -34,6 +36,8 @@ import {
     DEFAULT_AUTO_APPROVE_COSTS,
     fixtureVocabulary,
     orderedPhraseGroupDefinitions,
+    // R1 (W2) — the create form's phrase list is product truth the desk mirrors, so the fake answers with it.
+    PHRASE_CATALOG_ROWS,
     seedHashOf
 } from './product-values';
 import type { Goal, Story } from '../../types';
@@ -73,8 +77,15 @@ export function queueItem(id: string, overrides: Partial<QueueItem> = {}): Queue
     };
 }
 
-/** The `GET /stories/:id` read, minimal but complete — `openStory` refreshes a real view. */
-export function storyView(row: StoryRow): StoryView {
+/**
+ * The `GET /stories/:id` read, minimal but complete — `openStory` refreshes a real view.
+ *
+ * R4 — `storyOverrides` exists because `Story.chapter_count_request` has THREE states (a declared number, `null`
+ * for "the Editor decides", and ABSENT on a book written before the create asked), and a fixture that could only
+ * build the last one would leave two of them unpinned. The default stays ABSENT: that is what a book the field
+ * never touched looks like, and it is the state a pane must not read back as "the Author asked for this count".
+ */
+export function storyView(row: StoryRow, storyOverrides: Partial<Story> = {}): StoryView {
     const now = '2026-11-09T10:00:00.000Z';
     const story: Story = {
         id: row.id,
@@ -96,7 +107,8 @@ export function storyView(row: StoryRow): StoryView {
         blocked_on: row.blocked_on,
         digest_rev: 1,
         template_refs: [],
-        chapter_deps: {}
+        chapter_deps: {},
+        ...storyOverrides
     };
     const goal: Goal = {
         id: `goal_${row.id}`,
@@ -356,17 +368,25 @@ export function groupedPhraseView(storyId: string, overrides: Partial<PhraseView
  * scores a Summary section, and an invented `0` would claim a review that never ran.
  */
 export function phraseDetailView(storyId: string, overrides: Partial<PhraseDetailView> = {}): PhraseDetailView {
+    // THE COPIED SEED, and it is the WHOLE text on purpose: R3 put `seed` beside `seed_head`/`seed_chars` so the
+    // pane can show the entire Seed, and a fixture whose head and whole text disagree would let a test pass that the
+    // real read could not produce. `seed_chars` is the true length of THAT text, and `seed_head` is the read's prefix
+    // of it (under the server's 400-character window, so head and whole are the same bytes here).
+    const seed = 'A smuggler pays the tide to cross the salt road, and the road collects.';
     const chapters = [1, 2, 3];
     const groups: PhraseGroupRow[] = chapters.map((n) => ({
         id: `entry-chapter_${n}`,
         key: `chapter_${n}`,
         title: `Chapter ${n} — The Salt Road`,
-        description: `The ${n}${n === 1 ? 'st' : n === 2 ? 'nd' : 'rd'} chapter's contract: what it must happen, what must change.`,
+        description: `The ${n}${n === 1 ? 'st' : n === 2 ? 'nd' : 'rd'} chapter's contract: the beats it has to deliver, in order.`,
         order: n,
+        // R5 — the row carries the COMPOSED text, which is what the route stores (`phrase/plotpoints.ts:
+        // chapterEntryContent`): `Heading:`, then `Beats:` with one `- ` bullet per beat IN ORDER, then `Important
+        // dialogue:` ONLY when the chapter owes lines. Chapter 3 owes none, so its block is absent — the shape a
+        // test of "empty dialogue is omitted, not printed empty" needs without a second fixture.
         content:
-            `## Chapter ${n} — The Salt Road\n` +
-            `- Must happen: the crossing is attempted.\n` +
-            `- Must change: the mentor's price is paid.`,
+            `Heading: The Salt Road\nBeats:\n- The crossing is attempted.\n- The mentor's price is paid.` +
+            (n === 3 ? '' : `\nImportant dialogue:\n- The road collects its own toll.`),
         revision: 1,
         updated_by: 'writer',
         previous_content: '',
@@ -412,8 +432,15 @@ export function phraseDetailView(storyId: string, overrides: Partial<PhraseDetai
             open_tasks: 0
         },
         reviewed: reviewedBlock(),
-        seed_head: 'A smuggler pays the tide to cross the salt road, and the road collects.',
-        seed_chars: 67,
+        // The read's PREFIX (the server's own 400-character window) and the Seed's TRUE length — and with R3 the
+        // whole text beside them, so the pane's primary reading is the Seed rather than the window.
+        seed_head: seed.slice(0, 400),
+        seed_chars: seed.length,
+        seed,
+        // R12 — recorded once in the Start commit (`routes.ts:recordSeedSource`). The default fixture matches this
+        // file's default `startPhrase` fake, which copies the compiled Overview; a test that wants the Author's own
+        // text, or a row from before the field existed, overrides this key (`'custom'`, or `undefined`).
+        seed_source: 'compiled',
         brief: { status: 'accepted', chapter_count: 3, accepted_at: '2026-11-09T10:00:00.000Z' },
         ...overrides
     };
@@ -828,12 +855,14 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 view: phraseDetailView(storyId)
             })
         ),
-        // R7 — the one-time Seed cleanup. THE DEFAULT IS "NOTHING TO FIX": the pass answers the Author's own draft
-        // back unchanged (`changed:false`), which is the one proposal arm every fixture can render without
-        // pretending a rewrite happened. A test that wants a real proposal, or a guard refusal, overrides this with
-        // its own `vi.fn` — the same shape as `startPhrase`'s 409 arms.
-        getPhraseSeedCleanup: vi.fn(
-            async (storyId: string, key: string, seed: string): Promise<SeedCleanupProposal> => ({
+        // R7 / R6 (W2) — the one-time Seed cleanup, BOTH legs. THE DEFAULT IS "NOTHING TO FIX": the pass answers the
+        // Author's own draft back unchanged (`changed:false`), which is the one proposal arm every fixture can render
+        // without pretending a rewrite happened. A test that wants a real proposal, or a guard refusal, overrides
+        // these with its own `vi.fn` — the same shape as `startPhrase`'s 409 arms. Both legs call one function
+        // server-side, so both answers are the same `SeedCleanupProposal`; the story-scoped one is the in-story
+        // handoff card's, the draft one is the create form's (there is no Story yet to address).
+        requestPhraseSeedCleanup: vi.fn(
+            async (_storyId: string, _key: string, seed: string): Promise<SeedCleanupProposal> => ({
                 ok: true,
                 // THE REAL HASH, not a stand-in: the desk compares it against the draft in the Seed box to prove a
                 // proposal belongs to the text it was computed over, so a fake that invented one would hide a
@@ -843,6 +872,17 @@ export function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
                 changed: false
             })
         ),
+        requestSeedCleanupDraft: vi.fn(
+            async (_key: string, seed: string): Promise<SeedCleanupProposal> => ({
+                ok: true,
+                source_hash: seedHashOf(seed),
+                text: seed,
+                changed: false
+            })
+        ),
+        // R1 (W2) — THE CATALOG the create form's selector is built from: the server's own rows, mocked verbatim
+        // (`PHRASE_CATALOG_ROWS`). A form that read this list from a fixture of its own would be a second catalog.
+        getPhraseCatalog: vi.fn(async (): Promise<PhraseCatalogEntry[]> => PHRASE_CATALOG_ROWS.map((row) => ({ ...row }))),
         // T-W4 — ONE CHAPTER ENTRY's hand revision: the revise envelope, but with the PHRASE ② read as `view`
         // (`routes.ts:phraseVerbView` answers the phrase that was written, never the Summary by default).
         revisePhraseEntry: vi.fn(

@@ -304,17 +304,17 @@ describe('shell-binding — the Seed proofread is carried, not landed (R7)', () 
 
         // The card's pinned call: (storyId, phraseKey, seed).
         await actions.requestSeedCleanup?.('story_1', 'plotlines', draft);
-        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
+        expect(client.requestPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
 
         // The shell-local call: the draft alone, against this shell's Story and the handoff phrase. A bare string
         // is NOT an id here — the ask has no id slot — so it is the seed, and the Story comes from the scope.
         await actions.requestSeedCleanup?.(draft);
-        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
+        expect(client.requestPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', draft);
 
         // A bare call is the ask with no draft. The binding sends `''` rather than guessing an id, so the ROUTE's
         // 400 sentence is the answer (`routes.ts` refuses an unnamed Seed instead of spending a model call).
         await actions.requestSeedCleanup?.();
-        expect(client.getPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', '');
+        expect(client.requestPhraseSeedCleanup).toHaveBeenLastCalledWith('story_1', 'plotlines', '');
 
         // NO WRITE, NO REFETCH, NO LANDING. The phrase surface is untouched and the Story has not been re-read,
         // which is the difference between this verb and every other phrase verb in this file.
@@ -333,7 +333,7 @@ describe('shell-binding — the Seed proofread is carried, not landed (R7)', () 
             changed: true
         };
         const harness = fakeHarness([storyRow('story_1')], [], {
-            getPhraseSeedCleanup: vi.fn(async () => proposal)
+            requestPhraseSeedCleanup: vi.fn(async () => proposal)
         });
         await harness.store.openStory('story_1');
         const actions = shellActions(harness.store, 'story_1');

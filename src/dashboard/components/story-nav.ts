@@ -119,10 +119,15 @@ export const DEFAULT_STORY_SELECTION: StorySelection = { panel: 'summary' };
  *
  * `undefined` is the honest answer whenever the frame cannot prove the phrase is open — including a frame that
  * is `undefined` because the Story read has not landed. Absent is not "started": it is unknown.
+ *
+ * R1 (W2) — THE PARAMETER IS A PLAIN STRING, not `StoryPhraseKey`. The create form's phrase selector is driven by
+ * the server's catalog (`GET /phrases`), so a key the desk has never seen can arrive here (`state.ts:createStory`
+ * hands the key it just sent). A key with no rail surface takes the `undefined` branch, exactly like a phrase the
+ * frame cannot prove: the desk keeps the Summary rather than inventing a pane for a phrase it cannot render.
  */
 export function phraseLandingSelection(
     view: Pick<StoryViewData, 'phrase_started'> | undefined,
-    phrase: StoryPhraseKey
+    phrase: string
 ): StorySelection | undefined {
     if (phrase !== 'plotlines' || view === undefined) return undefined;
 

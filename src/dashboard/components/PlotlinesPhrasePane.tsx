@@ -2,8 +2,8 @@
 //
 // WHY A PANE RATHER THAN THE CLASSIC `PlotlinesPane`. `PlotlinesPane` renders the §4.3 records — the plotline rows
 // the classic tools wrote, with their beats and their ledger state. A book on the grouped pipeline has a different
-// object: one ENTRY PER CHAPTER, each a CONTRACT (what must happen, what must change, the pov, the setups and the
-// payoffs), each with its own revisions, findings and lock, all projected by `GET /stories/:id/phrases/plotlines`.
+// object: one ENTRY PER CHAPTER, each a CONTRACT (its ordered beats, and the lines of dialogue it owes), each with
+// its own revisions, findings and lock, all projected by `GET /stories/:id/phrases/plotlines`.
 // The two surfaces are chosen by the Setting (`story.plotlines_mode`, echoed by the read's `mode`), never by which
 // list happens to be non-empty — so `StoryView` routes on `story-contract.isPlotlinesGroups` and a classic book
 // keeps the records pane byte-for-byte as it was.
@@ -158,9 +158,9 @@ export function PlotlinesOverviewPane({ view, selection, onSelect }: PlotlinesPh
 
             <p className="sv-pane-subtitle">
                 The chapter entries are the Phrase 2 surface: one entry per chapter the phrase brief declares, each
-                carrying what that chapter must do — what happens, what changes, who tells it, and what it sets up
-                and pays off. Each entry is its own pane in the rail: its revisions, its findings and the contract
-                you revise live there.
+                carrying the beats that chapter has to deliver IN ORDER, and the lines of dialogue it owes. Each
+                entry is its own pane in the rail: its revisions, its findings and the contract you revise live
+                there.
             </p>
 
             <BriefCard view={view} />

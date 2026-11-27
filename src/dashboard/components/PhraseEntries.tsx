@@ -24,7 +24,7 @@
 // a lock is `locked === true`, a score is the newest `scores[]` row). This file adds no rules of its own: it adds
 // a place for two phrases to render the same ones.
 import { useState } from 'react';
-import type { PhraseFindingRow, PhraseGroupRow, PhrasePlotpointsInput } from '../api';
+import type { PhraseFindingRow, PhraseGroupRow } from '../api';
 import type { StorySelection } from './story-nav';
 import { plotlineGroupRef, summaryGroupRef } from './story-nav';
 // T2 — the entry's prose region is rendered Markdown (`MarkdownText.tsx`); the diff beside it is not (see the
@@ -34,6 +34,10 @@ import { RevisionDiff } from './RevisionDiff';
 import {
     canAuthorLockGroup,
     canAuthorUnlockGroup,
+    // R5 — the chapter contract's two directions: `chapterEntryDraft` decodes the entry's stored text back into
+    // the ORDERED beat/dialogue rows the Author edits, and `ChapterEntryDraft` is that row model.
+    chapterEntryDraft,
+    type ChapterEntryDraft,
     findingGroups,
     findingKindLabel,
     findingKindToken,
@@ -123,6 +127,17 @@ export interface PhraseSurface {
      * pinned string its panes have always printed.
      */
     emptyWriteLine: string;
+    /**
+     * R5 (W2) — the sentence the SEND control carries BEFORE the write is open, and ONLY a surface that has an
+     * open step supplies it.
+     *
+     * A Summary group's write is one textarea that is always on screen, so there is nothing to open and the field
+     * stays absent. A chapter entry's write is a LIST of rows, and opening it prefilled is the point (R5): the
+     * rows start as the contract the entry carries, so the first press opens the editor and the second one sends.
+     * A control that shut that first press with an "empty write" refusal would be refusing a request the Author
+     * never made — and the reason has to say what the press DOES.
+     */
+    openWriteLine?: string;
     /** The line while the phrase read is still on its way. */
     pendingLine: string;
     /** The line when the read FAILED — with the server's sentence appended by the caller. */
@@ -174,7 +189,11 @@ export const PLOTLINE_SURFACE: PhraseSurface = {
     entry: 'chapter entry',
     entries: 'chapter entries',
     emptyWriteLine:
-        "Write Must happen and Must change first — the route composes the entry's text and its plotlines contract from those two together, and refuses an entry without them (P4).",
+        'Write at least one beat first — the route composes this chapter entry’s text and its plotlines contract from the beats IN THE ORDER you list them, and an entry with no beat is refused (P4).',
+    // R5 — the beat rows open PREFILLED from the contract the entry carries today, so the first press is not a
+    // write and must not read like one.
+    openWriteLine:
+        'Open this chapter entry’s beats — the rows start as the contract the entry carries now, in the order they happen, and nothing is sent until you press again (R5).',
     pendingLine:
         'This Plotlines phrase is written as chapter entries. Their contracts arrive with the phrase read.',
     failureLine: 'The Plotlines chapter entries could not be read:',
@@ -543,36 +562,173 @@ function FindingRow({
 // ---------------------------------------------------------------------------
 
 /**
- * The plotpoints field list — a chapter entry's contract, in the order the route composes its prose from it.
+ * R5 (W2) — THE CHAPTER CONTRACT, AS THE AUTHOR EDITS IT: an optional heading, ORDERED beat rows, and optional
+ * ORDERED dialogue rows.
  *
- * `must_happen`/`must_change` are required because the route says so (`routes.ts:plotpointsFromBody` trims both and
- * 400s on an empty one: an entry that names neither is a chapter title, not a contract). The other four are
- * optional and travel only when they say something — the same rule `chapterEntryContent` applies, so a blank label
- * never reaches the composed text.
+ * WHY ROWS AND NOT PROSE BOXES. The contract IS two lists (`PhrasePlotpointsInput`: `heading` + `beats` +
+ * `dialogue`), and array order is the content — the beats are chronological, so C-7 checks the prose against every
+ * one of them IN ORDER and C-3/C-8 against the LAST. The pane used to offer six single-line prose fields named
+ * `Must happen`/`Must change`/`POV`/`Setups`/`Payoffs`; four of those fields are deprecated on the row
+ * (`shared/types.ts:Plotline`) and the two that survive were a list in disguise — one box holding several events
+ * separated by `;`, which is exactly the shape `plotlineBeatsOf` has to split back apart. A row per beat is the
+ * contract's own shape: it can be ordered, added to, and removed from, and the desk sends what the Author arranged
+ * rather than a paragraph the route has to guess at.
+ *
+ * WHY THE ROWS OPEN PREFILLED (and the prose editor still opens empty). The reading copy above is the composed text
+ * the loop installed, and an empty list of rows under it would ask the Author to retype a contract from memory —
+ * a beat dropped from memory is a beat C-7 stops checking. So opening this editor SEEDS the rows from the entry's
+ * stored text (`chapterEntryDraft`), and the reading copy steps aside while they are open: the rows ARE the text
+ * being edited, and printing both would read the same contract twice (the R-T2/F6 pin stays exactly where it was
+ * for the Summary's prose textarea, which still opens empty).
  */
-const PLOTPOINT_FIELDS: Array<{
-    key: keyof PhrasePlotpointsInput;
-    label: string;
-    required?: boolean;
-    hint: string;
-}> = [
-    { key: 'heading', label: 'Heading', hint: 'The chapter title this contract stands under. Blank keeps the entry\'s current heading out of the composed text.' },
-    { key: 'must_happen', label: 'Must happen (C-7)', required: true, hint: 'What this chapter has to put on the page. The route refuses an entry without it.' },
-    { key: 'must_change', label: 'Must change (C-8)', required: true, hint: 'What the story state is different by the end of it. The route refuses an entry without it.' },
-    { key: 'pov', label: 'POV', hint: 'Whose eyes the chapter is seen through. Blank sends nothing.' },
-    { key: 'setups', label: 'Setups (C-5)', hint: 'What this chapter plants for later chapters to pay off. Blank sends nothing.' },
-    { key: 'payoffs', label: 'Payoffs (C-5)', hint: 'What this chapter pays off from earlier chapters. Blank sends nothing.' }
-];
+/**
+ * OPENS the contract editor. The rows are the entry's own contract (`chapterEntryDraft` decodes the stored text),
+ * with ONE exception: an entry with nothing on the record yet — a row the loop has not written — opens with a single
+ * blank beat, because a list with no rows at all gives the Author nothing to type into and an "Add a beat" button
+ * they should not have to press to say the first thing.
+ */
+const openEntryDraft = (content: string | undefined): ChapterEntryDraft => {
+    const draft = chapterEntryDraft(content);
 
-/** The plotpoints editor's empty value — one key per field, so the submit can read it without `in` checks. */
-const emptyPlotpoints = (): Record<keyof PhrasePlotpointsInput, string> => ({
-    heading: '',
-    must_happen: '',
-    must_change: '',
-    pov: '',
-    setups: '',
-    payoffs: ''
-});
+    return { ...draft, beats: draft.beats.length > 0 ? draft.beats : [''] };
+};
+
+/** Trims a contract list and drops the blanks, KEEPING THE ORDER — the desk's half of `contractListOf`. */
+const cleanRows = (rows: string[]): string[] =>
+    rows.map((row) => row.trim()).filter((row) => row !== '');
+
+/** Moves one row to `to`, the one rule every reorder button shares; out-of-range indexes leave the list alone. */
+const moveRow = (rows: string[], from: number, to: number): string[] => {
+    if (to < 0 || to >= rows.length || from < 0 || from >= rows.length) return rows;
+
+    const next = [...rows];
+    const [row] = next.splice(from, 1);
+
+    next.splice(to, 0, row);
+
+    return next;
+};
+
+/** One ordered section of the contract editor — the beats, or the dialogue. See {@link ContractRows}. */
+interface ContractRowsProps {
+    /** The section's label, with its `*` when the route requires at least one row. */
+    label: string;
+    /** What ONE row is called, in its own accessible name and in the tooltips: `beat`, or `line`. */
+    noun: string;
+    /** The `data-testid` namespace: `group-beat` / `group-dialogue`. A test must be able to address the beats
+     * without guessing that the dialogue rows exist, and vice versa. */
+    testId: string;
+    /** The rows as the Author has them, IN ORDER. The array index IS the beat's position in the chapter. */
+    rows: string[];
+    onChange: (rows: string[]) => void;
+    /** A Writer pass or a lock holds the entry, so every control in the section is shut (U-16 states why). */
+    disabled: boolean;
+    /** The floor on removals: a contract keeps its last beat, a dialogue section may go empty. */
+    minRows: number;
+    /** The section's own explanation, carried by the inputs and the add control (U-16). */
+    hint: string;
+    /** The add control's label. */
+    addLabel: string;
+}
+
+/**
+ * R5 (W2) — ONE ORDERED LIST OF THE CONTRACT, as rows the Author can edit, reorder, add to, and remove.
+ *
+ * WHY A SECTION COMPONENT AND NOT INLINE MARKUP: the beats and the dialogue are the SAME shape — a list of strings
+ * where position is meaning — and two hand-written copies of "up, down, remove, add" drift the moment one gets a
+ * fix. One component means one set of `data-testid`s per section (`-input-N`, `-up-N`, `-down-N`, `-remove-N`,
+ * `-add`), which is also what lets a test pin the ORDER rather than the set.
+ *
+ * WHY THE BUTTONS SAY UP AND DOWN AND NOT MOVE-1/MOVE+1: the row number is printed beside the field, so an
+ * unlabelled arrow would describe a glyph instead of an act, and the accessible name carries the row it moves.
+ *
+ * WHY THE LAST BEAT CANNOT BE REMOVED (`minRows`): an entry with no non-blank beat is the write the route refuses
+ * (`contractListOf` drops the blanks, so a list of blanks is no contract), and a control that let the Author delete
+ * into that state would be a refusal they had to discover by clicking. The dialogue section's floor is 0 — a chapter
+ * that owes no lines is a normal chapter — and closing it leaves the key OFF the body, never an empty list.
+ */
+function ContractRows({ label, noun, testId, rows, onChange, disabled, minRows, hint, addLabel }: ContractRowsProps) {
+    /** Replaces ONE row's text, leaving the others and their order alone. */
+    const setRow = (index: number, value: string): void =>
+        onChange(rows.map((row, each) => (each === index ? value : row)));
+
+    return (
+        <div className="sv-contract-rows" data-testid={`${testId}-rows`}>
+            <span className="sv-group-plotpoint-label sv-contract-label" data-testid={`${testId}-label`}>
+                {label}
+            </span>
+            {rows.map((row, index) => (
+                // The index is the row's MEANING (beat 3 is beat 3), and the array is the only source of its text,
+                // so an index key is the honest key here: a reorder re-renders the values in their new positions.
+                <div className="sv-contract-row" key={`${testId}-row-${index}`} data-testid={`${testId}-row-${index}`}>
+                    <span className="sv-contract-row-order" data-testid={`${testId}-order-${index}`}>
+                        {index + 1}
+                    </span>
+                    <input
+                        className="sv-contract-row-input"
+                        aria-label={`${noun} ${index + 1} of ${rows.length}`}
+                        data-testid={`${testId}-input-${index}`}
+                        value={row}
+                        disabled={disabled}
+                        title={hint}
+                        onChange={(event) => setRow(index, event.currentTarget.value)}
+                    />
+                    <button
+                        type="button"
+                        className="button button--ghost sv-contract-row-move"
+                        data-testid={`${testId}-up-${index}`}
+                        disabled={disabled || index === 0}
+                        aria-label={`Move ${noun} ${index + 1} earlier`}
+                        title={index === 0 ? 'This is already the first one.' : `Move this ${noun} one place earlier (the order is the contract).`}
+                        onClick={() => onChange(moveRow(rows, index, index - 1))}
+                    >
+                        Up
+                    </button>
+                    <button
+                        type="button"
+                        className="button button--ghost sv-contract-row-move"
+                        data-testid={`${testId}-down-${index}`}
+                        disabled={disabled || index === rows.length - 1}
+                        aria-label={`Move ${noun} ${index + 1} later`}
+                        title={
+                            index === rows.length - 1
+                                ? 'This is already the last one.'
+                                : `Move this ${noun} one place later (the order is the contract).`
+                        }
+                        onClick={() => onChange(moveRow(rows, index, index + 1))}
+                    >
+                        Down
+                    </button>
+                    <button
+                        type="button"
+                        className="button button--ghost sv-contract-row-remove"
+                        data-testid={`${testId}-remove-${index}`}
+                        disabled={disabled || rows.length <= minRows}
+                        aria-label={`Remove ${noun} ${index + 1}`}
+                        title={
+                            rows.length <= minRows
+                                ? `A ${noun === 'beat' ? 'chapter entry needs at least one beat — the route refuses an entry without one (P4)' : 'chapter already owes no lines'} — nothing left to remove.`
+                                : `Take this ${noun} out of the contract.`
+                        }
+                        onClick={() => onChange(rows.filter((_, each) => each !== index))}
+                    >
+                        Remove
+                    </button>
+                </div>
+            ))}
+            <button
+                type="button"
+                className="button button--ghost sv-contract-row-add"
+                data-testid={`${testId}-add`}
+                disabled={disabled}
+                title={hint}
+                onClick={() => onChange([...rows, ''])}
+            >
+                {addLabel}
+            </button>
+        </div>
+    );
+}
 
 /**
  * ONE entry's pane: its purpose, its text, its revision number, its findings, its lock, and the Author's write.
@@ -614,13 +770,21 @@ export function PhraseEntryDetail({
     onSelect?: (selection: StorySelection) => void;
 }) {
     // The pane's local state, all of it about a WRITE in progress and none of it about the record:
-    //   - `draft`/`plotpoints`/`note` are the Author's pending revise body, dropped on send so what appears next
-    //     is the server's answer;
+    //   - `draft`/`contract`/`note` are the Author's pending revise body, dropped on send so what appears next
+    //     is the server's answer (`contract` is the chapter entry's row list, and it starts CLOSED — see below);
     //   - `lockArmed` is only the confirmation STEP the lock sits on (R1) — never a claim that the row is locked.
     //     The badge below reads `locked` off the phrase rows, so a refused lock leaves the pane saying `unlocked`
     //     in the same frame it prints the refusal.
     const [draft, setDraft] = useState<string | null>(null);
-    const [plotpoints, setPlotpoints] = useState<Record<keyof PhrasePlotpointsInput, string> | null>(null);
+    /**
+     * R5 — the chapter contract being rewritten, or `null` while the editor is CLOSED.
+     *
+     * `null` is a state, not an empty value: it is what keeps the reading copy on screen and gives the first press
+     * something to do (open the rows, prefilled) instead of sending a write the Author has not read yet. Closing
+     * the editor discards the rows — the record is the entry's stored text, and nothing here is a draft worth
+     * keeping across a pane change (P1: the durable store is the only memory).
+     */
+    const [contract, setContract] = useState<ChapterEntryDraft | null>(null);
     const [note, setNote] = useState('');
     const [lockArmed, setLockArmed] = useState(false);
 
@@ -712,16 +876,28 @@ export function PhraseEntryDetail({
     const previousScore = groupPreviousScorePercent(entry);
     const delta = score === undefined ? undefined : scoreDelta(score, previousScore);
 
-    // THE AUTHOR'S ONE WRITE. R-T2/F6: the pane shows the row's text ONCE — the prose region above is the reading
-    // copy — and the field below is an EDIT that starts empty and says what it replaces. Prefilling the field with
-    // the whole current text announced the same paragraphs twice to a screen reader, which is noise on the one
-    // surface where the Author is meant to read the book. For a chapter entry the same rule holds with six fields
-    // instead of one: the composed text above is the record, and the fields below are the contract being rewritten.
+    // THE AUTHOR'S ONE WRITE.
+    //
+    // THE PROSE EDITOR keeps R-T2/F6 exactly as it was: the pane shows the row's text ONCE (the reading copy above),
+    // and the textarea below is an EDIT that starts EMPTY, because pre-filling it announced the same paragraphs
+    // twice to a screen reader on the one surface where the Author is meant to read the book.
+    //
+    // THE CONTRACT EDITOR is the exception R5 makes, and the reason is a list. Six prose boxes that start empty ask
+    // the Author to retype a contract from memory, and a beat dropped from memory is a beat C-7 stops checking. So
+    // this editor OPENS: `contract === null` is the closed state (the reading copy is the record), the first press
+    // seeds the rows from the entry's stored text (`chapterEntryDraft`), and while the rows are open the reading
+    // copy steps aside — the rows ARE that text, editable, and printing both would read the same contract twice.
     const text = draft ?? '';
-    const fields = plotpoints ?? emptyPlotpoints();
     const trimmed = text.trim();
-    const mustHappen = fields.must_happen.trim();
-    const mustChange = fields.must_change.trim();
+    // The editor's open/closed state, per editor. The prose editor has no open step, so it is always "open" and its
+    // send condition is the prose itself. (`editorOpen`, not `open`: the findings above already own that name.)
+    const editorOpen = editor === 'content' || contract !== null;
+    // The rows as they will be SENT: trimmed, blanks dropped, ORDER PRESERVED (`contractListOf`'s rules, mirrored on
+    // the way out — the route drops the same blanks, so the desk and the entry's text cannot disagree about which
+    // beats the contract holds).
+    const beats = contract === null ? [] : cleanRows(contract.beats);
+    const dialogue = contract === null ? [] : cleanRows(contract.dialogue);
+    const heading = contract === null ? '' : contract.heading.trim();
     const verb = editor === 'content' ? actions.revisePhraseGroup : actions.revisePhraseEntry;
     // U-16: a disabled control states its reason, and the reason is the wire's own state (or the shell's missing
     // binding), never a guess from run rows. R1 puts the LOCK first: a locked row is settled content, so the
@@ -734,30 +910,53 @@ export function PhraseEntryDetail({
               ? `${entry.title} is locked in — locked content is settled and cannot be revised (R1). Unlock it first to write a new revision.`
               : busy
                 ? `The Writer is rewriting this ${surface.entry} right now — the revise route refuses the write until it lands (R4).`
-                : // THE EMPTY-WRITE REFUSAL, per surface. One branch for both editors, because the two phrases'
-                  // "nothing to send yet" sentences are different claims about different objects (an empty group
-                  // text vs an entry without its two required fields) and both live on the surface descriptor —
-                  // the Summary's wording is byte-identical to what its pane printed before the panes were
-                  // generalised, which is what its pinned tests hold.
-                  trimmed.length === 0 || mustHappen === '' || mustChange === ''
-                  ? surface.emptyWriteLine
-                  : '';
+                : // THE CLOSED EDITOR, and only a surface that HAS an open step says what the press does (R5). The
+                  // Summary's textarea is always on screen, so it has none and falls through to the empty-write line.
+                  !editorOpen && surface.openWriteLine !== undefined
+                  ? surface.openWriteLine
+                  : // THE EMPTY-WRITE REFUSAL, per surface. One branch for both editors, because the two phrases'
+                    // "nothing to send yet" sentences are different claims about different objects (an empty group
+                    // text vs an entry with no beat) and both live on the surface descriptor — the Summary's
+                    // wording is byte-identical to what its pane printed before the panes were generalised, which
+                    // is what its pinned tests hold.
+                    trimmed.length === 0 || beats.length === 0
+                    ? surface.emptyWriteLine
+                    : '';
     const canRevise =
         verb !== undefined &&
         !locked &&
         !busy &&
-        (editor === 'content'
-            ? trimmed.length > 0
-            : mustHappen.length > 0 && mustChange.length > 0);
+        // R5 — the CLOSED contract editor is not a shut control, it is an unopened one: the press that lands here
+        // opens the rows rather than sending, so it must be enabled. The SEND condition is what the rows hold once
+        // they are open — at least one non-blank beat, because an entry with no beat is the refusal the route makes.
+        //
+        // THE CLOSED TEST IS `editorOpen`, and it has to be that one: `open` above is `groupOpenFindings`, an ARRAY,
+        // and `![]` is false — keyed off that, a row with no findings at all would look "open", a row with findings
+        // would look closed, and the editor could never be opened from the closed state on either.
+        (!editorOpen && surface.openWriteLine !== undefined
+            ? true
+            : editor === 'content'
+              ? trimmed.length > 0
+              : beats.length > 0);
 
     /**
      * Sends the write, dropping the draft first: what appears next is the server's answer.
      *
-     * The two bodies are built apart on purpose. A plotpoints body carries the optional fields ONLY when they say
+     * The two bodies are built apart on purpose. A plotpoints body carries the optional keys ONLY when they say
      * something (`plotpointsFromBody`'s rule mirrored here — the client does not send a blank it knows the route
-     * will drop), and an empty optional field must not overwrite a contract the loop wrote with a blank line.
+     * will drop), and an empty dialogue section must not overwrite a contract the loop wrote with a blank line. The
+     * BEATS are sent as they stand, in order: re-ordering them in the rows IS the redraft, so nothing sorts them
+     * here, and the one blank row the editor keeps for typing into is dropped by `cleanRows` rather than sent as an
+     * empty beat.
      */
     const submit = () => {
+        // R5 — the first press on a chapter entry OPENS the rows, prefilled from the contract the entry carries.
+        // Nothing is sent, and the reading copy hands its place over to the rows.
+        if (editor !== 'content' && contract === null) {
+            setContract(openEntryDraft(entry.content));
+            return;
+        }
+
         if (!canRevise) {
             return;
         }
@@ -768,21 +967,17 @@ export function PhraseEntryDetail({
             void actions.revisePhraseGroup?.(view.story.id, entry.id, { content: text, ...noteValue });
             setDraft(null);
         } else {
-            const optional = (key: 'heading' | 'pov' | 'setups' | 'payoffs') =>
-                fields[key].trim() === '' ? {} : { [key]: fields[key].trim() };
-
             void actions.revisePhraseEntry?.(view.story.id, entry.id, {
                 plotpoints: {
-                    must_happen: fields.must_happen.trim(),
-                    must_change: fields.must_change.trim(),
-                    ...optional('heading'),
-                    ...optional('pov'),
-                    ...optional('setups'),
-                    ...optional('payoffs')
+                    beats,
+                    ...(heading === '' ? {} : { heading }),
+                    ...(dialogue.length === 0 ? {} : { dialogue })
+                    // The deprecated prose is NOT sent: the route recovers beats from a legacy `must_happen` body
+                    // for a client that has not caught up, and this desk writes the current shape (R5).
                 },
                 ...noteValue
             });
-            setPlotpoints(null);
+            setContract(null);
         }
 
         setNote('');
@@ -1018,14 +1213,27 @@ export function PhraseEntryDetail({
                        carried (`sv-summary-text` is the pane's sizing rule, `sv-group-content` is the reading copy),
                        so the sizing contract at `styles/story.css:1040-1048` and the R-T2/F6 pin still address it.
                        Raw HTML in agent prose stays escaped (`MarkdownText` has no `rehype-raw`). */
-                    <MarkdownText className="sv-summary-text sv-group-content" testId="group-content">
-                        {entry.content}
-                    </MarkdownText>
+                    /* R5 (W2) — WHILE THE CONTRACT EDITOR IS OPEN, THE ROWS BELOW ARE THE READING COPY. The composed
+                       text and the prefilled rows are the same words in two shapes, and printing both reads one
+                       contract twice — the duplication R-T2/F6 exists to prevent. So the composed prose steps aside
+                       for the duration and says where its text went; closing the editor (or landing a revision)
+                       brings it back. The Summary's prose editor has no open step, so this branch never fires for it
+                       and its reading copy is byte-identical to what it printed before — which is what that
+                       surface's pinned tests hold. */
+                    editor === 'plotpoints' && contract !== null ? (
+                        <p className="sv-group-quiet" data-testid="group-content-rows">
+                            {`${entry.title}’s contract is in the rows below — its heading, its beats in the order they happen, and the lines of dialogue it owes. Send them and the text here is composed from the new ones (P4).`}
+                        </p>
+                    ) : (
+                        <MarkdownText className="sv-summary-text sv-group-content" testId="group-content">
+                            {entry.content}
+                        </MarkdownText>
+                    )
                 )
             ) : (
                 /* U4's purposeful empty state: why it is empty and what fills it. */
                 <p className="sv-group-quiet" data-testid="group-empty">
-                    {draft === null && plotpoints === null
+                    {draft === null && contract === null
                         ? `No content yet. The loop writes this ${surface.entry} when the Editor puts it in the queue, or you can write it below.`
                         : 'Nothing is on the record yet — what you write here is the first revision.'}
                 </p>
@@ -1214,33 +1422,76 @@ export function PhraseEntryDetail({
                         onChange={(event) => setDraft(event.currentTarget.value)}
                     />
                 ) : (
-                    /* T-W4 — the contract fields. There is no prose textarea here on purpose: a chapter entry's
-                       stored text is composed FROM these fields
-                       (`phrase/plotpoints.ts:chapterEntryContent`), so an edit of the prose would be an edit of a
-                       rendering, and the route would refuse it for the wrong reason. The two required fields say so
-                       in their own `title`, which is where the route's 400 becomes a decision the Author can make
-                       before clicking (U-16). */
-                    <div className="sv-group-plotpoints" data-testid="group-plotpoints-fields">
-                        {PLOTPOINT_FIELDS.map((field) => (
-                            <label className="sv-group-plotpoint" key={field.key} data-testid={`group-plotpoint-${field.key}`}>
-                                <span className="sv-group-plotpoint-label">
-                                    {field.required ? `${field.label} *` : field.label}
-                                </span>
+                    /* R5 (W2) — THE CONTRACT AS ORDERED ROWS. There is no prose textarea here on purpose: a chapter
+                       entry's stored text is composed FROM these fields
+                       (`phrase/plotpoints.ts:chapterEntryContent`), so editing the prose would be editing a
+                       rendering, and the send would replace the Author's words with a paragraph the route has to
+                       re-split. The rows are closed until the Author opens them (`contract === null`), and opening
+                       seeds them from the entry's stored text, so the contract being edited is the one on the
+                       record — not a blank form the Author has to retype from memory. */
+                    contract === null ? (
+                        // THE CLOSED EDITOR says what the press does, so the pane never shows a dead button (U-16)
+                        // and never shows the same contract twice (the reading copy above is still the record).
+                        <p className="sv-group-quiet" data-testid="group-contract-closed">
+                            {`“Revise this ${surface.entry}” opens ${entry.title}’s contract as rows — its heading, its beats in the order they happen, and the lines of dialogue it owes. The rows start as the contract on the record, and nothing is sent until you press again (R5).`}
+                        </p>
+                    ) : (
+                        <div className="sv-group-plotpoints" data-testid="group-plotpoints-fields">
+                            <label className="sv-group-plotpoint" data-testid="group-plotpoint-heading">
+                                <span className="sv-group-plotpoint-label">Heading</span>
                                 <input
-                                    aria-label={`${field.label} for ${entry.title}`}
-                                    value={fields[field.key] ?? ''}
+                                    aria-label={`Heading for ${entry.title}`}
+                                    data-testid="group-plotpoint-heading-input"
+                                    value={contract.heading}
                                     disabled={busy || locked}
-                                    title={locked ? refuse : field.hint}
+                                    title="The chapter title this contract stands under. Blank sends no heading, and the entry keeps the one its row carries."
                                     onChange={(event) =>
-                                        setPlotpoints({
-                                            ...fields,
-                                            [field.key]: event.currentTarget.value
-                                        })
+                                        setContract({ ...contract, heading: event.currentTarget.value })
                                     }
                                 />
                             </label>
-                        ))}
-                    </div>
+
+                            <ContractRows
+                                label="Beats *"
+                                noun="beat"
+                                testId="group-beat"
+                                rows={contract.beats}
+                                disabled={busy || locked}
+                                // A contract keeps its last row: an entry with no non-blank beat is the write the
+                                // route refuses, so removing the only beat is not a move the desk offers.
+                                minRows={1}
+                                hint="One event this chapter has to put on the page, in the order it happens. C-7 checks the prose against every beat, and C-3/C-8 against the last one — so the order is the contract, and the Up/Down buttons are part of the write."
+                                addLabel="Add a beat"
+                                onChange={(beats) => setContract({ ...contract, beats })}
+                            />
+
+                            <ContractRows
+                                label="Important dialogue"
+                                noun="line"
+                                testId="group-dialogue"
+                                rows={contract.dialogue}
+                                disabled={busy || locked}
+                                // The section may go EMPTY: a chapter that owes no lines is a normal chapter, and an
+                                // empty list is sent as NO key rather than as a blank the composed text would print.
+                                minRows={0}
+                                hint="A line this chapter has to land, with the speaker inline (e.g. Mara: “The gate is open.”). Blank lines are dropped, and an empty section sends nothing."
+                                addLabel="Add a line of dialogue"
+                                onChange={(dialogue) => setContract({ ...contract, dialogue })}
+                            />
+
+                            {/* THE OTHER WAY OUT. Closing drops the rows: the record is the entry's stored text, and
+                                the desk keeps no draft of its own (P1). Without this control an Author who opened the
+                                editor by accident could only leave it by sending. */}
+                            <button
+                                type="button"
+                                className="button button--ghost"
+                                data-testid="group-contract-cancel"
+                                onClick={() => setContract(null)}
+                            >
+                                Leave the contract as it is
+                            </button>
+                        </div>
+                    )
                 )}
                 <input
                     aria-label="Note for the Editor"
@@ -1254,10 +1505,15 @@ export function PhraseEntryDetail({
                     className="sv-summary-revise-button"
                     data-testid="group-revise-submit"
                     disabled={!canRevise}
-                    title={canRevise ? `Send this ${editor === 'content' ? 'text' : 'contract'} to the ${surface.entry} as a new revision (R2).` : refuse}
+                    // R5 — an ENABLED closed button still says what its press does: the press opens the rows, and a
+                    // tooltip promising "send this contract" over a closed editor would name a write that is not
+                    // happening. The prose editor is always open, so its sentence is unchanged.
+                    title={canRevise && editorOpen
+                        ? `Send this ${editor === 'content' ? 'text' : 'contract'} to the ${surface.entry} as a new revision (R2).`
+                        : refuse}
                     onClick={submit}
                 >
-                    {draft === null && plotpoints === null
+                    {draft === null && contract === null
                         ? `Revise this ${surface.entry}`
                         : editor === 'content'
                           ? 'Send this text'

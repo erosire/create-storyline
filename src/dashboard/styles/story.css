@@ -1023,6 +1023,110 @@
     margin-top: 0;
 }
 
+/* ------------------------------------------------------------------ R5 (W2) — THE CHAPTER CONTRACT
+   A chapter entry's contract is an ORDERED list of beats plus an optional ordered list of lines, and both lists are
+   edited as rows and read as rows (`PlotlineContract.tsx`, `PhraseEntries.tsx:ContractRows`). Two shapes, one prefix:
+   the `sv-contract-beats`/`sv-contract-dialogue` pair is the READ-ONLY list the Plotlines pane and the chapter
+   compare view share, and the `sv-contract-rows` block is the EDITOR's rows — order number, field, Up/Down/Remove,
+   and the add control under the list.
+
+   WHY AN ORDER NUMBER IS A BOX AND NOT A GUESS: `ol` markers vanish when the list is edited (a blank row is a real
+   position the Author is about to fill), and the editor's rows are `div`s, so the number the Author uses to say
+   "beat 3" has to be printed by the row itself. `tabular-nums` keeps the column from jittering as rows are added. */
+
+/* The read-only contract. `list-style` stays on because the ORDER is the content C-7 checks; the marker is dropped
+   only in the editor, where the row prints its own number. */
+.sv-contract-beats,
+.sv-contract-dialogue {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin: 0;
+    padding-left: 1.1rem;
+    color: var(--text);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.sv-contract-dialogue {
+    /* The lines are quoted speech, not steps: an em-dash-style marker reads as a line of dialogue where a number
+       would read as another beat. */
+    list-style: '— ';
+    color: var(--dim);
+}
+
+.sv-contract-beat,
+.sv-contract-dialogue-line {
+    /* A beat is one sentence of a contract; a wrapped second line lines up under the text, not under the marker. */
+    padding-left: 0.1rem;
+}
+
+/* A contract that states no beat: a sentence, not an empty list under a heading, because "no contract" is the fact
+   C-1/C-3 are about. */
+.sv-contract-none {
+    margin: 0;
+    color: var(--dim);
+    font-size: 0.7rem;
+    font-style: italic;
+}
+
+/* THE EDITOR'S SECTION. One block per section (beats, then dialogue), label above the rows. */
+.sv-contract-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.4rem;
+}
+
+.sv-contract-label {
+    display: block;
+}
+
+.sv-contract-row {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+    gap: 0.3rem;
+    align-items: center;
+}
+
+.sv-contract-row-order {
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.sv-contract-row-input {
+    min-width: 0;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.7rem;
+}
+
+.sv-contract-row-input:disabled {
+    color: var(--dim);
+    cursor: not-allowed;
+}
+
+/* The three row buttons sit in the grid's third column. They are narrow and quiet on purpose: the field holds the
+   contract, and the row's controls must not out-shout the beat the Author is writing. */
+.sv-contract-row-move,
+.sv-contract-row-remove {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.63rem;
+}
+
+.sv-contract-row-add {
+    align-self: flex-start;
+    margin-top: 0.1rem;
+    font-size: 0.65rem;
+}
+
 .sv-group-note {
     display: flex;
     flex-wrap: wrap;

@@ -7,9 +7,10 @@
 //      (`plotlines-group:<uuid>`) — the ids the rail and the store both address rows by;
 //   2. the brief card's three states (no brief, drafted, accepted), which is the fact that decides whether the
 //      entries exist at all;
-//   3. the CONTRACT EDITOR: six fields that start empty, two of them required, and a body that carries the
-//      optional fields ONLY when they say something (the route composes the entry's prose from them, so a blank
-//      sent upstream would overwrite a contract the loop wrote);
+//   3. the CONTRACT EDITOR (R5): the entry's beats as ORDERED rows, opened prefilled from the text on the record,
+//      with an optional ordered dialogue section, and a body that carries the optional keys ONLY when they say
+//      something (the route composes the entry's prose from the fields, so a blank sent upstream would overwrite a
+//      contract the loop wrote) — and the legacy prose labels are not on this surface at all;
 //   4. the three read states (in flight / failed / not this model), which `phraseDetailReadLanded` tells apart —
 //      "the read is slow" and "there are no entries" are different claims.
 // The view handed to these panes is the PHRASE-SWAPPED one (`story-contract.plotlinesSurfaceView`, applied by
@@ -17,6 +18,9 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PlotlinesEntryPane, PlotlinesOverviewPane } from './PlotlinesPhrasePane';
+// R5 — the sentence the shut button prints is the SURFACE's, not a string this file retypes: the same object the
+// pane reads (`PhraseEntries.tsx:PLOTLINE_SURFACE`) is what makes the two surfaces unable to disagree.
+import { PLOTLINE_SURFACE } from './PhraseEntries';
 import { fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { plotlinesSurfaceView, type StoryViewData } from './story-contract';
 import { phraseDetailView } from '../testing/shell-fakes';
@@ -115,10 +119,16 @@ describe('PlotlinesOverviewPane — the chapter-entry rows (T-W4)', () => {
         const detail = phraseDetailView('s1');
         const { container } = render(<PlotlinesOverviewPane view={surfaceView({ detail })} />);
 
-        // The source really is Markdown, so the two negatives below are assertions and not vacuums.
-        expect(detail.overview).toContain('## Chapter 1 — The Salt Road');
+        // The source really does carry the records as TEXT (R5's `Heading:`/`Beats:` blocks, joined per entry by
+        // `phraseDetailView`), so the negatives below are assertions rather than vacuums.
+        expect(detail.overview).toContain('Heading: The Salt Road');
+        expect(detail.overview).toContain('Beats:');
+        expect(detail.overview).toContain('- The crossing is attempted.');
         expect(container.textContent).not.toContain('## ');
-        expect(container.textContent).not.toContain('- Must happen:');
+        // R5 — a row's record is now `Beats:` with one `- ` bullet per beat. This pane prints rows and counts, so
+        // neither the label nor a single bullet's text may appear in it.
+        expect(container.textContent).not.toContain('Beats:');
+        expect(container.textContent).not.toContain('- The crossing is attempted.');
         // And this pane holds no prose region: `group-content` is the entry pane's node.
         expect(container.querySelector('[data-testid="group-content"]')).toBeNull();
     });
@@ -312,59 +322,108 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         return { ...rendered, prose: screen.getByTestId('group-content') as HTMLElement };
     }
 
-    it('opens the entry the ref addresses, with six empty contract fields (R-T2/F6)', () => {
-        const { container } = entryPane();
+    /** The rows of one section (`group-beat` / `group-dialogue`), IN ORDER — array order IS the contract, so the
+     *  array, not the set, is the assertion (R5). */
+    function rowValues(section: string): string[] {
+        return Array.from(
+            document.querySelectorAll<HTMLInputElement>(`[data-testid^="${section}-input-"]`)
+        ).map((row) => row.value);
+    }
+
+    /** The number printed beside each row, which is what makes an Up/Down press an act the Author can aim at. */
+    function rowOrder(section: string): string[] {
+        return Array.from(
+            document.querySelectorAll<HTMLElement>(`[data-testid^="${section}-order-"]`)
+        ).map((cell) => cell.textContent ?? '');
+    }
+
+    it('opens the entry the ref addresses, with its contract as rows prefilled from the record (R-T2/F6 / R5)', () => {
+        const { calls, container } = entryPane();
 
         expect(container.querySelector('[data-testid="plotlines-pane-chapter_1"]')).toBeTruthy();
         expect(screen.getByTestId('group-title').textContent).toBe('Chapter 1 — The Salt Road');
-        // The prose region is the RECORD the server composed from the fields; the fields below are the write.
-        // T2/AC3 — and it is composed as MARKDOWN, so Phrase ② had the same raw-source problem Phrase ① did.
-        // WHAT THIS FIXTURE CARRIES is the `## <chapter>` heading and one `- ` bullet per field — the shape a
-        // composed phrase TEXT has (`shared/phrase.ts:composePhraseContent` puts that heading in front of an
-        // entry). It is NOT what the wire stores for one entry: that is `Label: value` lines, and the test below
-        // ('renders the labelled plotpoint block …') pins THAT shape against the producer's own function. The
-        // bullet text here is still the assertion — the prose must survive the renderer — and the heading and the
-        // list are what prove this fixture was RENDERED rather than printed.
+        // THE CLOSED EDITOR SHOWS THE RECORD THE SERVER COMPOSED — R5's text, in order: `Heading:`, `Beats:` with
+        // one `- ` bullet per beat, and `Important dialogue:` with its own bullets. The rendering is pinned by the
+        // two cases below; what this case pins is the WORDS and the ORDER.
         const prose = screen.getByTestId('group-content');
 
-        expect(prose.textContent).toContain('Must happen: the crossing is attempted.');
-        expect(prose.querySelector('h2')?.textContent).toBe('Chapter 1 — The Salt Road');
-        expect(Array.from(prose.querySelectorAll('li')).map((item) => item.textContent)).toEqual([
-            'Must happen: the crossing is attempted.',
-            "Must change: the mentor's price is paid."
-        ]);
+        // Every line of the record is on screen. The `- ` markers belong to the markdown source and the renderer
+        // consumes them (the block-level case below pins the exact structure), so the WORDS are what this reads.
+        for (const line of [
+            'Heading: The Salt Road',
+            'Beats:',
+            'The crossing is attempted.',
+            "The mentor's price is paid.",
+            'Important dialogue:',
+            'The road collects its own toll.'
+        ]) {
+            expect(prose.textContent).toContain(line);
+        }
+        // R5 — the legacy prose labels are NOT on this surface: they were the old chapter contract, and a desk
+        // that printed them beside the beats would describe one contract with two vocabularies.
+        for (const legacy of ['Must happen', 'Must change', 'POV', 'Setups', 'Payoffs']) {
+            expect(container.textContent).not.toContain(legacy);
+        }
         // There is no prose textarea on this surface at all: editing the composition would be editing a rendering.
         expect(container.querySelector('textarea')).toBeNull();
+        // THE EDITOR STARTS CLOSED, and the button names the act of opening it rather than a write (U-16).
+        expect(screen.queryByTestId('group-plotpoints-fields')).toBeNull();
+        expect(screen.getByTestId('group-contract-closed').textContent).toBe(
+            '“Revise this chapter entry” opens Chapter 1 — The Salt Road’s contract as rows — its heading, its beats in the order they happen, and the lines of dialogue it owes. The rows start as the contract on the record, and nothing is sent until you press again (R5).'
+        );
 
-        expect(
-            Array.from(container.querySelectorAll<HTMLElement>('[data-testid^="group-plotpoint-"]')).map((field) => [
-                field.getAttribute('data-testid'),
-                field.querySelector('.sv-group-plotpoint-label')?.textContent,
-                (field.querySelector('input') as HTMLInputElement).value
-            ])
-        ).toEqual([
-            ['group-plotpoint-heading', 'Heading', ''],
-            ['group-plotpoint-must_happen', 'Must happen (C-7) *', ''],
-            ['group-plotpoint-must_change', 'Must change (C-8) *', ''],
-            ['group-plotpoint-pov', 'POV', ''],
-            ['group-plotpoint-setups', 'Setups (C-5)', ''],
-            ['group-plotpoint-payoffs', 'Payoffs (C-5)', '']
-        ]);
-
-        // The two required fields say so in their own `title`, which is where the route's 400 becomes a decision
-        // the Author can make before clicking (U-16).
-        expect(
-            (screen.getByTestId('group-plotpoint-must_happen').querySelector('input') as HTMLInputElement).title
-        ).toBe('What this chapter has to put on the page. The route refuses an entry without it.');
-
-        // The write starts shut, and says which two fields are missing.
         const submit = screen.getByTestId('group-revise-submit');
 
-        expect(submit.hasAttribute('disabled')).toBe(true);
+        expect(submit.hasAttribute('disabled')).toBe(false);
         expect(submit.textContent).toBe('Revise this chapter entry');
-        expect(submit.getAttribute('title')).toBe(
-            "Write Must happen and Must change first — the route composes the entry's text and its plotlines contract from those two together, and refuses an entry without them (P4)."
+        expect(submit.getAttribute('title')).toBe(PLOTLINE_SURFACE.openWriteLine);
+
+        // THE FIRST PRESS OPENS THE ROWS AND SENDS NOTHING (R5). An empty form the Author has to retype from
+        // memory would be the failure mode here, so the rows are read back as the fixture's own record.
+        fireEvent.click(submit);
+
+        expect(calls.revisePhraseEntry).toBeUndefined();
+        expect((screen.getByTestId('group-plotpoint-heading-input') as HTMLInputElement).value).toBe(
+            'The Salt Road'
         );
+        expect(rowValues('group-beat')).toEqual([
+            'The crossing is attempted.',
+            "The mentor's price is paid."
+        ]);
+        expect(rowValues('group-dialogue')).toEqual(['The road collects its own toll.']);
+        expect(rowOrder('group-beat')).toEqual(['1', '2']);
+        expect(screen.getByTestId('group-beat-label').textContent).toBe('Beats *');
+        expect(screen.getByTestId('group-dialogue-label').textContent).toBe('Important dialogue');
+        // NO DUPLICATED READING CONTENT (R5): the composed prose steps aside while the rows carry the same words,
+        // and it says where the text went.
+        expect(screen.queryByTestId('group-content')).toBeNull();
+        expect(screen.getByTestId('group-content-rows').textContent).toBe(
+            'Chapter 1 — The Salt Road’s contract is in the rows below — its heading, its beats in the order they happen, and the lines of dialogue it owes. Send them and the text here is composed from the new ones (P4).'
+        );
+        // A contract keeps its last beat (`minRows`): an entry with no non-blank beat is the write the route
+        // refuses, so the desk does not offer a removal into that state.
+        expect(screen.getByTestId('group-beat-remove-0').hasAttribute('disabled')).toBe(false);
+        expect(screen.getByTestId('group-beat-up-0').hasAttribute('disabled')).toBe(true);
+        expect(
+            (screen.getByTestId('group-beat-input-0') as HTMLInputElement).title
+        ).toBe(
+            'One event this chapter has to put on the page, in the order it happens. C-7 checks the prose against every beat, and C-3/C-8 against the last one — so the order is the contract, and the Up/Down buttons are part of the write.'
+        );
+    });
+
+    it('leaves the contract as it was when the rows are closed, and sends nothing (R5)', () => {
+        const { calls } = entryPane();
+
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+        fireEvent.change(screen.getByTestId('group-beat-input-0'), { target: { value: 'a beat nobody meant to keep' } });
+        fireEvent.click(screen.getByTestId('group-contract-cancel'));
+
+        // The desk keeps no draft of its own (P1): the record is back, the rows are gone, and no write happened.
+        expect(calls.revisePhraseEntry).toBeUndefined();
+        expect(screen.queryByTestId('group-plotpoints-fields')).toBeNull();
+        expect(screen.getByTestId('group-content').textContent).toContain('Beats:');
+        // And the button is back to the open-line state, not a half-remembered edit.
+        expect(screen.getByTestId('group-revise-submit').textContent).toBe('Revise this chapter entry');
     });
 
     it('renders the composed chapter record as Markdown, so Phrase ② reads prose and not `## Chapter 1`', () => {
@@ -387,7 +446,12 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         expect(prose.className).toBe('sv-markdown sv-summary-text sv-group-content');
         expect(prose.getAttribute('aria-hidden')).toBeNull();
 
-        // The blocks, in source order, exactly.
+        // THE BLOCKS, IN SOURCE ORDER, EXACTLY. `Heading:` and `Beats:` are one paragraph (the composer joins its
+        // blocks with a single `\n`, and `MarkdownText` keeps that break as a real break rather than folding it
+        // away), and the `- ` lines are the list. THE ONE MARKDOWN WRINKLE, pinned rather than smoothed over: a
+        // label line that follows a list item is a LAZY CONTINUATION of that item, so `Important dialogue:` rides
+        // inside the last beat's `<li>` — which is why the AUTHORITATIVE reading of the contract is the structured
+        // one (`PlotlineContract.tsx`, and the rows this pane edits), and the composed prose is the record.
         expect(Array.from(prose.querySelectorAll('h1,h2,h3,h4,h5,h6,p,ul')).map((block) =>
             block.tagName === 'UL'
                 ? `UL:${Array.from(block.querySelectorAll('li'))
@@ -395,35 +459,25 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
                       .join('|')}`
                 : `${block.tagName}:${block.textContent ?? ''}`
         )).toEqual([
-            'H2:Chapter 1 — The Salt Road',
-            'UL:Must happen: the crossing is attempted.|Must change: the mentor\'s price is paid.'
+            'P:Heading: The Salt Road\nBeats:',
+            'UL:The crossing is attempted.|The mentor\'s price is paid.\nImportant dialogue:|The road collects its own toll.'
         ]);
         // The markers are gone from the whole pane, not only from the region that renders them.
         expect(container.textContent).not.toContain('## ');
-        expect(container.textContent).not.toContain('- Must happen:');
+        expect(container.textContent).not.toContain('- Beats:');
         // And no revision is being compared here (`previous_content` is empty), so this is the prose branch — the
         // word diff is the one surface that still prints Markdown source, and it is a `<p>`, not this node.
         expect(prose.querySelectorAll('del,ins')).toHaveLength(0);
     });
 
-    it('renders the labelled block the route STORES on an entry, one line per contract field (R-T2/F6)', () => {
-        // THE SHAPE THE WIRE ACTUALLY SENDS, which is NOT the composed one the fixture above carries:
-        // `server/phrase/plotpoints.ts:chapterEntryContent` (70-78) stores one `Label: value` line per field the
-        // Writer filled, in that function's fixed order, joined with a SINGLE `\n`, with no blank lines, no
-        // bullets and no heading of its own — the three write sites agree (`server/api/routes.ts:1271`,
-        // `server/phrase/plotpoints.ts:191`, `server/phrase/controllers/plotlines.ts:523`). That text has no
-        // markdown syntax in it at all, so markdown alone gives ONE paragraph with the six labels run together;
-        // the writer's newlines have to become real breaks, and this asserts it with the producer's own bytes
-        // rather than a re-typed string.
-        const stored = chapterEntryContent({ id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup, {
-            heading: 'The Salt Road',
-            must_happen: 'the crossing is attempted',
-            must_change: "the mentor's price is paid"
-        });
-
-        expect(stored).toBe(
-            "Heading: The Salt Road\nMust happen: the crossing is attempted\nMust change: the mentor's price is paid"
-        );
+    it('renders a legacy entry’s stored block with its breaks kept, and edits it as beats (R5 compatibility)', () => {
+        // THE OTHER GENERATION ON THE SAME SURFACE. A row written before the beats list carries one `Label: value`
+        // line per field, with no markdown syntax in it at all — markdown alone would run the labels together into
+        // one sentence, so the writer's newlines have to become real breaks. This is the COMPATIBILITY arm: the
+        // reading copy is kept whole, and the write the pane offers is still the beats
+        // (`story-contract.chapterEntryDraft` recovers them from the old prose, which the case below pins).
+        const stored =
+            'Heading: The Salt Road\nMust happen: the crossing is attempted\nMust change: the mentor\'s price is paid';
 
         const detail = phraseDetailView('s1');
         const { prose, container } = labelledEntryPane(stored);
@@ -448,17 +502,70 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         expect(prose.className).toBe('sv-markdown sv-summary-text sv-group-content');
         expect(prose.getAttribute('aria-hidden')).toBeNull();
         expect(container.querySelector('textarea')).toBeNull();
+
+        // THE WRITE IS STILL BEATS (R5): opening this legacy row recovers one beat per old field, in the old
+        // field's order, and the dialogue section is empty because the old shape had none.
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+
+        // The whole old block IS the contract, so it recovers as one beat per line the old prose used — heading
+        // line included, because a legacy row has no `Beats:` label to keep it out of the list
+        // (`story-contract.chapterEntryDraft`'s fallback, the same read §4.3's rows use).
+        expect((screen.getByTestId('group-plotpoint-heading-input') as HTMLInputElement).value).toBe('The Salt Road');
+        expect(rowValues('group-beat')).toEqual([
+            'Heading: The Salt Road',
+            'Must happen: the crossing is attempted',
+            "Must change: the mentor's price is paid"
+        ]);
+        expect(rowValues('group-dialogue')).toEqual([]);
     });
 
-    it('sends the two required fields and nothing else, addressed by the entry uuid', () => {
+    it('composes the record the current route stores: heading, beats in order, dialogue only when it owes lines (R5)', () => {
+        // THE COMPOSER THIS DESK MIRRORS (`phrase/plotpoints.ts:chapterEntryContent`, mirrored in
+        // `testing/product-values.ts`): `Heading:`, then `Beats:` with one `- ` item per beat IN ARRAY ORDER, then
+        // `Important dialogue:` ONLY when the section is non-empty. A blank line dropped by `cleanRows` cannot
+        // print an empty section, and the order of the array is the order of the text.
+        expect(
+            chapterEntryContent({ id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup, {
+                heading: 'The Salt Road',
+                beats: ['the toll is refused', 'the road collects'],
+                dialogue: ['Hale: “The gate is open.”']
+            })
+        ).toBe(
+            'Heading: The Salt Road\nBeats:\n- the toll is refused\n- the road collects\nImportant dialogue:\n- Hale: “The gate is open.”'
+        );
+        // The two optional blocks are off the text when they say nothing — not printed empty.
+        expect(
+            chapterEntryContent({ id: 'chapter_1', key: 'chapter_1' } as unknown as PhraseGroup, {
+                beats: ['the toll is refused']
+            })
+        ).toBe('Beats:\n- the toll is refused');
+    });
+
+    it('sends the beats in the order the rows hold them, addressed by the entry uuid (R5)', () => {
         const { calls } = entryPane();
 
-        fireEvent.change(screen.getByLabelText('Must happen (C-7) for Chapter 1 — The Salt Road'), {
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+        // A beat is trimmed on the way out (the route's `contractListOf` drops the same blanks), and a NEW beat
+        // added at the end is moved EARLIER by the row's own button — array order is the contract, so the Up press
+        // is part of the write, not a cosmetic reorder.
+        fireEvent.change(screen.getByTestId('group-beat-input-0'), {
             target: { value: '  the crossing is attempted, and the toll is refused  ' }
         });
-        fireEvent.change(screen.getByLabelText('Must change (C-8) for Chapter 1 — The Salt Road'), {
-            target: { value: 'the mentor stops paying for the road' }
-        });
+        fireEvent.click(screen.getByTestId('group-beat-add'));
+        // The rows hold what the Author typed, SPACES AND ALL — the trim belongs to the send (the route's
+        // `contractListOf` drops the same blanks), and the new row starts blank, ready to type into.
+        expect(rowValues('group-beat')).toEqual([
+            '  the crossing is attempted, and the toll is refused  ',
+            "The mentor's price is paid.",
+            ''
+        ]);
+        fireEvent.change(screen.getByTestId('group-beat-input-2'), { target: { value: 'the toll is paid twice over' } });
+        fireEvent.click(screen.getByTestId('group-beat-up-2'));
+        expect(rowValues('group-beat')).toEqual([
+            '  the crossing is attempted, and the toll is refused  ',
+            'the toll is paid twice over',
+            "The mentor's price is paid."
+        ]);
 
         const submit = screen.getByTestId('group-revise-submit');
 
@@ -468,59 +575,67 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
 
         fireEvent.click(submit);
 
-        // `(storyId, entryId, body)` with the uuid, never the row's position. Only the two required fields travel:
-        // an empty optional would overwrite a contract line the loop wrote with a blank.
+        // `(storyId, entryId, body)` with the uuid, never the row's position. The heading and the dialogue travel
+        // because they say something; the deprecated prose (`must_happen`/`must_change`) is not on the body at all.
         expect(calls.revisePhraseEntry).toEqual([
             [
                 's1',
                 'entry-chapter_1',
                 {
                     plotpoints: {
-                        must_happen: 'the crossing is attempted, and the toll is refused',
-                        must_change: 'the mentor stops paying for the road'
+                        beats: [
+                            'the crossing is attempted, and the toll is refused',
+                            'the toll is paid twice over',
+                            "The mentor's price is paid."
+                        ],
+                        heading: 'The Salt Road',
+                        dialogue: ['The road collects its own toll.']
                     }
                 }
             ]
         ]);
         // The draft is dropped on send: the next thing on screen is the server's answer, not a half-remembered
-        // request (P1), and the button goes back to its shut state.
-        expect(
-            (screen.getByTestId('group-plotpoint-must_happen').querySelector('input') as HTMLInputElement).value
-        ).toBe('');
-        expect(screen.getByTestId('group-revise-submit').hasAttribute('disabled')).toBe(true);
+        // request (P1), and the rows close back to the record.
+        expect(screen.queryByTestId('group-plotpoints-fields')).toBeNull();
+        expect(screen.getByTestId('group-revise-submit').textContent).toBe('Revise this chapter entry');
     });
 
-    it('sends an optional field only when it says something, and a note only when there is one', () => {
-        const { calls } = entryPane();
-
-        fireEvent.change(screen.getByLabelText('Heading for Chapter 1 — The Salt Road'), {
-            target: { value: 'The Salt Road' }
-        });
-        fireEvent.change(screen.getByLabelText('Must happen (C-7) for Chapter 1 — The Salt Road'), {
-            target: { value: 'the toll is refused' }
-        });
-        fireEvent.change(screen.getByLabelText('Must change (C-8) for Chapter 1 — The Salt Road'), {
-            target: { value: 'the road collects' }
-        });
-        fireEvent.change(screen.getByLabelText('POV for Chapter 1 — The Salt Road'), { target: { value: 'Hale' } });
-        fireEvent.change(screen.getByLabelText('Note for the Editor'), {
-            target: { value: '   make the toll concrete   ' }
-        });
+    it('omits a blank heading and an empty dialogue section, and sends a note only when there is one (R5)', () => {
+        // Chapter 3 is the fixture's dialogue-free chapter, so the empty section is the record's own state rather
+        // than a state this test typed its way into.
+        const pane = entryPane({ ref: 'plotlines-group:entry-chapter_3' });
+        const { calls } = pane;
 
         fireEvent.click(screen.getByTestId('group-revise-submit'));
 
-        // `setups` and `payoffs` stayed blank and are ABSENT from the body — the same rule
-        // `plotpointsFromBody` applies server-side, mirrored so the client never sends a blank to drop.
+        expect(screen.getByTestId('group-title').textContent).toBe('Chapter 3 — The Salt Road');
+        expect(rowValues('group-beat')).toEqual([
+            'The crossing is attempted.',
+            "The mentor's price is paid."
+        ]);
+        // An empty dialogue section is not a dead control: it opens as one blank row to type into.
+        expect(rowValues('group-dialogue')).toEqual([]);
+        fireEvent.click(screen.getByTestId('group-dialogue-add'));
+        expect(rowValues('group-dialogue')).toEqual(['']);
+
+        // Blank the heading, leave the added line blank, and add a note.
+        fireEvent.change(screen.getByTestId('group-plotpoint-heading-input'), {
+            target: { value: '   ' }
+        });
+        fireEvent.change(screen.getByLabelText('Note for the Editor'), {
+            target: { value: '   make the toll concrete   ' }
+        });
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+
+        // `heading` and `dialogue` are ABSENT from the body — the same rule `plotpointsFromBody` applies
+        // server-side, mirrored so the client never sends a blank that would overwrite a contract the loop wrote.
         expect(calls.revisePhraseEntry).toEqual([
             [
                 's1',
-                'entry-chapter_1',
+                'entry-chapter_3',
                 {
                     plotpoints: {
-                        must_happen: 'the toll is refused',
-                        must_change: 'the road collects',
-                        heading: 'The Salt Road',
-                        pov: 'Hale'
+                        beats: ['The crossing is attempted.', "The mentor's price is paid."]
                     },
                     note: 'make the toll concrete'
                 }
@@ -529,6 +644,61 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         // The note is dropped with the fields, so a second write starts from the record (P1). Read off the DOM
         // property rather than a matcher this package does not install.
         expect((screen.getByLabelText('Note for the Editor') as HTMLInputElement).value).toBe('');
+        pane.unmount();
+
+        // THE OTHER DIRECTION: a chapter that DOES owe lines sends them, and removing the last one takes the key
+        // off the body rather than sending an empty list.
+        const first = entryPane();
+
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+        fireEvent.click(screen.getByTestId('group-dialogue-remove-0'));
+        expect(rowValues('group-dialogue')).toEqual([]);
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+
+        expect(first.calls.revisePhraseEntry).toEqual([
+            [
+                's1',
+                'entry-chapter_1',
+                {
+                    plotpoints: {
+                        beats: ['The crossing is attempted.', "The mentor's price is paid."],
+                        heading: 'The Salt Road'
+                    }
+                }
+            ]
+        ]);
+        first.unmount();
+    });
+
+    it('refuses a send with no non-blank beat, and says what the route would refuse (R5 / P4)', () => {
+        const { calls } = entryPane();
+
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+        fireEvent.change(screen.getByTestId('group-beat-input-0'), { target: { value: '   ' } });
+        fireEvent.change(screen.getByTestId('group-beat-input-1'), { target: { value: '' } });
+
+        const submit = screen.getByTestId('group-revise-submit');
+
+        // `['', '  ']` is a non-empty array that carries no beat — the route 400s on it, and the button says so
+        // before the Author spends the press (U-16).
+        expect(submit.hasAttribute('disabled')).toBe(true);
+        expect(submit.getAttribute('title')).toBe(PLOTLINE_SURFACE.emptyWriteLine);
+
+        fireEvent.click(submit);
+
+        expect(calls.revisePhraseEntry).toBeUndefined();
+        // THE REMOVAL FLOOR (`minRows: 1`): two beats are both removable, and it is the LAST one the route refuses
+        // to live without — so the desk stops offering removals at one row rather than letting the Author delete
+        // into the state the write would 400 on.
+        expect(screen.getByTestId('group-beat-remove-0').hasAttribute('disabled')).toBe(false);
+        expect(screen.getByTestId('group-beat-remove-1').hasAttribute('disabled')).toBe(false);
+
+        fireEvent.click(screen.getByTestId('group-beat-remove-1'));
+
+        expect(rowValues('group-beat')).toEqual(['   ']);
+        expect(screen.getByTestId('group-beat-remove-0').hasAttribute('disabled')).toBe(true);
+        // Still nothing to send: the only row left is blank, which is the same absence as no row at all.
+        expect(screen.getByTestId('group-revise-submit').hasAttribute('disabled')).toBe(true);
     });
 
     it('refuses the write while the Writer holds the entry, and while the entry is locked (R4, R1)', () => {
@@ -542,10 +712,12 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         expect(screen.getByTestId('group-revise-submit').getAttribute('title')).toBe(
             'The Writer is rewriting this chapter entry right now — the revise route refuses the write until it lands (R4).'
         );
-        // Reading stays open: the row is a row, and only editing it waits (U5).
-        expect(
-            (screen.getByTestId('group-plotpoint-must_happen').querySelector('input') as HTMLInputElement).disabled
-        ).toBe(true);
+        // Reading stays open: the row is a row, and only editing it waits (U5). The press that would open the
+        // rows is refused, so no field is ever editable over a Writer pass the route would refuse (R4).
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+
+        expect(screen.queryByTestId('group-plotpoints-fields')).toBeNull();
+        expect(busyPane.calls.revisePhraseEntry).toBeUndefined();
         busyPane.unmount();
 
         const locked = phraseDetailView('s1', {
@@ -556,7 +728,7 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
             )
         });
 
-        entryPane({ detail: locked });
+        const lockedPane = entryPane({ detail: locked });
 
         // The edit block is shut rather than hidden, and says what to do instead (R1).
         expect(screen.getByTestId('group-revise-locked').textContent).toBe(
@@ -565,6 +737,11 @@ describe('PlotlinesEntryPane — the contract write (T-W4)', () => {
         expect(screen.getByTestId('group-revise-submit').getAttribute('title')).toBe(
             'Chapter 1 — The Salt Road is locked in — locked content is settled and cannot be revised (R1). Unlock it first to write a new revision.'
         );
+        fireEvent.click(screen.getByTestId('group-revise-submit'));
+
+        expect(lockedPane.calls.revisePhraseEntry).toBeUndefined();
+        expect(screen.queryByTestId('group-plotpoints-fields')).toBeNull();
+        lockedPane.unmount();
     });
 
     it('names a ref that no longer addresses an entry, and offers the phrase instead of an empty pane (U6)', () => {

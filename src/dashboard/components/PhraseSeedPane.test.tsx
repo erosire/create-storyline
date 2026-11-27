@@ -6,8 +6,9 @@
 // for every phrase, so a Seed row under Phrase ② printed the Author's idea and read as if that were the phrase's
 // own text. Three things have to hold, and each is pinned against the wire's fields rather than a paraphrase:
 //
-//   1. THE TEXT IS THE PHRASE'S OWN — `phraseDetail.seed_head`/`seed_chars` (`api.ts:PhraseDetailView`), never
-//      `story.idea`, and the pane proves it by following a changed `seed_head` while `story.idea` stands still;
+//   1. THE TEXT IS THE PHRASE'S OWN — with R3 the read carries the WHOLE copy as `phraseDetail.seed`
+//      (`api.ts:PhraseDetailView`), never `story.idea`, and the pane proves it by following a changed Seed while
+//      `story.idea` stands still; the 400-character `seed_head` is the fallback for a read without the new key;
 //   2. THE START CHOICE IS HERE while the phrase has no copied text — the compiled Phrase ① Overview, or the
 //      Author's paste — and each arm sends exactly one source (`routes.ts:PhraseStartBody` refuses both keys);
 //   3. A STARTED PHRASE IS READ-ONLY, because D-72 makes the copied Seed the text every chapter entry, revision
@@ -112,13 +113,14 @@ describe('PhraseSeedPane — a started phrase’s Seed is its own text, read-onl
         const { container } = mount(seedView({ compiled: true, started: true, detail: phraseDetailView('s1') }));
 
         expect(screen.getByTestId('phrase-seed-state').textContent).toBe('started');
-        // `seed_chars` is the wire's true length, printed beside the prefix so a truncated head says how much
-        // text it stands for (the full Seed is not on the wire, and this pane does not pretend otherwise).
+        // `seed_chars` is the wire's true length, printed beside the text so the number always describes the
+        // whole copy — with R3 the read carries that copy (`PhraseDetailView.seed`), so the number and the block
+        // below are the same bytes rather than a count of something off-screen.
         expect(screen.getByTestId('phrase-seed-chars').textContent).toBe(
             // The pinned sentence is byte-for-byte what `real-server-seed.test.tsx` and spec §18.13 pin (those
-            // strings are outside this wave's scope); R6's honesty lives in `phrase-seed-preview` below it, which
-            // says how much of that length is actually on screen.
-            `${phraseLabel(PHRASE_TWO)} started on its own Seed: these 67 characters, copied once at Start — the compiled Phrase 1 Overview, or the words you typed instead.`
+            // strings are outside this wave's scope); R3's honesty lives in the block below it, and `R6`'s
+            // preview notice only prints for a read that carries the prefix and nothing more.
+            `${phraseLabel(PHRASE_TWO)} started on its own Seed: these 71 characters, copied once at Start — the compiled Phrase 1 Overview, or the words you typed instead.`
         );
         expect(screen.getByTestId('phrase-seed-head').textContent).toBe(
             'A smuggler pays the tide to cross the salt road, and the road collects.'
@@ -137,11 +139,15 @@ describe('PhraseSeedPane — a started phrase’s Seed is its own text, read-onl
     it('follows the phrase read rather than the Story, with the same idea on the Story', () => {
         // Same book, two different copied Seeds: only the phrase read moved, so a pane reading `story.idea` would
         // render these two identically and this test would fail.
+        // R3 — `seed` is the text the pane renders, so a test that moved only `seed_head` would now be watching
+        // the fixture's standing default. Both fields move together, exactly as the read writes them.
         const first = phraseDetailView('s1', {
+            seed: '## Premise\nA keeper starts lying to the sea, and the sea believes her.',
             seed_head: '## Premise\nA keeper starts lying to the sea, and the sea believes her.',
             seed_chars: 74
         });
         const second = phraseDetailView('s1', {
+            seed: 'The archive burns at dawn, and the courier is already gone.',
             seed_head: 'The archive burns at dawn, and the courier is already gone.',
             seed_chars: 59
         });
@@ -217,7 +223,15 @@ describe('PhraseSeedPane — a started phrase’s Seed is its own text, read-onl
 const LONG_SEED = `## Premise\n${'The chart disagrees with the coast she drew herself. '.repeat(80)}`;
 const SEED_HEAD_400 = LONG_SEED.slice(0, 400);
 
-describe('PhraseSeedPane — the 400-character preview is labelled as a preview (R6 / AC4)', () => {
+/** THE FALLBACK ARM'S READ (R3): a 400-character prefix with NO whole text on it, which is the only state left
+ *  that prints the window notice, and the shape of a build that answers before `PhraseDetailView.seed` ships.
+ *  `seed_source` is absent too, so the pins below stay about the comparison the desk can prove from the wire
+ *  rather than the source field the row would answer with (`phrase-seed-provenance`, further down). */
+function prefixRead(head: string, chars: number): PhraseDetailView {
+    return phraseDetailView('s1', { seed: undefined, seed_source: undefined, seed_head: head, seed_chars: chars });
+}
+
+describe('PhraseSeedPane — a prefix-only read still says where it stops (R6 / AC4, R3’s fallback)', () => {
     it('names the window it shows and the residue the read does not carry', () => {
         // A mid-word cut, which is the shape the Author read as "an incomplete copy".
         expect(SEED_HEAD_400.length).toBe(400);
@@ -227,13 +241,16 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
             seedView({
                 compiled: true,
                 started: true,
-                detail: phraseDetailView('s1', { seed_head: SEED_HEAD_400, seed_chars: LONG_SEED.length })
+                detail: prefixRead(SEED_HEAD_400, LONG_SEED.length)
             })
         );
 
         const preview = screen.getByTestId('phrase-seed-preview');
 
         expect(preview.getAttribute('data-cut')).toBe('true');
+        // R3 — the window is now the FALLBACK, and the line says which arm the Author is looking at: `data-whole`
+        // is false precisely because the read carries no `seed` to render.
+        expect(preview.getAttribute('data-whole')).toBe('false');
         expect(preview.textContent).toBe(
             `A preview, not the whole Seed: this read carries the first 400 of ${LONG_SEED.length} characters and stops mid-word (D-76). The other ${LONG_SEED.length - 400} characters are on the phrase’s row and are part of the Seed — the copy is ${LONG_SEED.length} characters long, and nothing about the preview shortens it.`
         );
@@ -241,16 +258,17 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
         expect(screen.getByTestId('phrase-seed-head').textContent).toContain('Premise');
     });
 
-    it('says the whole Seed is on the read when the head is the whole text', () => {
+    it('says the whole Seed is on the read when the read carries the whole text (R3)', () => {
         const whole = 'A smuggler pays the tide to cross the salt road, and the road collects.';
 
-        mount(seedView({ compiled: true, started: true, detail: phraseDetailView('s1', { seed_head: whole, seed_chars: whole.length }) }));
+        mount(seedView({ compiled: true, started: true, detail: phraseDetailView('s1', { seed: whole }) }));
 
         const preview = screen.getByTestId('phrase-seed-preview');
 
         expect(preview.getAttribute('data-cut')).toBe('false');
+        expect(preview.getAttribute('data-whole')).toBe('true');
         expect(preview.textContent).toBe(
-            `The whole Seed is on this read — all ${whole.length} characters, with nothing cut off (D-76) — and it is read-only, exactly as it was copied (D-72).`
+            `The whole Seed is on this read — all ${whole.length} characters, every section of it, with nothing cut off (D-76) — and it is read-only, exactly as it was copied (D-72).`
         );
     });
 
@@ -262,7 +280,7 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
                 compiled: true,
                 started: true,
                 phrase: summaryRead('ready', LONG_SEED),
-                detail: phraseDetailView('s1', { seed_head: SEED_HEAD_400, seed_chars: LONG_SEED.length })
+                detail: prefixRead(SEED_HEAD_400, LONG_SEED.length)
             })
         );
 
@@ -284,7 +302,7 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
                 compiled: true,
                 started: true,
                 phrase: summaryRead('chosen', moved),
-                detail: phraseDetailView('s1', { seed_head: SEED_HEAD_400, seed_chars: LONG_SEED.length })
+                detail: prefixRead(SEED_HEAD_400, LONG_SEED.length)
             })
         );
 
@@ -305,7 +323,7 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
                 compiled: true,
                 started: true,
                 phrase: null,
-                detail: phraseDetailView('s1', { seed_head: SEED_HEAD_400, seed_chars: LONG_SEED.length })
+                detail: prefixRead(SEED_HEAD_400, LONG_SEED.length)
             })
         );
 
@@ -325,7 +343,7 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
                 compiled: true,
                 started: true,
                 phrase: live,
-                detail: phraseDetailView('s1', { seed_head: SEED_HEAD_400, seed_chars: LONG_SEED.length })
+                detail: prefixRead(SEED_HEAD_400, LONG_SEED.length)
             })
         );
 
@@ -334,6 +352,99 @@ describe('PhraseSeedPane — the 400-character preview is labelled as a preview 
         expect(provenance.getAttribute('data-match')).toBe('pending');
         expect(provenance.textContent).toBe(
             `This Seed is ${LONG_SEED.length} characters, and this Story has no reviewed Summary to accept: the rail shows no Overview text, so what the Start copied is the Overview the five groups held as they stood (D-78). Its ${live.overview.length} characters are the live composed Overview, which the Summary tab prints nowhere (D-67).`
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R3 / AC1 — THE WHOLE SEED ON SCREEN, NOT THE FIRST 400 CHARACTERS OF IT
+//
+// The requirement in the Author's own words: the Seed pane has to show the complete text, because the report it is
+// supposed to answer ("it doesn't copy the complete compile Seed correctly") was a five-section Seed whose last
+// section the 400-character window never reached. These pins therefore put a Seed on the read that IS longer than
+// the window, and require the section BEYOND the cut to be on screen — a pane still rendering `seed_head` passes
+// every preview pin above and fails this one.
+// ---------------------------------------------------------------------------
+
+/** Five sections, blank-line separated (so markdown renders five headings), long enough that the read's own
+ *  400-character prefix stops inside Theme and never reaches Ending. */
+const WHOLE_SEED = [
+    '## Premise',
+    'A lighthouse keeper starts lying to the sea, and the sea believes her — which is how the town keeps its ships.',
+    '## Promise',
+    'The lie has to cost her something the ledger cannot hold, and the reader has to see the day it comes due.',
+    '## Theme',
+    'A promise kept by an institution is still a promise; the question is only who pays the interest when the ledger runs short.',
+    '## Tone',
+    'Salt, paperwork, and dry humour — the uncanny arrives as a line item, and nobody in the room calls it uncanny.',
+    '## Ending',
+    'THE LAST SECTION THE WINDOW NEVER REACHED: she signs the sea out of the ledger, and the town goes dark on schedule.',
+].join('\n\n');
+
+describe('PhraseSeedPane — the whole Seed is rendered, not the first 400 characters (R3 / AC1)', () => {
+    it('shows every section of a Seed too long for the 400-character window', () => {
+        // The shape of the report: the read's prefix ends mid-Theme, so a pane rendering the prefix cannot show
+        // the Ending at all. Checked here rather than assumed, so the pin below is a proof and not a coincidence.
+        expect(WHOLE_SEED.length).toBeGreaterThan(400);
+        expect(WHOLE_SEED.slice(0, 400)).not.toContain('THE LAST SECTION');
+
+        mount(
+            seedView({
+                compiled: true,
+                started: true,
+                detail: phraseDetailView('s1', {
+                    seed: WHOLE_SEED,
+                    seed_head: WHOLE_SEED.slice(0, 400),
+                    seed_chars: WHOLE_SEED.length,
+                    seed_source: 'compiled'
+                })
+            })
+        );
+
+        const head = screen.getByTestId('phrase-seed-head');
+
+        // All five sections, as the markdown structures the Author reads.
+        for (const section of ['Premise', 'Promise', 'Theme', 'Tone', 'Ending']) {
+            expect(within(head).getByRole('heading', { name: section })).toBeTruthy();
+        }
+        // AC1, the exact half: the text beyond the cut is on screen, byte for byte, in order.
+        const paragraphs = within(head).getAllByRole('paragraph');
+
+        expect(paragraphs).toHaveLength(5);
+        expect(paragraphs.map((p) => p.textContent)).toEqual([
+            'A lighthouse keeper starts lying to the sea, and the sea believes her — which is how the town keeps its ships.',
+            'The lie has to cost her something the ledger cannot hold, and the reader has to see the day it comes due.',
+            'A promise kept by an institution is still a promise; the question is only who pays the interest when the ledger runs short.',
+            'Salt, paperwork, and dry humour — the uncanny arrives as a line item, and nobody in the room calls it uncanny.',
+            'THE LAST SECTION THE WINDOW NEVER REACHED: she signs the sea out of the ledger, and the town goes dark on schedule.',
+        ]);
+        // The wire's own length is the number on screen, and it describes the text the Author is looking at.
+        expect(screen.getByTestId('phrase-seed-chars').textContent).toContain(`these ${WHOLE_SEED.length} characters`);
+        expect(screen.getByTestId('phrase-seed-preview').getAttribute('data-whole')).toBe('true');
+        expect(screen.getByTestId('phrase-seed-preview').getAttribute('data-cut')).toBe('false');
+    });
+
+    it('names the source the row itself recorded, with no Summary read in the frame (R12)', () => {
+        // `'custom'` is the Author's own press, `'compiled'` is the Overview Phrase ① wrote (`routes.ts:recordSeedSource`).
+        // The field outranks the desk's inference, so the line prints even with the Phrase ① read absent — where the
+        // inferred arm below prints nothing at all.
+        const own = mount(
+            seedView({ compiled: true, started: true, phrase: null, detail: phraseDetailView('s1', { seed_source: 'custom' }) })
+        );
+
+        expect(screen.getByTestId('phrase-seed-provenance').getAttribute('data-match')).toBe('custom');
+        expect(screen.getByTestId('phrase-seed-provenance').textContent).toBe(
+            'This Seed is your own text: you pressed Start on it, the phrase copied it whole, and nothing has rewritten it since (R12, D-72). Its 71 characters are the bytes every chapter entry, revision and claim key is written against.'
+        );
+        own.unmount();
+
+        mount(
+            seedView({ compiled: true, started: true, phrase: null, detail: phraseDetailView('s1', { seed_source: 'compiled' }) })
+        );
+
+        expect(screen.getByTestId('phrase-seed-provenance').getAttribute('data-match')).toBe('compiled');
+        expect(screen.getByTestId('phrase-seed-provenance').textContent).toBe(
+            'This Seed is the compiled Phrase 1 Overview, copied whole at the Start (R12, D-72): its 71 characters came from the crew\'s Summary, not from a brief you typed, and nothing has rewritten them since.'
         );
     });
 });

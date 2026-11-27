@@ -61,26 +61,53 @@ describe('PlotlineChapters — the contract beside the prose (U-4, decision 0/5,
         ).toBeTruthy();
     });
 
-    it('puts the contract next to the prose: must-happen, must-change, POV, setups and payoffs (U-4, P4)', () => {
+    // R5 (W2) — the contract beside the prose is the chapter's ORDERED BEATS, and the order is asserted as an ORDER
+    // (an array of list items), because C-7 asks whether the prose delivers the beats in the order the contract
+    // lists them and C-3/C-8 read the LAST one. The five `Label: value` rows this replaced flattened that.
+    it('puts the contract next to the prose: the beats in order, then the lines the chapter owes (U-4, P4, R5)', () => {
         renderPane();
         const row = chapterRow('Ghost Index');
 
         expect(within(row).getByText('Plotline 2 — Ghost Index')).toBeTruthy();
-        const fields = Array.from(row.querySelectorAll<HTMLElement>('.sv-plotline-field')).map((field) => [
-            field.querySelector('dt')!.textContent,
-            field.querySelector('dd')!.textContent
-        ]);
-        expect(fields).toEqual([
-            ['Must happen (C-7)', 'The index answers in a voice that is not hers.'],
-            ['Must change (C-8)', 'She stops trusting the record.'],
-            ['POV', 'Hale'],
-            ['Setups / payoffs (C-5)', 'her own voice in the index / the sealed stack dreams']
-        ]);
+        // The two sections, and nothing else: the retired fields print no rows at all.
+        expect(
+            Array.from(row.querySelectorAll<HTMLElement>('.sv-plotline-field dt')).map((dt) => dt.textContent)
+        ).toEqual(['Beats', 'Important dialogue']);
+        expect(
+            Array.from(row.querySelectorAll('.sv-contract-beats > li')).map((item) => item.textContent)
+        ).toEqual(['The index answers in a voice that is not hers.', 'She stops trusting the record.']);
+        expect(
+            Array.from(row.querySelectorAll('.sv-contract-dialogue > li')).map((item) => item.textContent)
+        ).toEqual(['"That is my voice, and it is not in the catalogue."']);
+        // The words the desk no longer prints, asserted as absent so a re-added row has to pass a decision (R5).
+        // Scoped to the contract block: the badges and the prose beside it still speak of setups and payoffs, and
+        // this rule is about the contract's own rows, not the pane's whole vocabulary.
+        const contract = row.querySelector('.sv-plotline-fields') as HTMLElement;
+
+        for (const retired of ['Must happen', 'Must change', 'POV', 'Setups', 'Payoffs']) {
+            expect(contract.textContent).not.toContain(retired);
+        }
 
         // A locked contract is propose-only (D-6), and the gap to the Summary is shown, not fixed (C-2).
         expect(within(row).getByText('plotline locked — agents propose (D-6)')).toBeTruthy();
         expect(within(row).getByText('plotline not aligned to the Summary (C-2)')).toBeTruthy();
         expect(within(row).getByText('plotline marked needs_recheck (L-11)')).toBeTruthy();
+    });
+
+    // R5 — A CHAPTER THAT OWES NO LINES PRINTS NO DIALOGUE ROW, and a contract with no beat says so rather than
+    // showing an empty list under a heading. Both are the omission the route composes with (`chapterEntryContent`),
+    // and a row of `—` placeholders would read as a contract that exists and says nothing.
+    it('omits the dialogue section when the chapter owes no lines, and states a contract with no beats (R5)', () => {
+        renderPane();
+        const row = chapterRow('The Sealed Stack');
+
+        expect(
+            Array.from(row.querySelectorAll('.sv-contract-beats > li')).map((item) => item.textContent)
+        ).toEqual(['She is refused entry and names the refusal.', 'She goes from archivist to trespasser.']);
+        expect(row.querySelector('.sv-contract-dialogue')).toBeNull();
+        expect(Array.from(row.querySelectorAll<HTMLElement>('.sv-plotline-field dt')).map((dt) => dt.textContent)).toEqual([
+            'Beats'
+        ]);
     });
 
     it('says plainly when a chapter has no contract to be judged against (C-1, P4)', () => {

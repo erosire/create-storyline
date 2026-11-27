@@ -1,5 +1,10 @@
 // T-W4 — Phrase ②'s four routes, pinned on the WIRE: the paths, the verbs, and the exact body each accepts.
 //
+// R2 (W2) moved the Seed cleanup off the request line: the draft rides in a POST BODY (a pasted brief is routinely
+// larger than a request target can carry), and R5 (W2) moved a chapter entry's revise body from two prose fields to
+// the ORDERED `beats` list. Both are pinned here as text, because both are the difference between the desk asking
+// about the right text and asking about a fragment of it.
+//
 // These are the calls the handoff card, the dial and the entry pane make, and a path that drifts here fails
 // silently in the desk (the rail just shows a loading line), so every one is asserted as TEXT rather than a
 // snapshot. The refusals are asserted VERBATIM too: they are the Author's next action, and a client that
@@ -176,16 +181,18 @@ describe('api — POST /stories/:id/phrases/groups/:groupId/revise, the entry le
 
         expect(
             await api.revisePhraseEntry('story_1', 'entry-chapter_2', {
-                plotpoints: { must_happen: 'the toll is refused', must_change: 'the road collects' }
+                plotpoints: { beats: ['the toll is refused', 'the road collects'] }
             })
         ).toEqual(result);
         // The SAME route as the Summary group's revise, and the body is what makes it the entry leg: `plotpoints`,
         // never `content` — an entry's prose is composed from the fields, so a `content` key would be editing a
-        // rendering (P4).
+        // rendering (P4). THE BEATS TRAVEL AS AN ORDERED ARRAY: the order IS the contract (C-7 checks the prose
+        // against every beat and C-3/C-8 against the last one), so a client that sorted, joined or re-split this
+        // list would silently redraft the chapter on the way out.
         expect(lastFetch()).toEqual({
             url: `${API_ROOT}/stories/story_1/phrases/groups/entry-chapter_2/revise`,
             method: 'POST',
-            body: '{"plotpoints":{"must_happen":"the toll is refused","must_change":"the road collects"}}'
+            body: '{"plotpoints":{"beats":["the toll is refused","the road collects"]}}'
         });
     });
 
@@ -194,37 +201,44 @@ describe('api — POST /stories/:id/phrases/groups/:groupId/revise, the entry le
 
         await api.revisePhraseEntry('story_1', 'entry-chapter_1', {
             plotpoints: {
-                must_happen: 'the crossing is attempted',
-                must_change: 'the mentor’s price is paid',
                 heading: 'The Salt Road',
-                pov: 'Hale'
+                beats: ['the crossing is attempted', 'the mentor’s price is paid'],
+                dialogue: ['Hale: “The road collects its own toll.”']
             },
             note: 'make the toll concrete'
         });
 
+        // The client is a MIRROR, not a policy: the fields ride out exactly as the caller assembled them, in the
+        // caller's order, so the pane's omission rule (`PhraseEntries.tsx:submit`) is the one place a blank can be
+        // dropped, and this body is what the route composes the entry's text from.
         expect(JSON.parse(lastFetch().body ?? '')).toEqual({
             plotpoints: {
-                must_happen: 'the crossing is attempted',
-                must_change: 'the mentor’s price is paid',
                 heading: 'The Salt Road',
-                pov: 'Hale'
+                beats: ['the crossing is attempted', 'the mentor’s price is paid'],
+                dialogue: ['Hale: “The road collects its own toll.”']
             },
             note: 'make the toll concrete'
         });
     });
 
     it('raises the route’s refusal for an entry with no contract (P4)', async () => {
-        refused(400, 'a plotlines entry is revised through its plotpoints: send must_happen and must_change');
+        // THE ROUTE'S OWN SENTENCE (`routes.ts:plotpointsFromBody`, pinned by the server's
+        // `phrase-start-routes.test.ts:1235`), verbatim — and note that `['   ', '']` is a NON-EMPTY array that
+        // carries no beat: the blanks are dropped, which is what makes "at least one beat" a real rule.
+        refused(
+            400,
+            '`plotpoints` is a chapter entry\'s text: `beats` must be a non-empty list of non-blank strings — the ORDERED contract the entry\'s text and its `plotlines` row are composed from — or the body must carry the deprecated `must_happen` prose the Server recovers beats from (P4, §4.20).'
+        );
 
         const failure = await api
             .revisePhraseEntry('story_1', 'entry-chapter_1', {
-                plotpoints: { must_happen: '', must_change: '' }
+                plotpoints: { beats: ['   ', ''] }
             })
             .catch((error: unknown) => error);
 
         expect((failure as ApiError).status).toBe(400);
         expect((failure as ApiError).message).toBe(
-            'a plotlines entry is revised through its plotpoints: send must_happen and must_change'
+            '`plotpoints` is a chapter entry\'s text: `beats` must be a non-empty list of non-blank strings — the ORDERED contract the entry\'s text and its `plotlines` row are composed from — or the body must carry the deprecated `must_happen` prose the Server recovers beats from (P4, §4.20).'
         );
     });
 });
@@ -265,49 +279,54 @@ describe('api — PATCH /stories/:id with the Phrase ② dial (T-W4)', () => {
     });
 });
 
-// R7 — THE SEED PROOFREAD, on the wire. The verb is a GET, so the Author's draft rides in the QUERY: this suite is
-// the only place that fact is pinned, and a client that interpolated the draft raw would ask about a DIFFERENT
-// brief the moment the Author wrote an `&` or a `#` — which a prose brief does routinely, and the answer would look
-// like a proofread of text nobody typed.
-describe('api — GET /stories/:id/phrases/plotlines/seed/cleanup (R7)', () => {
-    it('asks with the draft in the query, with no body, and hands the proposal back untouched', async () => {
+// R2 / R7 — THE SEED PROOFREAD, on the wire, in BOTH ADDRESSES.
+//
+// The draft rides in a POST BODY (R2/W2): a pasted brief is routinely larger than a request target can carry
+// (`maxHeaderSize`), which is exactly the brief that needs proofreading, and prose in a query string is prose at
+// the mercy of `&`, `#` and `+`. Both arms answer a byte-identical `SeedCleanupProposal`, and BOTH write nothing:
+// the body is how an unwritable draft travels, not how a row is written (P10). The pre-create arm is addressed by
+// the CATALOG KEY, because the Seed it reads has no Story yet — the create copies it into the Story and the Start
+// copies it into the phrase (D-72).
+describe('api — POST /stories/:id/phrases/:key/seed/cleanup (R2 / R7)', () => {
+    it('sends the draft in the body, over the phrase’s own route, and hands the proposal back untouched', async () => {
         const proposal = { ok: true, source_hash: '9b8387ee', text: 'A mapmaker finds her own coastline.', changed: true };
 
         ok(proposal);
 
-        expect(await api.getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker she find her own coastline.')).toEqual(
-            proposal
-        );
-        // A GET with no body: the pass writes nothing, and the client must not offer it a body to write with.
+        expect(
+            await api.requestPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker she find her own coastline.')
+        ).toEqual(proposal);
+        // ONE body key, and the proposal comes back as the server answered it — `ok` and `changed` are the two
+        // flags the card branches on, so a client that mapped them would be deciding the Author's press for them.
         expect(lastFetch()).toEqual({
-            url: `${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup?seed=A%20mapmaker%20she%20find%20her%20own%20coastline.`,
-            method: 'GET'
+            url: `${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup`,
+            method: 'POST',
+            body: '{"seed":"A mapmaker she find her own coastline."}'
         });
-        expect(lastFetch().body).toBeUndefined();
     });
 
-    it('escapes the punctuation a prose brief actually contains, so the server reads the whole draft', async () => {
+    it('carries the punctuation and length a real brief contains, unescaped and whole', async () => {
         ok({ ok: true, source_hash: '00000000', text: 'x', changed: false });
 
-        await api.getPhraseSeedCleanup(
-            'story_1',
-            PHRASE_PLOTLINES_KEY,
-            'Six chapters & a tide # 6 charts + 1 lighthouse? she=drew it'
-        );
+        const draft =
+            'Six chapters & a tide # 6 charts + 1 lighthouse? she=drew it, and the ledger says "salt" — ' +
+            'so the road collects, and the road collects, and the road collects.';
 
-        // `&` and `#` are the two that would TRUNCATE an unescaped query — the proofread would run over a fragment
-        // and the Author would be shown a correction of a sentence they never sent.
-        expect(lastFetch().url).toBe(
-            `${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup?seed=Six%20chapters%20%26%20a%20tide%20%23%206%20charts%20%2B%201%20lighthouse%3F%20she%3Ddrew%20it`
-        );
+        await api.requestPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, draft);
+
+        // The request line holds ONLY the route, so none of that text is cut, escaped or truncated: the JSON body
+        // carries the draft byte for byte, which is the difference between a proofread of the Author's brief and a
+        // proofread of the fragment before the first `&`.
+        expect(lastFetch().url).toBe(`${API_ROOT}/stories/story_1/phrases/plotlines/seed/cleanup`);
+        expect(JSON.parse(lastFetch().body ?? '').seed).toBe(draft);
     });
 
     it('addresses an unquoted phrase key the way every other phrase verb does', async () => {
         ok({ ok: true, source_hash: '00000000', text: 'x', changed: false });
 
-        await api.getPhraseSeedCleanup('story_1', 'unwritten idea', 'A brief.');
+        await api.requestPhraseSeedCleanup('story_1', 'unwritten idea', 'A brief.');
 
-        expect(lastFetch().url).toBe(`${API_ROOT}/stories/story_1/phrases/unwritten%20idea/seed/cleanup?seed=A%20brief.`);
+        expect(lastFetch().url).toBe(`${API_ROOT}/stories/story_1/phrases/unwritten%20idea/seed/cleanup`);
     });
 
     it('passes the guard’s refusal arm through as a value, because a refusal is an answer (AC3)', async () => {
@@ -315,7 +334,7 @@ describe('api — GET /stories/:id/phrases/plotlines/seed/cleanup (R7)', () => {
         // decides what to show from `ok`.
         ok({ ok: false, source_hash: '9b8387ee', refusal: 'numbers_lost' });
 
-        expect(await api.getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker needs 6 charts.')).toEqual({
+        expect(await api.requestPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A mapmaker needs 6 charts.')).toEqual({
             ok: false,
             source_hash: '9b8387ee',
             refusal: 'numbers_lost'
@@ -329,12 +348,100 @@ describe('api — GET /stories/:id/phrases/plotlines/seed/cleanup (R7)', () => {
         );
 
         const failure = await api
-            .getPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A brief.')
+            .requestPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A brief.')
             .catch((error: unknown) => error);
 
         expect((failure as ApiError).status).toBe(409);
         expect((failure as ApiError).message).toBe(
             'this server has no model transport wired into its route table, so the Editor has nothing to ask for a proofread (R7): the Seed you typed is still exactly what POST …/phrases/start copies.'
         );
+    });
+});
+
+// R2 — THE PROOFREAD WITH NO STORY YET. The create form's brief has no row anywhere, so its route is addressed by
+// the phrase KIND the create will name as `start_phrase`; the story-scoped arm cannot stand in for it and 404s
+// before it reaches the model.
+describe('api — POST /phrases/:key/seed/cleanup (R2, the create form’s arm)', () => {
+    it('asks the draft’s own route, one body key, and answers the same proposal shape', async () => {
+        const proposal = { ok: true, source_hash: '4f2a91c0', text: 'A tide chart, redrawn.', changed: true };
+
+        ok(proposal);
+
+        expect(await api.requestSeedCleanupDraft('plotlines', 'A mapmaker she find her own coastline.')).toEqual(proposal);
+        expect(lastFetch()).toEqual({
+            url: `${API_ROOT}/phrases/plotlines/seed/cleanup`,
+            method: 'POST',
+            body: '{"seed":"A mapmaker she find her own coastline."}'
+        });
+    });
+
+    it('escapes the catalog key it is addressed by, and keeps the refusal arm a value', async () => {
+        ok({ ok: false, source_hash: '00000000', refusal: 'too_short' });
+
+        expect(await api.requestSeedCleanupDraft('unwritten idea', 'A fragment.')).toEqual({
+            ok: false,
+            source_hash: '00000000',
+            refusal: 'too_short'
+        });
+        expect(lastFetch().url).toBe(`${API_ROOT}/phrases/unwritten%20idea/seed/cleanup`);
+    });
+
+    it('raises the 404 for a key this build never catalogued, verbatim (L-13)', async () => {
+        refused(404, 'no startable phrase is catalogued under that key');
+
+        // A KEY THE CATALOG HAS NEVER HEARD OF. It used to be `summary` pinned here, which quietly recorded the
+        // wrong rule: W6 corrected the workspace leg to the catalog's START set, so the Summary is a kind this
+        // route answers — the only keys it refuses by address are ones the build does not have at all.
+        const failure = await api.requestSeedCleanupDraft('characters', 'A brief.').catch((error: unknown) => error);
+
+        expect((failure as ApiError).status).toBe(404);
+        expect((failure as ApiError).message).toBe('no startable phrase is catalogued under that key');
+    });
+
+    it('addresses the Summary kind on the pre-create leg, the phrase the default create mints (W6, R2)', async () => {
+        // THE BODY, not the query, and the kind from the catalog: the Create sheet's brief becomes the Summary's
+        // SEED (`seed_source: 'story_idea'`), so the proofread is addressed to `summary` exactly as it is to
+        // `plotlines`. Pinned as the request the browser dials, because a client that still refused this key is how
+        // the server fix alone would fail to reach an Author.
+        const proposal = { ok: true, source_hash: '9b8387ee', text: 'A tide chart, redrawn.', changed: true };
+
+        ok(proposal);
+
+        expect(await api.requestSeedCleanupDraft('summary', 'A mapmaker she find her own coastline.')).toEqual(
+            proposal
+        );
+        expect(lastFetch()).toEqual({
+            url: `${API_ROOT}/phrases/summary/seed/cleanup`,
+            method: 'POST',
+            body: '{"seed":"A mapmaker she find her own coastline."}'
+        });
+    });
+
+    it('keeps the optional `blocker` on the refusal arm, on both cleanup legs (R6, W4)', async () => {
+        // THE ONE KEY THAT SAYS WHOSE FAILURE IT IS. The server answers `refusal` PLUS `blocker` when its own
+        // prompt file is refused, and the desk prints a different sentence for that than for a guard refusal — so
+        // the client's job is to lose nothing on the way through. All three transports compose the same object
+        // (`routes.ts:seedCleanupBody`), and this desk calls two of them.
+        const blocked = {
+            ok: false,
+            source_hash: '00000000',
+            refusal: 'empty_answer',
+            blocker: 'seed-cleanup.md: `name: seed-cleaner` disagrees with `slug: seed-cleanup`'
+        };
+
+        ok(blocked);
+
+        expect(await api.requestSeedCleanupDraft(PHRASE_PLOTLINES_KEY, 'A brief.')).toEqual(blocked);
+        expect(await api.requestPhraseSeedCleanup('story_1', PHRASE_PLOTLINES_KEY, 'A brief.')).toEqual(blocked);
+
+        // AND THE ARM IS STILL JUST A VALUE when there is no blocker: the guard refusal stays the two-key object
+        // it always was, so a client-side `blocker ?? ''` never becomes a third state.
+        ok({ ok: false, source_hash: '00000000', refusal: 'numbers_lost' });
+
+        expect(await api.requestSeedCleanupDraft(PHRASE_PLOTLINES_KEY, 'A brief.')).toEqual({
+            ok: false,
+            source_hash: '00000000',
+            refusal: 'numbers_lost'
+        });
     });
 });

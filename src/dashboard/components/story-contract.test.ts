@@ -9,8 +9,16 @@ import {
     backtrackStatement,
     blankTemplatePayload,
     buildRevisionUnits,
+    // R5 (W2) — the chapter contract's parse/compose pair, and the count's three states. Pinned here rather than in
+    // the panes because they are ONE rule with one set of sentences, and a pane test could not tell a drifted label
+    // from a different product decision.
+    chapterCountInputRefusal,
+    chapterCountRequestLine,
+    chapterEntryDraft,
+    chapterEntryText,
     competingRevisionsFor,
     completionDiscardSentence,
+    contractListOf,
     deepReviewProgress,
     diffWords,
     draftVerdicts,
@@ -30,15 +38,15 @@ import {
     phaseLocks,
     phasesAfter,
     pendingProposalsFor,
+    // R5 — the two compatibility reads every contract surface shares.
+    plotlineBeatsOf,
+    plotlineDialogueOf,
     plotlinesCustomStartNotice,
     plotlinesCustomStartRefusal,
     plotlinesHandoffRefusal,
     // R7 — the cleanup's sentences and the receipt's provenance clause: every one is a wire state's words, so each
     // is pinned as a literal here rather than re-typed inside a component test.
     plotlinesSeedOrigin,
-    // F4 — the transport budget the ask is shut at, pinned as a number here so the margin below the measured
-    // 431 ceiling is a reviewed value rather than a constant buried in a component.
-    SEED_CLEANUP_ASK_URL_LIMIT,
     SEED_CLEANUP_APPLIED_NOTE,
     SEED_CLEANUP_NOTHING_TO_FIX,
     SEED_CLEANUP_PROPOSAL_NOTE,
@@ -58,7 +66,7 @@ import type { StoryViewData } from './story-contract';
 import type { SamplingView } from '../api';
 // The same default the server dispatches the deep review by, mocked for this suite.
 import { DEFAULT_SUMMARY_CRITICS } from '../testing/product-values';
-import type { Cost, Finding, FindingState, Revision, Run, Story } from '../../types';
+import type { Cost, Finding, FindingState, Plotline, Revision, Run, Story } from '../../types';
 
 describe('story-contract — phases, locks and backtrack (U-16, L-31, L-32)', () => {
     it('maps which lock signed which phase, with phase ③ signed only by `completed` (L-25a)', () => {
@@ -1058,6 +1066,29 @@ describe('story-contract — the custom-seed start gate (R7, D-76)', () => {
         );
     });
 
+    it('lets the server’s blocker own the refusal, and quotes the loader’s own sentence (R6, W4)', () => {
+        // THE FIELD THAT CHANGES WHOSE FAULT IT IS. `refusal: 'empty_answer'` beside a `blocker` means the pass never
+        // ran — `src/templates/seed-cleanup.md` was refused — while the same code WITHOUT a blocker means the model
+        // answered and a guard threw the rewrite away. Two opposite facts, and the one-word difference on the wire
+        // is what tells them apart, so the blocker's own text has to reach the line rather than be paraphrased into
+        // the guard's sentence (`routes.ts:seedCleanupBody` answers the loader's string verbatim on all three
+        // transports).
+        const blocker = 'seed-cleanup.md: `name: seed-cleaner` disagrees with `slug: seed-cleanup`';
+
+        expect(seedCleanupRefusalNotice('empty_answer', blocker)).toBe(
+            'The Editor never got to read your brief — the server could not use its own proofreading instructions: seed-cleanup.md: `name: seed-cleaner` disagrees with `slug: seed-cleanup`. Nothing was written, and your own text stands exactly as the create or the Start copies it (R7).'
+        );
+        // ANY guard code takes the same answer, because the code is what the blocked pass would have answered.
+        expect(seedCleanupRefusalNotice('numbers_lost', blocker)).toBe(seedCleanupRefusalNotice('too_long', blocker));
+        // THE GUARD LINES ARE UNTOUCHED by the new arm: absent is the ordinary refusal, byte for byte, and so is a
+        // blank string a hand-written row might carry — a padded-to-nothing reason is no reason (L-13).
+        expect(seedCleanupRefusalNotice('empty_answer', undefined)).toBe(seedCleanupRefusalNotice('empty_answer'));
+        expect(seedCleanupRefusalNotice('empty_answer', '   ')).toBe(seedCleanupRefusalNotice('empty_answer'));
+        // THE LOADER'S PADDING DOES NOT RIDE INTO THE SENTENCE: the line is composed prose, and a quoted string
+        // with stray whitespace reads as a typo in the desk's own copy.
+        expect(seedCleanupRefusalNotice('empty_answer', `  ${blocker}\n`)).toContain(`: ${blocker}.`);
+    });
+
     it('gates the ask on the two facts the route gates it on', () => {
         // NO VERB: U-16's standing rule — a shut control names the missing route.
         expect(seedCleanupAskRefusal('Six chapters, alternating timeline.', false)).toBe(
@@ -1072,54 +1103,38 @@ describe('story-contract — the custom-seed start gate (R7, D-76)', () => {
         expect(seedCleanupAskRefusal('Six chapters, alternating timeline.', true)).toBe('');
     });
 
-    // F4 — THE THIRD FACT, and the only one the route cannot tell the desk about. The proofread read carries the
-    // draft in the address (`dashboard/api.ts:1870` → `?seed=${encodeURIComponent(seed)}`), so an over-long
-    // draft dies in the listener's request line BEFORE routing: the desk gets HTTP 431, no
-    // `SeedCleanupRefusal`, and nothing to print. Measured on the real listener — the route answers (404, i.e.
-    // it routed) at an escaped seed of 16,200 and returns 431 at 16,300, and the same 431 lands at an escaped
-    // 18,080 while an escaped 12,056 still routes (`Temp/c9/probe-f4.ts`, `Temp/c9/probe-f4.out`). The limit is
-    // the round number under that: 12,000 escaped characters, ≈4,300 (≈26 %) of margin below the failure point,
-    // which also covers the 53-character path prefix and the rest of the request line.
-    it('shuts the ask when the draft will not fit the address it travels in (F4)', () => {
-        expect(SEED_CLEANUP_ASK_URL_LIMIT).toBe(12_000);
+    // F4 / R6 (W2) — THE THIRD FACT USED TO BE THE TRANSPORT, AND IT IS NOT ANY MORE. The proofread used to carry
+    // the draft in the request address (`?seed=…`), where a pasted synopsis died in the listener's request line
+    // before routing: HTTP 431, no `SeedCleanupRefusal`, nothing to print — so the desk guarded the escaped length
+    // at 12,000 characters. R6 moved the draft into a BODY on BOTH verbs (`POST /phrases/:key/seed/cleanup` and
+    // `POST /stories/:id/phrases/:key/seed/cleanup`), and a body has no request-line ceiling, so the guard and its
+    // constant are GONE — and this case is what pins that they are gone rather than quietly re-added by whoever
+    // touches the gate next. A pasted draft of any length is the route's business now, not the desk's.
+    it('puts no length ceiling on the draft, because the draft rides in a body now (F4 → R6)', () => {
+        // THE FORMER LIMIT, and the former refusal sentence it produced. Neither is exported any more; the text is
+        // written out here so a regression that re-introduces a length arm fails against this line rather than
+        // against a constant that could move with it.
+        const FORMER_LIMIT = 12_000;
 
-        // The sentence, in full, because a refusal an Author reads IS the product (L-13): it names the fix
-        // (paste less), says the text is untouched (AC3), and never reads as a failure the desk caused.
-        const TOO_LONG =
-            'That draft is too long for this ask — the proofread sends it inside the request’s address, and an ' +
-            'address past about 12,000 escaped characters comes back refused (HTTP 431) before the Editor reads a ' +
-            'word. Paste the part you want proofread — a chapter or two at a time — and the ask opens again; your ' +
-            'text in this box stands.';
+        expect(seedCleanupAskRefusal('x'.repeat(FORMER_LIMIT), true)).toBe('');
+        expect(seedCleanupAskRefusal('x'.repeat(FORMER_LIMIT + 1), true)).toBe('');
 
-        // EXACTLY AT THE LIMIT: the guard fires past the budget, not at it, and the escaped form is the axis.
-        const atLimit = 'x'.repeat(SEED_CLEANUP_ASK_URL_LIMIT);
-
-        expect(atLimit.length).toBe(12_000);
-        expect(encodeURIComponent(atLimit).length).toBe(12_000);
-        expect(seedCleanupAskRefusal(atLimit, true)).toBe('');
-
-        // ONE PAST IT: refused, in the desk's own words.
-        const overLimit = 'x'.repeat(SEED_CLEANUP_ASK_URL_LIMIT + 1);
-
-        expect(encodeURIComponent(overLimit).length).toBe(12_001);
-        expect(seedCleanupAskRefusal(overLimit, true)).toBe(TOO_LONG);
-
-        // THE ARM THAT MAKES THE GUARD NECESSARY — pasted characters are not wire characters. A space is `%20`,
-        // so 9,006 characters of ordinary prose escape to 12,008: a guard on the pasted length would dial the
-        // very request the transport refuses, which is the bug this clause closes.
+        // PASTED CHARACTERS ARE NOT WIRE CHARACTERS — and that no longer matters. This is the exact draft that used
+        // to escape past the ceiling (a space is `%20`, so 9,006 characters became 12,008); the ask stays open.
         const pasted = 'light '.repeat(1_501);
 
         expect(pasted.length).toBe(9_006);
         expect(encodeURIComponent(pasted).length).toBe(12_008);
-        expect(seedCleanupAskRefusal(pasted, true)).toBe(TOO_LONG);
+        expect(seedCleanupAskRefusal(pasted, true)).toBe('');
 
-        // The other two clauses keep their precedence: with no verb the missing-route sentence is still the
-        // answer, and a blank box is blank before it is long.
-        expect(seedCleanupAskRefusal(overLimit, false)).toBe(
+        // THE TWO CLAUSES THAT REMAIN keep their order: no verb is the missing route, and a blank box is blank
+        // before it is anything else.
+        expect(seedCleanupAskRefusal('x'.repeat(FORMER_LIMIT + 1), false)).toBe(
             'This shell has no Editor proofread route wired, so there is nothing to ask.'
         );
-        // AC3's standing clause.
-        expect(TOO_LONG).toContain('your text in this box stands');
+        expect(seedCleanupAskRefusal('   \n  ', false)).toBe(
+            'This shell has no Editor proofread route wired, so there is nothing to ask.'
+        );
     });
 
     it('says what the card may claim about the text it is showing (R7 / D-72)', () => {
@@ -1149,6 +1164,209 @@ describe('story-contract — the custom-seed start gate (R7, D-76)', () => {
         // ABSENT MEANS UNKNOWN — and the wording says "never recorded", not "the crew's".
         expect(plotlinesSeedOrigin(undefined)).toBe(
             'text whose origin this desk never recorded — the phrase started before the Seed’s provenance was kept'
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// R5 (W2) — THE CHAPTER CONTRACT IS A LIST, AND THE DESK PARSES AND COMPOSES IT EXACTLY
+//
+// These five functions are the whole client half of the beat contract: the cleaner that mirrors the route's
+// (`contractListOf`), the compatibility read a §4.3 row goes through (`plotlineBeatsOf`), the editor's prefill
+// (`chapterEntryDraft`), the text the desk previews (`chapterEntryText`), and the dialogue's optional arm
+// (`plotlineDialogueOf`). Every expectation is an EXACT value: the composer's labels and item order are what the
+// server stores (`phrase/plotpoints.ts:chapterEntryContent`), so a drifted bullet, a dropped label or a re-sorted
+// beat is a different contract on the wire, not a formatting choice.
+// ---------------------------------------------------------------------------
+
+describe('story-contract — the chapter contract as an ordered list (R5)', () => {
+    it('cleans a list the way the route does: trimmed, blanks dropped, order kept', () => {
+        expect(
+            contractListOf(['  the crossing is attempted  ', '', '   ', "the mentor's price is paid"])
+        ).toEqual(['the crossing is attempted', "the mentor's price is paid"]);
+        // A non-array is an empty contract, not a crash and not the value stringified.
+        expect(contractListOf(undefined)).toEqual([]);
+        expect(contractListOf('the crossing is attempted')).toEqual([]);
+        // A non-string item is dropped rather than printed as `[object Object]`.
+        expect(contractListOf(['one', 2, null, { beat: 'three' }, ' four '])).toEqual(['one', 'four']);
+    });
+
+    it('reads a stored contract whichever generation wrote the row — beats win, prose is recovered (R5)', () => {
+        // CURRENT ROW: `beats` as stored, in order, and the legacy prose is NOT consulted even when it disagrees.
+        // This is the precedence that keeps a half-migrated install from reading old prose off a row that has beats.
+        expect(
+            plotlineBeatsOf({
+                beats: ['the index answers', 'she stops trusting the record'],
+                must_happen: 'the index answers in a voice that is not hers'
+            } as Plotline)
+        ).toEqual(['the index answers', 'she stops trusting the record']);
+
+        // LEGACY ROW — the prose was the only statement the chapter ever made, and the two ways an old answer listed
+        // several events (`\n` and `;`) both split. The order is the prose's order.
+        expect(
+            plotlineBeatsOf({
+                must_happen: 'the crossing is attempted;\nthe toll is refused; the road collects'
+            } as Plotline)
+        ).toEqual(['the crossing is attempted', 'the toll is refused', 'the road collects']);
+
+        // A ONE-SENTENCE legacy block recovers as ONE beat — an honest single row, not a parsed list.
+        expect(plotlineBeatsOf({ must_happen: 'She is refused entry and names the refusal.' } as Plotline)).toEqual([
+            'She is refused entry and names the refusal.'
+        ]);
+
+        // NOTHING AT ALL, in either generation, is an empty list: the panes print their own "no contract" line.
+        expect(plotlineBeatsOf({ must_happen: '   ' } as Plotline)).toEqual([]);
+        expect(plotlineBeatsOf(undefined)).toEqual([]);
+        // The fields the re-cut dropped are NOT folded in: a `must_change` alone is not a beat.
+        expect(plotlineBeatsOf({ must_change: 'she stops trusting the record' } as Plotline)).toEqual([]);
+    });
+
+    it('reads the dialogue with no legacy arm, because there is no legacy field for it (R5)', () => {
+        expect(plotlineDialogueOf({ dialogue: [' "That is my voice." ', '', 'and it is not in the catalogue'] } as Plotline)).toEqual([
+            '"That is my voice."',
+            'and it is not in the catalogue'
+        ]);
+        // ABSENT is the same fact as EMPTY — the chapter owes no lines — and both answer `[]`.
+        expect(plotlineDialogueOf({ must_happen: 'the crossing is attempted' } as Plotline)).toEqual([]);
+        expect(plotlineDialogueOf({ dialogue: [] } as unknown as Plotline)).toEqual([]);
+        expect(plotlineDialogueOf(undefined)).toEqual([]);
+    });
+
+    it('composes the entry text exactly as the route does, labels and omissions included (R5)', () => {
+        // THE FULL BLOCK: heading, beats in order, dialogue in order, one `Label:` line each, bullets `- `.
+        expect(
+            chapterEntryText({
+                heading: 'The Salt Road',
+                beats: ['the crossing is attempted', 'the mentor pays'],
+                dialogue: ['the road collects its own toll']
+            })
+        ).toBe(
+            'Heading: The Salt Road\n' +
+                'Beats:\n' +
+                '- the crossing is attempted\n' +
+                '- the mentor pays\n' +
+                'Important dialogue:\n' +
+                '- the road collects its own toll'
+        );
+
+        // AN EMPTY DIALOGUE LIST OMITS ITS LABEL — the route never prints a heading over nothing.
+        expect(chapterEntryText({ heading: 'The Salt Road', beats: ['one'], dialogue: ['  ', ''] })).toBe(
+            'Heading: The Salt Road\nBeats:\n- one'
+        );
+        // A BLANK HEADING emits nothing, and a list of blanks is no block at all (the refusal case, P4).
+        expect(chapterEntryText({ heading: '   ', beats: ['', '  '] })).toBe('');
+        expect(chapterEntryText({ beats: ['one'] })).toBe('Beats:\n- one');
+        // The blanks are dropped and the ORDER survives; nothing is trimmed into a different beat.
+        expect(chapterEntryText({ beats: [' two ', 'one'] })).toBe('Beats:\n- two\n- one');
+    });
+
+    it('prefills the editor from the stored text, and recovers a legacy block as one beat (R5)', () => {
+        // THE INVERSE OF THE COMPOSER — the row carries only `content`, so the editor is built from these bytes.
+        expect(
+            chapterEntryDraft(
+                'Heading: The Salt Road\nBeats:\n- the crossing is attempted\n- the mentor pays\nImportant dialogue:\n- the road collects'
+            )
+        ).toEqual({
+            heading: 'The Salt Road',
+            beats: ['the crossing is attempted', 'the mentor pays'],
+            dialogue: ['the road collects']
+        });
+
+        // NO DIALOGUE BLOCK is an empty list, not an undefined field: the editor opens with the section closed.
+        expect(chapterEntryDraft('Heading: The Salt Road\nBeats:\n- one')).toEqual({
+            heading: 'The Salt Road',
+            beats: ['one'],
+            dialogue: []
+        });
+
+        // A LEGACY BLOCK (the old `Label: value` generation, or prose from before beats) is not thrown away and not
+        // re-flowed: it comes back as the beats the text actually stated, `;` splits included.
+        expect(chapterEntryDraft('Must happen: the crossing is attempted; the toll is refused')).toEqual({
+            heading: '',
+            beats: ['Must happen: the crossing is attempted', 'the toll is refused'],
+            dialogue: []
+        });
+
+        // AN EMPTY ENTRY opens the editor with nothing in it — the author writes the first beat.
+        expect(chapterEntryDraft('')).toEqual({ heading: '', beats: [], dialogue: [] });
+        expect(chapterEntryDraft(undefined)).toEqual({ heading: '', beats: [], dialogue: [] });
+    });
+
+    it('round-trips a composed block back through the editor unchanged (R5)', () => {
+        // THE PROPERTY THAT MATTERS: taking the Author's rows, composing them, and parsing the result gives the SAME
+        // rows. Anything else means a save moves the contract without the Author touching it.
+        const fields = {
+            heading: 'Ghost Index',
+            beats: ['the index answers', 'she stops trusting the record'],
+            dialogue: ['"That is my voice."']
+        };
+
+        expect(chapterEntryDraft(chapterEntryText(fields))).toEqual({
+            heading: fields.heading,
+            beats: fields.beats,
+            dialogue: fields.dialogue
+        });
+    });
+});
+
+// R4 (W2) — THE CHAPTER COUNT, IN THE THREE STATES THE WIRE ACTUALLY HAS.
+//
+// `chapter_count_request` is a NUMBER (the Author declared it), `null` ("the Editor decides"), or ABSENT (a book
+// written before the create asked). The count the book runs on (`summaries.chapter_count`, what C-0 fails on) is a
+// different fact, and the actual default of 1 is the number a pane reaches for by accident. These two functions are
+// the whole rule, so every surface that quotes a count quotes the same reading.
+describe('story-contract — the chapter count is Author truth, in three states (R4, D-3b)', () => {
+    it('refuses every count the route would refuse, and accepts blank as no answer', () => {
+        // BLANK is the third state of the field, and it is not a refusal: it sends nothing.
+        expect(chapterCountInputRefusal('')).toBe('');
+        expect(chapterCountInputRefusal('   ')).toBe('');
+        // A WHOLE NUMBER ≥ 1 is the declaration.
+        expect(chapterCountInputRefusal('1')).toBe('');
+        expect(chapterCountInputRefusal(' 12 ')).toBe('');
+        // `0` is the accidental sentinel — a count the loop cannot honour.
+        expect(chapterCountInputRefusal('0')).toBe(
+            'A chapter count of 0 asks for a book with no chapters. Leave the box empty to let the Editor decide (D-3b), or name a number from 1 up.'
+        );
+        expect(chapterCountInputRefusal('-3')).toBe(
+            'A chapter count of 0 asks for a book with no chapters. Leave the box empty to let the Editor decide (D-3b), or name a number from 1 up.'
+        );
+        // A fraction or a word is not a count the Editor can honour.
+        expect(chapterCountInputRefusal('1.5')).toBe(
+            'A chapter count is a whole number of chapters — a count the Editor has to honor cannot be a fraction or a word (D-3b).'
+        );
+        expect(chapterCountInputRefusal('seven')).toBe(
+            'A chapter count is a whole number of chapters — a count the Editor has to honor cannot be a fraction or a word (D-3b).'
+        );
+    });
+
+    it('says which of the three states a book is in, and never reads the running count as a request', () => {
+        const running =
+            'The number the book counts against is 7, and C-0 fails on any other count (D-3b).';
+
+        // DECLARED.
+        expect(chapterCountRequestLine({ chapter_count_request: 7 }, 7)).toBe(
+            `You asked for 7 chapters — a declared count is Author truth, and nothing downstream may disagree with it silently (D-3b). ${running}`
+        );
+        // ONE chapter reads as one chapter, not "1 chapters".
+        expect(chapterCountRequestLine({ chapter_count_request: 1 }, 7)).toContain('You asked for 1 chapter —');
+
+        // "THE EDITOR DECIDES" is an answer the Author gave, not a missing one.
+        expect(chapterCountRequestLine({ chapter_count_request: null }, 7)).toBe(
+            'You left the chapter count to the Editor: “you choose” was the answer you gave at the create, and that ' +
+                `suppresses the old default rather than falling back to it (D-3b). ${running}`
+        );
+
+        // ABSENT — a legacy book. The sentence refuses to call the running count a request, which is the exact
+        // defect R4 retires: the old line printed the running number where the declaration belonged.
+        expect(chapterCountRequestLine({}, 7)).toBe(
+            'No chapter count was recorded on this book — it was written before the create asked, so the number below is ' +
+                `what the Story runs on, not a number you named (D-3b). ${running}`
+        );
+
+        // NO SUMMARY ROW is a state, not a zero: no count is being honoured against anything yet.
+        expect(chapterCountRequestLine({ chapter_count_request: 4 }, undefined)).toBe(
+            'You asked for 4 chapters — a declared count is Author truth, and nothing downstream may disagree with it silently (D-3b). ' +
+                'This Story has no Summary row yet, so no count is being checked against anything (D-3b).'
         );
     });
 });

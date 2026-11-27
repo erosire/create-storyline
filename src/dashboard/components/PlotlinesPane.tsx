@@ -1,11 +1,17 @@
 // Phrase 3 — Plotlines. One contract per chapter, without the prose.
 //
 // WHY IT STOPS AT THE CONTRACT: U-4's side-by-side reading is the Chapters phrase's job. On the
-// Plotlines pane the Author is reviewing the promises themselves — what must happen, what must
-// change, whose eyes it is seen through — so showing the prose here would repeat the next phrase
-// and blur the question the screen is asking.
+// Plotlines pane the Author is reviewing the promises themselves — what happens, in what order, and what the last
+// one leaves different — so showing the prose here would repeat the next phrase and blur the question the screen is
+// asking.
+//
+// R5 — the promises are a chapter's ordered BEATS, rendered by the one contract component the compare view shares
+// (`PlotlineContract.tsx`). The five `Label: value` rows this card used to print are gone from the UI: the fields
+// still exist on the row as data, and the compatibility read that recovers an old row's prose into beats is
+// `story-contract.plotlineBeatsOf`, not a set of rows on the screen.
 import type { Plotline } from '../../types';
 import { plotlinesInOrder } from './story-nav';
+import { PlotlineContract } from './PlotlineContract';
 import type { StoryViewData } from './story-contract';
 
 function PlotlineCard({ plotline }: { plotline: Plotline }) {
@@ -29,28 +35,15 @@ function PlotlineCard({ plotline }: { plotline: Plotline }) {
                 </div>
             </header>
 
-            <dl className="plot-card-fields">
-                <div className="plot-card-field">
-                    <dt>Must happen (C-7)</dt>
-                    <dd>{plotline.must_happen || '—'}</dd>
-                </div>
-                <div className="plot-card-field">
-                    <dt>Must change (C-8)</dt>
-                    <dd>{plotline.must_change || '—'}</dd>
-                </div>
-                <div className="plot-card-field">
-                    <dt>POV</dt>
-                    <dd>{plotline.pov || '—'}</dd>
-                </div>
-                <div className="plot-card-field">
-                    <dt>Setups (C-5)</dt>
-                    <dd>{plotline.setups || '—'}</dd>
-                </div>
-                <div className="plot-card-field">
-                    <dt>Payoffs (C-5)</dt>
-                    <dd>{plotline.payoffs || '—'}</dd>
-                </div>
-            </dl>
+            {/* R5 — the contract as a LIST (see `PlotlineContract.tsx`): the beats in order, the optional dialogue,
+                and the pane's own line when the row states no beat at all. */}
+            <PlotlineContract
+                plotline={plotline}
+                contractClassName="plot-card-fields"
+                fieldClassName="plot-card-field"
+                testId={`plot-card-${plotline.id}`}
+                emptyLine="No beats recorded on this contract — C-3 has no last beat to read (P4)."
+            />
         </article>
     );
 }

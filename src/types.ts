@@ -293,6 +293,21 @@ export interface Story extends StoredRecord {
      */
     plotlines_mode?: 'groups' | 'classic';
     /**
+     * R4 (W2) — THE CHAPTER COUNT THE AUTHOR ASKED FOR, in three states, and the desk renders all three:
+     *
+     *   - a NUMBER — the Author declared it at the create (`POST /stories`' `chapter_count` is recorded as the
+     *     declaration in the same commit, `server/api/routes.ts`), and the honor-the-request check reads it;
+     *   - `null` — "the Editor decides", an explicit answer rather than a missing one: it suppresses the legacy
+     *     default below, so a seat is not told to honor a number nobody asked for;
+     *   - ABSENT — legacy. A book written before the field keeps the behaviour it always had (R6's no-migration
+     *     rule, the same shape `summary_mode`/`plotlines_mode`/`Phrase.seed_source` take), and the desk says
+     *     nothing was recorded rather than showing the working count as if the Author had named it.
+     *
+     * THIS IS NOT THE ACTUAL COUNT: `summaries.chapter_count` stays the number the loop counts against (D-3b),
+     * and the actual default (1) must never render as an author request (R4).
+     */
+    chapter_count_request?: number | null;
+    /**
      * PHRASE GROUP LOCK (additive) — may the EDITOR put a Summary phrase group into the locked state?
      *
      * The Editor's judgment is a recommendation about a group the pipeline keeps wanting to rewrite:
@@ -479,12 +494,30 @@ export interface Plotline extends StoredRecord {
     chapter_ref?: string;
     order: number;
     heading?: string;
-    /** The events that must occur (C-7). */
+    /**
+     * R5 (W2) — THE EVENTS THIS CHAPTER HAS TO DELIVER, IN ORDER. Array order IS the content (the beats are
+     * chronological), so the desk renders them as an ordered list and the Author's editor keeps the order it was
+     * given. Required by every contract the CURRENT generation writes; optional on the row type because a chapter
+     * contracted before the field carries none, and its beats are recovered from the legacy prose by the same rule
+     * `server/phrase/plotpoints.ts:plotlineBeatsOf` applies (mirrored client-side in
+     * `components/story-contract.ts:plotlineBeatsOf`, so the two surfaces cannot tell two stories about one row).
+     */
+    beats?: string[];
+    /**
+     * R5 (W2) — THE LINES OF DIALOGUE THIS CHAPTER HAS TO LAND, speaker inline (`Mara: "The gate is open."`).
+     * Optional; an absent key and an empty list mean the same thing on screen (the chapter owes no lines), and
+     * nothing renders a blank row for either.
+     */
+    dialogue?: string[];
+    /** DEPRECATED (§4.3's pre-beat shape) — read only through `plotlineBeatsOf`; never written again (R5). */
     must_happen?: string;
-    /** What must be different at the end — state, knowledge, relationship, position (C-8, C-3). */
+    /** DEPRECATED — the "what is different at the end" half of the old contract; its rule is C-3/C-8's last beat now. */
     must_change?: string;
+    /** DEPRECATED — whose eyes the chapter was told through. Not a contract field any more. */
     pov?: string;
+    /** DEPRECATED — what the old contract said the chapter plants. The ledger (C-5/C-6) was always the real source. */
     setups?: string;
+    /** DEPRECATED — what the old contract said the chapter collects. Read by nothing in the current generation. */
     payoffs?: string;
     /** L-7: mirrors `stories.plotlines_locked`. A locked plotline is read-only; agents propose. */
     contract_locked: boolean;
