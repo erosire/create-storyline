@@ -24,8 +24,7 @@ import {
     plotlinesModeTitle,
     plotlinesStarted
 } from './story-contract';
-import { FINDING_COSTS } from '../../shared/types';
-import type { Cost, LedgerEntry } from '../../shared/types';
+import type { Cost, LedgerEntry } from '../../types';
 import type { StoryActions, StoryViewData } from './story-contract';
 
 /**
@@ -115,9 +114,9 @@ export function SettingsPane({ view, actions }: SettingsPaneProps) {
                     auto-approve dial (D-35) — the same switch sets when the crew stops looking (D-35b)
                 </span>
                 <ul className="sv-dial-costs">
-                    {FINDING_COSTS.map((cost) => {
+                    {view.vocabulary.finding_costs.map((cost) => {
                         const covered = story.auto_approve.includes(cost);
-                        const nextSet = FINDING_COSTS.filter((candidate) =>
+                        const nextSet = view.vocabulary.finding_costs.filter((candidate) =>
                             candidate === cost ? !covered : story.auto_approve.includes(candidate)
                         );
 
@@ -264,7 +263,7 @@ export function SettingsPane({ view, actions }: SettingsPaneProps) {
                 ) : null}
             </div>
 
-            <CostDistributionPanel distribution={view.cost_distribution} />
+            <CostDistributionPanel distribution={view.cost_distribution} costs={view.vocabulary.finding_costs} />
         </section>
     );
 }

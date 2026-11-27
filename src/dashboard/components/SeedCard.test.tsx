@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { SeedCard } from './SeedCard';
-import { SEED_IDEA, fixtureSummary } from './story-fixtures';
+import { SEED_IDEA, fixtureSummary } from '../testing/story-fixtures';
 
 describe('SeedCard — the measure of the book (U-4, C-14, D-3b)', () => {
     it('shows the Author\u2019s own Seed verbatim and states that no agent may write it', () => {

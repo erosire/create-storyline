@@ -5,16 +5,18 @@
 // reads thin. Decision 17's answer is a NUMBER, not a queue: how many findings the Editor
 // confirmed at each cost, and how many it downgraded. The Author sees the pattern in one glance
 // and tunes the template (G-7) instead of re-refuting the same call forty times.
-import { FINDING_COSTS } from '../../shared/types';
+import type { Cost } from '../../types';
 import type { CostDistribution } from './story-contract';
 
 export interface CostDistributionProps {
     distribution: CostDistribution;
+    /** The costs to print, in the server's triage order (`StoryView.vocabulary.finding_costs`). */
+    costs: Cost[];
     /** The window the counts cover, stated by the server so the block never implies "all time". */
     windowLabel?: string;
 }
 
-export function CostDistributionPanel({ distribution, windowLabel = 'the last rounds' }: CostDistributionProps) {
+export function CostDistributionPanel({ distribution, costs, windowLabel = 'the last rounds' }: CostDistributionProps) {
     // A `critical` column of 0 next to a fat `taste` column is the soft-Editor signature; the
     // downgrades figure is what makes it a finding rather than a hunch.
     const downgrades = distribution.downgrades;
@@ -28,7 +30,7 @@ export function CostDistributionPanel({ distribution, windowLabel = 'the last ro
             </header>
 
             <ul className="sv-cost-stats">
-                {FINDING_COSTS.map((cost) => (
+                {costs.map((cost) => (
                     <li className="sv-cost-stat" key={cost}>
                         <span className="sv-cost-cost">{cost}</span>
                         <span className="sv-cost-count">{distribution.confirmed_per_cost[cost] ?? 0}</span>

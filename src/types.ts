@@ -1,32 +1,13 @@
-// §4 — the data model. Every record and every enum in the build contract lives here.
+// Type-only definitions shared with @underload/storyline's public wire/domain model.
 //
-// WHY THIS FILE IS THE PINNED CONTRACT: §4 states that collections "are normative in name
-// and field; a build MAY add fields, MUST NOT rename or drop one". Later waves (tools W2,
-// criteria W3, loop W4, dashboard W9-W13) code against these shapes, so a field name here
-// is a wire format: it is what lands in `store.json` (W1) and what every tool result names
-// (T-8). Renaming one is a migration, not a refactor.
+// THIS FILE HAS NO RUNTIME CODE BY DESIGN. The UI is a client of the separate
+// `@underload/storyline` package: every list, label, default, catalog and derivation it
+// renders comes from the server's projections. Only the names of the records and the shapes
+// the wire carries are duplicated here so the client can type what it receives. Tests may
+// use their own mocks/fixtures for runtime values (see `dashboard/testing`).
 //
-// ENUM STYLE: each enum is a `as const` array plus a type derived from it
-// (`export type X = (typeof XS)[number]`). The spec's enum names are preserved as the type
-// names; the array exists because W3/W4 need the value set at RUNTIME (validation, the
-// auto_approve dial's option list, the dashboard's badge switch) and a bare TS union
-// erases at compile time. P15 ("a phase model, a role set, or a criterion must be
-// replaceable without rewriting the store") is why the values are data, not class state.
-//
-// REQUIRED VS OPTIONAL, stated once (the §4 tables only mark a few fields "required"):
-//   - required  -> §4 marks it required, or it is an enum/boolean/counter that has no
-//                  "unset" state in the spec's own rules (states, locks, counters, the
-//                  dial), or a key a named rule dedupes/looks up on (fingerprint, D-16/D-32)
-//   - optional -> free text §4 describes as a plain field with no stated default
-// Everything else follows the table verbatim.
-//
-// NO BEHAVIOUR LIVES HERE. This module is types plus enum data only — no methods, no
-// imports — so it can be pulled into a browser bundle (the dashboard) and a Node process
-// (the store, the loop) from the same source.
-
-// ---------------------------------------------------------------------------
-// Base record (every §4 collection carries these three bookkeeping fields)
-// ---------------------------------------------------------------------------
+// Generated from the server's `src/shared/types.ts` plus `CriterionLevel`; keep field names
+// in step with `src/server/api/contract.ts` and the OpenAPI document in the server package.
 
 /**
  * The bookkeeping every §4 record carries. `rev` is the compare-and-swap token of T-4:
@@ -39,7 +20,6 @@ export interface StoredRecord {
     created_at: string;
     updated_at: string;
 }
-
 /**
  * A record WITHOUT the four bookkeeping fields — the payload `store.create` takes (W1) and
  * the shape factories like {@link defaultGoal} and `duplicateTemplate` hand back. Kept here
@@ -47,37 +27,21 @@ export interface StoredRecord {
  * `node:fs` into the browser bundle) just to name the type.
  */
 export type RecordInit<T extends StoredRecord> = Omit<T, 'id' | 'rev' | 'created_at' | 'updated_at'>;
-
-// ---------------------------------------------------------------------------
-// §4.1 / §4.2 / §4.4 / §4.17 enums
-// ---------------------------------------------------------------------------
-
 /** §4.1 `phase` — the three pipeline stages. `completed` is a STATUS, never a phase. */
-export const STORY_PHASES = ['summary', 'plotlines', 'chapters'] as const;
-export type StoryPhase = (typeof STORY_PHASES)[number];
 
+export type StoryPhase = 'summary' | 'plotlines' | 'chapters';
 /** §4.1 `status` — whether agents may work on the Story (the sweep dispatches `ready` only, L-0). */
-export const STORY_STATUSES = ['ready', 'pending', 'completed', 'stopped'] as const;
-export type StoryStatus = (typeof STORY_STATUSES)[number];
 
+export type StoryStatus = 'ready' | 'pending' | 'completed' | 'stopped';
 /**
  * §4.1 `pending_kind` — which flavour of waiting this is. The first four are the loop
  * waiting for the Author BY DESIGN; only `stalled` means the loop hit a wall (P14, L-37a).
  */
-export const PENDING_KINDS = [
-    'phase_signoff',
-    'idea_selection',
-    'finding_approval',
-    'drained',
-    'stalled',
-    'none'
-] as const;
-export type PendingKind = (typeof PENDING_KINDS)[number];
 
+export type PendingKind = 'phase_signoff' | 'idea_selection' | 'finding_approval' | 'drained' | 'stalled' | 'none';
 /** §4.1 `trend` — drives the `pending` transition (§6.8). Drained outranks `flat` (L-37a). */
-export const TRENDS = ['improving', 'flat', 'regressing', 'unknown'] as const;
-export type Trend = (typeof TRENDS)[number];
 
+export type Trend = 'improving' | 'flat' | 'regressing' | 'unknown';
 /**
  * §4.10 `cost` / §4.1 `auto_approve` — the finding costs. One list, two jobs (D-35b): the
  * dial that decides which findings skip the Author's approval gate, and the same dial that
@@ -90,14 +54,12 @@ export type Trend = (typeof TRENDS)[number];
  * a `taste`-cost `issue` and a `critical`-cost `proposal` (tools/reader.ts). The Editor's own
  * triage stays unrestricted (D-34a: its cost call is final, and it may re-cost a row to any rung).
  */
-export const FINDING_COSTS = ['critical', 'major', 'minor', 'taste'] as const;
-export type Cost = (typeof FINDING_COSTS)[number];
 
+export type Cost = 'critical' | 'major' | 'minor' | 'taste';
 /**
  * The dial's built-in default (D-35): on for `critical`, `major` and `minor`, off for `taste`.
  * Exported so the store, the tools and the UI cannot drift apart on it.
  */
-export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major', 'minor'];
 
 /**
  * §4.10 `kind` (additive) — WHAT a finding claims, as distinct from `cost`, which says only how much
@@ -119,9 +81,8 @@ export const DEFAULT_AUTO_APPROVE_COSTS: Cost[] = ['critical', 'major', 'minor']
  * and a raise that names no `kind` claims a defect. Order carries no other meaning (unlike `cost`,
  * whose order is the triage scale).
  */
-export const FINDING_KINDS = ['issue', 'proposal'] as const;
-export type FindingKind = (typeof FINDING_KINDS)[number];
 
+export type FindingKind = 'issue' | 'proposal';
 /**
  * §4.12 `roles[].kind` — selects the brief and the PERMISSION ROW, never the tool list
  * (D-17a, T-6a). All five kinds hold the whole catalogue; the server refuses the calls a
@@ -132,53 +93,30 @@ export type FindingKind = (typeof FINDING_KINDS)[number];
  * period/place/facts a Story depends on without ever touching the book. Appending it (rather
  * than inserting) keeps the §4 order of the original four intact.
  */
-export const ROLE_KINDS = ['writer', 'editor', 'critic', 'reader', 'researcher'] as const;
-export type RoleKind = (typeof ROLE_KINDS)[number];
 
+export type RoleKind = 'writer' | 'editor' | 'critic' | 'reader' | 'researcher';
 /** §4.10 `state` — the finding chain: raise (unconfirmed) → verify → approve → fix (D-33, D-34). */
-export const FINDING_STATES = ['unconfirmed', 'confirmed', 'approved', 'fixed', 'disputed', 'discarded'] as const;
-export type FindingState = (typeof FINDING_STATES)[number];
 
+export type FindingState = 'unconfirmed' | 'confirmed' | 'approved' | 'fixed' | 'disputed' | 'discarded';
 /**
  * §4.17 `state` — the Idea lifecycle. `refuted`/`unverifiable` are Editor verdicts;
  * `selected`/`discarded`/`deferred` are the Author's decisions, and the decided ones are
  * the anti-loop memory for that phase only (D-32, D-36).
  */
-export const IDEA_STATES = [
-    'proposed',
-    'verified',
-    'refuted',
-    'unverifiable',
-    'selected',
-    'discarded',
-    'deferred'
-] as const;
-export type IdeaState = (typeof IDEA_STATES)[number];
 
+export type IdeaState = 'proposed' | 'verified' | 'refuted' | 'unverifiable' | 'selected' | 'discarded' | 'deferred';
 /** §4.4 `state` — one chapter's place in the pipeline. */
-export const CHAPTER_STATES = [
-    'outlined',
-    'drafting',
-    'in_pass',
-    'in_review',
-    'needs_author',
-    'done',
-    'needs_recheck'
-] as const;
-export type ChapterState = (typeof CHAPTER_STATES)[number];
 
+export type ChapterState = 'outlined' | 'drafting' | 'in_pass' | 'in_review' | 'needs_author' | 'done' | 'needs_recheck';
 /** §4.7 `state` — the loop's work queue (D-11). */
-export const TASK_STATES = ['open', 'claimed', 'blocked', 'done', 'wontfix'] as const;
-export type TaskState = (typeof TASK_STATES)[number];
 
+export type TaskState = 'open' | 'claimed' | 'blocked' | 'done' | 'wontfix';
 /** §4.13 `state` — one ephemeral harness, spawn to teardown (S-1, S-3, D-18). */
-export const RUN_STATES = ['spawning', 'working', 'reporting', 'torn_down', 'failed', 'abandoned'] as const;
-export type RunState = (typeof RUN_STATES)[number];
 
+export type RunState = 'spawning' | 'working' | 'reporting' | 'torn_down' | 'failed' | 'abandoned';
 /** §4.14 `state` — a directive the loop must propagate, not a chat message (D-19). */
-export const DIRECTIVE_STATES = ['queued', 'propagating', 'done', 'rejected'] as const;
-export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
 
+export type DirectiveState = 'queued' | 'propagating' | 'done' | 'rejected';
 /**
  * §4.15 `state` — competing attempts at one unit. Everything but `selected` is deleted in
  * the selection commit (P13, D-22); the states exist so the deletion and the Author's
@@ -190,53 +128,39 @@ export type DirectiveState = (typeof DIRECTIVE_STATES)[number];
  * Only `drafted` (and the legacy `competing` rows written before this lifecycle existed) are
  * offered to Critics, Readers and the Editor.
  */
-export const REVISION_STATES = ['pending', 'drafted', 'competing', 'selected', 'merged_into', 'discarded'] as const;
-export type RevisionState = (typeof REVISION_STATES)[number];
 
+export type RevisionState = 'pending' | 'drafted' | 'competing' | 'selected' | 'merged_into' | 'discarded';
 /** §4.16 `state` — the agent→Author direction only (D-20, D-20a). */
-export const PROPOSAL_STATES = ['pending', 'accepted', 'rejected'] as const;
-export type ProposalState = (typeof PROPOSAL_STATES)[number];
 
+export type ProposalState = 'pending' | 'accepted' | 'rejected';
 /** §4.15 `unit_kind` — the divergence unit: chapter, plotline, or Summary (§14 item 1d). */
-export const UNIT_KINDS = ['summary', 'plotline', 'chapter'] as const;
-export type UnitKind = (typeof UNIT_KINDS)[number];
 
+export type UnitKind = 'summary' | 'plotline' | 'chapter';
 /** §4.6 `kind` — the ledger's fact classes. */
-export const LEDGER_KINDS = ['setup', 'payoff', 'fact', 'timeline', 'world_rule'] as const;
-export type LedgerKind = (typeof LEDGER_KINDS)[number];
 
+export type LedgerKind = 'setup' | 'payoff' | 'fact' | 'timeline' | 'world_rule';
 /** §4.6 `status` — a ledger fact's standing. `conflict` blocks completion (L-25). */
-export const LEDGER_STATUSES = ['open', 'paid', 'conflict', 'stale'] as const;
-export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
 
+export type LedgerStatus = 'open' | 'paid' | 'conflict' | 'stale';
 /** §4.17 `kind` — what an Idea is: a direction, a possibility, a fact, or a warning. */
-export const IDEA_KINDS = ['direction', 'possibility', 'fact', 'warning'] as const;
-export type IdeaKind = (typeof IDEA_KINDS)[number];
 
+export type IdeaKind = 'direction' | 'possibility' | 'fact' | 'warning';
 /** §4.9 `recommendation` — `stuck` means the reader believes the Story should go `pending`. */
-export const VERDICT_RECOMMENDATIONS = ['advance', 'fix', 'stuck'] as const;
-export type VerdictRecommendation = (typeof VERDICT_RECOMMENDATIONS)[number];
 
+export type VerdictRecommendation = 'advance' | 'fix' | 'stuck';
 /** §4.17 `verification.verdict` — the Editor's fact-check answer (D-27, C-15). */
-export const IDEA_VERDICTS = ['verified', 'refuted', 'unverifiable'] as const;
-export type IdeaVerdict = (typeof IDEA_VERDICTS)[number];
 
+export type IdeaVerdict = 'verified' | 'refuted' | 'unverifiable';
 /**
  * §4.4 / §8.1 `sections[].origin` — who produced a chapter section. `author` makes the
  * span propose-only for every agent (P9, T-2, D-37a); the section is the unit that carries
  * it, which is what makes P9 enforceable without freezing the whole chapter (T-2).
  */
-export const SECTION_ORIGINS = ['writer', 'author'] as const;
-export type SectionOrigin = (typeof SECTION_ORIGINS)[number];
 
+export type SectionOrigin = 'writer' | 'author';
 /** §4.15 / §8.2 `aggregate` — how N fresh agents inside one role answer as one (D-38). */
-export const ROLE_AGGREGATIONS = ['majority', 'merge', 'lead'] as const;
-export type RoleAggregation = (typeof ROLE_AGGREGATIONS)[number];
 
-// ---------------------------------------------------------------------------
-// §4.4 `chapters.sections` — the section-addressable prose (D-7)
-// ---------------------------------------------------------------------------
-
+export type RoleAggregation = 'majority' | 'merge' | 'lead';
 /**
  * One addressable section of chapter prose (D-7): "a long chapter is stored as ordered
  * sections so a reviewer can change one paragraph without rewriting the chapter". A
@@ -259,11 +183,6 @@ export interface ChapterSection {
     /** The `why` of that write (T-5) — the audit line P11 demands. */
     last_why?: string;
 }
-
-// ---------------------------------------------------------------------------
-// §4.1 `stories`
-// ---------------------------------------------------------------------------
-
 /**
  * Phase ①'s standard sampling size: how many no-tool Writers expand one Seed Brief into competing
  * `SummarySample` drafts per round. The number is a STORY setting (`summary_sampling`), not a
@@ -274,17 +193,14 @@ export interface ChapterSection {
  * turning the first pass into a lottery. Every later round is a fresh set written from the kept
  * revision plus the fix tasks, so the rail is a linear Revision 1…N history, not a tree.
  */
-export const DEFAULT_SUMMARY_SAMPLING = 3;
 
 /**
  * Phase ①'s standard Critic count: how many no-tool screening passes judge each sample (§6.4
  * step 4), and how many deep-review Critic passes the selected revision gets (§6.4 step 6). The
  * Author may change it per Story (`summary_critics`).
  */
-export const DEFAULT_SUMMARY_CRITICS = 5;
 
 /** The largest sample/critic count the API accepts — a typo guard, not a model constraint. */
-export const SUMMARY_REVIEW_LIMIT = 20;
 
 /**
  * §4.1 — one work of fiction, the unit of the loop (P3: a Story IS its records).
@@ -505,7 +421,6 @@ export interface Story extends StoredRecord {
      */
     summary_review_history?: SummaryReviewHistoryEntry[];
 }
-
 /**
  * G1 — one row of `Story.summary_review_history` (§3.6, ADDITIVE).
  *
@@ -536,11 +451,6 @@ export interface SummaryReviewHistoryEntry {
      */
     finding_refs?: string[];
 }
-
-// ---------------------------------------------------------------------------
-// §4.2 `summaries` — Phase 1's artifact, one record per Story
-// ---------------------------------------------------------------------------
-
 /**
  * §4.2 — the Summary the whole chain is measured against (D-4: `idea → summary → plotlines
  * → chapters`, every artifact naming the one above it).
@@ -563,11 +473,6 @@ export interface Summary extends StoredRecord {
     /** L-7a: mirrors `stories.summary_locked`. True = even the assistant cannot propose without a backtrack. */
     locked: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// §4.3 `plotlines` — one per chapter, the chapter's contract
-// ---------------------------------------------------------------------------
-
 /** §4.3 + P4: the chapter carries its contract, and the loop asks only "does the artifact deliver it?". */
 export interface Plotline extends StoredRecord {
     story_id: string;
@@ -588,11 +493,6 @@ export interface Plotline extends StoredRecord {
     /** §6.5: set by invalidation (L-11, L-11a) — both directions in time. */
     needs_recheck: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// §4.4 `chapters`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.4 — the prose for one Plotline.
  *
@@ -622,11 +522,6 @@ export interface Chapter extends StoredRecord {
     /** `n/m criteria passed` — rendered, never scored (P6). */
     last_score?: string;
 }
-
-// ---------------------------------------------------------------------------
-// §4.5 `cast`
-// ---------------------------------------------------------------------------
-
 /** §4.5 / D-9: `state_now` is a TRACKED fact — a reviewer checks behaviour against `arc` + `state_now`, not vibes (C-9). */
 export interface CastMember extends StoredRecord {
     story_id: string;
@@ -639,11 +534,6 @@ export interface CastMember extends StoredRecord {
     traits?: string;
     gender?: string;
 }
-
-// ---------------------------------------------------------------------------
-// §4.6 `ledger`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.6 / D-10: the continuity facts. Mechanical checks over this collection (a setup with
  * no payoff, a timeline out of order, a fact contradiction on a shared key) are CODE
@@ -659,11 +549,6 @@ export interface LedgerEntry extends StoredRecord {
     status: LedgerStatus;
     fingerprint?: string;
 }
-
-// ---------------------------------------------------------------------------
-// §4.7 `tasks`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.7 / D-11: the loop's work queue, agent-writable — the queue, not the transcript,
  * holds the plan. `kind` is deliberately free text (P15: a new kind of work must not
@@ -684,11 +569,6 @@ export interface Task extends StoredRecord {
     /** Attempts on this task — the thing that makes "no progress" visible (L-15). */
     attempts: number;
 }
-
-// ---------------------------------------------------------------------------
-// §4.8 `digests`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.8 / D-12a — the derived standing view every fresh run trusts.
  *
@@ -720,11 +600,6 @@ export interface Digest extends StoredRecord {
      */
     journal_seq?: number;
 }
-
-// ---------------------------------------------------------------------------
-// §4.9 `verdicts`
-// ---------------------------------------------------------------------------
-
 /** §5.1 / §4.9: one pass/fail line of a verdict. D-15: a FAILING line with no evidence is invalid. */
 export interface VerdictCriterion {
     criterion: string;
@@ -732,7 +607,6 @@ export interface VerdictCriterion {
     evidence: string;
     finding_ref?: string;
 }
-
 /** §4.9 — one run's pass/fail report against a set of criteria (P6: pass/fail, never a score). */
 export interface Verdict extends StoredRecord {
     story_id: string;
@@ -752,11 +626,6 @@ export interface Verdict extends StoredRecord {
     soft_count: number;
     recommendation: VerdictRecommendation;
 }
-
-// ---------------------------------------------------------------------------
-// §4.10 `findings`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.10 — a named claim with evidence and a fingerprint: a defect (`kind: 'issue'`, the default) or
  * a proposal to improve the text (`kind: 'proposal'`).
@@ -844,15 +713,9 @@ export interface Finding extends StoredRecord {
      */
     group_refs?: string[];
 }
-
-// ---------------------------------------------------------------------------
-// §4.11 `goals`
-// ---------------------------------------------------------------------------
-
 /** §5.1 `checker` — mechanical (server-side, no model call, G-3) vs. LLM judgment. */
-export const CRITERION_CHECKERS = ['code', 'judge'] as const;
-export type CriterionChecker = (typeof CRITERION_CHECKERS)[number];
 
+export type CriterionChecker = 'code' | 'judge';
 /**
  * §5.1 — one pass/fail check. P6: a boolean with a citation, never a 1–10 score, because a
  * fresh context grading numbers is noise. G-6: the question is always answerable against a
@@ -874,7 +737,6 @@ export interface Criterion {
     /** G-2: the smallest change that would satisfy it — every failure names one. */
     fix_hint: string;
 }
-
 /**
  * §4.11 / G-4 — the one shared target every crew's brief carries, so many independent
  * fresh reviewers produce a coherent result.
@@ -894,11 +756,6 @@ export interface Goal extends StoredRecord {
     flat_rounds: number;
     regress_tolerance: number;
 }
-
-// ---------------------------------------------------------------------------
-// §4.12 `templates` — the harness catalogue
-// ---------------------------------------------------------------------------
-
 /**
  * §4.12 `roles[]` — one role inside a crew definition (D-38).
  *
@@ -922,7 +779,6 @@ export interface TemplateRole {
     /** D-38: how those agents collapse to one answer (required when `agents` > 1). */
     aggregate?: RoleAggregation;
 }
-
 /**
  * §4.12 — a harness template: a crew definition, not an employee and not an agent (D-38).
  *
@@ -959,11 +815,6 @@ export interface Template extends StoredRecord {
     /** D-17: built-ins are duplicate-only. */
     editable: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// §4.13 `runs`
-// ---------------------------------------------------------------------------
-
 /**
  * §9 / S-7: one delegated sub-context (D-17e), nested on the run row that spawned it. It is
  * NOT a Work Item and gets no row of its own in the crew panel — the Author's unit of
@@ -975,7 +826,6 @@ export interface RunDelegation {
     summary?: string;
     tokens: number;
 }
-
 /**
  * §4.13 — one ephemeral harness, alive for exactly one Work Item and one Story (S-1, T-3).
  * D-18: the row exists from spawn to teardown so the Author can watch the crew and kill one.
@@ -1018,11 +868,6 @@ export interface Run extends StoredRecord {
      */
     group_refs?: string[];
 }
-
-// ---------------------------------------------------------------------------
-// §4.14 `directives`
-// ---------------------------------------------------------------------------
-
 /** §4.14 / D-19: a line of Author direction the loop must PROPAGATE — tasks, needs_recheck, and a report of what changed. */
 export interface Directive extends StoredRecord {
     story_id: string;
@@ -1031,11 +876,6 @@ export interface Directive extends StoredRecord {
     /** The plotlines/chapters/ledger entries the loop determined it must touch. */
     impact: string[];
 }
-
-// ---------------------------------------------------------------------------
-// §4.15 `revisions`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.15 — one competing attempt at one unit, held side by side until an Editor selects or
  * merges (P13, D-21: visible to the Editor, the Author, and nobody else).
@@ -1088,20 +928,17 @@ export interface Revision extends StoredRecord {
      * fewest high, then fewest total, then earliest) and the dashboard do not have to re-count
      * `sample_reviews` on every read. Written by the `choose_sample` commit.
      */
-    issue_counts?: { critical: number; high: number };
+    issue_counts?: {
+        critical: number;
+        high: number;
+    };
 }
-
-// ---------------------------------------------------------------------------
-// §4.17 `ideas`
-// ---------------------------------------------------------------------------
-
 /** T-10: one citation. A page cited for a claim it does not make gets the Idea `refuted`, not "mostly right" (C-15). */
 export interface IdeaSource {
     url_or_title: string;
     claim: string;
     accessed_at: string;
 }
-
 /** D-27 / D-31: the Editor's two independent answers — is it TRUE, and does this Author WANT it. */
 export interface IdeaVerification {
     verdict: IdeaVerdict;
@@ -1110,7 +947,6 @@ export interface IdeaVerification {
     checked_by_run: string;
     checked_at: string;
 }
-
 /**
  * §4.17 — what Critics and the Author put forward before anything is written.
  *
@@ -1142,11 +978,6 @@ export interface Idea extends StoredRecord {
     /** D-29: the artifact that absorbed it, once written. */
     absorbed_into?: string;
 }
-
-// ---------------------------------------------------------------------------
-// §4.16 `proposals`
-// ---------------------------------------------------------------------------
-
 /**
  * §4.16 / D-20: where every P9 propose-only edit lands, never in the target field.
  * D-20a: this collection is the agent→Author direction ONLY — the Author's own prose edit is
@@ -1161,12 +992,6 @@ export interface Proposal extends StoredRecord {
     run_ref?: string;
     state: ProposalState;
 }
-
-// ---------------------------------------------------------------------------
-// Phase 1 research pipeline — `knowledge`, `seed_briefs`, `sample_reviews`
-// (documents/phase-1-research-pipeline.md §3.2-§3.4)
-// ---------------------------------------------------------------------------
-
 /**
  * `knowledge.importance` — the Researcher's triage scale, ordered most to least load-bearing.
  *
@@ -1175,13 +1000,11 @@ export interface Proposal extends StoredRecord {
  * high entries enter the prompt"); `normal`/`low` stay readable through `readKnowledge` for the
  * deep-review Critic and never enter a sampling prefix.
  */
-export const KNOWLEDGE_IMPORTANCE = ['critical', 'high', 'normal', 'low'] as const;
-export type KnowledgeImportance = (typeof KNOWLEDGE_IMPORTANCE)[number];
 
+export type KnowledgeImportance = 'critical' | 'high' | 'normal' | 'low';
 /** `knowledge.kind` — what class of fact an entry is, so a prompt can pick the ones it needs. */
-export const KNOWLEDGE_KINDS = ['fact', 'world_rule', 'tech', 'period', 'place', 'person', 'other'] as const;
-export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 
+export type KnowledgeKind = 'fact' | 'world_rule' | 'tech' | 'period' | 'place' | 'person' | 'other';
 /**
  * One citation on a Knowledge entry. Same shape as {@link IdeaSource} because T-10's rule is
  * the same rule: a source backs ONE named claim (a page cited for a claim it does not make is
@@ -1192,7 +1015,6 @@ export interface KnowledgeSource {
     claim: string;
     accessed_at: string;
 }
-
 /**
  * §3.2 — the Researcher's artifact: one durable fact the book depends on, with its importance
  * and its sources.
@@ -1219,15 +1041,13 @@ export interface KnowledgeEntry extends StoredRecord {
     /** The Researcher role name/run that last wrote it (P11 attribution). */
     author: string;
 }
-
 /**
  * `seed_briefs.status` — `draft` while the Editor is still structuring, `accepted` once the
  * brief matches the current Seed and every non-optional field is present. The pipeline refuses
  * to sample until an accepted brief exists (§6.4 gate 1).
  */
-export const SEED_BRIEF_STATES = ['draft', 'accepted'] as const;
-export type SeedBriefState = (typeof SEED_BRIEF_STATES)[number];
 
+export type SeedBriefState = 'draft' | 'accepted';
 /**
  * §3.3 — the Editor's structured projection of the Author's Seed.
  *
@@ -1271,34 +1091,14 @@ export interface SeedBrief extends StoredRecord {
     status: SeedBriefState;
     notes?: string;
 }
-
-// ---------------------------------------------------------------------------
-// PHRASE ② — `plotline_briefs`: the Editor's structure pass over a phrase's copied seed
-//
-// WHY A SECOND BRIEF COLLECTION RATHER THAN REUSING `seed_briefs`: a `SeedBrief` is the structure of
-// `stories.idea` (its `seed_hash` is the hash of THAT text), and a Phrase ② brief is the structure of
-// the PHRASE's own copied seed — the compiled Summary the Author pushed in, or the Author's own text.
-// The two describe different inputs of the same Story, they are gated on different hashes, and one
-// accepted `SeedBrief` per Story is a rule the Phase ① pipeline already depends on. Putting both in
-// one collection would make that rule a lie; keeping them apart keeps Phrase ① deletable without
-// touching Phrase ② (the user's "phrases are discrete and independent").
-//
-// WHY A `chapters` ARRAY ON THE BRIEF RATHER THAN A COUNT ALONE: "all chapters are generated from the
-// Seeds in one go (number of chapters set by Editor)" — the structure pass decides the chapter COUNT
-// and the one-line seed of each chapter at the same moment, so the set is materialized whole when the
-// brief is accepted. The per-chapter `seed` lines are what the Writer is handed as the entry's brief;
-// they are not the chapter's prose and never become a `chapters` row.
-// ---------------------------------------------------------------------------
-
 /**
  * `plotline_briefs.status` — the same two-position lifecycle as {@link SeedBriefState}: `draft` while
  * the Editor is still structuring, `accepted` once the brief describes the phrase's CURRENT seed. The
  * acceptance is the moment the chapter entry set is materialized, so a `draft` brief has created no
  * `phrase_groups` rows yet.
  */
-export const PLOTLINE_BRIEF_STATES = ['draft', 'accepted'] as const;
-export type PlotlineBriefState = (typeof PLOTLINE_BRIEF_STATES)[number];
 
+export type PlotlineBriefState = 'draft' | 'accepted';
 /** One chapter's line in a {@link PlotlineBrief}: the order it will hold and the seed it grows from. */
 export interface PlotlineBriefChapter {
     /** 1-based. It becomes the chapter group's `order` and its key's number (`chapter_<order>`). */
@@ -1306,7 +1106,6 @@ export interface PlotlineBriefChapter {
     /** The one-or-two-sentence seed for this chapter, as the Editor wrote it. */
     seed: string;
 }
-
 /**
  * `plotline_briefs` — §3.3's shape applied to a Phrase ② seed: the Editor's structured projection of
  * one phrase's copied seed, carrying the chapter count and the per-chapter seeds.
@@ -1345,7 +1144,6 @@ export interface PlotlineBrief extends StoredRecord {
     research_questions?: string[];
     notes?: string;
 }
-
 /**
  * §3.4 — one screening Critic's `critical`/`high` complaint about ONE sample.
  *
@@ -1400,7 +1198,6 @@ export interface SampledIssue {
      */
     group_refs?: string[];
 }
-
 /**
  * H1 — one screening Critic's verdict on ONE requested fix, for ONE candidate draft.
  *
@@ -1426,7 +1223,6 @@ export interface SampledFixVerification {
     evidence: string;
     note?: string;
 }
-
 /**
  * §3.4 — the screening Critic's one-turn answer, persisted by the engine from the run's
  * validated structured output (§2 decision 2 — the same named exception D-12a makes for the
@@ -1461,25 +1257,6 @@ export interface SampleReview extends StoredRecord {
      */
     fix_verifications?: SampledFixVerification[];
 }
-
-// ---------------------------------------------------------------------------
-// SUMMARY PHRASE — `phrases`, `phrase_groups`, `group_revisions`
-//
-// WHY THREE COLLECTIONS INSTEAD OF ONE: the redesign's unit of work is a GROUP of the Summary
-// (premise / promise / theme / tone / ending — the five fields the `summaries` row already had,
-// now first-class), and the unit of AUDIT is a revision of one group. Splitting them gives the
-// three things the spec of this redesign asks for: a group can be rewritten without touching its
-// siblings (R2), a defect can name the groups it is about (R3), and the Author's history is
-// per-group instead of per-draft-set. The `summaries` row stays exactly as §4 defines it — it
-// becomes a generated compatibility MIRROR of the latest group revisions (R6), which is what lets
-// every existing reader (dashboard, Digest, criteria, phases ②/③) keep working untouched.
-//
-// ADDITIVE LIKE THE OTHER THREE PHASE-① COLLECTIONS (`knowledge`, `seed_briefs`,
-// `sample_reviews`): the names are appended to {@link COLLECTION_NAMES}, every snapshot reader
-// walks that registry, so a `store.json` written before the redesign loads with these three empty
-// and the Story keeps its `'sampling'` behaviour (R6 — readable, not migrated).
-// ---------------------------------------------------------------------------
-
 /**
  * `group_revisions.state` — the two positions one group's revision line can hold.
  *
@@ -1501,9 +1278,8 @@ export interface SampleReview extends StoredRecord {
  * Order of the array is the lifecycle order (archived → latest → discarded), matching the enum style
  * at the top of this file; the numbers are derived per group, never globally.
  */
-export const GROUP_REVISION_STATES = ['archived', 'latest', 'discarded'] as const;
-export type GroupRevisionState = (typeof GROUP_REVISION_STATES)[number];
 
+export type GroupRevisionState = 'archived' | 'latest' | 'discarded';
 /**
  * `phrases` — one Story's phrase: the thing the Author reads as a whole, composed from its groups.
  *
@@ -1614,7 +1390,6 @@ export interface Phrase extends StoredRecord {
     /** D-68 — when the Author chose (the choose commit's own stamp; empty/absent = never chosen). */
     reviewed_at?: string;
 }
-
 /**
  * `phrase_groups` — one writable part of a phrase, holding its CURRENT text.
  *
@@ -1687,7 +1462,6 @@ export interface PhraseGroup extends StoredRecord {
     /** When the current lock was set (the lock commit's own stamp). `null`/absent = no live lock. */
     locked_at?: string | null;
 }
-
 /**
  * Who may put a phrase group into the locked state ({@link PhraseGroup.locked}).
  *
@@ -1695,9 +1469,8 @@ export interface PhraseGroup extends StoredRecord {
  * {@link Story.editor_group_locking} on, and it may never UNLOCK — lifting a lock is the Author's
  * decision, whichever hand set it, so an Editor judgment cannot sign the book back out on its own.
  */
-export const PHRASE_GROUP_LOCK_ACTORS = ['author', 'editor'] as const;
-export type PhraseGroupLockActor = (typeof PHRASE_GROUP_LOCK_ACTORS)[number];
 
+export type PhraseGroupLockActor = 'author' | 'editor';
 /**
  * `group_revisions` — one superseded-or-current text of ONE group (R2's history).
  *
@@ -1764,28 +1537,6 @@ export interface GroupRevision extends StoredRecord {
     /** D-67 — the deep-review RUN whose clean pass stamped this row (P11's audit of the verdict). */
     clean_run_ref?: string;
 }
-
-// ---------------------------------------------------------------------------
-// READER SCORING — `summary_scores` (one Reader run per Summary revision)
-//
-// WHY A COLLECTION RATHER THAN A FIELD ON THE GROUP ROW: the Author asked for a score that
-// ACCUMULATES over time — "have several Reader do this over time" — and a group row holds one
-// current value, so a new install would overwrite the history. One row per (vector, group) keeps
-// every run's answer, which is also what makes the trend readable ("premise was 62, now 81").
-//
-// WHY KEYED BY `vector_hash` AND NOTHING ELSE: the group revision vector is the identity of the
-// installed Overview, and the whole phase-① review pipeline is already keyed that way
-// (`phrase/revisions.ts:groupVectorHash`, `phrase/exclusion.ts:groupReviewSeatKey`). A score is a
-// judgement of ONE state of the book; after a Writer install changes the entire Summary, the old
-// score is still true of the text it was written against, and a new run is owed against the new
-// hash. Same re-arm idiom, no new clock.
-//
-// IT IS DISPLAY-ONLY, and the row's existence is the whole guarantee: nothing in `loop/**` reads
-// this collection, so a 12 cannot block a sign-off and a 100 cannot pass a criterion. That is the
-// documented exception to P6 ("pass/fail criteria, not scores") — a PROGRESS SURFACE the Author
-// reads, not a number the loop decides on (documents/specifications.md, D-65).
-// ---------------------------------------------------------------------------
-
 /**
  * `summary_scores` — one section's score from one Reader run over one installed Overview.
  *
@@ -1815,11 +1566,6 @@ export interface SummaryScore extends StoredRecord {
     /** The Work Item that asked (`wi_summary_score_<hash>`). */
     work_item_ref: string;
 }
-
-// ---------------------------------------------------------------------------
-// Collection registry
-// ---------------------------------------------------------------------------
-
 /**
  * The 20 §4 collection names plus the five this redesign appends, in §4 order.
  * Exported as data so the store, the persistence
@@ -1832,43 +1578,8 @@ export interface SummaryScore extends StoredRecord {
  * additive: every snapshot reader walks this registry, so an old `store.json` loads with the
  * new collections empty (§11.1).
  */
-export const COLLECTION_NAMES = [
-    'stories',
-    'summaries',
-    'plotlines',
-    'chapters',
-    'cast',
-    'ledger',
-    'tasks',
-    'digests',
-    'verdicts',
-    'findings',
-    'goals',
-    'templates',
-    'runs',
-    'directives',
-    'revisions',
-    'ideas',
-    'proposals',
-    'knowledge',
-    'seed_briefs',
-    'sample_reviews',
-    // SUMMARY PHRASE (R1/R2): appended, never inserted, exactly as the phase-① pipeline's three were.
-    // Every snapshot reader walks this registry, so an old `store.json` loads these three empty.
-    'phrases',
-    'phrase_groups',
-    'group_revisions',
-    // READER SCORING (D-65): one Reader run per group vector writes five of these, and they
-    // accumulate across revisions. Appended last, per the additive-only rule.
-    'summary_scores',
-    // PHRASE ② PLOTLINES: the Editor's structure pass over a phrase's COPIED seed (its chapter count
-    // and per-chapter seeds). Appended last, per the additive-only rule, so an old `store.json` loads
-    // with this collection empty.
-    'plotline_briefs'
-] as const;
 
-export type CollectionName = (typeof COLLECTION_NAMES)[number];
-
+export type CollectionName = 'stories' | 'summaries' | 'plotlines' | 'chapters' | 'cast' | 'ledger' | 'tasks' | 'digests' | 'verdicts' | 'findings' | 'goals' | 'templates' | 'runs' | 'directives' | 'revisions' | 'ideas' | 'proposals' | 'knowledge' | 'seed_briefs' | 'sample_reviews' | 'phrases' | 'phrase_groups' | 'group_revisions' | 'summary_scores' | 'plotline_briefs';
 /**
  * `collection -> record type`. The store's typed accessors and the snapshot format both
  * derive from this map, so a new collection is one entry here plus one Store field.
@@ -1897,63 +1608,16 @@ export interface CollectionRecords {
     phrases: Phrase;
     phrase_groups: PhraseGroup;
     group_revisions: GroupRevision;
-    // READER SCORING (D-65) — see `SummaryScore`.
     summary_scores: SummaryScore;
-    // PHRASE ② PLOTLINES — see `PlotlineBrief`.
     plotline_briefs: PlotlineBrief;
 }
-
 /** Any §4 record — the type the journal, the audit trail and generic tool plumbing need. */
 export type AnyRecord = CollectionRecords[CollectionName];
-
 /**
  * `collection -> id singular`, used for the store's `${singular}_${n}` ids (W1). Two
  * collections need a real singular rather than a de-pluralised name (`cast` → a character
  * row, `ledger` → one entry), which is exactly why the map is explicit.
  */
-export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
-    stories: 'story',
-    summaries: 'summary',
-    plotlines: 'plotline',
-    chapters: 'chapter',
-    cast: 'cast_member',
-    ledger: 'ledger_entry',
-    tasks: 'task',
-    digests: 'digest',
-    verdicts: 'verdict',
-    findings: 'finding',
-    goals: 'goal',
-    templates: 'template',
-    runs: 'run',
-    directives: 'directive',
-    revisions: 'revision',
-    ideas: 'idea',
-    proposals: 'proposal',
-    knowledge: 'knowledge_entry',
-    seed_briefs: 'seed_brief',
-    sample_reviews: 'sample_review',
-    // The Summary Phrase collections. `phrase_group` (not `phrase_groups`) is the id singular the
-    // store's `${singular}_${n}` scheme would mint. `phrases` and `phrase_groups` never use that
-    // scheme — their rows carry a persisted UUID minted by `persist.ts:newRecordUid` and preserved by
-    // `store.ts:createWithId` (R1: a group id is an ADDRESS a route, a finding and a run row name).
-    // `group_revisions` DOES use the counter, because a group revision is addressed by
-    // (group id, number) and an Author reading history wants `group_revision_3`, not a UUID.
-    phrases: 'phrase',
-    phrase_groups: 'phrase_group',
-    group_revisions: 'group_revision',
-    // READER SCORING (D-65). The singular is `section_score`, NOT `summary_score`, and the reason is
-    // the id-prefix rule `store.ts:_resolveId` depends on (pinned in `types.test.ts`): `summaries`
-    // already mints `summary_0`, so a `summary_score_0` row would read as a `summary_…` family on a
-    // persisted id alone. `section_score_` is unambiguous against every other singular, and the row is
-    // addressed as (vector_hash, group_id) anyway — the id is just a ledger label.
-    summary_scores: 'section_score',
-    // PHRASE ② PLOTLINES. `plotline_brief` NESTS inside `plotlines`' `plotline_` family, and that is
-    // safe for the reason `phrases`/`phrase_groups` already documents below: `_resolveId` keeps the
-    // LAST prefix match it walked, and `plotline_briefs` is the last entry of `COLLECTION_NAMES`, so a
-    // `plotline_brief_0` id resolves to the brief family and not to a plotline. The nesting is pinned
-    // in `shared/types.test.ts` so a third `plotline_…` collection cannot join it unnoticed.
-    plotline_briefs: 'plotline_brief'
-};
 
 /**
  * The collections whose ids are ADDRESSES their owner mints — `persist.ts:newRecordUid` creating,
@@ -1978,7 +1642,9 @@ export const COLLECTION_SINGULARS: Record<CollectionName, string> = {
  * `phrases`, and `_resolveId` keeps the last prefix match. `store/record-identity.test.ts` pins both
  * halves, so this contract is a behaviour and not an intention.
  */
-export const UID_ADDRESSED_COLLECTIONS = ['phrases', 'phrase_groups'] as const;
 
 /** One of {@link UID_ADDRESSED_COLLECTIONS}. */
-export type UidAddressedCollection = (typeof UID_ADDRESSED_COLLECTIONS)[number];
+export type UidAddressedCollection = 'phrases' | 'phrase_groups';
+
+/** One grouping key: the three phase boundaries plus the whole-Story pass, and C-12 outside them. */
+export type CriterionLevel = 'summary' | 'plotlines' | 'chapters' | 'whole';

@@ -16,12 +16,13 @@
 // stored artifact — the Seed, the Summary, a plotline, the ledger, a template's
 // selection_rules — which is what makes a boolean with a citation possible at all (P6).
 
-import type { Criterion, Goal } from './types';
+import type { StoryVocabulary } from '../api';
+import type { Criterion, Goal } from '../../types';
 
 // The shape itself lives in ./types (so §4.11's `goals.criteria` can hold it without an
 // import cycle); it is re-exported here so a consumer of the Goal contract reads it from the
 // Goal module, exactly as §5.1 presents it.
-export type { Criterion, CriterionChecker } from './types';
+export type { Criterion, CriterionChecker } from '../../types';
 
 // ---------------------------------------------------------------------------
 // §5.2 — the built-in criteria (C-0…C-15)
@@ -297,4 +298,164 @@ export function defaultGoal(storyId: string): Goal {
 /** Convenience lookup for G-2 rendering (`failing: C-4, C-5` needs the label and fix_hint). */
 export function criterionById(id: string): Criterion | undefined {
     return BUILT_IN_CRITERIA.find((criterion) => criterion.id === id);
+}
+
+// ---------------------------------------------------------------------------
+// TEST-ONLY PRODUCT DATA — the server's values, copied into the test scaffolding.
+//
+// The UI production tree does not import this module. The real values are owned by
+// `@underload/storyline` and arrive over the wire (`StoryView.vocabulary` and the phrase
+// projections); tests use this mock so a fixture can build a payload without depending on
+// the server package (the two packages are separate repositories).
+// ---------------------------------------------------------------------------
+
+/** Typed by shape so this mock does not need the server's phrase module. */
+export interface MockPhraseGroupDefinition {
+    key: string;
+    title: string;
+    description: string;
+    order: number;
+}
+
+/** The five Summary groups, in composition order — the server's catalog values. */
+export const MOCK_SUMMARY_GROUPS: readonly MockPhraseGroupDefinition[] = [
+    {
+        key: 'premise',
+        title: 'Premise',
+        description:
+            'What the story is: the situation, who is in it, and the confrontation they are drawn into. One concrete account, no theme statement and no ending.',
+        order: 1
+    },
+    {
+        key: 'promise',
+        title: 'Promise',
+        description:
+            'What the story commits the reader to: the experience it undertakes to deliver, and the terms the rest of the book will be held to.',
+        order: 2
+    },
+    {
+        key: 'theme',
+        title: 'Theme',
+        description:
+            'What the story is about underneath: the argument it makes, stated as a claim the events can be checked against — never as a moral.',
+        order: 3
+    },
+    {
+        key: 'tone',
+        title: 'Tone',
+        description:
+            'Voice, point of view, tense and register the book is written in — the reading surface phase ③ is measured against. Prose qualities named, no sample prose.',
+        order: 4
+    },
+    {
+        key: 'ending',
+        title: 'Ending',
+        description:
+            "Where the story lands and what resolves: the outcome the premise and the promise are answered by, including what is deliberately left open.",
+        order: 5
+    }
+];
+
+/** Every Summary group definition, sorted by order. */
+export function orderedPhraseGroupDefinitions(): MockPhraseGroupDefinition[] {
+    return [...MOCK_SUMMARY_GROUPS].sort((left, right) => left.order - right.order);
+}
+
+/** One Summary group definition by key. */
+export function phraseGroupDefinition(key: string): MockPhraseGroupDefinition | undefined {
+    return MOCK_SUMMARY_GROUPS.find((definition) => definition.key === key);
+}
+
+/**
+ * The producer's composition format, copied for fixtures only: one `## <title>` per non-empty
+ * entry, blank line between, no trailing newline.
+ */
+export function composePhraseContent(
+    entries: ReadonlyArray<{ key: string; title: string; content: string }>,
+    rankOf: (key: string) => number = (key) => phraseGroupDefinition(key)?.order ?? Number.MAX_SAFE_INTEGER
+): string {
+    return [...entries]
+        .sort((left, right) => rankOf(left.key) - rankOf(right.key))
+        .filter((entry) => typeof entry.content === 'string' && entry.content.trim().length > 0)
+        .map((entry) => `## ${entry.title}\n${entry.content.trim()}`)
+        .join('\n\n');
+}
+
+/** FNV-1a 32-bit, rendered as 8 lowercase hex chars — the server's Seed-hash algorithm, mocked. */
+export function seedHashOf(text: string): string {
+    let hash = 0x811c9dc5;
+
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+
+    return hash.toString(16).padStart(8, '0');
+}
+
+/** The stored content format of one chapter entry, copied for fixtures only. */
+export function chapterEntryContent(
+    _group: unknown,
+    fields: {
+        heading?: string;
+        must_happen: string;
+        must_change: string;
+        pov?: string;
+        setups?: string;
+        payoffs?: string;
+    }
+): string {
+    const labels: Array<[string, keyof typeof fields]> = [
+        ['Heading', 'heading'],
+        ['Must happen', 'must_happen'],
+        ['Must change', 'must_change'],
+        ['POV', 'pov'],
+        ['Setups', 'setups'],
+        ['Payoffs', 'payoffs']
+    ];
+
+    return labels
+        .map(([label, field]) => {
+            const value = fields[field];
+
+            return typeof value === 'string' && value.trim() !== '' ? `${label}: ${value.trim()}` : '';
+        })
+        .filter((line) => line !== '')
+        .join('\n');
+}
+
+/** The server's sample/critic defaults, mocked for fixtures. */
+export const DEFAULT_SUMMARY_SAMPLING = 3;
+export const DEFAULT_SUMMARY_CRITICS = 5;
+
+/** The server's auto-approve default, mocked for fixtures. */
+export const DEFAULT_AUTO_APPROVE_COSTS = ['critical', 'major', 'minor'] as const;
+
+/** The server's finding-cost order, mocked for fixtures. */
+export const FINDING_COSTS = ['critical', 'major', 'minor', 'taste'] as const;
+
+/** The criterion checker choices, mocked for fixtures. */
+export const CRITERION_CHECKERS = ['code', 'judge'] as const;
+
+/** The server's accepted bound for a Summary review count, mocked for fixtures. */
+export const SUMMARY_REVIEW_LIMIT = 20;
+
+
+/** The server's Story-frame vocabulary, mocked for fixtures. */
+export function fixtureVocabulary(): StoryVocabulary {
+    return {
+        finding_costs: [...FINDING_COSTS],
+        default_auto_approve: [...DEFAULT_AUTO_APPROVE_COSTS],
+        summary_sampling_default: DEFAULT_SUMMARY_SAMPLING,
+        summary_critics_default: DEFAULT_SUMMARY_CRITICS,
+        summary_review_limit: SUMMARY_REVIEW_LIMIT,
+        criterion_checkers: [...CRITERION_CHECKERS],
+        goal_levels: (Object.keys(LEVELS) as CriterionLevel[]).map((key) => ({
+            key,
+            label: LEVEL_LABELS[key],
+            question: LEVEL_QUESTIONS[key],
+            criteria: [...LEVELS[key]]
+        })),
+        per_chapter_criteria: [...PER_CHAPTER]
+    };
 }

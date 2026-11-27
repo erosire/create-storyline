@@ -8,7 +8,7 @@ import { render, screen, within } from '@testing-library/react';
 import { RevisionsCompare } from './RevisionsCompare';
 import { buildRevisionUnits, revisionBodyText } from './story-contract';
 import { click } from '../testing/shell-fakes';
-import { fixtureActions, fixtureView } from './story-fixtures';
+import { fixtureActions, fixtureView } from '../testing/story-fixtures';
 
 /** The unit the fixture Story is contested on (D-23: it cannot advance until one is chosen). */
 function contestedUnit() {

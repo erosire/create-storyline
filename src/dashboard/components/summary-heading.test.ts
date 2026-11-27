@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { decorateSummaryOverview } from './summary-heading';
-import { composePhraseContent, orderedPhraseGroupDefinitions } from '../../shared/phrase';
+import { composePhraseContent, orderedPhraseGroupDefinitions } from '../testing/product-values';
 import type { SummaryHeadingRow } from './summary-heading';
 
 /** The five titles the producer writes headings from — the catalog, not a list this file invents. */

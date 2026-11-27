@@ -51,15 +51,14 @@ import {
     undoTargetFor,
     unconfirmedBlockingFindings
 } from './story-contract';
-import { NOW, fixtureCompletion, fixtureRuns, fixtureTemplates, fixtureView } from './story-fixtures';
+import { NOW, fixtureCompletion, fixtureRuns, fixtureTemplates, fixtureView } from '../testing/story-fixtures';
 import type { StoryViewData } from './story-contract';
 // The wire slice (`api.ts:SamplingView`), typed so the fixtures below cannot quietly drop one of the two
 // round numbers the projection sends (T12/P1).
 import type { SamplingView } from '../api';
-// The same default the loop dispatches the deep review by (`records.ts:screeningSizeOf`), so the clean
-// baselines spell out the pass count the engine actually owes rather than a number this file picked.
-import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
-import type { Cost, Finding, FindingState, Revision, Run, Story } from '../../shared/types';
+// The same default the server dispatches the deep review by, mocked for this suite.
+import { DEFAULT_SUMMARY_CRITICS } from '../testing/product-values';
+import type { Cost, Finding, FindingState, Revision, Run, Story } from '../../types';
 
 describe('story-contract — phases, locks and backtrack (U-16, L-31, L-32)', () => {
     it('maps which lock signed which phase, with phase ③ signed only by `completed` (L-25a)', () => {

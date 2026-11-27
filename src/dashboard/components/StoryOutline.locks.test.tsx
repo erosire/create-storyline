@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { StoryOutline } from './StoryOutline';
 import { DEFAULT_STORY_SELECTION } from './story-nav';
-import { fixturePhrase, fixtureView } from './story-fixtures';
+import { fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import type { PhraseGroupRow, PhraseView } from '../api';
 
 /**

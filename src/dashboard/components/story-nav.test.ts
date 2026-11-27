@@ -6,7 +6,7 @@
 //   - the selected revision is the one the Summary row carries;
 //   - the tick waits for the round to have a winner and for critical/major work to be gone.
 import { describe, expect, it } from 'vitest';
-import { fixtureReviewRuns, fixtureView } from './story-fixtures';
+import { fixtureReviewRuns, fixtureView } from '../testing/story-fixtures';
 import { lockCheck } from './story-contract';
 import type { StoryViewData } from './story-contract';
 // The wire slice (`api.ts:SamplingView`), typed so a fixture cannot quietly drop the in-flight round
@@ -20,7 +20,7 @@ import {
     summaryRevisions,
     summaryRevisionUnit
 } from './story-nav';
-import type { Finding, Revision, Verdict } from '../../shared/types';
+import type { Finding, Revision, Verdict } from '../../types';
 
 const DRAFT = (id: string, created: string, extra: Partial<Revision> = {}): Revision => ({
     id,

@@ -23,7 +23,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 import { SummaryOverviewPane } from './SummaryOverviewPane';
-import { fixturePhrase, fixtureView } from './story-fixtures';
+import { fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { summaryGroupRef } from './story-nav';
 // T14/AC2 — the pane prints `reviewedSummaryText(view)`; this test calls the SAME selector to prove the
 // decoration is applied at render and never written into the text the selector answers.
@@ -39,7 +39,7 @@ import {
     storyRow
 } from '../testing/shell-fakes';
 import { createDashboardStore } from '../state';
-import { composePhraseContent, orderedPhraseGroupDefinitions } from '../../shared/phrase';
+import { composePhraseContent, orderedPhraseGroupDefinitions } from '../testing/product-values';
 import type { PhraseFindingRow, PhraseGroupScore, PhraseView } from '../api';
 
 /** The mid-review grouped book: the fixture phrase, wired into the view the panes read. */

@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { SettingsPane } from './story-folders';
-import { fixtureActions, fixtureView } from './story-fixtures';
+import { fixtureActions, fixtureView } from '../testing/story-fixtures';
 import { EDITOR_GROUP_LOCKING_LABEL, EDITOR_GROUP_LOCKING_NOTE } from './story-contract';
 
 /** The pane with one Story's payload and a fresh recorder. */

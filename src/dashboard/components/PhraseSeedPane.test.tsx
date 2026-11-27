@@ -20,7 +20,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { PhraseSeedPane } from './PhraseSeedPane';
 import { customSeedRefusal, plotlinesCustomStartNotice, plotlinesHandoffRefusal } from './story-contract';
 import { ALL_STORY_PHRASES, phraseLabel } from './story-nav';
-import { SEED_IDEA, fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
+import { SEED_IDEA, fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { phraseDetailView } from '../testing/shell-fakes';
 import type { PhraseDetailView, PhraseView } from '../api';
 import type { StoryPhraseSpec } from './story-nav';

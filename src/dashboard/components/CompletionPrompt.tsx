@@ -7,7 +7,7 @@
 // itself is not information, and neither is a to-do list quietly emptied.
 import { completionDiscardSentence } from './story-contract';
 import type { CompletionPreview } from './story-contract';
-import type { Story } from '../../shared/types';
+import type { Story } from '../../types';
 
 export interface CompletionPromptProps {
     preview: CompletionPreview;

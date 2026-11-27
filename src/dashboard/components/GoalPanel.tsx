@@ -12,9 +12,8 @@
 // (L-14 makes an unreached level `n/a`, not `0/n`), so the levels ahead of the Story are listed
 // in a collapsed "not reached" group with no pass/fail badge at all.
 import { useState } from 'react';
-import { LEVELS, LEVEL_LABELS, LEVEL_QUESTIONS, PER_CHAPTER } from '../../shared/criteria';
-import { CRITERION_CHECKERS } from '../../shared/types';
-import type { Chapter, Criterion, CriterionChecker, Goal, StoryPhase } from '../../shared/types';
+import type { Chapter, Criterion, CriterionChecker, Goal, StoryPhase } from '../../types';
+import type { GoalLevelView } from '../api';
 import type { GoalFailingLine, GoalCriterionOp, GoalPatch } from './story-contract';
 
 /** Which levels belong to which phase (§5.2's levels table; ③ carries the whole-Story level too). */
@@ -37,6 +36,12 @@ export interface GoalPanelProps {
     /** chapter id -> the server's per-chapter progress string. */
     chapterProgress: Record<string, string>;
     chapters: Chapter[];
+    /** The server's Goal-level vocabulary (label, question and criterion ids), in level order. */
+    levels: GoalLevelView[];
+    /** Criterion ids judged per chapter rather than inside a level (the server's `per_chapter`). */
+    perChapter: string[];
+    /** The checker choices the server accepts for a new criterion (G-3). */
+    criterionCheckers: CriterionChecker[];
     /**
      * G-1: every one of these is the Author's right; absent means the endpoint has not landed.
      *
@@ -56,6 +61,9 @@ export function GoalPanel({
     failing,
     chapterProgress,
     chapters,
+    levels: goalLevels,
+    perChapter,
+    criterionCheckers,
     onPatchGoal,
     onSetChapterBar
 }: GoalPanelProps) {
@@ -64,7 +72,11 @@ export function GoalPanel({
     const criterionById = new Map(goal.criteria.map((criterion) => [criterion.id, criterion]));
 
     const levels = phaseLevels(phase);
-    const reached = new Set<string>([...levels.flatMap((level) => LEVELS[level]), ...PER_CHAPTER]);
+    const levelById = new Map(goalLevels.map((level) => [level.key, level] as const));
+    const reached = new Set<string>([
+        ...levels.flatMap((level) => levelById.get(level)?.criteria ?? []),
+        ...perChapter
+    ]);
     const ahead = goal.criteria.filter((criterion) => !reached.has(criterion.id));
 
     const [thresholdDraft, setThresholdDraft] = useState(String(goal.threshold_soft));
@@ -98,14 +110,19 @@ export function GoalPanel({
             {/* G-2 — the number line, verbatim from the server. */}
             <p className="sv-goal-progress">{progress}</p>
 
-            {levels.map((level) => (
+            {levels.map((level) => {
+                const levelView = levelById.get(level);
+
+                if (levelView === undefined) return null;
+
+                return (
                 <div className="sv-goal-level" key={level}>
                     {/* G-2 renders per-phase progress per level, so the level is named, not implied. */}
-                    <h4 className="sv-goal-level-title">{LEVEL_LABELS[level]}</h4>
-                    <p className="sv-goal-level-question">{LEVEL_QUESTIONS[level]}</p>
+                    <h4 className="sv-goal-level-title">{levelView.label}</h4>
+                    <p className="sv-goal-level-question">{levelView.question}</p>
 
                     <ul className="sv-goal-criteria">
-                        {LEVELS[level].map((id) => {
+                        {levelView.criteria.map((id) => {
                             const criterion = criterionById.get(id);
                             if (!criterion) {
                                 // The Author deleted this criterion (G-1) but the roster still names it.
@@ -184,7 +201,8 @@ export function GoalPanel({
                         })}
                     </ul>
                 </div>
-            ))}
+                );
+            })}
 
             {ahead.length > 0 ? (
                 // G-2 / L-14: an unreached level is `n/a`, so these carry no badge and no failure.
@@ -293,7 +311,7 @@ export function GoalPanel({
                                 setDraft({ ...draft, checker: event.target.value as CriterionChecker })
                             }
                         >
-                            {CRITERION_CHECKERS.map((checker) => (
+                            {criterionCheckers.map((checker) => (
                                 <option key={checker} value={checker}>
                                     {checker}
                                 </option>

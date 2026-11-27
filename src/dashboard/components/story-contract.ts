@@ -66,12 +66,7 @@ import type {
     Template,
     TemplateRole,
     Verdict
-} from '../../shared/types';
-// Phase ①'s Critics-per-sample default. It is a SHARED constant (`shared/types.ts`, the same value
-// `records.ts:screeningSizeOf` falls back to), so the dashboard's owed-review readout counts the
-// passes the loop actually dispatches rather than a number this file invented.
-import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
-
+} from '../../types';
 export type { CompletionPreview, CostDistribution, FailingCriterion };
 // R6 — the group rows the Summary rail and its panes render. Aliased here (rather than imported at every
 // call site) so the panels keep reading ONE module for their view contract, and so the shapes the panes
@@ -854,13 +849,17 @@ export function unconfirmedBlockingFindings(view: StoryViewData): Finding[] {
     );
 }
 
-/** The Author's Critics-per-sample count (D-17d) — `records.ts:screeningSizeOf`, mirrored not imported. */
-export const summaryCriticsOf = (story: Story): number => {
-    const raw = story.summary_critics;
+/**
+ * The Author's Critics-per-sample count (D-17d): the Story record's own setting when it carries one,
+ * otherwise the server's projected default (`StoryView.vocabulary`). Both values arrive on the wire;
+ * the UI keeps no copy of either.
+ */
+export const summaryCriticsOf = (view: Pick<StoryViewData, 'story' | 'vocabulary'>): number => {
+    const raw = view.story.summary_critics;
 
     if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
 
-    return DEFAULT_SUMMARY_CRITICS;
+    return view.vocabulary.summary_critics_default;
 };
 
 /**
@@ -934,7 +933,7 @@ export function deepReviewProgress(view: StoryViewData, selected: Revision | und
         else rows.push(run);
     }
 
-    const passes = summaryCriticsOf(view.story);
+    const passes = summaryCriticsOf(view);
     const context = summaryScopeContext(view);
     const closedFor = (pass: number): boolean =>
         (runsByKey.get(deepReviewKeyOf(selected.id, pass)) ?? []).some((run) => !isLiveRun(run));
@@ -1694,9 +1693,10 @@ export function groupBlockingFindings(view: StoryViewData, groupId: string): Phr
  * asking the Author something, and an accept is not the Author's answer. `ACCEPT_SWEPT_TASK_STATES` below is
  * the client's mirror of the sweep, and the statement uses THAT count, never this one.
  *
- * WHY THE CLIENT CARRIES ITS OWN COPY INSTEAD OF IMPORTING THE SERVER'S: `src/server/**` is a separate
- * module boundary from the desk (this file's standing rule — the desk derives from the WIRE it is handed,
- * never from server internals), and the three-state list is the fact the desk has to agree with.
+ * WHY THE CLIENT CARRIES ITS OWN COPY INSTEAD OF IMPORTING THE SERVER'S: the server is a separate
+ * package and repository (`@underload/storyline`), never a module this desk may import (this file's
+ * standing rule — the desk derives from the WIRE it is handed), and the three-state list is the fact
+ * the desk has to agree with.
  *
  * THE DEFECT THIS REMOVES: the gate used to ask `task.state !== 'done'`, which left a `wontfix` row — a task
  * the crew settled by DECLINING it — holding the Accept button greyed forever. `wontfix` is a closed state

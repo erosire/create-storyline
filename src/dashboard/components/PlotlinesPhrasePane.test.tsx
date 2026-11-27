@@ -17,12 +17,12 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PlotlinesEntryPane, PlotlinesOverviewPane } from './PlotlinesPhrasePane';
-import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { plotlinesSurfaceView, type StoryViewData } from './story-contract';
 import { phraseDetailView } from '../testing/shell-fakes';
-import { chapterEntryContent } from '../../server/phrase/plotpoints';
+import { chapterEntryContent } from '../testing/product-values';
 import type { PhraseDetailView, PhraseGroupRow } from '../api';
-import type { PhraseGroup } from '../../shared/types';
+import type { PhraseGroup } from '../../types';
 import type { StorySelection } from './story-nav';
 
 /**

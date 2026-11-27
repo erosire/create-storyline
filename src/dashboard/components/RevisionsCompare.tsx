@@ -31,7 +31,7 @@
 import { draftVerdicts, revisionBodyText } from './story-contract';
 import { MarkdownText } from './MarkdownText';
 import type { RevisionUnit } from './story-contract';
-import type { Revision, Verdict } from '../../shared/types';
+import type { Revision, Verdict } from '../../types';
 
 /**
  * U-13's verdict block for one draft column: the §4.9 row as the record states it — hard pass/fail,

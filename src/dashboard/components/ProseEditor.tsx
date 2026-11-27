@@ -20,7 +20,7 @@
 import { useState } from 'react';
 import { pendingProposalsFor } from './story-contract';
 import { ProposalRow } from './story-proposal-row';
-import type { Chapter, Proposal, Story } from '../../shared/types';
+import type { Chapter, Proposal, Story } from '../../types';
 
 export interface ProseEditorProps {
     chapter: Chapter;

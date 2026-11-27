@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PhaseStrip } from './PhaseStrip';
-import { fixtureStory } from './story-fixtures';
+import { fixtureStory } from '../testing/story-fixtures';
 
 function story() {
     return fixtureStory();

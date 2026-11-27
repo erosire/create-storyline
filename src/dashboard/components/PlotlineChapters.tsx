@@ -27,7 +27,7 @@ import {
     undoTargetFor
 } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
-import type { Chapter, Plotline } from '../../shared/types';
+import type { Chapter, Plotline } from '../../types';
 
 /** The plotline that governs one chapter (D-4: every artifact names the one above it). */
 function plotlineFor(chapter: Chapter, plotlines: Plotline[]): Plotline | undefined {

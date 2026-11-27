@@ -5,11 +5,13 @@ import { render, screen, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { GoalPanel } from './GoalPanel';
 import { click, type } from '../testing/shell-fakes';
-import { fixtureActions, fixtureGoal, fixtureChapters } from './story-fixtures';
+import { fixtureActions, fixtureGoal, fixtureChapters } from '../testing/story-fixtures';
+import { fixtureVocabulary } from '../testing/product-values';
 
 /** Renders the panel at phase ③ (the chapters + whole-Story levels are the reached ones). */
 function renderGoal(props: Partial<Parameters<typeof GoalPanel>[0]> = {}): ReactElement {
     const goal = fixtureGoal();
+    const vocabulary = fixtureVocabulary();
     return (
         <GoalPanel
             goal={goal.goal}
@@ -18,6 +20,9 @@ function renderGoal(props: Partial<Parameters<typeof GoalPanel>[0]> = {}): React
             failing={goal.failing}
             chapterProgress={goal.chapter_progress}
             chapters={fixtureChapters()}
+            levels={vocabulary.goal_levels}
+            perChapter={vocabulary.per_chapter_criteria}
+            criterionCheckers={vocabulary.criterion_checkers}
             {...props}
         />
     );

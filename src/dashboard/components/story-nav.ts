@@ -10,7 +10,7 @@
 // four reading phrases — Summary, Characters, Plotlines, Chapters. The loop's `story.phase` still
 // moves through its three locked artifacts; Characters is a supporting sheet the crew builds from
 // the Summary, so it has no `StoryPhase` of its own yet (the "Phrase 2 can be started" step).
-import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../shared/types';
+import type { Chapter, Finding, Plotline, Revision, Run, Verdict } from '../../types';
 import type { PhraseGroupRow, PhraseLockActor } from './story-contract';
 import {
     buildRevisionUnits,

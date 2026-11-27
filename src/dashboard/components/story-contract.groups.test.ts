@@ -73,15 +73,15 @@ import {
     summaryBlockingCost,
     unwrittenGroups
 } from './story-contract';
-import { fixtureGoal, fixtureIdeas, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureGoal, fixtureIdeas, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 // R-T2/F1: the rail's ready tick and the Accept button are the SAME fact, and the regression below asserts
 // both, so the nav module's derivation is under test here as well as the contract's blocker list.
 import { summaryReadyForReview } from './story-nav';
 import { groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
 import type { StoryViewData } from './story-contract';
 import type { PhraseFindingRow, PhraseGroupRow, PhraseGroupScore, PhraseTaskRow, PhraseView } from '../api';
-import type { Cost } from '../../shared/types';
-import type { Story } from '../../shared/types';
+import type { Cost } from '../../types';
+import type { Story } from '../../types';
 
 /** The mid-review grouped book: unwritten Ending, open findings, a claimed task, Theme held by the Writer. */
 function midReview() {

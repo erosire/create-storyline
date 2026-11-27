@@ -69,6 +69,7 @@ function Shell() {
         agents,
         selectedAgent,
         agentThreads,
+        agentThreadsHasMore,
         agentModels,
         loop,
     } = useDashboard();
@@ -221,6 +222,8 @@ function Shell() {
                                     threads={agentThreads[selectedAgent] ?? []}
                                     now={now}
                                     onKillRun={(runId) => void store.killRun(runId)}
+                                    hasMore={agentThreadsHasMore[selectedAgent] ?? false}
+                                    onLoadMore={() => void store.loadMoreAgentThreads(selectedAgent)}
                                 />
                             </div>
                             <DirectiveBar selection={selection} />

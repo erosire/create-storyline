@@ -22,9 +22,9 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import { SummaryGroupPane } from './SummaryGroupPane';
-import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { click, groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
-import { phraseGroupDefinition } from '../../shared/phrase';
+import { phraseGroupDefinition } from '../testing/product-values';
 import type { PhraseView } from '../api';
 
 /** The mid-review grouped book. */

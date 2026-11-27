@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { earlierDecisionOf, isDecidedIdea, isVerifiedIdea } from './story-contract';
 import { PHASE_LABELS } from './story-contract';
-import type { Idea, StoryPhase } from '../../shared/types';
+import type { Idea, StoryPhase } from '../../types';
 
 /** Verified Ideas sort first — D-27: "the Author selects among verified Ideas first". */
 function trayOrder(a: Idea, b: Idea): number {

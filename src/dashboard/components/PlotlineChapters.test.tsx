@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { PlotlineChapters } from './PlotlineChapters';
 import { click } from '../testing/shell-fakes';
-import { fixtureActions, fixtureFindings, fixtureView } from './story-fixtures';
+import { fixtureActions, fixtureFindings, fixtureView } from '../testing/story-fixtures';
 
 function renderPane(props: Partial<Parameters<typeof PlotlineChapters>[0]> = {}) {
     const { actions } = fixtureActions();

@@ -9,7 +9,7 @@
 // here (D-20a) — they are direct writes made from a pause (D-37).
 import { useState } from 'react';
 import { diffWords, patchOf } from './story-contract';
-import type { Proposal } from '../../shared/types';
+import type { Proposal } from '../../types';
 
 export interface ProposalRowProps {
     proposal: Proposal;

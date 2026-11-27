@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PlotlinesHandoff } from './PlotlinesHandoff';
-import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import type { StorySelection } from './story-nav';
 // R7 — the notice the card prints beside a shut compiled arm is the contract module's derivation, and this file
 // asserts the pane renders THAT string, not a copy of it the pane could reword. The cleanup's four sentences are

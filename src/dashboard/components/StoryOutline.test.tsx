@@ -11,7 +11,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { StoryOutline } from './StoryOutline';
 import { DEFAULT_STORY_SELECTION, phraseSeedRef } from './story-nav';
 import type { StorySelection } from './story-nav';
-import { fixturePhrase, fixtureStory, fixtureSummary, fixtureView } from './story-fixtures';
+import { fixturePhrase, fixtureStory, fixtureSummary, fixtureView } from '../testing/story-fixtures';
 // R-T2/F1 + F2: the rail's ready tick and its phrase-read line are driven by the same frame the gate reads,
 // so the regression is pinned on the real rail — the five clean rows coming from the wire-shaped projection.
 import { groupedPhraseView, phraseDetailView } from '../testing/shell-fakes';
@@ -19,7 +19,7 @@ import { groupedPhraseView, phraseDetailView } from '../testing/shell-fakes';
 // builder has to return so a wrong field name fails at compile time rather than as an empty rail.
 import type { PhraseDetailView } from '../api';
 import type { StoryViewData } from './story-contract';
-import type { Cost, Finding, FindingState } from '../../shared/types';
+import type { Cost, Finding, FindingState } from '../../types';
 
 /**
  * One settled Summary round for the discard tests (T4/R1 + R2): Revision 1 parked WITH a recorded reason,

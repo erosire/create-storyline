@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import { SummaryGroupPane } from './SummaryGroupPane';
-import { fixtureActions, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureActions, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { click, groupedPhraseView } from '../testing/shell-fakes';
 import type { PhraseGroupRow } from '../api';
 

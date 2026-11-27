@@ -50,17 +50,20 @@ import {
     type PhraseView,
     // R7 — the store's cleanup verb hands the PROPOSAL back to the card that asked (see the verb below).
     type SeedCleanupProposal,
-    type StoryKnowledgeTree
+    type StoryKnowledgeTree,
+    PAGE_SIZE
 } from './api';
 // R4 — `ProjectedRun` is the crew listing's row shape (the §4.13 record plus its phrase attribution); `Run`
 // itself no longer appears in this file, because every run this store holds came from that listing.
 import type { ProjectedRun } from './api';
-import type { Cost, Template } from '../shared/types';
+import type { Cost, Template } from '../types';
 
 /** Everything a render may read. One immutable object, replaced wholesale on every change. */
 export interface DashboardSnapshot {
     /** U-1 — the STORIES panel's rows, unsorted (the panel owns the awaiting→ready→done order). */
     stories: StoryRow[];
+    /** True while the server holds a chunk after the last row loaded. */
+    storiesHasMore: boolean;
     /** The Story THE STORY region shows; `null` is the Author's queue (U-10 home view). */
     activeStoryId: string | null;
     /** `story_id -> the last full read`, refetched on every event and every local mutation. */
@@ -123,6 +126,8 @@ export interface DashboardSnapshot {
     knowledge: Record<string, StoryKnowledgeTree>;
     /** U-10 — the cross-Story queue, in the server's order (already triaged by W3/W4f). */
     queue: QueueItem[];
+    /** True while the server holds another queue chunk. */
+    queueHasMore: boolean;
     /**
      * U-7 — runs for the active Story, or every Story when none is selected.
      *
@@ -137,6 +142,8 @@ export interface DashboardSnapshot {
      * spawn) and the desk renders those with the same honest line rather than inventing a phrase.
      */
     runs: ProjectedRun[];
+    /** True while the server holds another runs chunk for the current scope. */
+    runsHasMore: boolean;
     /** U-8 — the §4.12 catalogue. */
     templates: Template[];
     /** The global employee roster and every Story thread each employee is working right now. */
@@ -148,6 +155,8 @@ export interface DashboardSnapshot {
     selectedAgent: string | null;
     /** `employee kind -> every retained thread, oldest first` (the tile-opened content surface). */
     agentThreads: Record<string, AgentThreadRecord[]>;
+    /** `employee kind -> true while the server holds another thread chunk`. */
+    agentThreadsHasMore: Record<string, boolean>;
     /**
      * U-8 — the provider's model catalog (`GET /agents/models`). The employee tiles offer exactly
      * these ids; an empty list means the catalog has not answered yet, never that typing is allowed.
@@ -169,6 +178,7 @@ export interface DashboardSnapshot {
 
 const EMPTY_SNAPSHOT: DashboardSnapshot = {
     stories: [],
+    storiesHasMore: false,
     activeStoryId: null,
     storyViews: {},
     phrases: {},
@@ -179,11 +189,14 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
     phraseDetailErrors: {},
     knowledge: {},
     queue: [],
+    queueHasMore: false,
     runs: [],
+    runsHasMore: false,
     templates: [],
     agents: [],
     selectedAgent: null,
     agentThreads: {},
+    agentThreadsHasMore: {},
     agentModels: [],
     loop: null,
     queueStoryFilter: null,
@@ -242,10 +255,24 @@ export function createDashboardStore(client: ApiClient = api) {
         return flight;
     };
 
-    const refreshStories = (): Promise<void> =>
-        refresh('stories', async () => ({ stories: await client.listStories(), loading: false }));
+    /** How many rows to ask for on a refresh: at least one chunk, and every chunk already on screen. */
+    const loadedLimit = (loaded: number): number => Math.max(PAGE_SIZE, loaded);
 
-    const refreshQueue = (): Promise<void> => refresh('queue', async () => ({ queue: await client.getQueue() }));
+    const refreshStories = (): Promise<void> =>
+        refresh('stories', async () => {
+            const limit = loadedLimit(snapshot.stories.length);
+            const stories = await client.listStories({ limit, offset: 0 });
+
+            return { stories, storiesHasMore: stories.length === limit, loading: false };
+        });
+
+    const refreshQueue = (): Promise<void> =>
+        refresh('queue', async () => {
+            const limit = loadedLimit(snapshot.queue.length);
+            const queue = await client.getQueue({ limit, offset: 0 });
+
+            return { queue, queueHasMore: queue.length === limit };
+        });
 
     const refreshTemplates = (): Promise<void> =>
         refresh('templates', async () => ({ templates: await client.listTemplates() }));
@@ -258,9 +285,14 @@ export function createDashboardStore(client: ApiClient = api) {
      */
     const refreshAgentThreads = (kind: string): Promise<void> =>
         refresh(`agentThreads:${kind}`, async () => {
-            const list = await client.listAgentThreads(kind);
+            const loaded = snapshot.agentThreads[kind] ?? [];
+            const limit = loadedLimit(loaded.length);
+            const list = await client.listAgentThreads(kind, { limit, offset: 0 });
 
-            return { agentThreads: { ...snapshot.agentThreads, [kind]: list.threads } };
+            return {
+                agentThreads: { ...snapshot.agentThreads, [kind]: list.threads },
+                agentThreadsHasMore: { ...snapshot.agentThreadsHasMore, [kind]: list.threads.length === limit }
+            };
         });
 
     /** U-8 — the provider's catalog. Read once per page; a provider restart is a later reload's job. */
@@ -283,7 +315,12 @@ export function createDashboardStore(client: ApiClient = api) {
         });
 
     const refreshRuns = (): Promise<void> =>
-        refresh('runs', async () => ({ runs: await client.listRuns(snapshot.activeStoryId ?? undefined) }));
+        refresh('runs', async () => {
+            const limit = loadedLimit(snapshot.runs.length);
+            const runs = await client.listRuns(snapshot.activeStoryId ?? undefined, { limit, offset: 0 });
+
+            return { runs, runsHasMore: runs.length === limit };
+        });
 
     const refreshStory = (storyId: string): Promise<void> =>
         refresh(`story:${storyId}`, async () => {
@@ -294,7 +331,7 @@ export function createDashboardStore(client: ApiClient = api) {
             // R10 — that carried slice is LABELLED at the source (`projections.ts:storyView` → `projectRunRow`),
             // so this shortcut cannot leave the crew slot with unlabelled rows while `GET /runs` has labels.
             return storyId === snapshot.activeStoryId
-                ? { storyViews, runs: view.runs, loading: false }
+                ? { storyViews, runs: view.runs, runsHasMore: false, loading: false }
                 : { storyViews, loading: false };
         });
 
@@ -695,6 +732,68 @@ export function createDashboardStore(client: ApiClient = api) {
         },
         setQueueFilter(storyId: string | null): void {
             commit({ queueStoryFilter: storyId });
+        },
+
+        /** U-1 — fetch the next Stories chunk and append it. */
+        async loadMoreStories(): Promise<void> {
+            if (!snapshot.storiesHasMore) return;
+
+            try {
+                const items = await client.listStories({ limit: PAGE_SIZE, offset: snapshot.stories.length });
+
+                commit({
+                    stories: [...snapshot.stories, ...items],
+                    storiesHasMore: items.length === PAGE_SIZE
+                });
+            } catch (error) {
+                commit({ error: failureText(error) });
+            }
+        },
+        /** U-10 — fetch the next queue chunk and append it. */
+        async loadMoreQueue(): Promise<void> {
+            if (!snapshot.queueHasMore) return;
+
+            try {
+                const items = await client.getQueue({ limit: PAGE_SIZE, offset: snapshot.queue.length });
+
+                commit({ queue: [...snapshot.queue, ...items], queueHasMore: items.length === PAGE_SIZE });
+            } catch (error) {
+                commit({ error: failureText(error) });
+            }
+        },
+        /** U-7 — fetch the next crew chunk for the current Story scope. */
+        async loadMoreRuns(): Promise<void> {
+            if (!snapshot.runsHasMore) return;
+
+            try {
+                const items = await client.listRuns(snapshot.activeStoryId ?? undefined, {
+                    limit: PAGE_SIZE,
+                    offset: snapshot.runs.length
+                });
+
+                commit({ runs: [...snapshot.runs, ...items], runsHasMore: items.length === PAGE_SIZE });
+            } catch (error) {
+                commit({ error: failureText(error) });
+            }
+        },
+        /** U-8 — fetch the next thread chunk for one employee and append it. */
+        async loadMoreAgentThreads(kind: string): Promise<void> {
+            if (!(snapshot.agentThreadsHasMore[kind] ?? false)) return;
+
+            try {
+                const loaded = snapshot.agentThreads[kind] ?? [];
+                const list = await client.listAgentThreads(kind, { limit: PAGE_SIZE, offset: loaded.length });
+
+                commit({
+                    agentThreads: { ...snapshot.agentThreads, [kind]: [...loaded, ...list.threads] },
+                    agentThreadsHasMore: {
+                        ...snapshot.agentThreadsHasMore,
+                        [kind]: list.threads.length === PAGE_SIZE
+                    }
+                });
+            } catch (error) {
+                commit({ error: failureText(error) });
+            }
         },
 
         // ---- reads -------------------------------------------------------------------

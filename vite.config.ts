@@ -1,7 +1,8 @@
-// Vite configuration for the create-storyline app (the dashboard + server pair
-// that T1/T2 fill in). Modelled on distribution/chat-assistant/vite.config.ts —
-// the repo's only other dashboard+harness app — with the mount contract and the
-// dev port/proxy swapped for this package's decisions.
+// Vite configuration for the Storyline UI (this package is the dashboard only;
+// the server is the separate `@underload/storyline` package/repository). Modelled
+// on distribution/chat-assistant/vite.config.ts — the repo's only other
+// dashboard+harness app — with the mount contract and the dev port/proxy swapped
+// for this package's decisions.
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';

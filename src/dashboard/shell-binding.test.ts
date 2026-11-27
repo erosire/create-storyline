@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { assignedTemplates, criteriaOps, shellActions, storyViewData } from './shell-binding';
 import { fakeHarness, storyRow, storyView } from './testing/shell-fakes';
 import type { SeedCleanupProposal } from './api';
-import type { Chapter, Criterion, Template } from '../shared/types';
+import type { Chapter, Criterion, Template } from '../types';
 
 const criterion = (id: string, hard: boolean): Criterion => ({
     id,

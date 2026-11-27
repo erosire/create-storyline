@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { crewPhraseMarks } from './story-nav';
-import { fixtureRuns } from './story-fixtures';
+import { fixtureRuns } from '../testing/story-fixtures';
 import type { ProjectedRun } from '../api';
 
 const [FIXTURE_LIVE, FIXTURE_CLOSED] = fixtureRuns();

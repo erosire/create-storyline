@@ -17,9 +17,8 @@ import { render, screen } from '@testing-library/react';
 
 import { MarkdownText } from './MarkdownText';
 import { revisionBodyText } from './story-contract';
-import { chapterEntryContent } from '../../server/phrase/plotpoints';
-import { composePhraseContent } from '../../shared/phrase';
-import type { PhraseGroup } from '../../shared/types';
+import { chapterEntryContent, composePhraseContent } from '../testing/product-values';
+import type { PhraseGroup } from '../../types';
 
 /** The shape `shared/phrase.ts:composePhraseContent` actually produces: a heading per group, prose under it. */
 const OVERVIEW = [

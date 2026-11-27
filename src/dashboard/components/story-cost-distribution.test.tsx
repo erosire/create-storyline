@@ -7,7 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CostDistributionPanel } from './story-cost-distribution';
-import { fixtureCostDistribution } from './story-fixtures';
+import { fixtureCostDistribution } from '../testing/story-fixtures';
+import { FINDING_COSTS } from '../testing/product-values';
+
+const COSTS = [...FINDING_COSTS];
 
 function stats(): Array<[string, string]> {
     return Array.from(document.querySelectorAll<HTMLElement>('.sv-cost-stat')).map((stat) => [
@@ -18,7 +21,7 @@ function stats(): Array<[string, string]> {
 
 describe('CostDistributionPanel — the number behind a triage with no appeal (decision 17, D-34a)', () => {
     it('counts confirmations per cost and the downgrades, in the fixed cost order', () => {
-        render(<CostDistributionPanel distribution={fixtureCostDistribution()} />);
+        render(<CostDistributionPanel distribution={fixtureCostDistribution()} costs={COSTS} />);
 
         // The window is named, or the block would imply "all time" (E-1's honesty).
         expect(screen.getByText('Cost distribution — the last rounds')).toBeTruthy();
@@ -45,6 +48,7 @@ describe('CostDistributionPanel — the number behind a triage with no appeal (d
         render(
             <CostDistributionPanel
                 distribution={{ confirmed_per_cost: { critical: 3, major: 2, minor: 1, taste: 0 }, downgrades: 0 }}
+                costs={COSTS}
                 windowLabel="the current phase"
             />
         );
@@ -64,7 +68,7 @@ describe('CostDistributionPanel — the number behind a triage with no appeal (d
 
     it('renders a cost the server never reported as zero, never as a missing row', () => {
         render(
-            <CostDistributionPanel distribution={{ confirmed_per_cost: { critical: 1 } as never, downgrades: 2 }} />
+            <CostDistributionPanel distribution={{ confirmed_per_cost: { critical: 1 } as never, downgrades: 2 }} costs={COSTS} />
         );
 
         // The four costs are the fixed list (§4.1 `auto_approve` doubles as the dial), so a partial

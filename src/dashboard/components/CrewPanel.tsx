@@ -30,7 +30,7 @@ import { formatElapsed, isLiveRun, panelDissent } from './story-contract';
 // leave the crew panel printing the old number.
 import { ALL_STORY_PHRASES, phraseLabel } from './story-nav';
 import type { ProjectedRun, RunPhraseKey } from '../api';
-import type { RoleKind, Template } from '../../shared/types';
+import type { RoleKind, Template } from '../../types';
 
 /** U-8a: the crew that WRITES must never be confused with the crew that judges. */
 function roleClass(role: RoleKind): string {

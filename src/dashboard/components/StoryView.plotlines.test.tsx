@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import { StoryView } from './StoryView';
-import { fixtureActions, fixturePhrase, fixtureView, NOW, SEED_IDEA } from './story-fixtures';
+import { fixtureActions, fixturePhrase, fixtureView, NOW, SEED_IDEA } from '../testing/story-fixtures';
 import { phraseDetailView } from '../testing/shell-fakes';
 import type { PhraseDetailView } from '../api';
 import type { StoryViewData } from './story-contract';

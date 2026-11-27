@@ -22,10 +22,6 @@
  * `fixtureActions()` records every call, so a test asserts the EXACT route arguments a click
  * produced (U-16's button, D-35's dial, G-1's ops) rather than "something happened".
  */
-import { criterionById } from '../../shared/criteria';
-// Phase ①'s Critics-per-sample default (shared with the loop's own `screeningSizeOf`), so a baseline that
-// spells out "the review ran" uses the count the loop dispatches by rather than a number a test invented.
-import { DEFAULT_SUMMARY_CRITICS } from '../../shared/types';
 import type {
     CastMember,
     Chapter,
@@ -41,7 +37,7 @@ import type {
     Summary,
     Template,
     Verdict
-} from '../../shared/types';
+} from '../../types';
 import type {
     GoalSurface,
     PhraseFindingRow,
@@ -55,12 +51,17 @@ import type {
 } from '../api';
 // R6 — the five Summary groups come from the catalog module, not from a copy: the rail, the panes and these
 // fixtures all read the same product data, so a test cannot pin a group set the server does not send (R1).
-import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
 // R7 — the stub's `source_hash` is the same 8 hex digits the server journals for these bytes
 // (`shared/seed-hash.ts`), so a card that compares a proposal against the draft it was computed over is testing
 // its real comparison here rather than one against an invented digest.
-import { seedHashOf } from '../../shared/seed-hash';
-import type { CompletionPreview, StoryActions, StoryViewData } from './story-contract';
+import {
+    DEFAULT_SUMMARY_CRITICS,
+    criterionById,
+    fixtureVocabulary,
+    orderedPhraseGroupDefinitions,
+    seedHashOf
+} from './product-values';
+import type { CompletionPreview, StoryActions, StoryViewData } from '../components/story-contract';
 
 /** Frozen "now" — every relative figure in the story surface is measured against this instant. */
 export const NOW = '2026-11-11T12:00:00.000Z';
@@ -1285,6 +1286,7 @@ function fixtureViewBase(
         // The shell resolves the assignment ids into records (see `StoryViewData`).
         templates: fixtureTemplates().filter((template) => template.id === 't-chapters'),
         cost_distribution: fixtureCostDistribution(),
+        vocabulary: fixtureVocabulary(),
         completion_preview: options.completion ?? null,
         // U-1a: the stalled screen's "what the crews tried" list. Two rounds, oldest first, and the
         // second one's numbers are deliberately the SAME as the first — that flat pair is what makes

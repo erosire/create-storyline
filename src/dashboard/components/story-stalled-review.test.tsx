@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { StalledReview } from './story-stalled-review';
 import { click, type } from '../testing/shell-fakes';
-import { fixtureActions, fixtureView } from './story-fixtures';
-import type { Finding } from '../../shared/types';
+import { fixtureActions, fixtureView } from '../testing/story-fixtures';
+import type { Finding } from '../../types';
 
 function renderPane(options: { withActions?: boolean; noHistory?: boolean } = {}) {
     const { actions, calls } = fixtureActions();

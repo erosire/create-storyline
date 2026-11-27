@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { IdeasTray } from './IdeasTray';
 import { click } from '../testing/shell-fakes';
-import { fixtureActions, fixtureIdeas } from './story-fixtures';
+import { fixtureActions, fixtureIdeas } from '../testing/story-fixtures';
 
 /** Renders the tray wired the way `StoryView` wires it, so the payloads are the route's. */
 function renderTray(

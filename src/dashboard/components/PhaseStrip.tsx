@@ -3,7 +3,7 @@
 // to read where a Story is in the pipeline from across the room, so the current phase is marked
 // with `aria-current` AND a colour, never colour alone (L-34's "distinguishable at a glance").
 import { PHASE_LABELS, PHASE_ORDER } from './story-contract';
-import type { StoryPhase } from '../../shared/types';
+import type { StoryPhase } from '../../types';
 
 export interface PhaseStripProps {
     phase: StoryPhase;

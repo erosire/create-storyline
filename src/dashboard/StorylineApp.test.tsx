@@ -7,6 +7,7 @@ import { act, fireEvent, screen } from '@testing-library/react';
 import { StorylineApp } from './StorylineApp';
 import { click, fakeHarness, renderWithStore, storyRow } from './testing/shell-fakes';
 import type { DashboardStore } from './state';
+import { PAGE_SIZE } from './api';
 
 vi.mock('./components/StoryView', () => ({
     // The one thing the shell owes the story view is the bound props; the stub proves they
@@ -118,7 +119,7 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         await click(screen.getByRole('button', { name: /open Writer threads/ }));
 
         expect(store.getSnapshot().selectedAgent).toBe('writer');
-        expect(client.listAgentThreads).toHaveBeenCalledWith('writer');
+        expect(client.listAgentThreads).toHaveBeenCalledWith('writer', { limit: PAGE_SIZE, offset: 0 });
         expect(screen.getByTestId('agent-threads')).toBeTruthy();
         // R7 — the Writer is already the selected thing (its tile is lit, the region is named after
         // it), so the heading says only what the content IS. The accessible name still names the
@@ -186,7 +187,7 @@ describe('StorylineApp — the four regions (§10.1)', () => {
         await click(screen.getByRole('button', { name: /open Editor threads/ }));
 
         expect(store.getSnapshot().selectedAgent).toBe('editor');
-        expect(client.listAgentThreads).toHaveBeenCalledWith('editor');
+        expect(client.listAgentThreads).toHaveBeenCalledWith('editor', { limit: PAGE_SIZE, offset: 0 });
         expect(archivedTab().getAttribute('aria-pressed')).toBe('false');
         expect(screen.queryByText('write the summary')).toBeNull();
     });

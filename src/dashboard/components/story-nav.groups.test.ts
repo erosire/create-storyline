@@ -44,7 +44,7 @@ import {
 } from './story-nav';
 import type { PlotlineRailEntry } from './story-nav';
 import { groupSignOffBlockers, lockCheck } from './story-contract';
-import { fixtureGoal, fixtureIdeas, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureGoal, fixtureIdeas, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { groupedPhraseView, phraseDetailView, reviewedPhraseView } from '../testing/shell-fakes';
 // T-W4 — the Phrase ② read's type is pinned by name so the fixture builder above cannot drift off the wire
 // shape, and `StoryViewData` is the view every helper below is called with.

@@ -24,7 +24,7 @@
 import { useState } from 'react';
 import { blankTemplatePayload, hasEditorRole, isPanelRole } from './story-contract';
 import { PHASE_LABELS, PHASE_ORDER } from './story-contract';
-import type { Story, StoryPhase, Template, TemplateRole } from '../../shared/types';
+import type { Story, StoryPhase, Template, TemplateRole } from '../../types';
 
 /** U-8a: the kind badge is where the writer/judge distinction is made legible. */
 function kindClass(role: TemplateRole): string {

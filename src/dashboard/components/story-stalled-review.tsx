@@ -24,12 +24,12 @@
 // Like the rest of this directory, it is a pure function of `{ view, actions }` and every control is
 // disabled with its own explanation when the action has not landed, rather than inventing an endpoint.
 import { useState } from 'react';
-import type { CriterionLevel } from '../../shared/criteria';
+import type { CriterionLevel } from '../../types';
 import type { LevelHistoryRow } from '../api';
 import { findingKindLabel, findingKindToken, isLiveRun } from './story-contract';
 import type { StoryActions, StoryViewData } from './story-contract';
 import type { BacktrackTarget } from './story-contract';
-import type { Finding, StoryPhase } from '../../shared/types';
+import type { Finding, StoryPhase } from '../../types';
 
 /**
  * L-14's level names ("`idea→summary 4/4 · summary→plotlines 6/6`"). `server/loop/trend.ts` owns this

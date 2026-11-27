@@ -14,9 +14,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import { StoryView } from './StoryView';
-import { fixtureActions, fixtureIdeas, fixturePhrase, fixtureView } from './story-fixtures';
+import { fixtureActions, fixtureIdeas, fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { groupedPhraseView, reviewedPhraseView } from '../testing/shell-fakes';
-import { NOW } from './story-fixtures';
+import { NOW } from '../testing/story-fixtures';
 import type { PhraseView } from '../api';
 import type { StoryViewData } from './story-contract';
 // U-25 — the Seed row's ref, imported rather than spelled, so the test pins the SAME token the rail emits.

@@ -19,17 +19,7 @@ import { ConfirmButton } from './story-phase-controls';
 // §4.2's prose fields are Author text on the same footing as every other Summary surface, so they are
 // printed as Markdown. `className` keeps `.sv-summary-text` (the field's flex sizing) on the wrapper.
 import { MarkdownText } from './MarkdownText';
-import {
-    DEFAULT_SUMMARY_CRITICS,
-    DEFAULT_SUMMARY_SAMPLING,
-    SUMMARY_REVIEW_LIMIT,
-    type Finding,
-    type Revision,
-    type RevisionState,
-    type Story,
-    type StoryPhase,
-    type Summary
-} from '../../shared/types';
+import type { Finding, Revision, RevisionState, Story, StoryPhase, Summary } from '../../types';
 import {
     findingKindLabel,
     findingKindToken,
@@ -113,9 +103,11 @@ export interface SummaryPaneProps {
     onSelectRevision?: (unitRef: string, revisionId: string) => void;
     /** U-4 — the Summary's round is finished and the Author may sign it. */
     readyForReview?: boolean;
-    /** Phase ①'s two counts (the Author's settings): Writer samples per round and Critics per sample. */
+    /** Phase ①'s two counts, projected by the server (`StoryView.vocabulary`). */
     sampling?: number;
     critics?: number;
+    /** The server's accepted bound for either count. Absent means the input states no upper bound. */
+    reviewLimit?: number;
     /** Saves both counts in one Author write; absent means the control states the gap. */
     onSetSummaryReview?: (sampling: number, critics: number) => void;
     onBacktrack?: (phase: BacktrackTarget) => void;
@@ -123,12 +115,12 @@ export interface SummaryPaneProps {
 }
 
 /** A count input is only meaningful inside the API's own bound. */
-function countValue(raw: string, fallback: number): number {
+function countValue(raw: string, fallback: number, limit?: number): number {
     const value = Number.parseInt(raw, 10);
 
     if (!Number.isFinite(value)) return fallback;
 
-    return Math.min(SUMMARY_REVIEW_LIMIT, Math.max(1, value));
+    return limit === undefined ? Math.max(1, value) : Math.min(limit, Math.max(1, value));
 }
 
 /**
@@ -489,13 +481,14 @@ export function SummaryPane({
     readyForReview,
     sampling,
     critics,
+    reviewLimit,
     onSetSummaryReview,
     onBacktrack,
     backtrackNote
 }: SummaryPaneProps) {
     const locked = story.summary_locked;
-    const standardSampling = sampling ?? story.summary_sampling ?? DEFAULT_SUMMARY_SAMPLING;
-    const standardCritics = critics ?? story.summary_critics ?? DEFAULT_SUMMARY_CRITICS;
+    const standardSampling = sampling ?? story.summary_sampling ?? 0;
+    const standardCritics = critics ?? story.summary_critics ?? 0;
     const [samplingDraft, setSamplingDraft] = useState(String(standardSampling));
     const [criticsDraft, setCriticsDraft] = useState(String(standardCritics));
 
@@ -579,7 +572,7 @@ export function SummaryPane({
             {!locked ? (
                 <section className="sv-summary-review-dials" aria-label="Summary review dials">
                     <p className="sv-summary-review-dials-hint">
-                        Phase ① writes {DEFAULT_SUMMARY_SAMPLING} complete Summaries per round. The Critics critique
+                        Phase ① writes {standardSampling} complete Summaries per round. The Critics critique
                         each draft, and the round settles by itself: the engine keeps the draft with the fewest
                         findings — fewest critical, then fewest high, then fewest total, then the earliest sample
                         (§6.5, §16.6) — and parks the rest as discarded history. No Editor picks a column in phase ①.
@@ -590,7 +583,7 @@ export function SummaryPane({
                         <input
                             type="number"
                             min={1}
-                            max={SUMMARY_REVIEW_LIMIT}
+                            max={reviewLimit}
                             value={samplingDraft}
                             onChange={(event) => setSamplingDraft(event.target.value)}
                         />
@@ -600,7 +593,7 @@ export function SummaryPane({
                         <input
                             type="number"
                             min={1}
-                            max={SUMMARY_REVIEW_LIMIT}
+                            max={reviewLimit}
                             value={criticsDraft}
                             onChange={(event) => setCriticsDraft(event.target.value)}
                         />
@@ -616,8 +609,8 @@ export function SummaryPane({
                         }
                         onClick={() =>
                             onSetSummaryReview?.(
-                                countValue(samplingDraft, standardSampling),
-                                countValue(criticsDraft, standardCritics)
+                                countValue(samplingDraft, standardSampling, reviewLimit),
+                                countValue(criticsDraft, standardCritics, reviewLimit)
                             )
                         }
                     >

@@ -103,7 +103,7 @@ function EscalationAnswer({ storyId }: { storyId: string }) {
 
 export function AuthorQueue() {
     const store = useDashboardStore();
-    const { queue, queueStoryFilter } = useDashboard();
+    const { queue, queueHasMore, queueStoryFilter } = useDashboard();
     const visible = queueStoryFilter ? queue.filter((item) => item.story_id === queueStoryFilter) : queue;
     const groups = groupByStory(visible);
 
@@ -306,6 +306,17 @@ export function AuthorQueue() {
                     </ul>
                 </section>
             ))}
+
+            {queueHasMore ? (
+                <button
+                    type="button"
+                    className="button button--ghost queue__more"
+                    data-testid="queue-load-more"
+                    onClick={() => void store.loadMoreQueue()}
+                >
+                    Load more requests
+                </button>
+            ) : null}
         </div>
     );
 }

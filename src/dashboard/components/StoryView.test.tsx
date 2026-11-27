@@ -10,8 +10,8 @@ import { click } from '../testing/shell-fakes';
 import { buildRevisionUnits } from './story-contract';
 // U-25 — the Seed row's ref, imported rather than spelled, so the test pins the SAME token the rail emits.
 import { phraseSeedRef } from './story-nav';
-import type { Finding, Revision, Verdict } from '../../shared/types';
-import { NOW, fixtureActions, fixtureCompletion, fixtureReviewRuns, fixtureStory, fixtureView } from './story-fixtures';
+import type { Finding, Revision, Verdict } from '../../types';
+import { NOW, fixtureActions, fixtureCompletion, fixtureReviewRuns, fixtureStory, fixtureView } from '../testing/story-fixtures';
 
 function renderView(props: Partial<Parameters<typeof StoryView>[0]> = {}) {
     const harness = fixtureActions();

@@ -18,7 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { SettingsPane } from './story-folders';
-import { fixtureActions, fixtureView } from './story-fixtures';
+import { fixtureActions, fixtureView } from '../testing/story-fixtures';
 import { PLOTLINE_MODE_LABEL, PLOTLINE_MODE_NOTE, plotlinesModeRefusal } from './story-contract';
 import type { StoryViewData } from './story-contract';
 

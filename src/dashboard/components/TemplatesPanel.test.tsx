@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { TemplatesPanel } from './TemplatesPanel';
 import { click, type } from '../testing/shell-fakes';
-import { fixtureActions, fixtureStory, fixtureTemplates } from './story-fixtures';
+import { fixtureActions, fixtureStory, fixtureTemplates } from '../testing/story-fixtures';
 
 function renderTemplates(handlers: Partial<Parameters<typeof TemplatesPanel>[0]> = {}) {
     return render(<TemplatesPanel templates={fixtureTemplates()} story={fixtureStory()} {...handlers} />);

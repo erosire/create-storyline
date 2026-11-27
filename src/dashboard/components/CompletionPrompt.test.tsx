@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CompletionPrompt } from './CompletionPrompt';
 import { click } from '../testing/shell-fakes';
-import { fixtureActions, fixtureCompletion, fixtureStory } from './story-fixtures';
+import { fixtureActions, fixtureCompletion, fixtureStory } from '../testing/story-fixtures';
 
 function renderPrompt(props: Partial<Parameters<typeof CompletionPrompt>[0]> = {}) {
     return render(<CompletionPrompt preview={fixtureCompletion()} story={fixtureStory()} {...props} />);

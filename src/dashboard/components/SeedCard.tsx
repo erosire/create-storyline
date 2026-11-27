@@ -9,7 +9,7 @@
 //
 // D-3b: `chapter_count` rides on this card because it is the same kind of Author truth —
 // declared, never chosen by the Writer, and a hard fact (a deviation is a failing C-0).
-import type { Summary } from '../../shared/types';
+import type { Summary } from '../../types';
 
 export interface SeedCardProps {
     idea: string;

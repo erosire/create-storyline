@@ -22,7 +22,7 @@ import { useMemo, useState } from 'react';
 import { PHASE_LABELS, PHASE_ORDER, formatElapsed } from './story-contract';
 import { MarkdownText } from './MarkdownText';
 import type { AgentThreadRecord } from '../api';
-import type { StoryPhase } from '../../shared/types';
+import type { StoryPhase } from '../../types';
 
 /**
  * The phase-session code the Author reads. The rail numbers the four reading phrases (1 Summary,
@@ -129,9 +129,13 @@ export interface AgentThreadsViewProps {
     now: string;
     /** P8/U-7 — the Author's cord for a live run; a panel's threads share the run it kills. */
     onKillRun?: (runId: string) => void;
+    /** True while the server holds another thread chunk for this employee. */
+    hasMore?: boolean;
+    /** Fetch and append the next thread chunk. */
+    onLoadMore?: () => void;
 }
 
-export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreadsViewProps) {
+export function AgentThreadsView({ kind, threads, now, onKillRun, hasMore = false, onLoadMore }: AgentThreadsViewProps) {
     const groups = useMemo(() => groupThreads(threads), [threads]);
     const [open, setOpen] = useState<Set<string>>(() => new Set());
     /** U-8: the request is collapsed by default, at every state — open the bar, then the block. */
@@ -432,6 +436,17 @@ export function AgentThreadsView({ kind, threads, now, onKillRun }: AgentThreads
                     </div>
                 );
             })}
+
+            {hasMore ? (
+                <button
+                    type="button"
+                    className="button button--ghost sv-threads__more"
+                    data-testid="threads-load-more"
+                    onClick={onLoadMore}
+                >
+                    Load more threads
+                </button>
+            ) : null}
         </section>
     );
 }

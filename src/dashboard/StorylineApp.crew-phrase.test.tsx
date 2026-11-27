@@ -21,7 +21,7 @@ import type { RenderResult } from '@testing-library/react';
 import { StorylineApp } from './StorylineApp';
 import { fakeHarness, renderWithStore, storyRow, storyView } from './testing/shell-fakes';
 import type { ApiClient, ProjectedRun, StoryView as StoryViewPayload } from './api';
-import type { Run } from '../shared/types';
+import type { Run } from '../types';
 
 /** The Story the shell's `getStory` answers with, over the rows one case cares about. */
 function payloadWith(runs: ProjectedRun[]): StoryViewPayload {

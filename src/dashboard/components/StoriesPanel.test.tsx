@@ -5,8 +5,8 @@
 // the phase strip, the trend and the full status_reason live on the Story's own panes, whose rail
 // highlights the artifact (`StoryOutline`). These tests pin that compact contract and the
 // stop/resume/delete controls being available on the open row.
-import { describe, expect, it } from 'vitest';
-import { within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { screen, within } from '@testing-library/react';
 import { StoriesPanel } from './StoriesPanel';
 import { click, renderShell, storyRow } from '../testing/shell-fakes';
 
@@ -70,6 +70,25 @@ const rowIds = () =>
 const rowFor = (id: string) => document.querySelector<HTMLElement>(`li.story-row[data-story="${id}"]`) as HTMLElement;
 
 describe('StoriesPanel — the STORIES region (U-1 / U-1b / U-1c)', () => {
+    it('loads the panel in chunks and appends the next one (U-1)', async () => {
+        const first = Array.from({ length: 50 }, (_, index) => storyRow(`story_${index}`));
+        const second = [storyRow('story_50')];
+        const listStories = vi.fn(async (options?: { offset?: number }) =>
+            options?.offset === 50 ? second : first
+        );
+
+        await renderShell(<StoriesPanel />, [], [], { listStories });
+
+        expect(rowIds().length).toBe(50);
+        expect(listStories).toHaveBeenCalledWith({ limit: 50, offset: 0 });
+
+        await click(screen.getByTestId('stories-load-more'));
+
+        expect(rowIds().length).toBe(51);
+        expect(listStories).toHaveBeenLastCalledWith({ limit: 50, offset: 50 });
+        expect(screen.queryByTestId('stories-load-more')).toBeNull();
+    });
+
     it('puts the Story awaiting the Author on top, then the stall, then ready, then done (U-1)', async () => {
         await renderShell(<StoriesPanel />, fixture());
         expect(rowIds()).toEqual(['story_1', 'story_4', 'story_2', 'story_3', 'story_5']);

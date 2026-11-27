@@ -4,7 +4,7 @@
 // Plotlines pane the Author is reviewing the promises themselves — what must happen, what must
 // change, whose eyes it is seen through — so showing the prose here would repeat the next phrase
 // and blur the question the screen is asking.
-import type { Plotline } from '../../shared/types';
+import type { Plotline } from '../../types';
 import { plotlinesInOrder } from './story-nav';
 import type { StoryViewData } from './story-contract';
 

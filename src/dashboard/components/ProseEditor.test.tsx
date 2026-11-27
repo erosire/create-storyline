@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { ProseEditor } from './ProseEditor';
 import { click, type } from '../testing/shell-fakes';
-import { fixtureActions, fixtureChapters, fixtureProposals, fixtureStory } from './story-fixtures';
+import { fixtureActions, fixtureChapters, fixtureProposals, fixtureStory } from '../testing/story-fixtures';
 
 const C2 = fixtureChapters()[1];
 const STORY = fixtureStory();

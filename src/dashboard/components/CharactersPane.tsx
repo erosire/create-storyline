@@ -8,7 +8,7 @@
 //
 // WHY THIS READS THE BOOK AND NOT THE KNOWLEDGE ARTICLE: §4.5's cast is the tracked sheet a
 // reviewer checks behaviour against (D-9, C-9), so the pane shows the records as they stand.
-import type { CastMember } from '../../shared/types';
+import type { CastMember } from '../../types';
 import type { StoryActions, StoryViewData } from './story-contract';
 import { castMembers, summaryReadyForReview } from './story-nav';
 

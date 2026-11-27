@@ -1,12 +1,13 @@
 // The UI/server boundary, enforced instead of remembered.
 //
 // The dashboard is a CLIENT of the Storyline server. Production code under `src/dashboard/`
-// may render shared model types, but it may not import a server module, import the harness
-// engine, or perform network I/O outside `api.ts`. The earlier direct-harness experiment
-// (session and record tool calls from the browser bundle) is exactly what this suite prevents
-// from returning: the server is the only backend the UI talks to, so one route table owns every
-// Story decision and the browser never holds a second vocabulary.
-import { readdirSync, readFileSync } from 'node:fs';
+// may render shared model types, but it may not import a server module (the server is the
+// separate `@underload/storyline` package/repository), import the harness engine, or perform
+// network I/O outside `api.ts`. The earlier direct-harness experiment (session and record tool
+// calls from the browser bundle) is exactly what this suite prevents from returning: the server
+// is the only backend the UI talks to, so one route table owns every Story decision and the
+// browser never holds a second vocabulary.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -22,7 +23,9 @@ function runtimeFiles(): string[] {
             const full = path.join(directory, entry.name);
 
             if (entry.isDirectory()) {
-                walk(full);
+                // `testing/` is the test scaffolding (fixtures, client doubles, product-data mocks);
+                // it is never part of the browser bundle, so the production boundary does not apply.
+                if (entry.name !== 'testing') walk(full);
                 continue;
             }
 
@@ -47,10 +50,19 @@ const sourceOf = (file: string): string => readFileSync(file, 'utf8');
 
 describe('the dashboard is a server client and nothing else', () => {
     it('never imports a server module or the harness engine', () => {
-        const banned = /from\s+['"](?:\.\.?\/)+server(?:\/|['"])|from\s+['"]@underload\/harness(?:\/[^'"]*)?['"]/;
+        const banned =
+            /from\s+['"](?:\.\.?\/)+server(?:\/|['"])|from\s+['"]@underload\/(?:harness|storyline)(?:\/[^'"]*)?['"]/;
         const offenders = runtimeFiles().filter((file) => banned.test(sourceOf(file)));
 
         expect(offenders.map(relative)).toEqual([]);
+    });
+
+    it('keeps runtime product data out of the UI: there is no src/shared module', () => {
+        // The server owns the phrase catalog/composition, criteria roster, Seed hash, defaults and
+        // chapter-entry formatting. The UI may keep type definitions (`src/types.ts`) and test-only
+        // mocks (`src/dashboard/testing/`), but a runtime copy in the production tree would be the
+        // second source of truth this package must not have.
+        expect(existsSync(path.join(PACKAGE_ROOT, 'src', 'shared'))).toBe(false);
     });
 
     it('performs network I/O in exactly one module', () => {

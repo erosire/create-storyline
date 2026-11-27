@@ -281,8 +281,9 @@ export function StoryView({
                                 focus={revisionFocus}
                                 focusSelectable={focusSelectable}
                                 readyForReview={summaryReadyForReview(view)}
-                                sampling={story.summary_sampling}
-                                critics={story.summary_critics}
+                                sampling={story.summary_sampling ?? view.vocabulary.summary_sampling_default}
+                                critics={story.summary_critics ?? view.vocabulary.summary_critics_default}
+                                reviewLimit={view.vocabulary.summary_review_limit}
                                 onSetSummaryReview={
                                     actions.setSummaryReview
                                         ? (sampling, critics) =>
@@ -428,6 +429,9 @@ export function StoryView({
                         failing={view.goal.failing}
                         chapterProgress={view.goal.chapter_progress}
                         chapters={view.chapters}
+                        levels={view.vocabulary.goal_levels}
+                        perChapter={view.vocabulary.per_chapter_criteria}
+                        criterionCheckers={view.vocabulary.criterion_checkers}
                         onPatchGoal={
                             actions.patchGoal ? (patch) => void actions.patchGoal?.(story.id, patch) : undefined
                         }

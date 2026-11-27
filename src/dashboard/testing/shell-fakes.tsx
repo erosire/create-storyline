@@ -30,9 +30,13 @@ import type {
     StoryView
 } from '../api';
 import { DashboardContext, createDashboardStore, type DashboardStore } from '../state';
-import { DEFAULT_AUTO_APPROVE_COSTS, type Goal, type Story } from '../../shared/types';
-import { orderedPhraseGroupDefinitions } from '../../shared/phrase';
-import { seedHashOf } from '../../shared/seed-hash';
+import {
+    DEFAULT_AUTO_APPROVE_COSTS,
+    fixtureVocabulary,
+    orderedPhraseGroupDefinitions,
+    seedHashOf
+} from './product-values';
+import type { Goal, Story } from '../../types';
 
 /** One STORIES-panel row with §4.1-plausible defaults; override what the test cares about. */
 export function storyRow(id: string, overrides: Partial<StoryRow> = {}): StoryRow {
@@ -121,6 +125,7 @@ export function storyView(row: StoryRow): StoryView {
         runs: [],
         templates: [],
         cost_distribution: { confirmed_per_cost: { critical: 0, major: 0, minor: 0, taste: 0 }, downgrades: 0 },
+        vocabulary: fixtureVocabulary(),
         completion_preview: null,
         digest: null
     };

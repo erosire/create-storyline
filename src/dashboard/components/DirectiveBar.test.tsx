@@ -9,7 +9,7 @@ import { DirectiveBar } from './DirectiveBar';
 import { click, renderShell, storyRow, storyView, type } from '../testing/shell-fakes';
 // U-25 — the rail's Seed rows are addressed by this ref, and the bar has to speak for the one the rail is on.
 import { phraseSeedRef } from './story-nav';
-import type { Chapter } from '../../shared/types';
+import type { Chapter } from '../../types';
 
 const rows = () => [storyRow('story_3', { title: 'Second Death', phase: 'chapters', status: 'ready' })];
 

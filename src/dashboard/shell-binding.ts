@@ -35,7 +35,7 @@
 //     that route (`POST /stories/:id/revisions/:revisionId/select`), so the binding exists now and the
 //     comparison pane's Select is no longer a tooltip.
 
-import type { Chapter, Cost, Criterion, StoryPhase, Template } from '../shared/types';
+import type { Chapter, Cost, Criterion, StoryPhase, Template } from '../types';
 import type {
     AssistantRequest,
     BacktrackPhase,

@@ -1,7 +1,8 @@
 // §10 / W9-W13 — the browser-side client for the server's `/v1/storyline` surface.
 //
-// THE ONE NETWORK LAYER. The server owns the HTTP contract in `src/storyline-server.swagger.yaml`;
-// this module is the dashboard's only implementation of it. Components render store snapshots and
+// THE ONE NETWORK LAYER. The server owns the HTTP contract in the separate `@underload/storyline`
+// package (`src/storyline-server.swagger.yaml` there); this module is the dashboard's only
+// implementation of it. Components render store snapshots and
 // call store methods; neither imports a server module, calls the model provider, opens a harness
 // socket, or executes a harness tool. A second transport in the UI would be a second backend, and
 // the dashboard is deliberately a client of the Storyline server and nothing else.
@@ -9,7 +10,7 @@
 // Everything the dashboard renders therefore lives here under a name both sides agreed to: the
 // method names (T9 imports exactly these), the row/view projections (`StoryRow`, `StoryView`,
 // `QueueItem`), and the SSE event names. The record shapes themselves are NOT redefined — they
-// come from `src/shared/types.ts` (§4 is normative in name and field), and only the server-computed
+// come from `src/types.ts` (§4 is normative in name and field), and only the server-computed
 // PROJECTIONS are declared here.
 //
 // PROJECTIONS VS RECORDS: `StoryRow` is not `Story` — it carries the criteria engine's
@@ -31,6 +32,8 @@ import type {
     CastMember,
     Cost,
     Criterion,
+    CriterionChecker,
+    CriterionLevel,
     Chapter,
     Digest,
     Finding,
@@ -51,10 +54,19 @@ import type {
     PendingKind,
     Trend,
     Verdict
-} from '../shared/types';
+} from '../types';
 
 /** The one root the UI dials (dev proxy → gateway; see `vite.config.ts`). */
 export const API_ROOT = '/v1/storyline';
+
+/** The chunk size the desk asks list routes for; the server caps a chunk at 500. */
+export const PAGE_SIZE = 50;
+
+/** A list request's chunk window. Both fields are omitted on the pre-pagination calls. */
+export interface PageOptions {
+    limit?: number;
+    offset?: number;
+}
 
 /** SSE topics the server emits (`data:` is the affected story id, empty for workspace-wide). */
 export type StreamKind = 'story' | 'runs' | 'queue';
@@ -154,6 +166,30 @@ export interface FailingCriterion {
     criterion: string;
     fix_hint: string;
     evidence?: string;
+}
+
+/** One Goal level, as the server projects its label, question and criterion set (U-6 / §5.2). */
+export interface GoalLevelView {
+    key: CriterionLevel;
+    label: string;
+    question: string;
+    criteria: string[];
+}
+
+/**
+ * The product vocabulary a Story frame carries — every list and default the desk renders that the
+ * server owns. The UI does not keep a second copy of these values: the projection sends them, and a
+ * test may stand in its own mock (`dashboard/testing/product-values.ts`).
+ */
+export interface StoryVocabulary {
+    finding_costs: Cost[];
+    default_auto_approve: Cost[];
+    summary_sampling_default: number;
+    summary_critics_default: number;
+    summary_review_limit: number;
+    criterion_checkers: CriterionChecker[];
+    goal_levels: GoalLevelView[];
+    per_chapter_criteria: string[];
 }
 
 /** §5.1 / U-6 — the Goal plus live pass/fail per phase and per chapter (rendered by W3). */
@@ -341,6 +377,8 @@ export interface StoryView {
     cost_distribution: CostDistribution;
     completion_preview: CompletionPreview | null;
     digest: Digest | null;
+    /** Server-owned labels, lists and defaults the desk renders (see `StoryVocabulary`). */
+    vocabulary: StoryVocabulary;
     /**
      * U-1a — "what the crews tried across rounds", the third thing the stalled screen has to show.
      * The server projects it from the loop's round bookkeeping (`level_history` on the Story row,
@@ -1418,7 +1456,7 @@ export interface AgentThreadList {
 
 /** The full method set T9 imports — one entry per route in the pinned table. */
 export interface ApiClient {
-    listStories(): Promise<StoryRow[]>;
+    listStories(options?: PageOptions): Promise<StoryRow[]>;
     createStory(input: CreateStoryInput): Promise<StoryRow>;
     /**
      * §10 / P1 — hard-delete a Story and everything it owns: every §4 record, the knowledge
@@ -1560,7 +1598,7 @@ export interface ApiClient {
      * This is what clicking the employee tile opens in the content area; `request` and `answer`
      * are the detail of each bar.
      */
-    listAgentThreads(kind: string): Promise<AgentThreadList>;
+    listAgentThreads(kind: string, options?: PageOptions): Promise<AgentThreadList>;
     /**
      * U-8 — set (or clear, with `null`) one employee's model on the global roster. Answers the
      * whole refreshed projection, because every tile's model line is server-owned.
@@ -1635,7 +1673,7 @@ export interface ApiClient {
      * run's own `group_refs` and `work_item_ref`. The desk renders no phrase words of its own, so a crew row
      * standing under a Phrase-① rail cannot silently be Phrase-② work.
      */
-    listRuns(storyId?: string): Promise<ProjectedRun[]>;
+    listRuns(storyId?: string, options?: PageOptions): Promise<ProjectedRun[]>;
     /**
      * S-3 — teardown with a recorded reason; the Author's kill (U-7). S-RUNTIME: a run id is LOCAL to one
      * Story's book, so `storyId` names which book's executor aborts the thread. Omit it only when the id is
@@ -1644,7 +1682,7 @@ export interface ApiClient {
      */
     killRun(runId: string, storyId?: string): Promise<Run>;
     /** U-10 — the cross-Story queue that is the home screen. */
-    getQueue(): Promise<QueueItem[]>;
+    getQueue(options?: PageOptions): Promise<QueueItem[]>;
     /** §8.6 — the assistant tool the locked panes offer (U-4). */
     requestAssistant(storyId: string, request: AssistantRequest): Promise<Run>;
     /**
@@ -1678,6 +1716,29 @@ export class ApiError extends Error {
  * is the product copy, so it is re-thrown verbatim; only a body that is not JSON yields the
  * generic line. A 204 (no body) resolves to `undefined as T`.
  */
+/** The `?limit=&offset=` suffix a chunked call carries; nothing when no window was asked for. */
+function pageParams(options?: PageOptions): Record<string, string> {
+    const params: Record<string, string> = {};
+
+    if (options?.limit !== undefined) params.limit = String(options.limit);
+    if (options?.offset !== undefined) params.offset = String(options.offset);
+
+    return params;
+}
+
+/** A query string from a parameter record, or `''` when it is empty. */
+function queryString(params: Record<string, string | undefined>): string {
+    const entries = Object.entries(params).filter((entry): entry is [string, string] => entry[1] !== undefined);
+
+    if (entries.length === 0) return '';
+
+    return `?${new URLSearchParams(entries).toString()}`;
+}
+
+function pageQuery(options?: PageOptions): string {
+    return queryString(pageParams(options));
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_ROOT}${path}`, {
         ...init,
@@ -1813,7 +1874,7 @@ function subscribeEvents(onEvent: (kind: StreamKind, storyId?: string) => void):
 
 /** The pinned surface, as data — injected wholesale by `state.ts` and by the tests. */
 export const api: ApiClient = {
-    listStories: () => request<StoryRow[]>('/stories'),
+    listStories: (options) => request<StoryRow[]>(`/stories${pageQuery(options)}`),
     createStory: (input) => post<StoryRow>('/stories', input),
     deleteStory: (storyId) => del<{ deleted: string }>(storyPath(storyId)),
     getStory: (storyId) => request<StoryView>(storyPath(storyId)),
@@ -1883,7 +1944,8 @@ export const api: ApiClient = {
     getStoryKnowledge: (storyId) => request<StoryKnowledgeTree>(storyPath(storyId, '/knowledge')),
     listAgents: () => request<AgentStatusRow[]>('/agents'),
     listAgentModels: () => request<AgentModelCatalog>('/agents/models'),
-    listAgentThreads: (kind) => request<AgentThreadList>(`/agents/${encodeURIComponent(kind)}/threads`),
+    listAgentThreads: (kind, options) =>
+        request<AgentThreadList>(`/agents/${encodeURIComponent(kind)}/threads${pageQuery(options)}`),
     setAgentModel: (kind, model) => patch<AgentStatusRow[]>(`/agents/${encodeURIComponent(kind)}`, { model }),
     // S-5 — the loop's ceiling. One global pair of routes, because the number is the process's and no
     // Story owns it; the PATCH answers the fresh projection, never what the Author typed.
@@ -1943,11 +2005,16 @@ export const api: ApiClient = {
     listTemplates: () => request<Template[]>('/templates'),
     createTemplate: (input) => post<Template>('/templates', input),
     patchTemplate: (templateId, body) => patch<Template>(`/templates/${encodeURIComponent(templateId)}`, body),
-    listRuns: (storyId) =>
-        request<ProjectedRun[]>(`/runs${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
+    listRuns: (storyId, options) =>
+        request<ProjectedRun[]>(
+            `/runs${queryString({
+                ...(storyId === undefined ? {} : { story_id: storyId }),
+                ...pageParams(options)
+            })}`
+        ),
     killRun: (runId, storyId) =>
         post<Run>(`/runs/${encodeURIComponent(runId)}/kill${storyId ? `?story_id=${encodeURIComponent(storyId)}` : ''}`),
-    getQueue: () => request<QueueItem[]>('/queue'),
+    getQueue: (options) => request<QueueItem[]>(`/queue${pageQuery(options)}`),
     requestAssistant: (storyId, body) => post<Run>(storyPath(storyId, '/assistant'), body),
     subscribeEvents
 };

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { SummaryPane } from './SummaryPane';
 import { click } from '../testing/shell-fakes';
-import { fixtureRevisions, fixtureStory, fixtureSummary } from './story-fixtures';
+import { fixtureRevisions, fixtureStory, fixtureSummary } from '../testing/story-fixtures';
 import type { SummaryRevisionEntry } from './story-nav';
 
 const DELETION_SENTENCE =

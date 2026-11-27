@@ -19,7 +19,7 @@
 import { useState } from 'react';
 import { PHASE_LABELS, PHASE_ORDER, backtrackStatement, isGroupSummary, lockCheck, phasesAfter } from './story-contract';
 import type { BacktrackTarget, LockCheck, StoryActions, StoryViewData } from './story-contract';
-import type { Story, StoryPhase } from '../../shared/types';
+import type { Story, StoryPhase } from '../../types';
 
 /**
  * The ask-once button: the first click swaps the control for the destructive sentence plus a

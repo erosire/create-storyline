@@ -17,7 +17,7 @@
 
 import { useDashboard, useDashboardStore } from '../state';
 import type { StoryRow } from '../api';
-import type { PendingKind, StoryStatus } from '../../shared/types';
+import type { PendingKind, StoryStatus } from '../../types';
 import { ConfirmButton } from './story-phase-controls';
 
 /** U-1's status badge — the §4.1 enum values verbatim, because the Author learns these words. */
@@ -98,7 +98,7 @@ export function sortStories(stories: StoryRow[]): StoryRow[] {
 
 export function StoriesPanel() {
     const store = useDashboardStore();
-    const { stories, activeStoryId, selectedAgent } = useDashboard();
+    const { stories, storiesHasMore, activeStoryId, selectedAgent } = useDashboard();
     const ordered = sortStories(stories);
 
     return (
@@ -218,6 +218,17 @@ export function StoriesPanel() {
                     );
                 })}
             </ul>
+
+            {storiesHasMore ? (
+                <button
+                    type="button"
+                    className="button button--ghost panel__more"
+                    data-testid="stories-load-more"
+                    onClick={() => void store.loadMoreStories()}
+                >
+                    Load more stories
+                </button>
+            ) : null}
         </div>
     );
 }

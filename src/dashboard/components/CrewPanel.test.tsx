@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CrewPanel } from './CrewPanel';
 import { click } from '../testing/shell-fakes';
-import { NOW, fixtureActions, fixtureRuns, fixtureTemplates } from './story-fixtures';
+import { NOW, fixtureActions, fixtureRuns, fixtureTemplates } from '../testing/story-fixtures';
 // C2a/R4 — the phrase mark is a field the CREW LISTING's projection adds, so the rows a mark test builds are the
 // projected rows (`api.ts:ProjectedRun`), not the bare §4.13 record.
 import type { ProjectedRun } from '../api';

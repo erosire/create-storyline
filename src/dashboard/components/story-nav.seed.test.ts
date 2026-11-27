@@ -32,7 +32,7 @@ import {
     summaryGroupFocus,
     summaryRevisionFocus
 } from './story-nav';
-import { fixturePhrase, fixtureView } from './story-fixtures';
+import { fixturePhrase, fixtureView } from '../testing/story-fixtures';
 import { phraseDetailView } from '../testing/shell-fakes';
 import type { StoryViewData } from './story-contract';
 
